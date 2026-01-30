@@ -54,6 +54,8 @@ class HelloTriangleApplication {
     VkDebugUtilsMessengerEXT debugMessenger;
 
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+    VkDevice device;
+    VkQueue graphicsQueue;
 
     void initWindow() {
         glfwInit();
@@ -67,6 +69,7 @@ class HelloTriangleApplication {
         createInstance();
         setupDebugMessenger();
         pickPhysicalDevice();
+        createLogicalDevice();
     }
 
     void mainLoop() {
@@ -76,6 +79,8 @@ class HelloTriangleApplication {
     }
 
     void cleanup() {
+        vkDestroyDevice(device, nullptr);
+
         if (enableValidationLayers) {
             DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
         }
@@ -104,13 +109,13 @@ class HelloTriangleApplication {
         createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         createInfo.pApplicationInfo = &appInfo;
 
-        // uint32_t glfwExensionCount = 0;
+        // uint32_t glfwExtensionCount = 0;
         // const char **glfwExtensions;
 
         // glfwExtensions =
-        // glfwGetRequiredInstanceExtensions(&glfwExensionCount);
+        // glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
 
-        // createInfo.enabledExtensionCount = glfwExensionCount;
+        // createInfo.enabledExtensionCount = glfwExtensionCount;
         // createInfo.ppEnabledExtensionNames = glfwExtensions;
 
         auto extensions = getRequiredExtensions();
@@ -162,7 +167,6 @@ class HelloTriangleApplication {
                 std::cout << "Selected GPU: " << deviceProperties.deviceName
                           << std::endl;
 
-                // 打印显卡类型（可选，为了让你看懂它是独显还是集显）
                 std::string typeStr;
                 switch (deviceProperties.deviceType) {
                 case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
@@ -213,6 +217,7 @@ class HelloTriangleApplication {
         return indices.isComplete();
     }
 
+    // 找到gpu中能画图的队列族，并返回索引。在获取需要画图时得到索引使用
     QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device) {
         QueueFamilyIndices indices;
 
@@ -238,6 +243,43 @@ class HelloTriangleApplication {
         }
 
         return indices;
+    }
+
+    void createLogicalDevice() {
+        QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
+
+        VkDeviceQueueCreateInfo queueCreateInfo{};
+        queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        queueCreateInfo.queueFamilyIndex = indices.graphicsFamily.value();
+        queueCreateInfo.queueCount = 1;
+        float queuePriority = 1.0f;
+        queueCreateInfo.pQueuePriorities = &queuePriority;
+
+        VkPhysicalDeviceFeatures deviceFeatures{};
+
+        VkDeviceCreateInfo createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+
+        createInfo.pQueueCreateInfos = &queueCreateInfo;
+        createInfo.queueCreateInfoCount = 1;
+
+        createInfo.pEnabledFeatures = &deviceFeatures;
+        createInfo.enabledExtensionCount = 0;
+
+        if (enableValidationLayers) {
+            createInfo.enabledLayerCount =
+                static_cast<uint32_t>(validationLayers.size());
+            createInfo.ppEnabledLayerNames = validationLayers.data();
+        } else {
+            createInfo.enabledLayerCount = 0;
+        }
+
+        if (vkCreateDevice(physicalDevice, &createInfo, nullptr, &device) !=
+            VK_SUCCESS) {
+            throw std::runtime_error("failed to create logical device!");
+        }
+
+        vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
     }
 
     void populateDebugMessengerCreateInfo(

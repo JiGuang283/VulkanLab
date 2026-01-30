@@ -35,3 +35,7 @@ target_link_libraries(VulkanLab PRIVATE
 if(WIN32)
     target_link_libraries(VulkanLab PRIVATE user32 shell32 gdi32)
 endif()
+
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
