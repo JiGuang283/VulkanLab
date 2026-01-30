@@ -151,11 +151,12 @@ class HelloTriangleApplication {
         vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
 
         for (const auto &device : devices) {
-            if (isDeviceSuitable(device)) {
+            VkPhysicalDeviceProperties deviceProperties;
+            vkGetPhysicalDeviceProperties(device, &deviceProperties);
+            if (isDeviceSuitable(device) &&
+                deviceProperties.deviceType ==
+                    VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
                 physicalDevice = device;
-
-                VkPhysicalDeviceProperties deviceProperties;
-                vkGetPhysicalDeviceProperties(device, &deviceProperties);
 
                 std::cout << "---------------------------------" << std::endl;
                 std::cout << "Selected GPU: " << deviceProperties.deviceName
