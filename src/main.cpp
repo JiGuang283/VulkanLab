@@ -165,19 +165,19 @@ class HelloTriangleApplication {
                 std::string typeStr;
                 switch (deviceProperties.deviceType) {
                 case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
-                    typeStr = "Discrete GPU (独立显卡)";
+                    typeStr = "Discrete GPU";
                     break;
                 case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
-                    typeStr = "Integrated GPU (集成显卡)";
+                    typeStr = "Integrated GPU";
                     break;
                 case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
-                    typeStr = "Virtual GPU (虚拟显卡)";
+                    typeStr = "Virtual GPU";
                     break;
                 case VK_PHYSICAL_DEVICE_TYPE_CPU:
-                    typeStr = "CPU (软件模拟)";
+                    typeStr = "CPU";
                     break;
                 default:
-                    typeStr = "Other (其他)";
+                    typeStr = "Other";
                     break;
                 }
                 std::cout << "Device Type : " << typeStr << std::endl;
