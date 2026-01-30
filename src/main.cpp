@@ -153,6 +153,43 @@ class HelloTriangleApplication {
         for (const auto &device : devices) {
             if (isDeviceSuitable(device)) {
                 physicalDevice = device;
+
+                VkPhysicalDeviceProperties deviceProperties;
+                vkGetPhysicalDeviceProperties(device, &deviceProperties);
+
+                std::cout << "---------------------------------" << std::endl;
+                std::cout << "Selected GPU: " << deviceProperties.deviceName
+                          << std::endl;
+
+                // 打印显卡类型（可选，为了让你看懂它是独显还是集显）
+                std::string typeStr;
+                switch (deviceProperties.deviceType) {
+                case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+                    typeStr = "Discrete GPU (独立显卡)";
+                    break;
+                case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+                    typeStr = "Integrated GPU (集成显卡)";
+                    break;
+                case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
+                    typeStr = "Virtual GPU (虚拟显卡)";
+                    break;
+                case VK_PHYSICAL_DEVICE_TYPE_CPU:
+                    typeStr = "CPU (软件模拟)";
+                    break;
+                default:
+                    typeStr = "Other (其他)";
+                    break;
+                }
+                std::cout << "Device Type : " << typeStr << std::endl;
+                std::cout << "API Version : "
+                          << VK_VERSION_MAJOR(deviceProperties.apiVersion)
+                          << "."
+                          << VK_VERSION_MINOR(deviceProperties.apiVersion)
+                          << "."
+                          << VK_VERSION_PATCH(deviceProperties.apiVersion)
+                          << std::endl;
+                std::cout << "---------------------------------" << std::endl;
+
                 break;
             }
         }
@@ -164,7 +201,7 @@ class HelloTriangleApplication {
     struct QueueFamilyIndices {
         std::optional<uint32_t> graphicsFamily;
 
-        bool isComplete(){
+        bool isComplete() {
             return graphicsFamily.has_value();
         }
     };
@@ -179,18 +216,20 @@ class HelloTriangleApplication {
         QueueFamilyIndices indices;
 
         uint32_t QueueFamilyCount = 0;
-        vkGetPhysicalDeviceQueueFamilyProperties(device, &QueueFamilyCount, nullptr);
+        vkGetPhysicalDeviceQueueFamilyProperties(device, &QueueFamilyCount,
+                                                 nullptr);
 
         std::vector<VkQueueFamilyProperties> queueFamilies(QueueFamilyCount);
-        vkGetPhysicalDeviceQueueFamilyProperties(device, &QueueFamilyCount, queueFamilies.data());
+        vkGetPhysicalDeviceQueueFamilyProperties(device, &QueueFamilyCount,
+                                                 queueFamilies.data());
 
         int i = 0;
-        for(const auto& queueFamily:queueFamilies){
-            if(queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT){
+        for (const auto &queueFamily : queueFamilies) {
+            if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
                 indices.graphicsFamily = i;
             }
 
-            if(indices.isComplete()){
+            if (indices.isComplete()) {
                 break;
             }
 
