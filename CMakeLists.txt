@@ -20,7 +20,21 @@ include_directories(${GLFW_DIR}/include)
 link_directories(${GLFW_DIR}/lib-vc2022)
 
 # 3. 添加可执行文件
-add_executable(VulkanLab src/main.cpp)
+add_executable(VulkanLab
+    src/main.cpp
+    src/app.cpp
+    src/vulkan_instance.cpp
+    src/vulkan_device.cpp
+    src/vulkan_swapchain.cpp
+    src/vulkan_pipeline.cpp
+    src/vulkan_renderpass.cpp
+    src/vulkan_framebuffers.cpp
+    src/vulkan_commandpool.cpp
+    src/vulkan_drawframe.cpp
+)
+
+# 添加 src 目录为头文件搜索路径
+target_include_directories(VulkanLab PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 # 4. 链接库
 # 链接 Vulkan 和 GLFW
@@ -39,3 +53,10 @@ endif()
 if(MSVC)
     add_compile_options(/utf-8)
 endif()
+
+# Copy shaders to build directory
+add_custom_command(TARGET VulkanLab POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/shader
+        $<TARGET_FILE_DIR:VulkanLab>/shader
+)

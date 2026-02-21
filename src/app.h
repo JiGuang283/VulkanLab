@@ -1,0 +1,96 @@
+#pragma once
+
+#include "vulkan_utils.h"
+
+class HelloTriangleApplication {
+  public:
+    void run();
+
+  private:
+    // ---- 窗口 ----
+    GLFWwindow *window;
+
+    // ---- Vulkan 核心对象 ----
+    VkInstance instance;
+    VkDebugUtilsMessengerEXT debugMessenger;
+    VkSurfaceKHR surface;
+
+    // ---- 设备 ----
+    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+    VkDevice device;
+    VkQueue graphicsQueue;
+    VkQueue presentQueue;
+
+    // ---- 交换链 ----
+    VkSwapchainKHR swapChain;
+    std::vector<VkImage> swapChainImages;
+    VkFormat swapChainImageFormat;
+    VkExtent2D swapChainExtent;
+    std::vector<VkImageView> swapChainImageViews;
+
+    // ---- 图形管线 ----
+    VkPipelineLayout pipelineLayout;
+    VkRenderPass renderPass;
+    VkPipeline graphicsPipeline;
+
+    // ---- 帧缓冲 ----
+    std::vector<VkFramebuffer> swapChainFramebuffers;
+    VkCommandPool commandPool;
+    VkCommandBuffer commandBuffer;
+
+    // ---- 同步 ----
+    VkSemaphore imageAvailableSemaphore;
+    VkSemaphore renderFinishedSemaphore;
+    VkFence inFlightFence;
+
+    // ---- 应用主框架 (app.cpp) ----
+    void initWindow();
+    void initVulkan();
+    void mainLoop();
+    void cleanup();
+
+    // ---- 实例与调试 (vulkan_instance.cpp) ----
+    void createInstance();
+    void setupDebugMessenger();
+    void populateDebugMessengerCreateInfo(
+        VkDebugUtilsMessengerCreateInfoEXT &createInfo);
+    bool checkValidationLayerSupport();
+    std::vector<const char *> getRequiredExtensions();
+    static VKAPI_ATTR VkBool32 VKAPI_CALL
+    debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+                  VkDebugUtilsMessageTypeFlagsEXT messageType,
+                  const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
+                  void *pUserData);
+
+    // ---- 设备管理 (vulkan_device.cpp) ----
+    void pickPhysicalDevice();
+    void createLogicalDevice();
+    bool isDeviceSuitable(VkPhysicalDevice device);
+    bool checkDeviceExtensionSupport(VkPhysicalDevice device);
+    QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device);
+
+    // ---- 交换链 (vulkan_swapchain.cpp) ----
+    void createSurface();
+    void createSwapChain();
+    void createImageViews();
+    SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device);
+    VkSurfaceFormatKHR chooseSwapSurfaceFormat(
+        const std::vector<VkSurfaceFormatKHR> &availableFormats);
+    VkPresentModeKHR chooseSwapPresentMode(
+        const std::vector<VkPresentModeKHR> &availablePresentModes);
+    VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR &capabilities);
+
+    // ---- 图形管线 (vulkan_pipeline.cpp) ----
+    void createGraphicsPipeline();
+    VkShaderModule createShaderModule(const std::vector<char> code);
+    void createRenderPass();
+
+    // ----帧缓冲----
+    void createFramebuffers();
+    void createCommandPool();
+    void createCommandBuffer();
+    void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
+
+    void drawFrame();
+    void createSyncObjects();
+};
