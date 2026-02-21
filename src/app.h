@@ -36,18 +36,23 @@ class HelloTriangleApplication {
     // ---- 帧缓冲 ----
     std::vector<VkFramebuffer> swapChainFramebuffers;
     VkCommandPool commandPool;
-    VkCommandBuffer commandBuffer;
+    std::vector<VkCommandBuffer> commandBuffers;
 
     // ---- 同步 ----
-    VkSemaphore imageAvailableSemaphore;
-    VkSemaphore renderFinishedSemaphore;
-    VkFence inFlightFence;
+    std::vector<VkSemaphore> imageAvailableSemaphores;
+    std::vector<VkSemaphore> renderFinishedSemaphores;
+    std::vector<VkFence> inFlightFences;
+
+    bool framebufferResized = false;
+
+    uint32_t currentFrame = 0;
 
     // ---- 应用主框架 (app.cpp) ----
     void initWindow();
     void initVulkan();
     void mainLoop();
     void cleanup();
+    static void framebufferResizeCallback(GLFWwindow* window, int width, int height);
 
     // ---- 实例与调试 (vulkan_instance.cpp) ----
     void createInstance();
@@ -88,9 +93,13 @@ class HelloTriangleApplication {
     // ----帧缓冲----
     void createFramebuffers();
     void createCommandPool();
-    void createCommandBuffer();
-    void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
+    void createCommandBuffers();
+    void recordCommandBuffer(VkCommandBuffer commandBuffer,
+                             uint32_t imageIndex);
 
     void drawFrame();
     void createSyncObjects();
+
+    void recreateSwapChain();
+    void cleanupSwapChain();
 };
