@@ -13,49 +13,65 @@ void HelloTriangleApplication::pickPhysicalDevice() {
     std::vector<VkPhysicalDevice> devices(deviceCount);
     vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
 
-    for (const auto &device : devices) {
-        VkPhysicalDeviceProperties deviceProperties;
-        vkGetPhysicalDeviceProperties(device, &deviceProperties);
-        if (isDeviceSuitable(device) &&
-            deviceProperties.deviceType ==
-                VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
-            physicalDevice = device;
+    VkPhysicalDevice fallbackDevice = VK_NULL_HANDLE;
 
-            std::cout << "---------------------------------" << std::endl;
-            std::cout << "Selected GPU: " << deviceProperties.deviceName
-                      << std::endl;
+    auto printDeviceInfo = [](VkPhysicalDeviceProperties &props) {
+        std::cout << "---------------------------------" << std::endl;
+        std::cout << "Selected GPU: " << props.deviceName << std::endl;
 
-            std::string typeStr;
-            switch (deviceProperties.deviceType) {
-            case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
-                typeStr = "Discrete GPU";
-                break;
-            case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
-                typeStr = "Integrated GPU";
-                break;
-            case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
-                typeStr = "Virtual GPU";
-                break;
-            case VK_PHYSICAL_DEVICE_TYPE_CPU:
-                typeStr = "CPU";
-                break;
-            default:
-                typeStr = "Other";
-                break;
-            }
-            std::cout << "Device Type : " << typeStr << std::endl;
-            std::cout << "API Version : "
-                      << VK_VERSION_MAJOR(deviceProperties.apiVersion) << "."
-                      << VK_VERSION_MINOR(deviceProperties.apiVersion) << "."
-                      << VK_VERSION_PATCH(deviceProperties.apiVersion)
-                      << std::endl;
-            std::cout << "---------------------------------" << std::endl;
-
+        std::string typeStr;
+        switch (props.deviceType) {
+        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+            typeStr = "Discrete GPU";
+            break;
+        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+            typeStr = "Integrated GPU";
+            break;
+        case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
+            typeStr = "Virtual GPU";
+            break;
+        case VK_PHYSICAL_DEVICE_TYPE_CPU:
+            typeStr = "CPU";
+            break;
+        default:
+            typeStr = "Other";
             break;
         }
+        std::cout << "Device Type : " << typeStr << std::endl;
+        std::cout << "API Version : " << VK_VERSION_MAJOR(props.apiVersion)
+                  << "." << VK_VERSION_MINOR(props.apiVersion) << "."
+                  << VK_VERSION_PATCH(props.apiVersion) << std::endl;
+        std::cout << "---------------------------------" << std::endl;
+    };
+
+    for (const auto &device : devices) {
+        if (!isDeviceSuitable(device))
+            continue;
+
+        VkPhysicalDeviceProperties deviceProperties;
+        vkGetPhysicalDeviceProperties(device, &deviceProperties);
+
+        if (deviceProperties.deviceType ==
+            VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+            physicalDevice = device;
+            printDeviceInfo(deviceProperties);
+            break;
+        }
+
+        if (fallbackDevice == VK_NULL_HANDLE) {
+            fallbackDevice = device;
+        }
     }
+
     if (physicalDevice == VK_NULL_HANDLE) {
-        throw std::runtime_error("failed to find a suitable GPU!");
+        if (fallbackDevice != VK_NULL_HANDLE) {
+            physicalDevice = fallbackDevice;
+            VkPhysicalDeviceProperties deviceProperties;
+            vkGetPhysicalDeviceProperties(physicalDevice, &deviceProperties);
+            printDeviceInfo(deviceProperties);
+        } else {
+            throw std::runtime_error("failed to find a suitable GPU!");
+        }
     }
 }
 
@@ -74,7 +90,11 @@ bool HelloTriangleApplication::isDeviceSuitable(VkPhysicalDevice device) {
                             !swapChainSupport.presentModes.empty();
     }
 
-    return indices.isComplete() && extensionsSupported && swapChainAdequate;
+    VkPhysicalDeviceFeatures supportedFeatures;
+    vkGetPhysicalDeviceFeatures(device, &supportedFeatures);
+
+    return indices.isComplete() && extensionsSupported && swapChainAdequate &&
+           supportedFeatures.samplerAnisotropy;
 }
 
 bool HelloTriangleApplication::checkDeviceExtensionSupport(
@@ -156,6 +176,7 @@ void HelloTriangleApplication::createLogicalDevice() {
     }
 
     VkPhysicalDeviceFeatures deviceFeatures{};
+    deviceFeatures.samplerAnisotropy = VK_TRUE;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

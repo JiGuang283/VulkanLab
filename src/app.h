@@ -29,6 +29,7 @@ class HelloTriangleApplication {
     std::vector<VkImageView> swapChainImageViews;
 
     // ---- 图形管线 ----
+    VkDescriptorSetLayout descriptorSetLayout;
     VkPipelineLayout pipelineLayout;
     VkRenderPass renderPass;
     VkPipeline graphicsPipeline;
@@ -47,12 +48,31 @@ class HelloTriangleApplication {
 
     uint32_t currentFrame = 0;
 
+    VkBuffer vertexBuffer;
+    VkDeviceMemory vertexBufferMemory;
+    VkBuffer indexBuffer;
+    VkDeviceMemory indexBufferMemory;
+
+    std::vector<VkBuffer> uniformBuffers;
+    std::vector<VkDeviceMemory> uniformBuffersMemory;
+    std::vector<void *> uniformBuffersMapped;
+
+    VkDescriptorPool descriptorPool;
+    std::vector<VkDescriptorSet> descriptorSets;
+
+    VkImage textureImage;
+    VkDeviceMemory textureImageMemory;
+
+    VkImageView textureImageView;
+    VkSampler textureSampler;
+
     // ---- 应用主框架 (app.cpp) ----
     void initWindow();
     void initVulkan();
     void mainLoop();
     void cleanup();
-    static void framebufferResizeCallback(GLFWwindow* window, int width, int height);
+    static void framebufferResizeCallback(GLFWwindow *window, int width,
+                                          int height);
 
     // ---- 实例与调试 (vulkan_instance.cpp) ----
     void createInstance();
@@ -102,4 +122,38 @@ class HelloTriangleApplication {
 
     void recreateSwapChain();
     void cleanupSwapChain();
+
+    void createVertexBuffer();
+    void createIndexBuffer();
+    uint32_t findMemoryType(uint32_t typeFilter,
+                            VkMemoryPropertyFlags properties);
+    void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
+                      VkMemoryPropertyFlags properties, VkBuffer &buffer,
+                      VkDeviceMemory &bufferMemory);
+    VkCommandBuffer beginSingleTimeCommands();
+    void endSingleTimeCommands(VkCommandBuffer commandBuffer);
+    void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
+
+    void createDescriptorSetLayout();
+    void createUniformBuffers();
+    void updateUniformBuffer(uint32_t currentImage);
+
+    // 创建描述符池和描述符集
+    void createDescriptionPool();
+    void createDescriptorSets();
+
+    void createTextureImage();
+    void createTextureImageView();
+    VkImageView createImageView(VkImage image, VkFormat format);
+    void createImage(uint32_t width, uint32_t height, VkFormat format,
+                     VkImageTiling tiling, VkImageUsageFlags usage,
+                     VkMemoryPropertyFlags properties, VkImage &image,
+                     VkDeviceMemory &imageMemory);
+    void transitionImageLayout(VkImage image, VkFormat format,
+                               VkImageLayout oldLayout,
+                               VkImageLayout newLayout);
+    void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width,
+                           uint32_t height);
+
+    void createTextureSampler();
 };
