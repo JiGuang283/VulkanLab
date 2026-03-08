@@ -2,6 +2,17 @@
     "cSpell.words": [
         "commandpool",
         "renderpass",
-        "stbi"
-    ]
+        "stbi",
+        "Subpasses"
+    ],
+    "C_Cpp.intelliSenseEngine": "Default",
+    "C_Cpp.intelliSenseCacheSize": 512,
+    "C_Cpp.workspaceParsingPriority": "low",
+    "editor.quickSuggestionsDelay": 10,
+    "files.exclude": {
+        "**/build": true,
+        "**/.git": true
+    },
+
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
 }

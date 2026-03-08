@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(VulkanLab)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # 设置 C++ 标准
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,10 +21,12 @@ find_path(GLM_INCLUDE_DIR glm/glm.hpp
 # 指向我们刚才建立的 external 目录
 set(GLFW_DIR "${CMAKE_SOURCE_DIR}/external/glfw")
 set(STB_DIR "${CMAKE_SOURCE_DIR}/external/stb")
+set(TINYOBJ_DIR "${CMAKE_SOURCE_DIR}/external/tiny_obj_loader.h")
 
 # 添加 GLFW 头文件目录
 include_directories(${GLFW_DIR}/include)
 include_directories(${STB_DIR})
+include_directories(${TINYOBJ_DIR})
 
 # 添加 GLFW 库文件目录 (这里假设你使用的是 lib-vc2022，如果是旧版 VS 请调整)
 link_directories(${GLFW_DIR}/lib-vc2022)
@@ -32,6 +36,7 @@ add_executable(VulkanLab
     src/main.cpp
     src/app.cpp
     src/stb_image.cpp
+    src/tiny_obj_loader.cpp
     src/vulkan_instance.cpp
     src/vulkan_device.cpp
     src/vulkan_swapchain.cpp
@@ -43,6 +48,7 @@ add_executable(VulkanLab
     src/vulkan_vertex.cpp
     src/vulkan_uniform.cpp
     src/vulkan_texture.cpp
+    src/vulkan_depth.cpp
 )
 
 # 添加 src 目录及 GLM 头文件为搜索路径
@@ -88,4 +94,11 @@ add_custom_command(TARGET VulkanLab POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/textures
         $<TARGET_FILE_DIR:VulkanLab>/textures
+)
+
+# Copy models to build directory
+add_custom_command(TARGET VulkanLab POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/models
+        $<TARGET_FILE_DIR:VulkanLab>/models
 )

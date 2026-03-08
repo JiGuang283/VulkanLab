@@ -66,6 +66,10 @@ class HelloTriangleApplication {
     VkImageView textureImageView;
     VkSampler textureSampler;
 
+    VkImage depthImage;
+    VkDeviceMemory depthImageMemory;
+    VkImageView depthImageView;
+
     // ---- 应用主框架 (app.cpp) ----
     void initWindow();
     void initVulkan();
@@ -144,7 +148,7 @@ class HelloTriangleApplication {
 
     void createTextureImage();
     void createTextureImageView();
-    VkImageView createImageView(VkImage image, VkFormat format);
+    VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags);
     void createImage(uint32_t width, uint32_t height, VkFormat format,
                      VkImageTiling tiling, VkImageUsageFlags usage,
                      VkMemoryPropertyFlags properties, VkImage &image,
@@ -156,4 +160,8 @@ class HelloTriangleApplication {
                            uint32_t height);
 
     void createTextureSampler();
+    void createDepthResources();
+
+    VkFormat findSuportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features);
+    VkFormat findDepthFormat();
 };
