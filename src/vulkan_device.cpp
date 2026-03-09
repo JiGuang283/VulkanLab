@@ -54,6 +54,7 @@ void HelloTriangleApplication::pickPhysicalDevice() {
         if (deviceProperties.deviceType ==
             VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
             physicalDevice = device;
+            msaaSamples = getMaxUsableSampleCount();
             printDeviceInfo(deviceProperties);
             break;
         }
@@ -177,6 +178,7 @@ void HelloTriangleApplication::createLogicalDevice() {
 
     VkPhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.samplerAnisotropy = VK_TRUE;
+    deviceFeatures.sampleRateShading = VK_TRUE;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

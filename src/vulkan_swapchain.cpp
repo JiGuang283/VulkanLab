@@ -153,7 +153,7 @@ void HelloTriangleApplication::createImageViews() {
     swapChainImageViews.resize(swapChainImages.size());
 
     for (size_t i = 0; i < swapChainImages.size(); i++) {
-        swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+        swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
     }
 }
 
@@ -172,17 +172,23 @@ void HelloTriangleApplication::recreateSwapChain(){
 
     createSwapChain();
     createImageViews();
+    createColorResources();
     createDepthResources();
     createFramebuffers();
 }
 
 void HelloTriangleApplication::cleanupSwapChain(){
-    vkDestroyImageView(device, depthImageView, nullptr);
-    vkDestroyImage(device, depthImage, nullptr);
-    vkFreeMemory(device, depthImageMemory, nullptr);
     for(auto framebuffer : swapChainFramebuffers){
         vkDestroyFramebuffer(device, framebuffer, nullptr);
     }
+
+    vkDestroyImageView(device, colorImageView, nullptr);
+    vkDestroyImage(device, colorImage, nullptr);
+    vkFreeMemory(device, colorImageMemory, nullptr);
+
+    vkDestroyImageView(device, depthImageView, nullptr);
+    vkDestroyImage(device, depthImage, nullptr);
+    vkFreeMemory(device, depthImageMemory, nullptr);
 
     for(auto imageView : swapChainImageViews){
         vkDestroyImageView(device, imageView, nullptr);

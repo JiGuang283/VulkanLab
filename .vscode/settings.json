@@ -1,9 +1,12 @@
 {
     "cSpell.words": [
+        "blit",
         "commandpool",
+        "msaa",
         "renderpass",
         "stbi",
-        "Subpasses"
+        "Subpasses",
+        "tinyobj"
     ],
     "C_Cpp.intelliSenseEngine": "Default",
     "C_Cpp.intelliSenseCacheSize": 512,

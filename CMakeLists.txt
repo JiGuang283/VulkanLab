@@ -37,6 +37,7 @@ add_executable(VulkanLab
     src/app.cpp
     src/stb_image.cpp
     src/tiny_obj_loader.cpp
+    src/vulkan_model.cpp
     src/vulkan_instance.cpp
     src/vulkan_device.cpp
     src/vulkan_swapchain.cpp
@@ -49,6 +50,8 @@ add_executable(VulkanLab
     src/vulkan_uniform.cpp
     src/vulkan_texture.cpp
     src/vulkan_depth.cpp
+    src/vulkan_mipmap.cpp
+    src/vulkan_msaa.cpp
 )
 
 # 添加 src 目录及 GLM 头文件为搜索路径
