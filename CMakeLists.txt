@@ -22,37 +22,23 @@ find_path(GLM_INCLUDE_DIR glm/glm.hpp
 set(GLFW_DIR "${CMAKE_SOURCE_DIR}/external/glfw")
 set(STB_DIR "${CMAKE_SOURCE_DIR}/external/stb")
 set(TINYOBJ_DIR "${CMAKE_SOURCE_DIR}/external/tiny_obj_loader.h")
+set(VMA_DIR "${CMAKE_SOURCE_DIR}/external/vma")
 
 # 添加 GLFW 头文件目录
 include_directories(${GLFW_DIR}/include)
 include_directories(${STB_DIR})
 include_directories(${TINYOBJ_DIR})
+include_directories(${VMA_DIR})
 
 # 添加 GLFW 库文件目录 (这里假设你使用的是 lib-vc2022，如果是旧版 VS 请调整)
 link_directories(${GLFW_DIR}/lib-vc2022)
 
 # 3. 添加可执行文件
-add_executable(VulkanLab
-    src/main.cpp
-    src/app.cpp
-    src/stb_image.cpp
-    src/tiny_obj_loader.cpp
-    src/vulkan_model.cpp
-    src/vulkan_instance.cpp
-    src/vulkan_device.cpp
-    src/vulkan_swapchain.cpp
-    src/vulkan_pipeline.cpp
-    src/vulkan_renderpass.cpp
-    src/vulkan_framebuffers.cpp
-    src/vulkan_commandpool.cpp
-    src/vulkan_drawframe.cpp
-    src/vulkan_vertex.cpp
-    src/vulkan_uniform.cpp
-    src/vulkan_texture.cpp
-    src/vulkan_depth.cpp
-    src/vulkan_mipmap.cpp
-    src/vulkan_msaa.cpp
+file(GLOB_RECURSE SOURCES
+    "${CMAKE_SOURCE_DIR}/src/*.cpp"
+    "${CMAKE_SOURCE_DIR}/src/*.h"
 )
+add_executable(VulkanLab ${SOURCES})
 
 # 添加 src 目录及 GLM 头文件为搜索路径
 target_include_directories(VulkanLab PRIVATE ${CMAKE_SOURCE_DIR}/src ${GLM_INCLUDE_DIR})

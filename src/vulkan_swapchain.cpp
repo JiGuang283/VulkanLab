@@ -171,6 +171,7 @@ void HelloTriangleApplication::recreateSwapChain(){
     cleanupSwapChain();
 
     createSwapChain();
+    createSwapChainSemaphores();
     createImageViews();
     createColorResources();
     createDepthResources();
@@ -178,6 +179,11 @@ void HelloTriangleApplication::recreateSwapChain(){
 }
 
 void HelloTriangleApplication::cleanupSwapChain(){
+    for (auto semaphore : renderFinishedSemaphores) {
+        vkDestroySemaphore(device, semaphore, nullptr);
+    }
+    renderFinishedSemaphores.clear();
+
     for(auto framebuffer : swapChainFramebuffers){
         vkDestroyFramebuffer(device, framebuffer, nullptr);
     }

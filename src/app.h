@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vulkan_utils.h"
+#include "vk_mem_alloc.h"
 
 class HelloTriangleApplication {
   public:
@@ -80,6 +81,8 @@ class HelloTriangleApplication {
     VkDeviceMemory colorImageMemory;
     VkImageView colorImageView;
 
+    VmaAllocator allocator;
+
     // ---- 应用主框架 (app.cpp) ----
     void initWindow();
     void initVulkan();
@@ -133,6 +136,7 @@ class HelloTriangleApplication {
 
     void drawFrame();
     void createSyncObjects();
+    void createSwapChainSemaphores();
 
     void recreateSwapChain();
     void cleanupSwapChain();
@@ -186,4 +190,6 @@ class HelloTriangleApplication {
 
     VkSampleCountFlagBits getMaxUsableSampleCount();
     void createColorResources();
+
+    void createAllocator();
 };
