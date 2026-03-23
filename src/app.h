@@ -1,7 +1,10 @@
 #pragma once
 
-#include "vulkan_utils.h"
 #include "vk_mem_alloc.h"
+#include "vulkan_utils.h"
+
+#include "core/VulkanContext.h"
+#include "core/Device.h"
 
 class HelloTriangleApplication {
   public:
@@ -12,15 +15,17 @@ class HelloTriangleApplication {
     GLFWwindow *window;
 
     // ---- Vulkan 核心对象 ----
-    VkInstance instance;
-    VkDebugUtilsMessengerEXT debugMessenger;
-    VkSurfaceKHR surface;
+    // VkInstance instance;
+    // VkDebugUtilsMessengerEXT debugMessenger;
+    // VkSurfaceKHR surface;
+    std::unique_ptr<vkr::VulkanContext> context;
 
     // ---- 设备 ----
-    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
-    VkDevice device;
-    VkQueue graphicsQueue;
-    VkQueue presentQueue;
+    // VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+    // VkDevice device;
+    // VkQueue graphicsQueue;
+    // VkQueue presentQueue;
+    std::unique_ptr<vkr::Device> device;
 
     // ---- 交换链 ----
     VkSwapchainKHR swapChain;
@@ -76,7 +81,7 @@ class HelloTriangleApplication {
 
     uint32_t mipLevels;
 
-    VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
+    // VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
     VkImage colorImage;
     VkDeviceMemory colorImageMemory;
     VkImageView colorImageView;
@@ -92,30 +97,30 @@ class HelloTriangleApplication {
                                           int height);
 
     // ---- 实例与调试 (vulkan_instance.cpp) ----
-    void createInstance();
-    void setupDebugMessenger();
-    void populateDebugMessengerCreateInfo(
-        VkDebugUtilsMessengerCreateInfoEXT &createInfo);
-    bool checkValidationLayerSupport();
-    std::vector<const char *> getRequiredExtensions();
-    static VKAPI_ATTR VkBool32 VKAPI_CALL
-    debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-                  VkDebugUtilsMessageTypeFlagsEXT messageType,
-                  const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
-                  void *pUserData);
+    // void createInstance();
+    // void setupDebugMessenger();
+    // void populateDebugMessengerCreateInfo(
+    //     VkDebugUtilsMessengerCreateInfoEXT &createInfo);
+    // bool checkValidationLayerSupport();
+    // std::vector<const char *> getRequiredExtensions();
+    // static VKAPI_ATTR VkBool32 VKAPI_CALL
+    // debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+    //               VkDebugUtilsMessageTypeFlagsEXT messageType,
+    //               const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
+    //               void *pUserData);
 
     // ---- 设备管理 (vulkan_device.cpp) ----
-    void pickPhysicalDevice();
-    void createLogicalDevice();
-    bool isDeviceSuitable(VkPhysicalDevice device);
-    bool checkDeviceExtensionSupport(VkPhysicalDevice device);
-    QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device);
+    // void pickPhysicalDevice();
+    // void createLogicalDevice();
+    // bool isDeviceSuitable(VkPhysicalDevice device);
+    // bool checkDeviceExtensionSupport(VkPhysicalDevice device);
+    // QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device);
 
     // ---- 交换链 (vulkan_swapchain.cpp) ----
     void createSurface();
     void createSwapChain();
     void createImageViews();
-    SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device);
+    // SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device);
     VkSurfaceFormatKHR chooseSwapSurfaceFormat(
         const std::vector<VkSurfaceFormatKHR> &availableFormats);
     VkPresentModeKHR chooseSwapPresentMode(
@@ -143,8 +148,8 @@ class HelloTriangleApplication {
 
     void createVertexBuffer();
     void createIndexBuffer();
-    uint32_t findMemoryType(uint32_t typeFilter,
-                            VkMemoryPropertyFlags properties);
+    // uint32_t findMemoryType(uint32_t typeFilter,
+    //                         VkMemoryPropertyFlags properties);
     void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                       VkMemoryPropertyFlags properties, VkBuffer &buffer,
                       VkDeviceMemory &bufferMemory);
@@ -188,7 +193,7 @@ class HelloTriangleApplication {
     void generateMipmaps(VkImage image, VkFormat imageFormat, int32_t texWidth,
                          int32_t texHeight, uint32_t mipLevels);
 
-    VkSampleCountFlagBits getMaxUsableSampleCount();
+    // VkSampleCountFlagBits getMaxUsableSampleCount();
     void createColorResources();
 
     void createAllocator();

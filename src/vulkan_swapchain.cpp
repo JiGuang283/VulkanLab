@@ -2,42 +2,42 @@
 
 // ---- Surface 创建 ----
 
-void HelloTriangleApplication::createSurface() {
-    if (glfwCreateWindowSurface(instance, window, nullptr, &surface) !=
-        VK_SUCCESS) {
-        throw std::runtime_error("failed to create window surface!");
-    }
-}
+// void HelloTriangleApplication::createSurface() {
+//     if (glfwCreateWindowSurface(instance, window, nullptr, &surface) !=
+//         VK_SUCCESS) {
+//         throw std::runtime_error("failed to create window surface!");
+//     }
+// }
 
 // ---- 交换链支持查询 ----
 
-SwapChainSupportDetails
-HelloTriangleApplication::querySwapChainSupport(VkPhysicalDevice device) {
-    SwapChainSupportDetails details;
+// SwapChainSupportDetails
+// HelloTriangleApplication::querySwapChainSupport(VkPhysicalDevice device) {
+//     SwapChainSupportDetails details;
 
-    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface,
-                                              &details.capabilities);
+//     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, context->surface(),
+//                                               &details.capabilities);
 
-    uint32_t formatCount;
-    vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount,
-                                         nullptr);
-    if (formatCount != 0) {
-        details.formats.resize(formatCount);
-        vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount,
-                                             details.formats.data());
-    }
+//     uint32_t formatCount;
+//     vkGetPhysicalDeviceSurfaceFormatsKHR(device, context->surface(), &formatCount,
+//                                          nullptr);
+//     if (formatCount != 0) {
+//         details.formats.resize(formatCount);
+//         vkGetPhysicalDeviceSurfaceFormatsKHR(device, context->surface(), &formatCount,
+//                                              details.formats.data());
+//     }
 
-    uint32_t presentModeCount;
-    vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface,
-                                              &presentModeCount, nullptr);
-    if (presentModeCount != 0) {
-        details.presentModes.resize(presentModeCount);
-        vkGetPhysicalDeviceSurfacePresentModesKHR(
-            device, surface, &presentModeCount, details.presentModes.data());
-    }
+//     uint32_t presentModeCount;
+//     vkGetPhysicalDeviceSurfacePresentModesKHR(device, context->surface(),
+//                                               &presentModeCount, nullptr);
+//     if (presentModeCount != 0) {
+//         details.presentModes.resize(presentModeCount);
+//         vkGetPhysicalDeviceSurfacePresentModesKHR(
+//             device, context->surface(), &presentModeCount, details.presentModes.data());
+//     }
 
-    return details;
-}
+//     return details;
+// }
 
 // ---- 交换链参数选择 ----
 
@@ -91,7 +91,7 @@ VkExtent2D HelloTriangleApplication::chooseSwapExtent(
 
 void HelloTriangleApplication::createSwapChain() {
     SwapChainSupportDetails swapChainSupport =
-        querySwapChainSupport(physicalDevice);
+        device->querySwapChainSupport();
 
     VkSurfaceFormatKHR surfaceFormat =
         chooseSwapSurfaceFormat(swapChainSupport.formats);
@@ -107,7 +107,7 @@ void HelloTriangleApplication::createSwapChain() {
 
     VkSwapchainCreateInfoKHR createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-    createInfo.surface = surface;
+    createInfo.surface = context->surface();
     createInfo.minImageCount = imageCount;
     createInfo.imageFormat = surfaceFormat.format;
     createInfo.imageColorSpace = surfaceFormat.colorSpace;
@@ -115,7 +115,7 @@ void HelloTriangleApplication::createSwapChain() {
     createInfo.imageArrayLayers = 1;
     createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-    QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
+    QueueFamilyIndices indices = device->queueFamilies();
     uint32_t queueFamilyIndices[] = {indices.graphicsFamily.value(),
                                      indices.presentFamily.value()};
 
@@ -133,14 +133,14 @@ void HelloTriangleApplication::createSwapChain() {
     createInfo.clipped = VK_TRUE;
     createInfo.oldSwapchain = VK_NULL_HANDLE;
 
-    if (vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapChain) !=
+    if (vkCreateSwapchainKHR(device->logicalDevice(), &createInfo, nullptr, &swapChain) !=
         VK_SUCCESS) {
         throw std::runtime_error("failed to create swap chain!");
     }
 
-    vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
+    vkGetSwapchainImagesKHR(device->logicalDevice(), swapChain, &imageCount, nullptr);
     swapChainImages.resize(imageCount);
-    vkGetSwapchainImagesKHR(device, swapChain, &imageCount,
+    vkGetSwapchainImagesKHR(device->logicalDevice(), swapChain, &imageCount,
                             swapChainImages.data());
 
     swapChainImageFormat = surfaceFormat.format;
@@ -166,7 +166,7 @@ void HelloTriangleApplication::recreateSwapChain(){
         glfwWaitEvents();
     }
 
-    vkDeviceWaitIdle(device);
+    vkDeviceWaitIdle(device->logicalDevice());
 
     cleanupSwapChain();
 
@@ -180,25 +180,25 @@ void HelloTriangleApplication::recreateSwapChain(){
 
 void HelloTriangleApplication::cleanupSwapChain(){
     for (auto semaphore : renderFinishedSemaphores) {
-        vkDestroySemaphore(device, semaphore, nullptr);
+        vkDestroySemaphore(device->logicalDevice(), semaphore, nullptr);
     }
     renderFinishedSemaphores.clear();
 
     for(auto framebuffer : swapChainFramebuffers){
-        vkDestroyFramebuffer(device, framebuffer, nullptr);
+        vkDestroyFramebuffer(device->logicalDevice(), framebuffer, nullptr);
     }
 
-    vkDestroyImageView(device, colorImageView, nullptr);
-    vkDestroyImage(device, colorImage, nullptr);
-    vkFreeMemory(device, colorImageMemory, nullptr);
+    vkDestroyImageView(device->logicalDevice(), colorImageView, nullptr);
+    vkDestroyImage(device->logicalDevice(), colorImage, nullptr);
+    vkFreeMemory(device->logicalDevice(), colorImageMemory, nullptr);
 
-    vkDestroyImageView(device, depthImageView, nullptr);
-    vkDestroyImage(device, depthImage, nullptr);
-    vkFreeMemory(device, depthImageMemory, nullptr);
+    vkDestroyImageView(device->logicalDevice(), depthImageView, nullptr);
+    vkDestroyImage(device->logicalDevice(), depthImage, nullptr);
+    vkFreeMemory(device->logicalDevice(), depthImageMemory, nullptr);
 
     for(auto imageView : swapChainImageViews){
-        vkDestroyImageView(device, imageView, nullptr);
+        vkDestroyImageView(device->logicalDevice(), imageView, nullptr);
     }
 
-    vkDestroySwapchainKHR(device, swapChain, nullptr);
+    vkDestroySwapchainKHR(device->logicalDevice(), swapChain, nullptr);
 }

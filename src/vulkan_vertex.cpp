@@ -12,9 +12,9 @@ void HelloTriangleApplication::createVertexBuffer() {
                  stagingBuffer, stagingBufferMemory);
 
     void *data;
-    vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
+    vkMapMemory(device->logicalDevice(), stagingBufferMemory, 0, bufferSize, 0, &data);
     memcpy(data, vertices.data(), (size_t)bufferSize);
-    vkUnmapMemory(device, stagingBufferMemory);
+    vkUnmapMemory(device->logicalDevice(), stagingBufferMemory);
 
     createBuffer(
         bufferSize,
@@ -22,26 +22,26 @@ void HelloTriangleApplication::createVertexBuffer() {
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vertexBuffer, vertexBufferMemory);
     copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
 
-    vkDestroyBuffer(device, stagingBuffer, nullptr);
-    vkFreeMemory(device, stagingBufferMemory, nullptr);
+    vkDestroyBuffer(device->logicalDevice(), stagingBuffer, nullptr);
+    vkFreeMemory(device->logicalDevice(), stagingBufferMemory, nullptr);
 }
 
-uint32_t
-HelloTriangleApplication::findMemoryType(uint32_t typeFilter,
-                                         VkMemoryPropertyFlags properties) {
-    VkPhysicalDeviceMemoryProperties memProperties;
-    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
+// uint32_t
+// HelloTriangleApplication::findMemoryType(uint32_t typeFilter,
+//                                          VkMemoryPropertyFlags properties) {
+//     VkPhysicalDeviceMemoryProperties memProperties;
+//     vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
 
-    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
-        if (typeFilter & (1 << i) &&
-            (memProperties.memoryTypes[i].propertyFlags & properties) ==
-                properties) {
-            return i;
-        }
-    }
+//     for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+//         if (typeFilter & (1 << i) &&
+//             (memProperties.memoryTypes[i].propertyFlags & properties) ==
+//                 properties) {
+//             return i;
+//         }
+//     }
 
-    throw std::runtime_error("failed to find suitable memory type!");
-}
+//     throw std::runtime_error("failed to find suitable memory type!");
+// }
 
 void HelloTriangleApplication::createBuffer(VkDeviceSize size,
                                             VkBufferUsageFlags usage,
@@ -54,25 +54,25 @@ void HelloTriangleApplication::createBuffer(VkDeviceSize size,
     bufferInfo.usage = usage;
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-    if (vkCreateBuffer(device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
+    if (vkCreateBuffer(device->logicalDevice(), &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
         throw std::runtime_error("failed to create buffer!");
     }
 
     VkMemoryRequirements memRequirements;
-    vkGetBufferMemoryRequirements(device, buffer, &memRequirements);
+    vkGetBufferMemoryRequirements(device->logicalDevice(), buffer, &memRequirements);
 
     VkMemoryAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     allocInfo.allocationSize = memRequirements.size;
     allocInfo.memoryTypeIndex =
-        findMemoryType(memRequirements.memoryTypeBits, properties);
+        device->findMemoryType(memRequirements.memoryTypeBits, properties);
 
-    if (vkAllocateMemory(device, &allocInfo, nullptr, &bufferMemory) !=
+    if (vkAllocateMemory(device->logicalDevice(), &allocInfo, nullptr, &bufferMemory) !=
         VK_SUCCESS) {
         throw std::runtime_error("failed to allocate buffer memory!");
     }
 
-    vkBindBufferMemory(device, buffer, bufferMemory, 0);
+    vkBindBufferMemory(device->logicalDevice(), buffer, bufferMemory, 0);
 }
 
 VkCommandBuffer HelloTriangleApplication::beginSingleTimeCommands() {
@@ -83,7 +83,7 @@ VkCommandBuffer HelloTriangleApplication::beginSingleTimeCommands() {
     allocInfo.commandBufferCount = 1;
 
     VkCommandBuffer commandBuffer;
-    vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer);
+    vkAllocateCommandBuffers(device->logicalDevice(), &allocInfo, &commandBuffer);
 
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -102,10 +102,10 @@ void HelloTriangleApplication::endSingleTimeCommands(VkCommandBuffer commandBuff
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &commandBuffer;
 
-    vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-    vkQueueWaitIdle(graphicsQueue);
+    vkQueueSubmit(device->graphicsQueue(), 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(device->graphicsQueue());
 
-    vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+    vkFreeCommandBuffers(device->logicalDevice(), commandPool, 1, &commandBuffer);
 }
 
 void HelloTriangleApplication::copyBuffer(VkBuffer srcBuffer,
@@ -133,9 +133,9 @@ void HelloTriangleApplication::createIndexBuffer() {
                  stagingBuffer, stagingBufferMemory);
 
     void *data;
-    vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
+    vkMapMemory(device->logicalDevice(), stagingBufferMemory, 0, bufferSize, 0, &data);
     memcpy(data, indices.data(), (size_t)bufferSize);
-    vkUnmapMemory(device, stagingBufferMemory);
+    vkUnmapMemory(device->logicalDevice(), stagingBufferMemory);
 
     createBuffer(
         bufferSize,
@@ -143,6 +143,6 @@ void HelloTriangleApplication::createIndexBuffer() {
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
     copyBuffer(stagingBuffer, indexBuffer, bufferSize);
 
-    vkDestroyBuffer(device, stagingBuffer, nullptr);
-    vkFreeMemory(device, stagingBufferMemory, nullptr);
+    vkDestroyBuffer(device->logicalDevice(), stagingBuffer, nullptr);
+    vkFreeMemory(device->logicalDevice(), stagingBufferMemory, nullptr);
 }

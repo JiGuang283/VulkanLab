@@ -1,10 +1,49 @@
-/*
+#include "VulkanContext.h"
+#include "vulkan_utils.h"
 
-#include "app.h"
+#include <iostream>
 
-// ---- 实例创建 ----
+namespace vkr {
 
-void HelloTriangleApplication::createInstance() {
+static VKAPI_ATTR VkBool32 VKAPI_CALL
+debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+              VkDebugUtilsMessageTypeFlagsEXT messageType,
+              const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
+              void *pUserData) {
+    std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
+    return VK_FALSE;
+}
+
+VulkanContext::VulkanContext(GLFWwindow *window) : window_(window) {
+    createInstance();
+    setupDebugMessenger();
+    createSurface();
+}
+
+VulkanContext::~VulkanContext() {
+    if (enableValidationLayers) {
+        DestroyDebugUtilsMessengerEXT(instance_, debugMessenger_, nullptr);
+    }
+    vkDestroySurfaceKHR(instance_, surface_, nullptr);
+    vkDestroyInstance(instance_, nullptr);
+}
+
+std::vector<const char *> getRequiredExtensions() {
+    uint32_t glfwExtensionCount = 0;
+    const char **glfwExtensions;
+    glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+
+    std::vector<const char *> extensions(glfwExtensions,
+                                         glfwExtensions + glfwExtensionCount);
+
+    if (enableValidationLayers) {
+        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    }
+
+    return extensions;
+}
+
+void VulkanContext::createInstance() {
     if (enableValidationLayers && !checkValidationLayerSupport()) {
         throw std::runtime_error(
             "validation layers requested requested, but not available!");
@@ -39,14 +78,32 @@ void HelloTriangleApplication::createInstance() {
         createInfo.pNext = nullptr;
     }
 
-    if (vkCreateInstance(&createInfo, nullptr, &instance) != VK_SUCCESS) {
+    if (vkCreateInstance(&createInfo, nullptr, &instance_) != VK_SUCCESS) {
         throw std::runtime_error("failed to create instance!");
     }
 }
 
-// ---- 调试信使 ----
+void VulkanContext::setupDebugMessenger() {
+    if (!enableValidationLayers)
+        return;
 
-void HelloTriangleApplication::populateDebugMessengerCreateInfo(
+    VkDebugUtilsMessengerCreateInfoEXT createInfo;
+    populateDebugMessengerCreateInfo(createInfo);
+
+    if (CreateDebugUtilsMessengerEXT(instance_, &createInfo, nullptr,
+                                     &debugMessenger_) != VK_SUCCESS) {
+        throw std::runtime_error("failed to set up debug messenger!");
+    }
+}
+
+void VulkanContext::createSurface() {
+    if (glfwCreateWindowSurface(instance_, window_, nullptr, &surface_) !=
+        VK_SUCCESS) {
+        throw std::runtime_error("failed to create window surface!");
+    }
+}
+
+void VulkanContext::populateDebugMessengerCreateInfo(
     VkDebugUtilsMessengerCreateInfoEXT &createInfo) {
     createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
@@ -60,22 +117,7 @@ void HelloTriangleApplication::populateDebugMessengerCreateInfo(
     createInfo.pfnUserCallback = debugCallback;
 }
 
-void HelloTriangleApplication::setupDebugMessenger() {
-    if (!enableValidationLayers)
-        return;
-
-    VkDebugUtilsMessengerCreateInfoEXT createInfo;
-    populateDebugMessengerCreateInfo(createInfo);
-
-    if (CreateDebugUtilsMessengerEXT(instance, &createInfo, nullptr,
-                                     &debugMessenger) != VK_SUCCESS) {
-        throw std::runtime_error("failed to set up debug messenger!");
-    }
-}
-
-// ---- 验证层支持检查 ----
-
-bool HelloTriangleApplication::checkValidationLayerSupport() {
+bool VulkanContext::checkValidationLayerSupport() {
     uint32_t layerCount;
     vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
 
@@ -98,9 +140,7 @@ bool HelloTriangleApplication::checkValidationLayerSupport() {
     return true;
 }
 
-// ---- 获取所需扩展 ----
-
-std::vector<const char *> HelloTriangleApplication::getRequiredExtensions() {
+std::vector<const char *> VulkanContext::getRequiredExtensions() {
     uint32_t glfwExtensionCount = 0;
     const char **glfwExtensions;
     glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
@@ -115,15 +155,4 @@ std::vector<const char *> HelloTriangleApplication::getRequiredExtensions() {
     return extensions;
 }
 
-// ---- 调试回调 ----
-
-VKAPI_ATTR VkBool32 VKAPI_CALL HelloTriangleApplication::debugCallback(
-    VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-    VkDebugUtilsMessageTypeFlagsEXT messageType,
-    const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
-    void *pUserData) {
-    std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
-    return VK_FALSE;
-}
-
-*/
+} // namespace vkr

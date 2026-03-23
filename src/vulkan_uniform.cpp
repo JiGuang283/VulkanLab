@@ -27,7 +27,7 @@ void HelloTriangleApplication::createDescriptorSetLayout() {
     layoutInfo.bindingCount = static_cast<uint32_t>(binding.size());
     layoutInfo.pBindings = binding.data();
 
-    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
+    if (vkCreateDescriptorSetLayout(device->logicalDevice(), &layoutInfo, nullptr,
                                     &descriptorSetLayout) != VK_SUCCESS) {
         throw std::runtime_error("failed to create descriptor set layout!");
     }
@@ -45,7 +45,7 @@ void HelloTriangleApplication::createUniformBuffers() {
                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                      uniformBuffers[i], uniformBuffersMemory[i]);
-        vkMapMemory(device, uniformBuffersMemory[i], 0, bufferSize, 0,
+        vkMapMemory(device->logicalDevice(), uniformBuffersMemory[i], 0, bufferSize, 0,
                     &uniformBuffersMapped[i]);
     }
 }
@@ -79,7 +79,7 @@ void HelloTriangleApplication::createDescriptionPool(){
     poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 
 
-    if(vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS){
+    if(vkCreateDescriptorPool(device->logicalDevice(), &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS){
         throw std::runtime_error("failed to create descriptor pool!");
     }
 }
@@ -93,7 +93,7 @@ void HelloTriangleApplication::createDescriptorSets(){
     allocInfo.pSetLayouts = layouts.data();
 
     descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
-    if(vkAllocateDescriptorSets(device, &allocInfo, descriptorSets.data()) != VK_SUCCESS){
+    if(vkAllocateDescriptorSets(device->logicalDevice(), &allocInfo, descriptorSets.data()) != VK_SUCCESS){
         throw std::runtime_error("failed to allocate descriptor sets!");
     }
 
@@ -125,6 +125,6 @@ void HelloTriangleApplication::createDescriptorSets(){
         descriptorWrites[1].descriptorCount = 1;
         descriptorWrites[1].pImageInfo = &imageInfo;
         
-        vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+        vkUpdateDescriptorSets(device->logicalDevice(), static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
     }
 }

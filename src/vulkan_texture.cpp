@@ -23,9 +23,9 @@ void HelloTriangleApplication::createTextureImage() {
                  stagingBuffer, stagingBufferrMemory);
 
     void *data;
-    vkMapMemory(device, stagingBufferrMemory, 0, imageSize, 0, &data);
+    vkMapMemory(device->logicalDevice(), stagingBufferrMemory, 0, imageSize, 0, &data);
     memcpy(data, pixels, static_cast<size_t>(imageSize));
-    vkUnmapMemory(device, stagingBufferrMemory);
+    vkUnmapMemory(device->logicalDevice(), stagingBufferrMemory);
 
     stbi_image_free(pixels);
 
@@ -44,8 +44,8 @@ void HelloTriangleApplication::createTextureImage() {
     //                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
     //                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, mipLevels);
 
-    vkDestroyBuffer(device, stagingBuffer, nullptr);
-    vkFreeMemory(device, stagingBufferrMemory, nullptr);
+    vkDestroyBuffer(device->logicalDevice(), stagingBuffer, nullptr);
+    vkFreeMemory(device->logicalDevice(), stagingBufferrMemory, nullptr);
 
     generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, mipLevels);
 }
@@ -70,25 +70,25 @@ void HelloTriangleApplication::createImage(
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     imageInfo.mipLevels = mipLevels;
 
-    if (vkCreateImage(device, &imageInfo, nullptr, &image) != VK_SUCCESS) {
+    if (vkCreateImage(device->logicalDevice(), &imageInfo, nullptr, &image) != VK_SUCCESS) {
         throw std::runtime_error("failed to create image!");
     }
 
     VkMemoryRequirements memRequirements;
-    vkGetImageMemoryRequirements(device, image, &memRequirements);
+    vkGetImageMemoryRequirements(device->logicalDevice(), image, &memRequirements);
 
     VkMemoryAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     allocInfo.allocationSize = memRequirements.size;
     allocInfo.memoryTypeIndex =
-        findMemoryType(memRequirements.memoryTypeBits, properties);
+        device->findMemoryType(memRequirements.memoryTypeBits, properties);
 
-    if (vkAllocateMemory(device, &allocInfo, nullptr, &imageMemory) !=
+    if (vkAllocateMemory(device->logicalDevice(), &allocInfo, nullptr, &imageMemory) !=
         VK_SUCCESS) {
         throw std::runtime_error("failed to allocate image memory!");
     }
 
-    vkBindImageMemory(device, image, imageMemory, 0);
+    vkBindImageMemory(device->logicalDevice(), image, imageMemory, 0);
 }
 
 void HelloTriangleApplication::transitionImageLayout(VkImage image,
@@ -196,7 +196,7 @@ HelloTriangleApplication::createImageView(VkImage image, VkFormat format,
     viewInfo.subresourceRange.levelCount = mipLevels;
 
     VkImageView imageView;
-    if (vkCreateImageView(device, &viewInfo, nullptr, &imageView) !=
+    if (vkCreateImageView(device->logicalDevice(), &viewInfo, nullptr, &imageView) !=
         VK_SUCCESS) {
         throw std::runtime_error("failed to create image view!");
     }
@@ -220,7 +220,7 @@ void HelloTriangleApplication::createTextureSampler() {
     samplerInfo.anisotropyEnable = VK_TRUE;
 
     VkPhysicalDeviceProperties properties{};
-    vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+    vkGetPhysicalDeviceProperties(device->physicalDevice(), &properties);
 
     samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
 
@@ -233,7 +233,7 @@ void HelloTriangleApplication::createTextureSampler() {
     samplerInfo.minLod = 0.0f;
     samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
 
-    if (vkCreateSampler(device, &samplerInfo, nullptr, &textureSampler) !=
+    if (vkCreateSampler(device->logicalDevice(), &samplerInfo, nullptr, &textureSampler) !=
         VK_SUCCESS) {
         throw std::runtime_error("failed to create texture sampler!");
     }

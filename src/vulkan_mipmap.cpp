@@ -4,7 +4,7 @@ void HelloTriangleApplication::generateMipmaps(VkImage image, VkFormat imageForm
                                                int32_t texHeight,
                                                uint32_t mipLevels) {
     VkFormatProperties formatProperties;
-    vkGetPhysicalDeviceFormatProperties(physicalDevice, imageFormat, &formatProperties);
+    vkGetPhysicalDeviceFormatProperties(device->physicalDevice(), imageFormat, &formatProperties);
 
     if(!(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)){
         throw std::runtime_error("texture image format does not support linear blitting!");

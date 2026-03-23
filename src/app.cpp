@@ -25,11 +25,13 @@ void HelloTriangleApplication::initWindow() {
 // ---- Vulkan 初始化 ----
 
 void HelloTriangleApplication::initVulkan() {
-    createInstance();
-    setupDebugMessenger();
-    createSurface();
-    pickPhysicalDevice();
-    createLogicalDevice();
+    // createInstance();
+    // setupDebugMessenger();
+    // createSurface();
+    context = std::make_unique<vkr::VulkanContext>(window);
+    // pickPhysicalDevice();
+    // createLogicalDevice();
+    device = std::make_unique<vkr::Device>(*context);
     createAllocator();
     createSwapChain();
     createImageViews();
@@ -61,7 +63,7 @@ void HelloTriangleApplication::mainLoop() {
         drawFrame();
     }
 
-    vkDeviceWaitIdle(device);
+    vkDeviceWaitIdle(device->logicalDevice());
 }
 
 // ---- 资源清理 ----
@@ -69,45 +71,43 @@ void HelloTriangleApplication::mainLoop() {
 void HelloTriangleApplication::cleanup() {
     cleanupSwapChain();
 
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        vkDestroyBuffer(device, uniformBuffers[i], nullptr);
-        vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
-    }
-
-    vkDestroyDescriptorPool(device, descriptorPool, nullptr);
-
-    vkDestroySampler(device, textureSampler, nullptr);
-    vkDestroyImageView(device, textureImageView, nullptr);
-
-    vkDestroyImage(device, textureImage, nullptr);
-    vkFreeMemory(device, textureImageMemory, nullptr);
-
-    vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
-
-    vkDestroyBuffer(device, indexBuffer, nullptr);
-    vkFreeMemory(device, indexBufferMemory, nullptr);
-
-    vkDestroyBuffer(device, vertexBuffer, nullptr);
-    vkFreeMemory(device, vertexBufferMemory, nullptr);
+    VkDevice d = device->logicalDevice();
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
-        vkDestroyFence(device, inFlightFences[i], nullptr);
+        vkDestroyBuffer(d, uniformBuffers[i], nullptr);
+        vkFreeMemory(d, uniformBuffersMemory[i], nullptr);
     }
 
-    vkDestroyPipeline(device, graphicsPipeline, nullptr);
-    vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-    vkDestroyRenderPass(device, renderPass, nullptr);
-    vkDestroyCommandPool(device, commandPool, nullptr);
+    vkDestroyDescriptorPool(d, descriptorPool, nullptr);
 
-    vkDestroyDevice(device, nullptr);
+    vkDestroySampler(d, textureSampler, nullptr);
+    vkDestroyImageView(d, textureImageView, nullptr);
 
-    if (enableValidationLayers) {
-        DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
+    vkDestroyImage(d, textureImage, nullptr);
+    vkFreeMemory(d, textureImageMemory, nullptr);
+
+    vkDestroyDescriptorSetLayout(d, descriptorSetLayout, nullptr);
+
+    vkDestroyBuffer(d, indexBuffer, nullptr);
+    vkFreeMemory(d, indexBufferMemory, nullptr);
+
+    vkDestroyBuffer(d, vertexBuffer, nullptr);
+    vkFreeMemory(d, vertexBufferMemory, nullptr);
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        vkDestroySemaphore(d, imageAvailableSemaphores[i], nullptr);
+        vkDestroyFence(d, inFlightFences[i], nullptr);
     }
 
-    vkDestroySurfaceKHR(instance, surface, nullptr);
-    vkDestroyInstance(instance, nullptr);
+    vkDestroyPipeline(d, graphicsPipeline, nullptr);
+    vkDestroyPipelineLayout(d, pipelineLayout, nullptr);
+    vkDestroyRenderPass(d, renderPass, nullptr);
+    vkDestroyCommandPool(d, commandPool, nullptr);
+
+    vmaDestroyAllocator(allocator);
+
+    device.reset();  // ~Device() 销毁 VkDevice
+    context.reset(); // ~VulkanContext() 销毁 Surface/Instance
 
     glfwDestroyWindow(window);
 
@@ -115,8 +115,8 @@ void HelloTriangleApplication::cleanup() {
 }
 
 void HelloTriangleApplication::framebufferResizeCallback(GLFWwindow *window,
-                                                         int width,
-                                                         int height) {
+                                                         int         width,
+                                                         int         height) {
     auto app = reinterpret_cast<HelloTriangleApplication *>(
         glfwGetWindowUserPointer(window));
     app->framebufferResized = true;

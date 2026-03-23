@@ -1,17 +1,18 @@
-#include "app.h"
 
+#include "app.h"
+/*
 // ---- 物理设备选择 ----
 
 void HelloTriangleApplication::pickPhysicalDevice() {
     uint32_t deviceCount = 0;
-    vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
+    vkEnumeratePhysicalDevices(context->instance(), &deviceCount, nullptr);
 
     if (deviceCount == 0) {
         throw std::runtime_error("failed to find GPUs with Vulkan support!");
     }
 
     std::vector<VkPhysicalDevice> devices(deviceCount);
-    vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
+    vkEnumeratePhysicalDevices(context->instance(), &deviceCount, devices.data());
 
     VkPhysicalDevice fallbackDevice = VK_NULL_HANDLE;
 
@@ -140,7 +141,7 @@ HelloTriangleApplication::findQueueFamilies(VkPhysicalDevice device) {
         }
 
         VkBool32 presentSupport = false;
-        vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface,
+        vkGetPhysicalDeviceSurfaceSupportKHR(device, i, context->surface(),
                                              &presentSupport);
 
         if (presentSupport) {
@@ -208,12 +209,14 @@ void HelloTriangleApplication::createLogicalDevice() {
     vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
     vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
 }
+*/
 
 void HelloTriangleApplication::createAllocator(){
     VmaAllocatorCreateInfo allocatorInfo{};
-    allocatorInfo.physicalDevice = physicalDevice;
-    allocatorInfo.device = device;
-    allocatorInfo.instance = instance;
+    allocatorInfo.physicalDevice = device->physicalDevice();
+    allocatorInfo.device = device->logicalDevice();
+    allocatorInfo.instance = context->instance();
     allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_0;
     vmaCreateAllocator(&allocatorInfo, &allocator);
 }
+
