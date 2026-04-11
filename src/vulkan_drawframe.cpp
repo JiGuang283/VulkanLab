@@ -14,8 +14,8 @@ void HelloTriangleApplication::createSyncObjects() {
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         if (vkCreateSemaphore(device->logicalDevice(), &semaphoreInfo, nullptr,
                               &imageAvailableSemaphores[i]) != VK_SUCCESS ||
-            vkCreateFence(device->logicalDevice(), &fenceInfo, nullptr, &inFlightFences[i]) !=
-                VK_SUCCESS) {
+            vkCreateFence(device->logicalDevice(), &fenceInfo, nullptr,
+                          &inFlightFences[i]) != VK_SUCCESS) {
             throw std::runtime_error(
                 "failed to create synchronization objects for a frame!");
         }
@@ -25,28 +25,28 @@ void HelloTriangleApplication::createSyncObjects() {
 }
 
 void HelloTriangleApplication::createSwapChainSemaphores() {
-    renderFinishedSemaphores.resize(swapChainImages.size());
+    renderFinishedSemaphores.resize(swapChain_->imageCount());
 
     VkSemaphoreCreateInfo semaphoreInfo{};
     semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
-    for (size_t i = 0; i < swapChainImages.size(); i++) {
+    for (size_t i = 0; i < swapChain_->imageCount(); i++) {
         if (vkCreateSemaphore(device->logicalDevice(), &semaphoreInfo, nullptr,
                               &renderFinishedSemaphores[i]) != VK_SUCCESS) {
-            throw std::runtime_error(
-                "failed to create render-finished semaphore for swap chain image!");
+            throw std::runtime_error("failed to create render-finished "
+                                     "semaphore for swap chain image!");
         }
     }
 }
 
 void HelloTriangleApplication::drawFrame() {
-    vkWaitForFences(device->logicalDevice(), 1, &inFlightFences[currentFrame], VK_TRUE,
-                    UINT64_MAX);
+    vkWaitForFences(device->logicalDevice(), 1, &inFlightFences[currentFrame],
+                    VK_TRUE, UINT64_MAX);
 
     uint32_t imageIndex;
     VkResult result = vkAcquireNextImageKHR(
-        device->logicalDevice(), swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame],
-        VK_NULL_HANDLE, &imageIndex);
+        device->logicalDevice(), swapChain_->handle(), UINT64_MAX,
+        imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         recreateSwapChain();
@@ -89,7 +89,7 @@ void HelloTriangleApplication::drawFrame() {
     presentInfo.waitSemaphoreCount = 1;
     presentInfo.pWaitSemaphores = signalSemaphores;
 
-    VkSwapchainKHR swapChains[] = {swapChain};
+    VkSwapchainKHR swapChains[] = {swapChain_->handle()};
     presentInfo.swapchainCount = 1;
     presentInfo.pSwapchains = swapChains;
     presentInfo.pImageIndices = &imageIndex;

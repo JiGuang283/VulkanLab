@@ -73,8 +73,8 @@ void HelloTriangleApplication::createGraphicsPipeline() {
     viewport.x = 0.0f;
     viewport.y = 0.0f;
 
-    viewport.width = (float)swapChainExtent.width;
-    viewport.height = (float)swapChainExtent.height;
+    viewport.width = (float)swapChain_->extent().width;
+    viewport.height = (float)swapChain_->extent().height;
 
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
@@ -82,7 +82,7 @@ void HelloTriangleApplication::createGraphicsPipeline() {
     // 裁剪
     VkRect2D scissor{};
     scissor.offset = {0, 0};
-    scissor.extent = swapChainExtent;
+    scissor.extent = swapChain_->extent();
 
     VkPipelineViewportStateCreateInfo viewportState{};
     viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;

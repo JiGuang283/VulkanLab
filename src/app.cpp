@@ -33,8 +33,8 @@ void HelloTriangleApplication::initVulkan() {
     // createLogicalDevice();
     device = std::make_unique<vkr::Device>(*context);
     createAllocator();
-    createSwapChain();
-    createImageViews();
+    swapChain_ =
+        std::make_unique<vkr::SwapChain>(*device, context->surface(), window);
     createRenderPass();
     createDescriptorSetLayout();
     createGraphicsPipeline();
@@ -99,8 +99,9 @@ void HelloTriangleApplication::cleanup() {
 
     vmaDestroyAllocator(allocator);
 
-    device.reset();  // ~Device() 销毁 VkDevice
-    context.reset(); // ~VulkanContext() 销毁 Surface/Instance
+    swapChain_.reset(); // ~SwapChain() 销毁 ImageViews/SwapchainKHR
+    device.reset();     // ~Device() 销毁 VkDevice
+    context.reset();    // ~VulkanContext() 销毁 Surface/Instance
 
     glfwDestroyWindow(window);
 

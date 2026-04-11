@@ -132,30 +132,7 @@ void HelloTriangleApplication::copyBufferToImage(VkBuffer buffer, VkImage image,
     endSingleTimeCommands(commandBuffer);
 }
 
-VkImageView
-HelloTriangleApplication::createImageView(VkImage image, VkFormat format,
-                                          VkImageAspectFlags aspectFlags,
-                                          uint32_t           mipLevels) {
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = format;
-    viewInfo.subresourceRange.aspectMask = aspectFlags;
-    viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
-    viewInfo.subresourceRange.levelCount = mipLevels;
-
-    VkImageView imageView;
-    if (vkCreateImageView(device->logicalDevice(), &viewInfo, nullptr,
-                          &imageView) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create image view!");
-    }
-
-    return imageView;
-}
+// createImageView() 已搬入 SwapChain 类
 
 void HelloTriangleApplication::createTextureImageView() {
     textureImage_->createView(VK_FORMAT_R8G8B8A8_SRGB,

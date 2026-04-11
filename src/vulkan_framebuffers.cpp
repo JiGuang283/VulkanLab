@@ -1,12 +1,12 @@
 #include "app.h"
 
 void HelloTriangleApplication::createFramebuffers() {
-    swapChainFramebuffers.resize(swapChainImageViews.size());
+    swapChainFramebuffers.resize(swapChain_->imageViews().size());
 
-    for (size_t i = 0; i < swapChainImageViews.size(); i++) {
+    for (size_t i = 0; i < swapChain_->imageViews().size(); i++) {
         std::array<VkImageView, 3> attachments = {colorImage_->imageView(),
                                                   depthImage_->imageView(),
-                                                  swapChainImageViews[i]};
+                                                  swapChain_->imageViews()[i]};
 
         VkFramebufferCreateInfo framebufferInfo{};
         framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -14,8 +14,8 @@ void HelloTriangleApplication::createFramebuffers() {
         framebufferInfo.attachmentCount =
             static_cast<uint32_t>(attachments.size());
         framebufferInfo.pAttachments = attachments.data();
-        framebufferInfo.width = swapChainExtent.width;
-        framebufferInfo.height = swapChainExtent.height;
+        framebufferInfo.width = swapChain_->extent().width;
+        framebufferInfo.height = swapChain_->extent().height;
         framebufferInfo.layers = 1;
 
         if (vkCreateFramebuffer(device->logicalDevice(), &framebufferInfo,

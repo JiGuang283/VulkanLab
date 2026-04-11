@@ -6,6 +6,7 @@
 #include "core/Buffer.h"
 #include "core/Device.h"
 #include "core/Image.h"
+#include "core/SwapChain.h"
 #include "core/VulkanContext.h"
 
 class HelloTriangleApplication {
@@ -30,11 +31,7 @@ class HelloTriangleApplication {
     std::unique_ptr<vkr::Device> device;
 
     // ---- 交换链 ----
-    VkSwapchainKHR           swapChain;
-    std::vector<VkImage>     swapChainImages;
-    VkFormat                 swapChainImageFormat;
-    VkExtent2D               swapChainExtent;
-    std::vector<VkImageView> swapChainImageViews;
+    std::unique_ptr<vkr::SwapChain> swapChain_;
 
     // ---- 图形管线 ----
     VkDescriptorSetLayout descriptorSetLayout;
@@ -108,15 +105,6 @@ class HelloTriangleApplication {
     // QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device);
 
     // ---- 交换链 (vulkan_swapchain.cpp) ----
-    void createSurface();
-    void createSwapChain();
-    void createImageViews();
-    // SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device);
-    VkSurfaceFormatKHR chooseSwapSurfaceFormat(
-        const std::vector<VkSurfaceFormatKHR> &availableFormats);
-    VkPresentModeKHR chooseSwapPresentMode(
-        const std::vector<VkPresentModeKHR> &availablePresentModes);
-    VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR &capabilities);
 
     // ---- 图形管线 (vulkan_pipeline.cpp) ----
     void           createGraphicsPipeline();
@@ -154,11 +142,8 @@ class HelloTriangleApplication {
     void createDescriptionPool();
     void createDescriptorSets();
 
-    void        createTextureImage();
-    void        createTextureImageView();
-    VkImageView createImageView(VkImage image, VkFormat format,
-                                VkImageAspectFlags aspectFlags,
-                                uint32_t           mipLevels);
+    void createTextureImage();
+    void createTextureImageView();
 
     void transitionImageLayout(VkImage image, VkFormat format,
                                VkImageLayout oldLayout, VkImageLayout newLayout,

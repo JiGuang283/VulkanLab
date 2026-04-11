@@ -30,10 +30,10 @@
 // }
 
 void HelloTriangleApplication::createColorResources() {
-    VkFormat colorFormat = swapChainImageFormat;
+    VkFormat colorFormat = swapChain_->imageFormat();
 
     colorImage_ = std::make_unique<vkr::Image>(
-        *device, swapChainExtent.width, swapChainExtent.height, 1,
+        *device, swapChain_->extent().width, swapChain_->extent().height, 1,
         device->msaaSamples(), colorFormat, VK_IMAGE_TILING_OPTIMAL,
         VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT |
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
