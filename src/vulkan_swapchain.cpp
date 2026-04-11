@@ -19,11 +19,13 @@
 //                                               &details.capabilities);
 
 //     uint32_t formatCount;
-//     vkGetPhysicalDeviceSurfaceFormatsKHR(device, context->surface(), &formatCount,
+//     vkGetPhysicalDeviceSurfaceFormatsKHR(device, context->surface(),
+//     &formatCount,
 //                                          nullptr);
 //     if (formatCount != 0) {
 //         details.formats.resize(formatCount);
-//         vkGetPhysicalDeviceSurfaceFormatsKHR(device, context->surface(), &formatCount,
+//         vkGetPhysicalDeviceSurfaceFormatsKHR(device, context->surface(),
+//         &formatCount,
 //                                              details.formats.data());
 //     }
 
@@ -33,7 +35,8 @@
 //     if (presentModeCount != 0) {
 //         details.presentModes.resize(presentModeCount);
 //         vkGetPhysicalDeviceSurfacePresentModesKHR(
-//             device, context->surface(), &presentModeCount, details.presentModes.data());
+//             device, context->surface(), &presentModeCount,
+//             details.presentModes.data());
 //     }
 
 //     return details;
@@ -90,8 +93,7 @@ VkExtent2D HelloTriangleApplication::chooseSwapExtent(
 // ---- 交换链创建 ----
 
 void HelloTriangleApplication::createSwapChain() {
-    SwapChainSupportDetails swapChainSupport =
-        device->querySwapChainSupport();
+    SwapChainSupportDetails swapChainSupport = device->querySwapChainSupport();
 
     VkSurfaceFormatKHR surfaceFormat =
         chooseSwapSurfaceFormat(swapChainSupport.formats);
@@ -116,8 +118,8 @@ void HelloTriangleApplication::createSwapChain() {
     createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
     QueueFamilyIndices indices = device->queueFamilies();
-    uint32_t queueFamilyIndices[] = {indices.graphicsFamily.value(),
-                                     indices.presentFamily.value()};
+    uint32_t           queueFamilyIndices[] = {indices.graphicsFamily.value(),
+                                               indices.presentFamily.value()};
 
     if (indices.graphicsFamily != indices.presentFamily) {
         createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
@@ -133,12 +135,13 @@ void HelloTriangleApplication::createSwapChain() {
     createInfo.clipped = VK_TRUE;
     createInfo.oldSwapchain = VK_NULL_HANDLE;
 
-    if (vkCreateSwapchainKHR(device->logicalDevice(), &createInfo, nullptr, &swapChain) !=
-        VK_SUCCESS) {
+    if (vkCreateSwapchainKHR(device->logicalDevice(), &createInfo, nullptr,
+                             &swapChain) != VK_SUCCESS) {
         throw std::runtime_error("failed to create swap chain!");
     }
 
-    vkGetSwapchainImagesKHR(device->logicalDevice(), swapChain, &imageCount, nullptr);
+    vkGetSwapchainImagesKHR(device->logicalDevice(), swapChain, &imageCount,
+                            nullptr);
     swapChainImages.resize(imageCount);
     vkGetSwapchainImagesKHR(device->logicalDevice(), swapChain, &imageCount,
                             swapChainImages.data());
@@ -153,15 +156,17 @@ void HelloTriangleApplication::createImageViews() {
     swapChainImageViews.resize(swapChainImages.size());
 
     for (size_t i = 0; i < swapChainImages.size(); i++) {
-        swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
+        swapChainImageViews[i] =
+            createImageView(swapChainImages[i], swapChainImageFormat,
+                            VK_IMAGE_ASPECT_COLOR_BIT, 1);
     }
 }
 
-void HelloTriangleApplication::recreateSwapChain(){
+void HelloTriangleApplication::recreateSwapChain() {
     int width = 0;
     int height = 0;
     glfwGetFramebufferSize(window, &width, &height);
-    while(width == 0 || height == 0){
+    while (width == 0 || height == 0) {
         glfwGetFramebufferSize(window, &width, &height);
         glfwWaitEvents();
     }
@@ -178,25 +183,21 @@ void HelloTriangleApplication::recreateSwapChain(){
     createFramebuffers();
 }
 
-void HelloTriangleApplication::cleanupSwapChain(){
+void HelloTriangleApplication::cleanupSwapChain() {
     for (auto semaphore : renderFinishedSemaphores) {
         vkDestroySemaphore(device->logicalDevice(), semaphore, nullptr);
     }
     renderFinishedSemaphores.clear();
 
-    for(auto framebuffer : swapChainFramebuffers){
+    for (auto framebuffer : swapChainFramebuffers) {
         vkDestroyFramebuffer(device->logicalDevice(), framebuffer, nullptr);
     }
 
-    vkDestroyImageView(device->logicalDevice(), colorImageView, nullptr);
-    vkDestroyImage(device->logicalDevice(), colorImage, nullptr);
-    vkFreeMemory(device->logicalDevice(), colorImageMemory, nullptr);
+    colorImage_.reset();
 
-    vkDestroyImageView(device->logicalDevice(), depthImageView, nullptr);
-    vkDestroyImage(device->logicalDevice(), depthImage, nullptr);
-    vkFreeMemory(device->logicalDevice(), depthImageMemory, nullptr);
+    depthImage_.reset();
 
-    for(auto imageView : swapChainImageViews){
+    for (auto imageView : swapChainImageViews) {
         vkDestroyImageView(device->logicalDevice(), imageView, nullptr);
     }
 

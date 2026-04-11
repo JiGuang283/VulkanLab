@@ -4,8 +4,9 @@ void HelloTriangleApplication::createFramebuffers() {
     swapChainFramebuffers.resize(swapChainImageViews.size());
 
     for (size_t i = 0; i < swapChainImageViews.size(); i++) {
-        std::array<VkImageView, 3> attachments = {
-            colorImageView, depthImageView, swapChainImageViews[i]};
+        std::array<VkImageView, 3> attachments = {colorImage_->imageView(),
+                                                  depthImage_->imageView(),
+                                                  swapChainImageViews[i]};
 
         VkFramebufferCreateInfo framebufferInfo{};
         framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;

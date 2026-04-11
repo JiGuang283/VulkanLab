@@ -3,14 +3,17 @@
 void HelloTriangleApplication::createDepthResources() {
     VkFormat depthFormat = findDepthFormat();
 
-    createImage(swapChainExtent.width, swapChainExtent.height, 1, device->msaaSamples(), depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthImage, depthImageMemory);
-    depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1);
+    depthImage_ = std::make_unique<vkr::Image>(
+        *device, swapChainExtent.width, swapChainExtent.height, 1,
+        device->msaaSamples(), depthFormat, VK_IMAGE_TILING_OPTIMAL,
+        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-    
+    depthImage_->createView(depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1);
 
-    transitionImageLayout(depthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 1);
-
-
+    transitionImageLayout(depthImage_->handle(), depthFormat,
+                          VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 1);
 }
 
 VkFormat HelloTriangleApplication::findSuportedFormat(
@@ -18,7 +21,8 @@ VkFormat HelloTriangleApplication::findSuportedFormat(
     VkFormatFeatureFlags features) {
     for (VkFormat format : candidates) {
         VkFormatProperties props;
-        vkGetPhysicalDeviceFormatProperties(device->physicalDevice(), format, &props);
+        vkGetPhysicalDeviceFormatProperties(device->physicalDevice(), format,
+                                            &props);
 
         if (tiling == VK_IMAGE_TILING_LINEAR &&
             (props.linearTilingFeatures & features) == features) {
@@ -34,12 +38,13 @@ VkFormat HelloTriangleApplication::findSuportedFormat(
 
 VkFormat HelloTriangleApplication::findDepthFormat() {
     return findSuportedFormat({VK_FORMAT_D32_SFLOAT,
-                                VK_FORMAT_D32_SFLOAT_S8_UINT,
-                                VK_FORMAT_D24_UNORM_S8_UINT},
-                               VK_IMAGE_TILING_OPTIMAL,
-                               VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
+                               VK_FORMAT_D32_SFLOAT_S8_UINT,
+                               VK_FORMAT_D24_UNORM_S8_UINT},
+                              VK_IMAGE_TILING_OPTIMAL,
+                              VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
 }
 
-bool hasStencilComponent(VkFormat format){
-    return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT;
+bool hasStencilComponent(VkFormat format) {
+    return format == VK_FORMAT_D32_SFLOAT_S8_UINT ||
+           format == VK_FORMAT_D24_UNORM_S8_UINT;
 }

@@ -73,26 +73,19 @@ void HelloTriangleApplication::cleanup() {
 
     VkDevice d = device->logicalDevice();
 
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        vkDestroyBuffer(d, uniformBuffers[i], nullptr);
-        vkFreeMemory(d, uniformBuffersMemory[i], nullptr);
-    }
+    uniformBuffers_.clear();
 
     vkDestroyDescriptorPool(d, descriptorPool, nullptr);
 
     vkDestroySampler(d, textureSampler, nullptr);
-    vkDestroyImageView(d, textureImageView, nullptr);
 
-    vkDestroyImage(d, textureImage, nullptr);
-    vkFreeMemory(d, textureImageMemory, nullptr);
+    textureImage_.reset();
 
     vkDestroyDescriptorSetLayout(d, descriptorSetLayout, nullptr);
 
-    vkDestroyBuffer(d, indexBuffer, nullptr);
-    vkFreeMemory(d, indexBufferMemory, nullptr);
+    indexBuffer_.reset();
 
-    vkDestroyBuffer(d, vertexBuffer, nullptr);
-    vkFreeMemory(d, vertexBufferMemory, nullptr);
+    vertexBuffer_.reset();
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroySemaphore(d, imageAvailableSemaphores[i], nullptr);

@@ -8,8 +8,8 @@ void HelloTriangleApplication::createCommandPool() {
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
 
-    if (vkCreateCommandPool(device->logicalDevice(), &poolInfo, nullptr, &commandPool) !=
-        VK_SUCCESS) {
+    if (vkCreateCommandPool(device->logicalDevice(), &poolInfo, nullptr,
+                            &commandPool) != VK_SUCCESS) {
         throw std::runtime_error("failed to create command pool!");
     }
 }
@@ -23,8 +23,8 @@ void HelloTriangleApplication::createCommandBuffers() {
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     allocInfo.commandBufferCount = static_cast<uint32_t>(commandBuffers.size());
 
-    if (vkAllocateCommandBuffers(device->logicalDevice(), &allocInfo, commandBuffers.data()) !=
-        VK_SUCCESS) {
+    if (vkAllocateCommandBuffers(device->logicalDevice(), &allocInfo,
+                                 commandBuffers.data()) != VK_SUCCESS) {
         throw std::runtime_error("failed to allocate command buffers!");
     }
 }
@@ -72,11 +72,12 @@ void HelloTriangleApplication::recordCommandBuffer(
     scissor.extent = swapChainExtent;
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-    VkBuffer vertexBuffers[] = {vertexBuffer};
+    VkBuffer     vertexBuffers[] = {vertexBuffer_->handle()};
     VkDeviceSize offsets[] = {0};
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
 
-    vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdBindIndexBuffer(commandBuffer, indexBuffer_->handle(), 0,
+                         VK_INDEX_TYPE_UINT32);
 
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             pipelineLayout, 0, 1, &descriptorSets[currentFrame],
