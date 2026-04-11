@@ -5,6 +5,7 @@
 #include <vulkan/vulkan.h>
 
 #include "VulkanContext.h"
+#include "vk_mem_alloc.h"
 #include "vulkan_utils.h"
 
 namespace vkr {
@@ -28,6 +29,8 @@ class Device {
                                            VkMemoryPropertyFlags props) const;
     SwapChainSupportDetails querySwapChainSupport() const;
 
+    VmaAllocator allocator() const { return allocator_; }
+
   private:
     void pickPhysicalDevice();
     void createLogicalDevice();
@@ -35,8 +38,10 @@ class Device {
     bool               isDeviceSuitable(VkPhysicalDevice device);
     bool               checkDeviceExtensionSupport(VkPhysicalDevice device);
     QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device) const;
-    SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device) const;
-    VkSampleCountFlagBits   getMaxUsableSampleCount();
+    SwapChainSupportDetails
+                          querySwapChainSupport(VkPhysicalDevice device) const;
+    VkSampleCountFlagBits getMaxUsableSampleCount();
+    void                  createAllocator();
 
     VulkanContext        &ctx_;
     VkPhysicalDevice      physicalDevice_ = VK_NULL_HANDLE;
@@ -44,6 +49,7 @@ class Device {
     VkQueue               graphicsQueue_ = VK_NULL_HANDLE;
     VkQueue               presentQueue_ = VK_NULL_HANDLE;
     VkSampleCountFlagBits msaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
+    VmaAllocator          allocator_ = VK_NULL_HANDLE;
 };
 
 } // namespace vkr

@@ -1,8 +1,13 @@
-#include "app.h"
-#include "vulkan_vertex.h"
-#include <fstream>
+#include "Pipeline.h"
+#include "Device.h"
+#include "vulkan_utils.h"
 
-static std::vector<char> readFile(const std::string &filename) {
+#include <fstream>
+#include <stdexcept>
+
+namespace vkr {
+
+std::vector<char> Pipeline::readFile(const std::string &filename) {
     std::ifstream file(filename, std::ios::ate | std::ios::binary);
 
     if (!file.is_open()) {
@@ -20,12 +25,28 @@ static std::vector<char> readFile(const std::string &filename) {
     return buffer;
 }
 
-// ---- 图形管线创建 ----
+VkShaderModule Pipeline::createShaderModule(const std::vector<char> &code) {
+    VkShaderModuleCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    createInfo.codeSize = code.size();
+    createInfo.pCode = reinterpret_cast<const uint32_t *>(code.data());
 
-void HelloTriangleApplication::createGraphicsPipeline() {
-    // TODO: 后续教程中实现
-    auto vertShaderCode = readFile("shader/vert.spv");
-    auto fragShaderCode = readFile("shader/frag.spv");
+    VkShaderModule shaderModule;
+    if (vkCreateShaderModule(device_->logicalDevice(), &createInfo, nullptr,
+                             &shaderModule) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create shader module!");
+    }
+
+    return shaderModule;
+}
+
+Pipeline::Pipeline(Device &device, VkRenderPass renderPass,
+                   VkDescriptorSetLayout descriptorSetLayout,
+                   const std::string &vertPath, const std::string &fragPath)
+    : device_(&device) {
+
+    auto vertShaderCode = readFile(vertPath);
+    auto fragShaderCode = readFile(fragPath);
 
     VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
     VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
@@ -47,7 +68,7 @@ void HelloTriangleApplication::createGraphicsPipeline() {
     VkPipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo,
                                                       fragShaderStageInfo};
 
-    // 顶点输入（配置顶点数据格式）
+    // 顶点输入
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType =
         VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -61,35 +82,18 @@ void HelloTriangleApplication::createGraphicsPipeline() {
         static_cast<uint32_t>(attributeDescriptions.size());
     vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
-    // 输入配装（连接点的方式）
+    // 输入装配
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType =
         VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     inputAssembly.primitiveRestartEnable = VK_FALSE;
 
-    // 视口设置
-    VkViewport viewport = {};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-
-    viewport.width = (float)swapChain_->extent().width;
-    viewport.height = (float)swapChain_->extent().height;
-
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-
-    // 裁剪
-    VkRect2D scissor{};
-    scissor.offset = {0, 0};
-    scissor.extent = swapChain_->extent();
-
+    // 视口（动态状态，这里仅占位）
     VkPipelineViewportStateCreateInfo viewportState{};
     viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
     viewportState.viewportCount = 1;
-    viewportState.pViewports = &viewport;
     viewportState.scissorCount = 1;
-    viewportState.pScissors = &scissor;
 
     // 光栅化
     VkPipelineRasterizationStateCreateInfo rasterizer{};
@@ -99,10 +103,8 @@ void HelloTriangleApplication::createGraphicsPipeline() {
     rasterizer.rasterizerDiscardEnable = VK_FALSE;
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
     rasterizer.lineWidth = 1.0f;
-
     rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
     rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-
     rasterizer.depthBiasEnable = VK_FALSE;
 
     // 多重采样
@@ -111,7 +113,7 @@ void HelloTriangleApplication::createGraphicsPipeline() {
         VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisampling.sampleShadingEnable = VK_TRUE;
     multisampling.minSampleShading = .2f;
-    multisampling.rasterizationSamples = device->msaaSamples();
+    multisampling.rasterizationSamples = device_->msaaSamples();
 
     // 深度与模版测试
     VkPipelineDepthStencilStateCreateInfo depthStencil{};
@@ -127,7 +129,7 @@ void HelloTriangleApplication::createGraphicsPipeline() {
     depthStencil.front = {};
     depthStencil.back = {};
 
-    // 颜色混合（覆盖模式）
+    // 颜色混合
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.colorWriteMask =
         VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -156,15 +158,20 @@ void HelloTriangleApplication::createGraphicsPipeline() {
         static_cast<uint32_t>(dynamicStates.size());
     dynamicState.pDynamicStates = dynamicStates.data();
 
+    VkPushConstantRange pushConstantRange{};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = sizeof(float) * 16; // mat4
+
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = 1;
     pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
-    pipelineLayoutInfo.pushConstantRangeCount = 0;
-    pipelineLayoutInfo.pPushConstantRanges = nullptr;
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 
-    if (vkCreatePipelineLayout(device->logicalDevice(), &pipelineLayoutInfo,
-                               nullptr, &pipelineLayout) != VK_SUCCESS) {
+    if (vkCreatePipelineLayout(device_->logicalDevice(), &pipelineLayoutInfo,
+                               nullptr, &pipelineLayout_) != VK_SUCCESS) {
         throw std::runtime_error("failed to create pipeline layout!");
     }
 
@@ -180,34 +187,30 @@ void HelloTriangleApplication::createGraphicsPipeline() {
     pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.pDynamicState = &dynamicState;
-    pipelineInfo.layout = pipelineLayout;
+    pipelineInfo.layout = pipelineLayout_;
     pipelineInfo.renderPass = renderPass;
     pipelineInfo.subpass = 0;
     pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
     pipelineInfo.basePipelineIndex = -1;
 
-    if (vkCreateGraphicsPipelines(device->logicalDevice(), VK_NULL_HANDLE, 1,
+    if (vkCreateGraphicsPipelines(device_->logicalDevice(), VK_NULL_HANDLE, 1,
                                   &pipelineInfo, nullptr,
-                                  &graphicsPipeline) != VK_SUCCESS) {
+                                  &pipeline_) != VK_SUCCESS) {
         throw std::runtime_error("failed to create graphics pipeline!");
     }
 
-    vkDestroyShaderModule(device->logicalDevice(), fragShaderModule, nullptr);
-    vkDestroyShaderModule(device->logicalDevice(), vertShaderModule, nullptr);
+    vkDestroyShaderModule(device_->logicalDevice(), fragShaderModule, nullptr);
+    vkDestroyShaderModule(device_->logicalDevice(), vertShaderModule, nullptr);
 }
 
-VkShaderModule
-HelloTriangleApplication::createShaderModule(const std::vector<char> code) {
-    VkShaderModuleCreateInfo createInfo{};
-    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    createInfo.codeSize = code.size();
-    createInfo.pCode = reinterpret_cast<const uint32_t *>(code.data());
-
-    VkShaderModule shaderModule;
-    if (vkCreateShaderModule(device->logicalDevice(), &createInfo, nullptr,
-                             &shaderModule) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create shader module!");
+Pipeline::~Pipeline() {
+    if (device_) {
+        VkDevice d = device_->logicalDevice();
+        if (pipeline_ != VK_NULL_HANDLE)
+            vkDestroyPipeline(d, pipeline_, nullptr);
+        if (pipelineLayout_ != VK_NULL_HANDLE)
+            vkDestroyPipelineLayout(d, pipelineLayout_, nullptr);
     }
-
-    return shaderModule;
 }
+
+} // namespace vkr

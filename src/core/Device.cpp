@@ -7,8 +7,10 @@ namespace vkr {
 Device::Device(VulkanContext &ctx) : ctx_(ctx) {
     pickPhysicalDevice();
     createLogicalDevice();
+    createAllocator();
 }
 Device::~Device() {
+    vmaDestroyAllocator(allocator_);
     vkDestroyDevice(device_, nullptr);
 }
 
@@ -286,6 +288,17 @@ SwapChainSupportDetails Device::querySwapChainSupport() const {
 
 QueueFamilyIndices Device::queueFamilies() const {
     return findQueueFamilies(physicalDevice_);
+}
+
+void Device::createAllocator() {
+    VmaAllocatorCreateInfo info{};
+    info.physicalDevice = physicalDevice_;
+    info.device = device_;
+    info.instance = ctx_.instance();
+    info.vulkanApiVersion = VK_API_VERSION_1_0;
+    if (vmaCreateAllocator(&info, &allocator_) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create VMA allocator!");
+    }
 }
 
 } // namespace vkr

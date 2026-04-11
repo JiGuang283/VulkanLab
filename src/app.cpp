@@ -1,66 +1,119 @@
 #include "app.h"
 
+#include <chrono>
+
 // ---- 应用入口 ----
 
 void HelloTriangleApplication::run() {
-    initWindow();
+    window_ = std::make_unique<vkr::Window>(WIDTH, HEIGHT, "Vulkan");
+    input_ = std::make_unique<vkr::InputManager>(*window_);
+
     initVulkan();
+
+    window_->setResizeCallback([this](int, int) { renderer_->notifyResize(); });
+
     mainLoop();
     cleanup();
-}
-
-// ---- 窗口初始化 ----
-
-void HelloTriangleApplication::initWindow() {
-    glfwInit();
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GL_FALSE);
-
-    window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
-
-    glfwSetWindowUserPointer(window, this);
-    glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
 }
 
 // ---- Vulkan 初始化 ----
 
 void HelloTriangleApplication::initVulkan() {
-    // createInstance();
-    // setupDebugMessenger();
-    // createSurface();
-    context = std::make_unique<vkr::VulkanContext>(window);
-    // pickPhysicalDevice();
-    // createLogicalDevice();
+    context = std::make_unique<vkr::VulkanContext>(window_->handle());
     device = std::make_unique<vkr::Device>(*context);
-    createAllocator();
-    swapChain_ =
-        std::make_unique<vkr::SwapChain>(*device, context->surface(), window);
-    createRenderPass();
-    createDescriptorSetLayout();
-    createGraphicsPipeline();
-    createCommandPool();
-    createColorResources();
-    createDepthResources();
-    createFramebuffers();
-    createTextureImage();
-    createTextureImageView();
-    createTextureSampler();
-    loadModel();
-    createVertexBuffer();
-    createIndexBuffer();
-    createUniformBuffers();
-    createDescriptionPool();
-    createDescriptorSets();
-    createCommandBuffers();
-    createSyncObjects();
+    swapChain_ = std::make_unique<vkr::SwapChain>(*device, context->surface(),
+                                                  window_->handle());
+    renderer_ = std::make_unique<vkr::Renderer>(*device, *swapChain_,
+                                                sizeof(UniformBufferObject));
+    texture_ =
+        std::make_shared<vkr::Texture>(*device, *renderer_, TEXTURE_PATH);
+    material_ = std::make_shared<vkr::Material>(
+        *device, *renderer_, *texture_, "shader/vert.spv", "shader/frag.spv");
+    mesh_ = vkr::Mesh::fromOBJ(*device, *renderer_, MODEL_PATH);
+
+    scene_.addObject({mesh_, material_, glm::mat4(1.0f)});
+
+    camera_.setAspect(swapChain_->extent().width /
+                      (float)swapChain_->extent().height);
 }
 
 // ---- 主循环 ----
 
 void HelloTriangleApplication::mainLoop() {
-    while (!glfwWindowShouldClose(window)) {
-        glfwPollEvents();
-        drawFrame();
+    input_->setCursorCaptured(true);
+
+    auto lastTime = std::chrono::high_resolution_clock::now();
+    auto startTime = lastTime;
+
+    while (!window_->shouldClose()) {
+        window_->pollEvents();
+
+        // ---- deltaTime ----
+        auto  now = std::chrono::high_resolution_clock::now();
+        float dt = std::chrono::duration<float>(now - lastTime).count();
+        lastTime = now;
+
+        // ---- 输入处理 ----
+        input_->update();
+
+        if (input_->isKeyDown(GLFW_KEY_ESCAPE))
+            window_->setShouldClose(true);
+
+        // WASD 移动
+        const float speed = 2.0f;
+        glm::vec3   move{0.0f};
+        if (input_->isKeyDown(GLFW_KEY_W))
+            move.z += speed * dt;
+        if (input_->isKeyDown(GLFW_KEY_S))
+            move.z -= speed * dt;
+        if (input_->isKeyDown(GLFW_KEY_A))
+            move.x -= speed * dt;
+        if (input_->isKeyDown(GLFW_KEY_D))
+            move.x += speed * dt;
+        if (input_->isKeyDown(GLFW_KEY_SPACE))
+            move.y += speed * dt;
+        if (input_->isKeyDown(GLFW_KEY_LEFT_SHIFT))
+            move.y -= speed * dt;
+        camera_.translate(move);
+
+        // 鼠标旋转
+        const float sensitivity = 0.1f;
+        auto        delta = input_->mouseDelta();
+        camera_.rotate(delta.x * sensitivity, -delta.y * sensitivity);
+
+        // ---- 渲染 ----
+        VkCommandBuffer cmd = renderer_->beginFrame();
+        if (!cmd)
+            continue;
+
+        updateUniformBuffer(renderer_->frameIndex());
+
+        // 更新场景物体变换
+        float time = std::chrono::duration<float>(now - startTime).count();
+        scene_.objects()[0].transform =
+            glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f),
+                        glm::vec3(0.0f, 0.0f, 1.0f));
+
+        renderer_->beginRenderPass(cmd);
+
+        VkViewport viewport{};
+        viewport.x = 0.0f;
+        viewport.y = 0.0f;
+        viewport.width = static_cast<float>(swapChain_->extent().width);
+        viewport.height = static_cast<float>(swapChain_->extent().height);
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+        VkRect2D scissor{};
+        scissor.offset = {0, 0};
+        scissor.extent = swapChain_->extent();
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+        scene_.render(cmd, renderer_->frameIndex());
+
+        renderer_->endRenderPass(cmd);
+        renderer_->endFrame();
     }
 
     vkDeviceWaitIdle(device->logicalDevice());
@@ -69,49 +122,26 @@ void HelloTriangleApplication::mainLoop() {
 // ---- 资源清理 ----
 
 void HelloTriangleApplication::cleanup() {
-    cleanupSwapChain();
+    renderer_.reset();
 
-    VkDevice d = device->logicalDevice();
+    material_.reset();
+    texture_.reset();
+    mesh_.reset();
 
-    uniformBuffers_.clear();
+    swapChain_.reset();
+    device.reset();
+    context.reset();
 
-    vkDestroyDescriptorPool(d, descriptorPool, nullptr);
-
-    vkDestroySampler(d, textureSampler, nullptr);
-
-    textureImage_.reset();
-
-    vkDestroyDescriptorSetLayout(d, descriptorSetLayout, nullptr);
-
-    indexBuffer_.reset();
-
-    vertexBuffer_.reset();
-
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        vkDestroySemaphore(d, imageAvailableSemaphores[i], nullptr);
-        vkDestroyFence(d, inFlightFences[i], nullptr);
-    }
-
-    vkDestroyPipeline(d, graphicsPipeline, nullptr);
-    vkDestroyPipelineLayout(d, pipelineLayout, nullptr);
-    vkDestroyRenderPass(d, renderPass, nullptr);
-    vkDestroyCommandPool(d, commandPool, nullptr);
-
-    vmaDestroyAllocator(allocator);
-
-    swapChain_.reset(); // ~SwapChain() 销毁 ImageViews/SwapchainKHR
-    device.reset();     // ~Device() 销毁 VkDevice
-    context.reset();    // ~VulkanContext() 销毁 Surface/Instance
-
-    glfwDestroyWindow(window);
-
-    glfwTerminate();
+    input_.reset();
+    window_.reset();
 }
 
-void HelloTriangleApplication::framebufferResizeCallback(GLFWwindow *window,
-                                                         int         width,
-                                                         int         height) {
-    auto app = reinterpret_cast<HelloTriangleApplication *>(
-        glfwGetWindowUserPointer(window));
-    app->framebufferResized = true;
+// ---- Uniform 更新 ----
+
+void HelloTriangleApplication::updateUniformBuffer(uint32_t currentImage) {
+    UniformBufferObject ubo{};
+    ubo.view = camera_.viewMatrix();
+    ubo.proj = camera_.projectionMatrix();
+
+    memcpy(renderer_->mappedUniformBuffer(currentImage), &ubo, sizeof(ubo));
 }
