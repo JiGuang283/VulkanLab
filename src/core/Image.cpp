@@ -22,24 +22,12 @@ Image::Image(Device &device, uint32_t width, uint32_t height,
     imageInfo.samples = samples;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-    if (vkCreateImage(device.logicalDevice(), &imageInfo, nullptr, &image_) !=
-        VK_SUCCESS)
-        throw std::runtime_error("failed to create image!");
+    VmaAllocationCreateInfo allocCI{};
+    allocCI.requiredFlags = memProps;
 
-    VkMemoryRequirements memReq;
-    vkGetImageMemoryRequirements(device.logicalDevice(), image_, &memReq);
-
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memReq.size;
-    allocInfo.memoryTypeIndex =
-        device.findMemoryType(memReq.memoryTypeBits, memProps);
-
-    if (vkAllocateMemory(device.logicalDevice(), &allocInfo, nullptr,
-                         &memory_) != VK_SUCCESS)
-        throw std::runtime_error("failed to allocate image memory!");
-
-    vkBindImageMemory(device.logicalDevice(), image_, memory_, 0);
+    if (vmaCreateImage(device.allocator(), &imageInfo, &allocCI, &image_,
+                       &allocation_, nullptr) != VK_SUCCESS)
+        throw std::runtime_error("failed to create image with VMA!");
 }
 
 Image::~Image() {
@@ -47,11 +35,11 @@ Image::~Image() {
 }
 
 Image::Image(Image &&other) noexcept
-    : device_(other.device_), image_(other.image_), memory_(other.memory_),
-      view_(other.view_) {
+    : device_(other.device_), image_(other.image_),
+      allocation_(other.allocation_), view_(other.view_) {
     other.device_ = nullptr;
     other.image_ = VK_NULL_HANDLE;
-    other.memory_ = VK_NULL_HANDLE;
+    other.allocation_ = VK_NULL_HANDLE;
     other.view_ = VK_NULL_HANDLE;
 }
 
@@ -60,11 +48,11 @@ Image &Image::operator=(Image &&other) noexcept {
         cleanup();
         device_ = other.device_;
         image_ = other.image_;
-        memory_ = other.memory_;
+        allocation_ = other.allocation_;
         view_ = other.view_;
         other.device_ = nullptr;
         other.image_ = VK_NULL_HANDLE;
-        other.memory_ = VK_NULL_HANDLE;
+        other.allocation_ = VK_NULL_HANDLE;
         other.view_ = VK_NULL_HANDLE;
     }
     return *this;
@@ -99,12 +87,10 @@ void Image::cleanup() {
         if (view_ != VK_NULL_HANDLE)
             vkDestroyImageView(d, view_, nullptr);
         if (image_ != VK_NULL_HANDLE)
-            vkDestroyImage(d, image_, nullptr);
-        if (memory_ != VK_NULL_HANDLE)
-            vkFreeMemory(d, memory_, nullptr);
+            vmaDestroyImage(device_->allocator(), image_, allocation_);
         view_ = VK_NULL_HANDLE;
         image_ = VK_NULL_HANDLE;
-        memory_ = VK_NULL_HANDLE;
+        allocation_ = VK_NULL_HANDLE;
     }
 }
 

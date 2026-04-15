@@ -1,4 +1,5 @@
 #pragma once
+#include "vk_mem_alloc.h"
 #include <vulkan/vulkan.h>
 
 namespace vkr {
@@ -18,9 +19,8 @@ class Image {
     Image(Image &&other) noexcept;
     Image &operator=(Image &&other) noexcept;
 
-    VkImage        handle() const { return image_; }
-    VkDeviceMemory memory() const { return memory_; }
-    VkImageView    imageView() const { return view_; }
+    VkImage     handle() const { return image_; }
+    VkImageView imageView() const { return view_; }
 
     void createView(VkFormat format, VkImageAspectFlags aspectFlags,
                     uint32_t mipLevels);
@@ -28,10 +28,10 @@ class Image {
   private:
     void cleanup();
 
-    Device        *device_ = nullptr;
-    VkImage        image_ = VK_NULL_HANDLE;
-    VkDeviceMemory memory_ = VK_NULL_HANDLE;
-    VkImageView    view_ = VK_NULL_HANDLE;
+    Device       *device_ = nullptr;
+    VkImage       image_ = VK_NULL_HANDLE;
+    VmaAllocation allocation_ = VK_NULL_HANDLE;
+    VkImageView   view_ = VK_NULL_HANDLE;
 };
 
 } // namespace vkr

@@ -13,21 +13,6 @@ Device::~Device() {
     vmaDestroyAllocator(allocator_);
     vkDestroyDevice(device_, nullptr);
 }
-
-uint32_t Device::findMemoryType(uint32_t              typeFilter,
-                                VkMemoryPropertyFlags props) const {
-    VkPhysicalDeviceMemoryProperties memProperties;
-    vkGetPhysicalDeviceMemoryProperties(physicalDevice_, &memProperties);
-
-    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
-        if (typeFilter & (1 << i) &&
-            (memProperties.memoryTypes[i].propertyFlags & props) == props) {
-            return i;
-        }
-    }
-
-    throw std::runtime_error("failed to find suitable memory type!");
-}
 SwapChainSupportDetails
 Device::querySwapChainSupport(VkPhysicalDevice device) const {
     SwapChainSupportDetails details;

@@ -1,4 +1,5 @@
 #pragma once
+#include "vk_mem_alloc.h"
 #include <vulkan/vulkan.h>
 
 namespace vkr {
@@ -17,9 +18,8 @@ class Buffer {
     Buffer(Buffer &&other) noexcept;
     Buffer &operator=(Buffer &&other) noexcept;
 
-    VkBuffer       handle() const { return buffer_; }
-    VkDeviceMemory memory() const { return memory_; }
-    VkDeviceSize   size() const { return size_; }
+    VkBuffer     handle() const { return buffer_; }
+    VkDeviceSize size() const { return size_; }
 
     void *map();
     void  unmap();
@@ -28,11 +28,11 @@ class Buffer {
   private:
     void cleanup();
 
-    Device        *device_ = nullptr;
-    VkBuffer       buffer_ = VK_NULL_HANDLE;
-    VkDeviceMemory memory_ = VK_NULL_HANDLE;
-    VkDeviceSize   size_ = 0;
-    void          *mapped_ = nullptr;
+    Device       *device_ = nullptr;
+    VkBuffer      buffer_ = VK_NULL_HANDLE;
+    VmaAllocation allocation_ = VK_NULL_HANDLE;
+    VkDeviceSize  size_ = 0;
+    void         *mapped_ = nullptr;
 };
 
 } // namespace vkr
