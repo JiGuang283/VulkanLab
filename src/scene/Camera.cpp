@@ -29,6 +29,12 @@ void Camera::setPosition(const glm::vec3 &pos) {
     position_ = pos;
 }
 
+void Camera::setYawPitch(float yaw, float pitch) {
+    yaw_ = yaw;
+    pitch_ = glm::clamp(pitch, -89.0f, 89.0f);
+    updateVectors();
+}
+
 void Camera::lookAt(const glm::vec3 &target) {
     glm::vec3 dir = glm::normalize(target - position_);
     pitch_ = glm::degrees(std::asin(dir.z));

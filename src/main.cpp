@@ -1,4 +1,5 @@
 #include "app/Application.h"
+#include "scene/BuiltinScenes.h"
 #include <iostream>
 
 int main() {
@@ -6,9 +7,17 @@ int main() {
     // 按需覆写默认配置，例如：
     // config.windowWidth  = 1280;
     // config.windowHeight = 720;
-    config.modelPath = "models/SheenChair.glb";
 
     vkr::Application app(config);
+
+    app.registerScene(
+        {"Viking Room",
+         vkr::vikingRoomSceneFactory(config.texturePath, config.vertShaderPath,
+                                     config.fragShaderPath)});
+    app.registerScene(
+        {"Sheen Chair",
+         vkr::sheenChairSceneFactory(config.texturePath, config.vertShaderPath,
+                                     config.fragShaderPath)});
 
     try {
         app.run();

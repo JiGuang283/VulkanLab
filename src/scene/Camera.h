@@ -15,6 +15,7 @@ class Camera {
 
     // ---- 位置与朝向 ----
     void setPosition(const glm::vec3 &pos);
+    void setYawPitch(float yaw, float pitch);
     void lookAt(const glm::vec3 &target);
 
     // ---- FPS 风格控制（阶段 4 接入）----

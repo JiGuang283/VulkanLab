@@ -24,6 +24,7 @@ set(STB_DIR "${CMAKE_SOURCE_DIR}/external/stb")
 set(TINYOBJ_DIR "${CMAKE_SOURCE_DIR}/external/tiny_obj_loader.h")
 set(VMA_DIR "${CMAKE_SOURCE_DIR}/external/vma")
 set(GLTF_DIR "${CMAKE_SOURCE_DIR}/external/gltf")
+set(IMGUI_DIR "${CMAKE_SOURCE_DIR}/external/imgui")
 
 # 添加 GLFW 头文件目录
 include_directories(${GLFW_DIR}/include)
@@ -31,6 +32,8 @@ include_directories(${STB_DIR})
 include_directories(${TINYOBJ_DIR})
 include_directories(${VMA_DIR})
 include_directories(${GLTF_DIR})
+include_directories(${IMGUI_DIR})
+include_directories(${IMGUI_DIR}/backends)
 
 # 添加 GLFW 库文件目录 (这里假设你使用的是 lib-vc2022，如果是旧版 VS 请调整)
 link_directories(${GLFW_DIR}/lib-vc2022)
@@ -40,7 +43,18 @@ file(GLOB_RECURSE SOURCES
     "${CMAKE_SOURCE_DIR}/src/*.cpp"
     "${CMAKE_SOURCE_DIR}/src/*.h"
 )
-add_executable(VulkanLab ${SOURCES})
+
+set(IMGUI_SOURCES
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp
+    ${IMGUI_DIR}/imgui_demo.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
+)
+
+add_executable(VulkanLab ${SOURCES} ${IMGUI_SOURCES})
 
 # 添加 src 目录及 GLM 头文件为搜索路径
 target_include_directories(VulkanLab PRIVATE ${CMAKE_SOURCE_DIR}/src ${GLM_INCLUDE_DIR})

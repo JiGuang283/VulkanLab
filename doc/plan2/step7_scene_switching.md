@@ -1,3 +1,562 @@
+# 第七步：场景切换 + 编辑器式输入（Scene Switching & Editor Input）
+
+> v2（2026-04-21 修订）
+> 原版将场景切换绑定到 F1/F2 热键；接入 ImGui（step6）后出现新约束：
+> 游戏模式下鼠标被 `GLFW_CURSOR_DISABLED` 捕获，ImGui 无法点击。
+> 本步把交互范式统一成**类游戏引擎编辑器**：
+>   - 默认光标可用，ImGui 可点击；
+>   - 按住鼠标右键才进入"场景漫游"，松开立即回到 UI；
+>   - 场景切换改为 ImGui 窗口里的列表/下拉，不再占用热键。
+
+---
+
+## 0. 背景：step6 之后暴露的问题
+
+1. **鼠标冲突**。`Application::mainLoop()` 一开始就 `setCursorCaptured(true)`，光标被隐藏并锁在窗口中心，ImGui 获得的光标位置是中心点，无法点击按钮。
+2. **单一输入模式**。当前代码只在 `wantCaptureMouse()` 为真时临时让出光标，但 ImGui 的 `WantCaptureMouse` 需要先检测到光标进入它自己的窗口才会变 true——光标一开始就被锁住根本进不去，陷入死循环。
+3. **硬编码旋转 + 硬编码模型加载**（原 v1 已指出）。
+
+核心结论：**应用有两种稳定的状态**——UI 状态（鼠标归 ImGui/OS）和漫游状态（鼠标归相机），必须显式、原子地切换。
+
+---
+
+## 1. 目标
+
+### 1.1 场景切换（沿用 v1 目标）
+- 启动时可通过 Config 指定默认场景
+- 运行时通过 **ImGui 面板** 切换场景（不再用 F1/F2）
+- 切换时正确释放旧场景的 GPU 资源
+- 每个场景可以有自己的模型、贴图、初始相机位置、每帧更新逻辑
+
+### 1.2 编辑器式输入（新）
+- 光标默认可见，能点击 ImGui
+- **按住鼠标右键**进入场景漫游：鼠标移动旋转相机，WASD/Space/Shift 平移
+- **松开鼠标右键**：立刻恢复光标并回到 UI
+- 如果右键**起始按下的位置在 ImGui 窗口之上**，不触发漫游（把事件让给 UI）
+- 漫游过程中光标被隐藏，相机获得"无限量程"的鼠标增量；松开时光标恢复到按下前的位置（Unity/Unreal 的 Scene View 行为）
+
+### 1.3 不做的事
+- ❌ 场景序列化
+- ❌ 热重载
+- ❌ 场景图层级
+- ❌ 异步加载
+- ❌ 撤销/重做、gizmo、选择高亮（后续步骤可做）
+
+---
+
+## 2. 当前架构分析
+
+### 2.1 资源所有权（已在 v1 分析，此处简述）
+
+`Application` 直接持有 `texture_/material_/mesh_/gltfMeshes_`，切场景需要手动清场，容易遗漏。
+
+**决策**：把这些移入 `Scene`，让 Scene 为自身资源的**唯一所有者**。切换场景 = `reset()` 旧 Scene → 构造新 Scene。
+
+### 2.2 输入管道现状
+
+```cpp
+// InputManager（精简视图）
+void update();                  // 仅重置 mouseDelta_
+bool isKeyDown(Key);            // 查询式
+glm::vec2 mouseDelta();         // 光标被捕获时才累加
+void setCursorCaptured(bool);   // GLFW_CURSOR_DISABLED / NORMAL
+```
+
+问题：
+- `mouseDelta_` 只在 `cursorCaptured_` 为真时被回调累加——编辑器模式下非漫游期间也应累加（将来鼠标拖拽 gizmo 会需要）。
+- 没有**鼠标按键**状态，无法实现"按住右键才漫游"。
+- 没有**边沿触发**（`isKeyPressed` / `isMouseButtonPressed`），一次性事件不好写。
+
+### 2.3 跨场景不变的部分
+
+| 对象 | 说明 |
+|------|------|
+| Window / InputManager / Context / Device / SwapChain / FrameSync / Renderer / Pipeline / GuiSystem | 生命周期与应用一致，切场景不动 |
+| Camera | 观察者；切场景时只重置位姿，不重建 |
+
+---
+
+## 3. 顶层设计
+
+### 3.1 InputMode：显式的模式状态机
+
+在 `Application` 里维护一个枚举：
+
+```cpp
+enum class InputMode {
+    UI,          // 光标可见，ImGui 接管
+    CameraDrag,  // 光标隐藏并锁定，相机接管鼠标
+};
+```
+
+状态机：
+
+```
+  ┌──────────┐   右键按下(且未在ImGui上)   ┌──────────────┐
+  │    UI    │ ────────────────────────▶ │  CameraDrag  │
+  │          │ ◀──────────────────────── │              │
+  └──────────┘       右键释放              └──────────────┘
+```
+
+**进入 CameraDrag 的条件**（必须全部满足）：
+1. 当前是 UI 模式
+2. 本帧检测到鼠标右键**边沿按下**
+3. `ImGui::GetIO().WantCaptureMouse` 为 **false**（点击未命中任何 ImGui 窗口）
+4. `ImGui::IsAnyItemActive()` 为 **false**（例如正在拖滑块，不能被抢走）
+
+**切换动作**：
+- 进入 CameraDrag：记录光标位置 `savedCursor_`，设 `GLFW_CURSOR_DISABLED`，重置 `firstMouse_`，禁用 ImGui 鼠标输入（见 3.2）。
+- 退出 CameraDrag：恢复 `GLFW_CURSOR_NORMAL`，`glfwSetCursorPos(savedCursor_)` 还原光标。
+
+### 3.2 ImGui 与输入的共存
+
+- 继续用 `ImGui_ImplGlfw_InitForVulkan(window, true)`——ImGui 链式接管 GLFW 回调。
+- 在 CameraDrag 模式时设 `ImGuiConfigFlags_NoMouse`，防止 ImGui 把隐藏光标当成"鼠标停留在某窗口"。
+- UI 模式时移除该 flag。
+
+```cpp
+auto& io = ImGui::GetIO();
+if (mode == InputMode::CameraDrag) io.ConfigFlags |=  ImGuiConfigFlags_NoMouse;
+else                                io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+```
+
+### 3.3 相机输入改造
+
+- 仅在 `mode == CameraDrag` 时 `camera_.rotate(delta.x * sens, -delta.y * sens)`；
+- WASD/Space/Shift 同样仅在 CameraDrag 时响应（符合编辑器习惯）。
+- Escape 键始终生效——任何模式按 Esc 退出（或先退漫游）。
+
+### 3.4 场景切换 UI
+
+ImGui 窗口 `Scene` 里放一个列表：
+
+```cpp
+void Application::drawGui() {
+    ImGui::Begin("Scene");
+    for (int i = 0; i < (int)sceneRegistry_.size(); ++i) {
+        const bool selected = (i == currentSceneIndex_);
+        if (ImGui::Selectable(sceneRegistry_[i].name.c_str(), selected))
+            pendingSceneIndex_ = i;          // 延迟到下一帧开头切
+    }
+    ImGui::End();
+
+    ImGui::Begin("Stats");
+    ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
+    const auto p = camera_.position();
+    ImGui::Text("Camera: (%.2f, %.2f, %.2f)", p.x, p.y, p.z);
+    ImGui::Text("Mode: %s", mode_ == InputMode::UI ? "UI" : "Drag");
+    ImGui::End();
+}
+```
+
+**为什么用 `pendingSceneIndex_` 而不是立刻 `switchScene(i)`？**
+ImGui 点击发生在 `beginFrame()` 之后；此时已经 `ImGui::NewFrame()`。
+直接 `vkDeviceWaitIdle` + 释放资源虽然能跑，但把 GPU-stall 放在 UI 交互里语义混乱。
+统一在下一帧**循环开始处**执行切换，保证所有切换都在帧外完成：
+
+```cpp
+// mainLoop 开头
+if (pendingSceneIndex_ != -1) {
+    switchScene(pendingSceneIndex_);
+    pendingSceneIndex_ = -1;
+}
+```
+
+---
+
+## 4. InputManager 增量接口
+
+保持向后兼容，新增：
+
+```cpp
+enum class MouseButton : int {
+    Left   = 0,  // GLFW_MOUSE_BUTTON_LEFT
+    Right  = 1,
+    Middle = 2,
+};
+
+class InputManager {
+  public:
+    // 已有：isKeyDown / mouseDelta / setCursorCaptured ...
+
+    // 新增：鼠标按键（查询 + 边沿）
+    bool isMouseDown(MouseButton) const;
+    bool isMousePressed(MouseButton) const;    // 上升沿
+    bool isMouseReleased(MouseButton) const;   // 下降沿
+
+    // 新增：键盘边沿触发
+    bool isKeyPressed(Key) const;
+
+    // 新增：无视 cursorCaptured_ 总是累加 delta
+    glm::vec2 rawMouseDelta() const;
+
+    // 光标位置（用于进入漫游前保存）
+    glm::dvec2 cursorPos() const;
+    void       setCursorPos(glm::dvec2);
+};
+```
+
+### 4.1 实现要点
+
+- 在 `update()` 里同步上一帧按键/按钮状态到 `prevKeys_ / prevButtons_`，生成边沿信号。
+- `mouseCallback` 始终累加 `rawMouseDelta_`；`mouseDelta_` 在 `cursorCaptured_` 下同步累加（兼容原行为）。
+- `cursorPos()` 直接调用 `glfwGetCursorPos`。
+
+---
+
+## 5. Scene / SceneFactory / BuiltinScenes
+
+### 5.1 Scene 扩展（与 v1 一致）
+
+```cpp
+struct CameraPose {
+    glm::vec3 position{2.0f, 2.0f, 2.0f};
+    float     yaw   = -135.0f;
+    float     pitch = -30.0f;
+};
+
+class Scene {
+  public:
+    using UpdateFn = std::function<void(Scene&, float dt, float time)>;
+
+    void addTexture(std::shared_ptr<Texture>);
+    void addMaterial(std::shared_ptr<Material>);
+    void addMesh(std::shared_ptr<Mesh>);
+    void addObject(SceneObject);
+
+    void render(VkCommandBuffer, uint32_t frameIndex, Pipeline&) const;
+    void setUpdateFn(UpdateFn);
+    void update(float dt, float time);
+
+    std::vector<SceneObject>       &objects();
+    const std::vector<SceneObject> &objects() const;
+
+    std::optional<CameraPose> initialCamera;
+
+  private:
+    std::vector<std::shared_ptr<Texture>>  textures_;
+    std::vector<std::shared_ptr<Material>> materials_;
+    std::vector<std::shared_ptr<Mesh>>     meshes_;
+    std::vector<SceneObject>               objects_;
+    UpdateFn                               updateFn_;
+};
+```
+
+### 5.2 SceneFactory / SceneEntry
+
+相较 v1 去掉 `hotKey` 字段：
+
+```cpp
+using SceneFactory = std::function<
+    std::unique_ptr<Scene>(Device&, FrameSync&, Renderer&, Pipeline&)
+>;
+
+struct SceneEntry {
+    std::string  name;
+    SceneFactory factory;
+};
+```
+
+> 注：`Pipeline` 目前是 Application 拥有的共享 `opaquePipeline_`，场景工厂只引用不拥有。
+> 将来场景自带 pipeline 时，改为 Scene 持有 `vector<unique_ptr<Pipeline>>` 即可，接口不破坏。
+
+### 5.3 BuiltinScenes
+
+集中放具体场景构造函数：
+
+```cpp
+// BuiltinScenes.h
+SceneFactory vikingRoomSceneFactory(std::string tex, std::string vp, std::string fp);
+SceneFactory sheenChairSceneFactory(std::string tex, std::string vp, std::string fp);
+```
+
+工厂内部把原 `Application::init()` 里模型/贴图/材质的构造逻辑搬过来，**并把硬编码的旋转写进 `setUpdateFn`**：
+
+```cpp
+scene->setUpdateFn([](Scene& s, float, float time) {
+    s.objects()[0].transform =
+        glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f),
+                    glm::vec3(0.0f, 0.0f, 1.0f));
+});
+scene->initialCamera = CameraPose{{2,2,2}, -135.0f, -30.0f};
+```
+
+---
+
+## 6. Application 结构变化
+
+### 6.1 头文件
+
+```cpp
+class Application {
+  public:
+    explicit Application(const Config& = {});
+    void run();
+    void registerScene(SceneEntry entry);
+
+  private:
+    // --- 基础设施 ---
+    std::unique_ptr<Window>        window_;
+    std::unique_ptr<InputManager>  input_;
+    std::unique_ptr<VulkanContext> context_;
+    std::unique_ptr<Device>        device_;
+    std::unique_ptr<SwapChain>     swapChain_;
+    std::unique_ptr<FrameSync>     frameSync_;
+    std::unique_ptr<Renderer>      renderer_;
+    std::unique_ptr<Pipeline>      opaquePipeline_;
+    std::unique_ptr<GuiSystem>     gui_;
+
+    // --- 场景切换 ---
+    std::vector<SceneEntry>   sceneRegistry_;
+    std::unique_ptr<Scene>    currentScene_;
+    int                       currentSceneIndex_ = -1;
+    int                       pendingSceneIndex_ = -1;
+
+    // --- 输入模式 ---
+    InputMode                 mode_ = InputMode::UI;
+    glm::dvec2                savedCursor_{};
+
+    Camera camera_;
+
+    void init();
+    void mainLoop();
+    void drawGui();
+    void switchScene(int index);
+    void updateInputMode();
+    void processCameraInput(float dt);
+    void updateUniforms(uint32_t frameIndex);
+};
+```
+
+删除字段：`texture_`, `material_`, `mesh_`, `gltfMeshes_`, `scene_`。
+
+### 6.2 mainLoop 骨架
+
+```cpp
+void Application::mainLoop() {
+    // 不再启动时捕获光标——默认 UI 模式
+    auto startTime = std::chrono::high_resolution_clock::now();
+    auto lastTime  = startTime;
+
+    while (!window_->shouldClose()) {
+        window_->pollEvents();
+        input_->update();   // 刷新边沿 + 清 mouseDelta
+
+        // 1. 帧外：场景切换
+        if (pendingSceneIndex_ != -1) {
+            switchScene(pendingSceneIndex_);
+            pendingSceneIndex_ = -1;
+        }
+
+        // 2. 时间
+        auto  now = std::chrono::high_resolution_clock::now();
+        float dt  = std::chrono::duration<float>(now - lastTime).count();
+        lastTime  = now;
+
+        // 3. ImGui 新帧（updateInputMode 依赖 io）
+        gui_->beginFrame();
+
+        // 4. 模式切换 + 输入
+        updateInputMode();
+        if (mode_ == InputMode::CameraDrag) processCameraInput(dt);
+        if (input_->isKeyDown(Key::Escape)) window_->setShouldClose(true);
+
+        // 5. 场景 tick
+        float t = std::chrono::duration<float>(now - startTime).count();
+        if (currentScene_) currentScene_->update(dt, t);
+
+        // 6. UI
+        drawGui();
+
+        // 7. 渲染
+        auto ctx = frameSync_->beginFrame();
+        if (!ctx) {
+            handleSwapChainRecreate();
+            ImGui::EndFrame();
+            continue;
+        }
+        updateUniforms(ctx->frameIndex);
+        renderer_->beginRenderPass(ctx->cmd, ctx->imageIndex);
+        if (currentScene_) currentScene_->render(ctx->cmd, ctx->frameIndex, *opaquePipeline_);
+        gui_->render(ctx->cmd);
+        renderer_->endRenderPass(ctx->cmd);
+        frameSync_->endFrame(*ctx);
+
+        if (frameSync_->swapChainNeedsRecreation()) handleSwapChainRecreate();
+    }
+    vkDeviceWaitIdle(device_->logicalDevice());
+}
+```
+
+### 6.3 updateInputMode
+
+```cpp
+void Application::updateInputMode() {
+    auto& io = ImGui::GetIO();
+
+    if (mode_ == InputMode::UI) {
+        const bool pressed = input_->isMousePressed(MouseButton::Right);
+        const bool overUI  = io.WantCaptureMouse || ImGui::IsAnyItemActive();
+        if (pressed && !overUI) {
+            savedCursor_ = input_->cursorPos();
+            input_->setCursorCaptured(true);
+            io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+            mode_ = InputMode::CameraDrag;
+        }
+    } else { // CameraDrag
+        if (input_->isMouseReleased(MouseButton::Right)) {
+            input_->setCursorCaptured(false);
+            input_->setCursorPos(savedCursor_);
+            io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+            mode_ = InputMode::UI;
+        }
+    }
+}
+```
+
+### 6.4 processCameraInput
+
+把原 `processInput(dt)` 的 WASD + mouseDelta 改名并改为只在 CameraDrag 时调用：
+
+```cpp
+void Application::processCameraInput(float dt) {
+    glm::vec3 move{0.0f};
+    if (input_->isKeyDown(Key::W))         move.z += config_.moveSpeed * dt;
+    if (input_->isKeyDown(Key::S))         move.z -= config_.moveSpeed * dt;
+    if (input_->isKeyDown(Key::A))         move.x -= config_.moveSpeed * dt;
+    if (input_->isKeyDown(Key::D))         move.x += config_.moveSpeed * dt;
+    if (input_->isKeyDown(Key::Space))     move.y += config_.moveSpeed * dt;
+    if (input_->isKeyDown(Key::LeftShift)) move.y -= config_.moveSpeed * dt;
+    camera_.translate(move);
+
+    const auto d = input_->mouseDelta();
+    camera_.rotate(d.x * config_.mouseSensitivity,
+                  -d.y * config_.mouseSensitivity);
+}
+```
+
+### 6.5 switchScene
+
+```cpp
+void Application::switchScene(int index) {
+    if (index < 0 || index >= (int)sceneRegistry_.size()) return;
+    if (index == currentSceneIndex_) return;
+
+    vkDeviceWaitIdle(device_->logicalDevice());
+    currentScene_.reset();
+
+    const auto& entry = sceneRegistry_[index];
+    currentScene_ = entry.factory(*device_, *frameSync_, *renderer_, *opaquePipeline_);
+    currentSceneIndex_ = index;
+
+    if (currentScene_->initialCamera) {
+        const auto& p = *currentScene_->initialCamera;
+        camera_.setPosition(p.position);
+        camera_.setYawPitch(p.yaw, p.pitch);
+    }
+}
+```
+
+---
+
+## 7. Camera 需要新增的 setter
+
+```cpp
+void Camera::setYawPitch(float yaw, float pitch);
+```
+
+`setPosition` 已有。
+
+---
+
+## 8. Config 变化
+
+```cpp
+struct Config {
+    // 删除：modelPath（移入场景工厂）
+    std::string texturePath    = "textures/viking_room.png";
+    std::string vertShaderPath = "shader/vert.spv";
+    std::string fragShaderPath = "shader/frag.spv";
+
+    float moveSpeed        = 2.0f;
+    float mouseSensitivity = 0.1f;
+
+    int defaultSceneIndex  = 0;
+    // ...其余字段不变
+};
+```
+
+---
+
+## 9. main.cpp 注册
+
+```cpp
+int main() {
+    vkr::Config cfg;
+    vkr::Application app(cfg);
+
+    app.registerScene({"Viking Room",
+        vkr::vikingRoomSceneFactory(cfg.texturePath, cfg.vertShaderPath, cfg.fragShaderPath)});
+    app.registerScene({"Sheen Chair",
+        vkr::sheenChairSceneFactory(cfg.texturePath, cfg.vertShaderPath, cfg.fragShaderPath)});
+
+    try { app.run(); }
+    catch (const std::exception& e) { std::cerr << e.what() << "\n"; return 1; }
+    return 0;
+}
+```
+
+---
+
+## 10. 同步/边界条件
+
+| 场景 | 保障 |
+|------|-----|
+| 场景切换时释放 GPU 资源 | 在 mainLoop 开头、`beginFrame()` 之前 `vkDeviceWaitIdle` |
+| ImGui 正在拖滑块时误按右键 | `IsAnyItemActive()` 判守，优先让 UI 吃事件 |
+| 窗口失焦 / Alt-Tab | GLFW `WindowFocusCallback` 中强制 `mode_=UI` 并 `setCursorCaptured(false)`（可选扩展） |
+| 光标从屏幕边缘回来 | `GLFW_CURSOR_DISABLED` 使鼠标增量无限，无需处理 |
+| 漫游中窗口 resize | swap chain 重建分支已有，与输入模式正交 |
+
+---
+
+## 11. 验收标准
+
+- [ ] 启动后光标可见，能点 ImGui 按钮/选项
+- [ ] 点击 ImGui `Scene` 面板中 "Sheen Chair"，**下一帧**完成切换，无崩溃、无 validation 错误
+- [ ] ImGui 窗口外**按住鼠标右键**：光标消失，鼠标移动能旋转相机，WASD 能平移
+- [ ] 松开右键：光标出现在原位置，可继续点击 ImGui
+- [ ] 右键按下瞬间鼠标正悬停在 ImGui 窗口之上 → **不进入漫游**，ImGui 正常响应
+- [ ] 多次 UI↔Drag 切换稳定；连续切换场景 ≥ 10 次无泄漏
+- [ ] Application 不再直接持有 `texture_/material_/mesh_/gltfMeshes_/scene_`
+- [ ] 原来的硬编码 `scene_.objects()[0].transform = rotate(...)` 已移到场景工厂
+- [ ] Stats 面板显示当前 FPS、相机位置、输入模式
+
+---
+
+## 12. 提交顺序建议
+
+1. **InputManager 扩展**：加鼠标按钮、边沿触发、`cursorPos`/`setCursorPos`、`rawMouseDelta`（纯加法，不破坏现有 API）。
+2. **Camera 扩展**：`setYawPitch`。
+3. **Scene 扩展**：资源所有权字段、`update()` 钩子、`initialCamera`（纯加法）。
+4. **SceneFactory + BuiltinScenes**：把 init() 里模型/贴图构造搬进工厂函数；暂先保持 Application 旧逻辑并存，用一个 factory 构建初始场景。
+5. **Application 改造**：引入 `InputMode`、`updateInputMode`、`processCameraInput`、`pendingSceneIndex_`、`switchScene`；删除旧 `scene_/texture_/material_/mesh_`；`drawGui` 里加 Scene/Stats 面板。
+6. **main.cpp**：注册两个场景；移除 Config 中 `modelPath`。
+7. **回归测试**：两场景来回切、UI/漫游切换、resize 组合。
+
+每一步都可编译运行。
+
+---
+
+## 13. 未来扩展接口（保持兼容）
+
+| 需求 | 当前设计如何自然演进 |
+|------|---------------------|
+| 选中物体 / 属性面板 | Scene 公开 `objects()`，ImGui 遍历即可；Gizmo 之后加 `GizmoDrag` 模式 |
+| 多 Pipeline / 多 Material 场景 | Scene 持有 vector<unique_ptr<Pipeline>> 与资源一起管理 |
+| 游戏模式（全屏 + 捕获光标） | 再加 `InputMode::Game`：光标始终锁定，无需右键 |
+| 暂停 / 步进调试 | `Scene::update` 接受 dt，外层轻松拦截 |
+| 异步场景加载 | `SceneFactory` 改为返回 `std::future<unique_ptr<Scene>>`；mainLoop poll |
 # 第七步：场景切换（Scene Switching）
 
 ## 目标
