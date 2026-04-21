@@ -1,6 +1,6 @@
 #include "Image.h"
 #include "Device.h"
-#include <stdexcept>
+#include "VulkanCheck.h"
 
 namespace vkr {
 
@@ -25,9 +25,8 @@ Image::Image(Device &device, uint32_t width, uint32_t height,
     VmaAllocationCreateInfo allocCI{};
     allocCI.requiredFlags = memProps;
 
-    if (vmaCreateImage(device.allocator(), &imageInfo, &allocCI, &image_,
-                       &allocation_, nullptr) != VK_SUCCESS)
-        throw std::runtime_error("failed to create image with VMA!");
+    VK_CHECK(vmaCreateImage(device.allocator(), &imageInfo, &allocCI, &image_,
+                            &allocation_, nullptr));
 }
 
 Image::~Image() {
@@ -76,9 +75,8 @@ void Image::createView(VkFormat format, VkImageAspectFlags aspectFlags,
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount = 1;
 
-    if (vkCreateImageView(device_->logicalDevice(), &viewInfo, nullptr,
-                          &view_) != VK_SUCCESS)
-        throw std::runtime_error("failed to create image view!");
+    VK_CHECK(vkCreateImageView(device_->logicalDevice(), &viewInfo, nullptr,
+                               &view_));
 }
 
 void Image::cleanup() {

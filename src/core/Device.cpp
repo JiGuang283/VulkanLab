@@ -1,6 +1,18 @@
 #include "Device.h"
+#include "VulkanCheck.h"
 
 #include <iostream>
+#include <set>
+#include <string>
+#include <vector>
+
+namespace {
+const bool                      enableValidationLayers = true;
+const std::vector<const char *> validationLayers = {
+    "VK_LAYER_KHRONOS_validation"};
+const std::vector<const char *> deviceExtensions = {
+    VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+} // namespace
 
 namespace vkr {
 
@@ -156,10 +168,7 @@ void Device::createLogicalDevice() {
         createInfo.enabledLayerCount = 0;
     }
 
-    if (vkCreateDevice(physicalDevice_, &createInfo, nullptr, &device_) !=
-        VK_SUCCESS) {
-        throw std::runtime_error("failed to create logical device!");
-    }
+    VK_CHECK(vkCreateDevice(physicalDevice_, &createInfo, nullptr, &device_));
 
     vkGetDeviceQueue(device_, indices.graphicsFamily.value(), 0,
                      &graphicsQueue_);
@@ -281,9 +290,7 @@ void Device::createAllocator() {
     info.device = device_;
     info.instance = ctx_.instance();
     info.vulkanApiVersion = VK_API_VERSION_1_0;
-    if (vmaCreateAllocator(&info, &allocator_) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create VMA allocator!");
-    }
+    VK_CHECK(vmaCreateAllocator(&info, &allocator_));
 }
 
 } // namespace vkr

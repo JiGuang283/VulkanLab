@@ -1,36 +1,36 @@
 #pragma once
 
-#include <vulkan/vulkan.h>
+#include <functional>
 #include <vector>
+#include <vulkan/vulkan.h>
 
-struct  GLFWwindow;
+namespace vkr {
 
+using SurfaceCreator = std::function<VkSurfaceKHR(VkInstance)>;
 
-namespace vkr{
-
-class VulkanContext{
-public:
-    VulkanContext(GLFWwindow* window);
+class VulkanContext {
+  public:
+    VulkanContext(SurfaceCreator            createSurface,
+                  std::vector<const char *> requiredExtensions);
     ~VulkanContext();
 
-    VulkanContext(const VulkanContext&) = delete;
-    VulkanContext& operator=(const VulkanContext) = delete;
+    VulkanContext(const VulkanContext &) = delete;
+    VulkanContext &operator=(const VulkanContext &) = delete;
 
-    VkInstance instance() const {return instance_;}
-    VkSurfaceKHR surface() const {return surface_;}
+    VkInstance   instance() const { return instance_; }
+    VkSurfaceKHR surface() const { return surface_; }
 
-private:
-    void createInstance();
+  private:
+    void createInstance(std::vector<const char *> requiredExtensions);
     void setupDebugMessenger();
-    void createSurface();
 
     bool checkValidationLayerSupport();
-    std::vector<const char*> getRequiredExtensions();
-    void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo);
+    void populateDebugMessengerCreateInfo(
+        VkDebugUtilsMessengerCreateInfoEXT &createInfo);
 
-    GLFWwindow* window_;
-    VkInstance instance_;
-    VkDebugUtilsMessengerEXT debugMessenger_;
-    VkSurfaceKHR surface_;
+    VkInstance               instance_ = VK_NULL_HANDLE;
+    VkDebugUtilsMessengerEXT debugMessenger_ = VK_NULL_HANDLE;
+    VkSurfaceKHR             surface_ = VK_NULL_HANDLE;
 };
-}
+
+} // namespace vkr

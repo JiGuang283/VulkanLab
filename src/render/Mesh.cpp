@@ -1,7 +1,7 @@
 #include "Mesh.h"
-#include "Renderer.h"
+#include "Vertex.h"
 #include "core/Device.h"
-#include "vulkan_utils.h"
+#include "core/FrameSync.h"
 
 #include <tiny_obj_loader.h>
 
@@ -12,7 +12,7 @@
 
 namespace vkr {
 
-Mesh::Mesh(Device &device, Renderer &renderer, const void *vertexData,
+Mesh::Mesh(Device &device, FrameSync &frameSync, const void *vertexData,
            VkDeviceSize vertexSize, const uint32_t *indexData,
            uint32_t indexCount)
     : indexCount_(indexCount) {
@@ -32,8 +32,8 @@ Mesh::Mesh(Device &device, Renderer &renderer, const void *vertexData,
                                          VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-        renderer.copyBuffer(staging.handle(), vertexBuffer_->handle(),
-                            vertexSize);
+        frameSync.copyBuffer(staging.handle(), vertexBuffer_->handle(),
+                             vertexSize);
     }
 
     // ---- 索引缓冲 ----
@@ -53,12 +53,12 @@ Mesh::Mesh(Device &device, Renderer &renderer, const void *vertexData,
             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-        renderer.copyBuffer(staging.handle(), indexBuffer_->handle(),
-                            indexSize);
+        frameSync.copyBuffer(staging.handle(), indexBuffer_->handle(),
+                             indexSize);
     }
 }
 
-std::unique_ptr<Mesh> Mesh::fromOBJ(Device &device, Renderer &renderer,
+std::unique_ptr<Mesh> Mesh::fromOBJ(Device &device, FrameSync &frameSync,
                                     const std::string &path) {
     tinyobj::attrib_t                attrib;
     std::vector<tinyobj::shape_t>    shapes;
@@ -96,7 +96,7 @@ std::unique_ptr<Mesh> Mesh::fromOBJ(Device &device, Renderer &renderer,
               << ", Indices: " << indices.size() << std::endl;
 
     return std::make_unique<Mesh>(
-        device, renderer, vertices.data(),
+        device, frameSync, vertices.data(),
         static_cast<VkDeviceSize>(sizeof(Vertex) * vertices.size()),
         indices.data(), static_cast<uint32_t>(indices.size()));
 }

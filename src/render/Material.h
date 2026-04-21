@@ -2,7 +2,9 @@
 
 #include "Renderer.h"
 #include "Texture.h"
+#include "core/FrameSync.h"
 #include "core/Pipeline.h"
+#include "core/PipelineConfig.h"
 
 #include <memory>
 #include <string>

@@ -50,4 +50,26 @@ void Window::framebufferResizeCallback(GLFWwindow *w, int width, int height) {
         data->window->resizeCallback_(width, height);
 }
 
+VkSurfaceKHR Window::createSurface(VkInstance instance) const {
+    VkSurfaceKHR surface;
+    if (glfwCreateWindowSurface(instance, window_, nullptr, &surface) !=
+        VK_SUCCESS) {
+        throw std::runtime_error("failed to create window surface!");
+    }
+    return surface;
+}
+
+std::vector<const char *> Window::getRequiredVulkanExtensions() {
+    uint32_t     glfwExtensionCount = 0;
+    const char **glfwExtensions =
+        glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+    return {glfwExtensions, glfwExtensions + glfwExtensionCount};
+}
+
+VkExtent2D Window::framebufferExtent() const {
+    int w, h;
+    glfwGetFramebufferSize(window_, &w, &h);
+    return {static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
+}
+
 } // namespace vkr

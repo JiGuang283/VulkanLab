@@ -1,23 +1,55 @@
 #include "VulkanContext.h"
-#include "vulkan_utils.h"
+#include "VulkanCheck.h"
 
+#include <cstring>
 #include <iostream>
+#include <vector>
+
+namespace {
+const bool                      enableValidationLayers = true;
+const std::vector<const char *> validationLayers = {
+    "VK_LAYER_KHRONOS_validation"};
+
+VkResult CreateDebugUtilsMessengerEXT(
+    VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator,
+    VkDebugUtilsMessengerEXT    *pDebugMessenger) {
+    auto func = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(
+        instance, "vkCreateDebugUtilsMessengerEXT");
+    if (func != nullptr) {
+        return func(instance, pCreateInfo, pAllocator, pDebugMessenger);
+    } else {
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
+    }
+}
+
+void DestroyDebugUtilsMessengerEXT(VkInstance                   instance,
+                                   VkDebugUtilsMessengerEXT     debugMessenger,
+                                   const VkAllocationCallbacks *pAllocator) {
+    auto func = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(
+        instance, "vkDestroyDebugUtilsMessengerEXT");
+    if (func != nullptr) {
+        func(instance, debugMessenger, pAllocator);
+    }
+}
+} // namespace
 
 namespace vkr {
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL
-debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-              VkDebugUtilsMessageTypeFlagsEXT messageType,
+debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT      messageSeverity,
+              VkDebugUtilsMessageTypeFlagsEXT             messageType,
               const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
-              void *pUserData) {
+              void                                       *pUserData) {
     std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
     return VK_FALSE;
 }
 
-VulkanContext::VulkanContext(GLFWwindow *window) : window_(window) {
-    createInstance();
+VulkanContext::VulkanContext(SurfaceCreator            createSurface,
+                             std::vector<const char *> requiredExtensions) {
+    createInstance(std::move(requiredExtensions));
     setupDebugMessenger();
-    createSurface();
+    surface_ = createSurface(instance_);
 }
 
 VulkanContext::~VulkanContext() {
@@ -28,22 +60,8 @@ VulkanContext::~VulkanContext() {
     vkDestroyInstance(instance_, nullptr);
 }
 
-std::vector<const char *> getRequiredExtensions() {
-    uint32_t glfwExtensionCount = 0;
-    const char **glfwExtensions;
-    glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-
-    std::vector<const char *> extensions(glfwExtensions,
-                                         glfwExtensions + glfwExtensionCount);
-
-    if (enableValidationLayers) {
-        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-    }
-
-    return extensions;
-}
-
-void VulkanContext::createInstance() {
+void VulkanContext::createInstance(
+    std::vector<const char *> requiredExtensions) {
     if (enableValidationLayers && !checkValidationLayerSupport()) {
         throw std::runtime_error(
             "validation layers requested requested, but not available!");
@@ -60,9 +78,12 @@ void VulkanContext::createInstance() {
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = &appInfo;
 
-    auto extensions = getRequiredExtensions();
-    createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
-    createInfo.ppEnabledExtensionNames = extensions.data();
+    if (enableValidationLayers) {
+        requiredExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    }
+    createInfo.enabledExtensionCount =
+        static_cast<uint32_t>(requiredExtensions.size());
+    createInfo.ppEnabledExtensionNames = requiredExtensions.data();
 
     VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
     if (enableValidationLayers) {
@@ -78,9 +99,7 @@ void VulkanContext::createInstance() {
         createInfo.pNext = nullptr;
     }
 
-    if (vkCreateInstance(&createInfo, nullptr, &instance_) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create instance!");
-    }
+    VK_CHECK(vkCreateInstance(&createInfo, nullptr, &instance_));
 }
 
 void VulkanContext::setupDebugMessenger() {
@@ -90,17 +109,8 @@ void VulkanContext::setupDebugMessenger() {
     VkDebugUtilsMessengerCreateInfoEXT createInfo;
     populateDebugMessengerCreateInfo(createInfo);
 
-    if (CreateDebugUtilsMessengerEXT(instance_, &createInfo, nullptr,
-                                     &debugMessenger_) != VK_SUCCESS) {
-        throw std::runtime_error("failed to set up debug messenger!");
-    }
-}
-
-void VulkanContext::createSurface() {
-    if (glfwCreateWindowSurface(instance_, window_, nullptr, &surface_) !=
-        VK_SUCCESS) {
-        throw std::runtime_error("failed to create window surface!");
-    }
+    VK_CHECK(CreateDebugUtilsMessengerEXT(instance_, &createInfo, nullptr,
+                                          &debugMessenger_));
 }
 
 void VulkanContext::populateDebugMessengerCreateInfo(
@@ -138,21 +148,6 @@ bool VulkanContext::checkValidationLayerSupport() {
         }
     }
     return true;
-}
-
-std::vector<const char *> VulkanContext::getRequiredExtensions() {
-    uint32_t glfwExtensionCount = 0;
-    const char **glfwExtensions;
-    glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-
-    std::vector<const char *> extensions(glfwExtensions,
-                                         glfwExtensions + glfwExtensionCount);
-
-    if (enableValidationLayers) {
-        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-    }
-
-    return extensions;
 }
 
 } // namespace vkr

@@ -8,6 +8,16 @@ namespace vkr {
 
 class Window;
 
+enum class Key : int {
+    W = 87,          // GLFW_KEY_W
+    A = 65,          // GLFW_KEY_A
+    S = 83,          // GLFW_KEY_S
+    D = 68,          // GLFW_KEY_D
+    Space = 32,      // GLFW_KEY_SPACE
+    LeftShift = 340, // GLFW_KEY_LEFT_SHIFT
+    Escape = 256,    // GLFW_KEY_ESCAPE
+};
+
 class InputManager {
   public:
     explicit InputManager(Window &window);
@@ -19,6 +29,7 @@ class InputManager {
     void update();
 
     bool isKeyDown(int key) const;
+    bool isKeyDown(Key key) const;
 
     glm::vec2 mouseDelta() const { return mouseDelta_; }
 

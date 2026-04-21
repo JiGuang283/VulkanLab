@@ -1,16 +1,17 @@
 #pragma once
+#include <functional>
 #include <vector>
 #include <vulkan/vulkan.h>
-
-struct GLFWwindow;
 
 namespace vkr {
 
 class Device;
 
+using ExtentProvider = std::function<VkExtent2D()>;
+
 class SwapChain {
   public:
-    SwapChain(Device &device, VkSurfaceKHR surface, GLFWwindow *window);
+    SwapChain(Device &device, VkSurfaceKHR surface, ExtentProvider getExtent);
     ~SwapChain();
 
     SwapChain(const SwapChain &) = delete;
@@ -45,9 +46,9 @@ class SwapChain {
                                 VkImageAspectFlags aspectFlags,
                                 uint32_t           mipLevels);
 
-    Device      *device_ = nullptr;
-    VkSurfaceKHR surface_ = VK_NULL_HANDLE; // 非拥有，VulkanContext 管理
-    GLFWwindow  *window_ = nullptr;         // 非拥有
+    Device        *device_ = nullptr;
+    VkSurfaceKHR   surface_ = VK_NULL_HANDLE; // 非拥有，VulkanContext 管理
+    ExtentProvider getExtent_;                // 回调获取窗口尺寸
 
     VkSwapchainKHR           swapChain_ = VK_NULL_HANDLE;
     VkFormat                 imageFormat_ = VK_FORMAT_UNDEFINED;

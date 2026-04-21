@@ -1,6 +1,6 @@
 #include "Buffer.h"
 #include "Device.h"
-#include <stdexcept>
+#include "VulkanCheck.h"
 
 namespace vkr {
 
@@ -16,9 +16,8 @@ Buffer::Buffer(Device &device, VkDeviceSize size, VkBufferUsageFlags usage,
     VmaAllocationCreateInfo allocCI{};
     allocCI.requiredFlags = memProps;
 
-    if (vmaCreateBuffer(device.allocator(), &bufferInfo, &allocCI, &buffer_,
-                        &allocation_, nullptr) != VK_SUCCESS)
-        throw std::runtime_error("failed to create buffer with VMA!");
+    VK_CHECK(vmaCreateBuffer(device.allocator(), &bufferInfo, &allocCI,
+                             &buffer_, &allocation_, nullptr));
 }
 
 Buffer::~Buffer() {

@@ -1,15 +1,15 @@
 #include "SwapChain.h"
 #include "Device.h"
+#include "VulkanCheck.h"
 
-#include <GLFW/glfw3.h>
 #include <algorithm>
 #include <limits>
-#include <stdexcept>
 
 namespace vkr {
 
-SwapChain::SwapChain(Device &device, VkSurfaceKHR surface, GLFWwindow *window)
-    : device_(&device), surface_(surface), window_(window) {
+SwapChain::SwapChain(Device &device, VkSurfaceKHR surface,
+                     ExtentProvider getExtent)
+    : device_(&device), surface_(surface), getExtent_(std::move(getExtent)) {
     createSwapChain();
     createImageViews();
 }
@@ -55,11 +55,7 @@ SwapChain::chooseSwapExtent(const VkSurfaceCapabilitiesKHR &capabilities) {
         std::numeric_limits<uint32_t>::max()) {
         return capabilities.currentExtent;
     } else {
-        int width, height;
-        glfwGetFramebufferSize(window_, &width, &height);
-
-        VkExtent2D actualExtent = {static_cast<uint32_t>(width),
-                                   static_cast<uint32_t>(height)};
+        VkExtent2D actualExtent = getExtent_();
 
         actualExtent.width =
             std::clamp(actualExtent.width, capabilities.minImageExtent.width,
@@ -117,10 +113,8 @@ void SwapChain::createSwapChain() {
     createInfo.clipped = VK_TRUE;
     createInfo.oldSwapchain = VK_NULL_HANDLE;
 
-    if (vkCreateSwapchainKHR(device_->logicalDevice(), &createInfo, nullptr,
-                             &swapChain_) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create swap chain!");
-    }
+    VK_CHECK(vkCreateSwapchainKHR(device_->logicalDevice(), &createInfo,
+                                  nullptr, &swapChain_));
 
     vkGetSwapchainImagesKHR(device_->logicalDevice(), swapChain_, &imageCount,
                             nullptr);
@@ -159,10 +153,8 @@ VkImageView SwapChain::createImageView(VkImage image, VkFormat format,
     viewInfo.subresourceRange.levelCount = mipLevels;
 
     VkImageView imageView;
-    if (vkCreateImageView(device_->logicalDevice(), &viewInfo, nullptr,
-                          &imageView) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create image view!");
-    }
+    VK_CHECK(vkCreateImageView(device_->logicalDevice(), &viewInfo, nullptr,
+                               &imageView));
 
     return imageView;
 }

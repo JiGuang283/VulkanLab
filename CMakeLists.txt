@@ -23,12 +23,14 @@ set(GLFW_DIR "${CMAKE_SOURCE_DIR}/external/glfw")
 set(STB_DIR "${CMAKE_SOURCE_DIR}/external/stb")
 set(TINYOBJ_DIR "${CMAKE_SOURCE_DIR}/external/tiny_obj_loader.h")
 set(VMA_DIR "${CMAKE_SOURCE_DIR}/external/vma")
+set(GLTF_DIR "${CMAKE_SOURCE_DIR}/external/gltf")
 
 # 添加 GLFW 头文件目录
 include_directories(${GLFW_DIR}/include)
 include_directories(${STB_DIR})
 include_directories(${TINYOBJ_DIR})
 include_directories(${VMA_DIR})
+include_directories(${GLTF_DIR})
 
 # 添加 GLFW 库文件目录 (这里假设你使用的是 lib-vc2022，如果是旧版 VS 请调整)
 link_directories(${GLFW_DIR}/lib-vc2022)
@@ -58,7 +60,7 @@ if(WIN32)
 endif()
 
 if(MSVC)
-    add_compile_options(/utf-8)
+    add_compile_options(/utf-8 /FS)
 endif()
 
 # Find glslc to compile shaders

@@ -9,11 +9,11 @@
 
 namespace vkr {
 
-class Renderer;
+class FrameSync;
 
 class Texture {
   public:
-    Texture(Device &device, Renderer &renderer, const std::string &path);
+    Texture(Device &device, FrameSync &frameSync, const std::string &path);
     ~Texture();
 
     Texture(const Texture &) = delete;
@@ -23,7 +23,7 @@ class Texture {
     VkSampler   sampler() const { return sampler_; }
 
   private:
-    void loadFromFile(Renderer &renderer, const std::string &path);
+    void loadFromFile(FrameSync &frameSync, const std::string &path);
     void createSampler();
 
     static void transitionImageLayout(VkCommandBuffer cmd, VkImage image,
@@ -35,7 +35,7 @@ class Texture {
                                   VkImage image, uint32_t width,
                                   uint32_t height);
 
-    void generateMipmaps(Renderer &renderer, VkImage image, VkFormat format,
+    void generateMipmaps(FrameSync &frameSync, VkImage image, VkFormat format,
                          int32_t width, int32_t height, uint32_t mipLevels);
 
     Device                *device_ = nullptr;

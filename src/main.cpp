@@ -1,7 +1,14 @@
-#include "app.h"
+#include "app/Application.h"
+#include <iostream>
 
 int main() {
-    HelloTriangleApplication app;
+    vkr::Config config;
+    // 按需覆写默认配置，例如：
+    // config.windowWidth  = 1280;
+    // config.windowHeight = 720;
+    config.modelPath = "models/SheenChair.glb";
+
+    vkr::Application app(config);
 
     try {
         app.run();

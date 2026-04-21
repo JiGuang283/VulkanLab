@@ -1,9 +1,8 @@
 #include "Material.h"
-
-#include "vulkan_utils.h"
+#include "Renderer.h"
+#include "core/VulkanCheck.h"
 
 #include <array>
-#include <stdexcept>
 
 namespace vkr {
 
@@ -11,9 +10,19 @@ Material::Material(Device &device, Renderer &renderer, const Texture &texture,
                    const std::string &vertShader, const std::string &fragShader)
     : device_(&device), renderer_(&renderer) {
     createDescriptorSetLayout();
-    pipeline_ = std::make_unique<Pipeline>(device, renderer.renderPass(),
-                                           descriptorSetLayout_, vertShader,
-                                           fragShader);
+
+    PipelineConfig config;
+    config.vertShaderPath = vertShader;
+    config.fragShaderPath = fragShader;
+    config.vertexLayout = defaultVertexLayout();
+    config.msaaSamples = device.msaaSamples();
+    config.descriptorLayouts = {descriptorSetLayout_};
+    config.pushConstants = {
+        {VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float) * 16}};
+
+    pipeline_ =
+        std::make_unique<Pipeline>(device, renderer.renderPass(), config);
+
     createDescriptorPool();
     createDescriptorSets(texture);
 }
@@ -59,11 +68,8 @@ void Material::createDescriptorSetLayout() {
     layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
     layoutInfo.pBindings = bindings.data();
 
-    if (vkCreateDescriptorSetLayout(device_->logicalDevice(), &layoutInfo,
-                                    nullptr,
-                                    &descriptorSetLayout_) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create descriptor set layout!");
-    }
+    VK_CHECK(vkCreateDescriptorSetLayout(device_->logicalDevice(), &layoutInfo,
+                                         nullptr, &descriptorSetLayout_));
 }
 
 void Material::createDescriptorPool() {
@@ -79,10 +85,8 @@ void Material::createDescriptorPool() {
     poolInfo.pPoolSizes = poolSizes.data();
     poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 
-    if (vkCreateDescriptorPool(device_->logicalDevice(), &poolInfo, nullptr,
-                               &descriptorPool_) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create descriptor pool!");
-    }
+    VK_CHECK(vkCreateDescriptorPool(device_->logicalDevice(), &poolInfo,
+                                    nullptr, &descriptorPool_));
 }
 
 void Material::createDescriptorSets(const Texture &texture) {
@@ -95,16 +99,14 @@ void Material::createDescriptorSets(const Texture &texture) {
     allocInfo.pSetLayouts = layouts.data();
 
     descriptorSets_.resize(MAX_FRAMES_IN_FLIGHT);
-    if (vkAllocateDescriptorSets(device_->logicalDevice(), &allocInfo,
-                                 descriptorSets_.data()) != VK_SUCCESS) {
-        throw std::runtime_error("failed to allocate descriptor sets!");
-    }
+    VK_CHECK(vkAllocateDescriptorSets(device_->logicalDevice(), &allocInfo,
+                                      descriptorSets_.data()));
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         VkDescriptorBufferInfo bufferInfo{};
         bufferInfo.buffer = renderer_->uniformBufferHandle(i);
         bufferInfo.offset = 0;
-        bufferInfo.range = sizeof(UniformBufferObject);
+        bufferInfo.range = renderer_->uniformBufferSize();
 
         VkDescriptorImageInfo imageInfo{};
         imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;

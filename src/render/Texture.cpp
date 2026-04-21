@@ -1,19 +1,19 @@
 #include "Texture.h"
-#include "Renderer.h"
 #include "core/Buffer.h"
+#include "core/FrameSync.h"
+#include "core/VulkanCheck.h"
 
 #include <stb_image.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <stdexcept>
 
 namespace vkr {
 
-Texture::Texture(Device &device, Renderer &renderer, const std::string &path)
+Texture::Texture(Device &device, FrameSync &frameSync, const std::string &path)
     : device_(&device) {
-    loadFromFile(renderer, path);
+    loadFromFile(frameSync, path);
     createSampler();
 }
 
@@ -23,7 +23,7 @@ Texture::~Texture() {
     }
 }
 
-void Texture::loadFromFile(Renderer &renderer, const std::string &path) {
+void Texture::loadFromFile(FrameSync &frameSync, const std::string &path) {
     int          texWidth, texHeight, texChannels;
     stbi_uc     *pixels = stbi_load(path.c_str(), &texWidth, &texHeight,
                                     &texChannels, STBI_rgb_alpha);
@@ -55,16 +55,16 @@ void Texture::loadFromFile(Renderer &renderer, const std::string &path) {
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
     // transition + copy in a single command submission
-    VkCommandBuffer cmd = renderer.beginSingleTimeCommands();
+    VkCommandBuffer cmd = frameSync.beginSingleTimeCommands();
     transitionImageLayout(cmd, image_->handle(), VK_FORMAT_R8G8B8A8_SRGB,
                           VK_IMAGE_LAYOUT_UNDEFINED,
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevels_);
     copyBufferToImage(cmd, staging.handle(), image_->handle(),
                       static_cast<uint32_t>(texWidth),
                       static_cast<uint32_t>(texHeight));
-    renderer.endSingleTimeCommands(cmd);
+    frameSync.endSingleTimeCommands(cmd);
 
-    generateMipmaps(renderer, image_->handle(), VK_FORMAT_R8G8B8A8_SRGB,
+    generateMipmaps(frameSync, image_->handle(), VK_FORMAT_R8G8B8A8_SRGB,
                     texWidth, texHeight, mipLevels_);
 
     image_->createView(VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -95,10 +95,8 @@ void Texture::createSampler() {
     samplerInfo.minLod = 0.0f;
     samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
 
-    if (vkCreateSampler(device_->logicalDevice(), &samplerInfo, nullptr,
-                        &sampler_) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create texture sampler!");
-    }
+    VK_CHECK(vkCreateSampler(device_->logicalDevice(), &samplerInfo, nullptr,
+                             &sampler_));
 }
 
 void Texture::transitionImageLayout(VkCommandBuffer cmd, VkImage image,
@@ -181,7 +179,7 @@ void Texture::copyBufferToImage(VkCommandBuffer cmd, VkBuffer buffer,
                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 }
 
-void Texture::generateMipmaps(Renderer &renderer, VkImage image,
+void Texture::generateMipmaps(FrameSync &frameSync, VkImage image,
                               VkFormat format, int32_t width, int32_t height,
                               uint32_t mipLevels) {
     VkFormatProperties formatProperties;
@@ -194,7 +192,7 @@ void Texture::generateMipmaps(Renderer &renderer, VkImage image,
             "texture image format does not support linear blitting!");
     }
 
-    VkCommandBuffer commandBuffer = renderer.beginSingleTimeCommands();
+    VkCommandBuffer commandBuffer = frameSync.beginSingleTimeCommands();
 
     VkImageMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -264,7 +262,7 @@ void Texture::generateMipmaps(Renderer &renderer, VkImage image,
                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
                          0, nullptr, 1, &barrier);
 
-    renderer.endSingleTimeCommands(commandBuffer);
+    frameSync.endSingleTimeCommands(commandBuffer);
 }
 
 } // namespace vkr

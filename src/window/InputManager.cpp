@@ -19,6 +19,10 @@ bool InputManager::isKeyDown(int key) const {
     return glfwGetKey(window_, key) == GLFW_PRESS;
 }
 
+bool InputManager::isKeyDown(Key key) const {
+    return isKeyDown(static_cast<int>(key));
+}
+
 void InputManager::setCursorCaptured(bool captured) {
     cursorCaptured_ = captured;
     glfwSetInputMode(window_, GLFW_CURSOR,

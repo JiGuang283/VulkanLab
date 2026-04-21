@@ -1,4 +1,6 @@
 #pragma once
+#include "PipelineConfig.h"
+
 #include <string>
 #include <vector>
 #include <vulkan/vulkan.h>
@@ -10,8 +12,7 @@ class Device;
 class Pipeline {
   public:
     Pipeline(Device &device, VkRenderPass renderPass,
-             VkDescriptorSetLayout descriptorSetLayout,
-             const std::string &vertPath, const std::string &fragPath);
+             const PipelineConfig &config);
     ~Pipeline();
 
     Pipeline(const Pipeline &) = delete;

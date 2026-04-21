@@ -5,8 +5,8 @@
 #include <vulkan/vulkan.h>
 
 #include "VulkanContext.h"
+#include "VulkanTypes.h"
 #include "vk_mem_alloc.h"
-#include "vulkan_utils.h"
 
 namespace vkr {
 

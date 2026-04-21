@@ -1,8 +1,11 @@
 #pragma once
 
+#include <vulkan/vulkan.h>
+
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 struct GLFWwindow;
 
@@ -30,6 +33,11 @@ class Window {
     GLFWwindow *handle() const { return window_; }
     uint32_t    width() const { return width_; }
     uint32_t    height() const { return height_; }
+
+    // Vulkan surface 创建（封装 GLFW 细节）
+    VkSurfaceKHR                     createSurface(VkInstance instance) const;
+    static std::vector<const char *> getRequiredVulkanExtensions();
+    VkExtent2D                       framebufferExtent() const;
 
     using ResizeCallback = std::function<void(int width, int height)>;
     void setResizeCallback(ResizeCallback cb);
