@@ -7,6 +7,10 @@ layout(binding = 0) uniform UniformBufferObject{
 
 layout(push_constant) uniform PushConstants {
     mat4 model;
+    vec4 baseColorFactor;
+    vec4 emissiveMetallic;
+    vec4 roughnessAlpha;
+    vec4 reserved;
 } push;
 
 layout(location = 0) in vec3 inPosition;

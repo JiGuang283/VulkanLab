@@ -3,6 +3,8 @@
 #include "core/VulkanCheck.h"
 
 #include <array>
+#include <cassert>
+#include <utility>
 
 namespace vkr {
 
@@ -17,6 +19,19 @@ Material::Material(Device &device, Renderer &renderer, const Texture &texture,
 
     createDescriptorPool();
     createDescriptorSets(texture);
+    // params_ keeps default factors; baseColor stays null because the legacy
+    // ctor does not own the Texture. Scene::render only reads factors.
+}
+
+Material::Material(Device &device, Renderer &renderer, MaterialParams params,
+                   const PipelineConfig &config)
+    : device_(&device), renderer_(&renderer), config_(config),
+      params_(std::move(params)) {
+    assert(params_.baseColor && "MaterialParams.baseColor must not be null");
+    createDescriptorSetLayout();
+    config_.descriptorLayouts.push_back(descriptorSetLayout_);
+    createDescriptorPool();
+    createDescriptorSets(*params_.baseColor);
 }
 
 Material::~Material() {

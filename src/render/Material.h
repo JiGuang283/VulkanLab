@@ -5,10 +5,23 @@
 #include "core/FrameSync.h"
 #include "core/PipelineConfig.h"
 
+#include <glm/glm.hpp>
+
+#include <memory>
 #include <vector>
 #include <vulkan/vulkan.h>
 
 namespace vkr {
+
+struct MaterialParams {
+    std::shared_ptr<Texture> baseColor;
+    glm::vec4                baseColorFactor{1.0f};
+    glm::vec3                emissiveFactor{0.0f};
+    float                    metallicFactor  = 1.0f;
+    float                    roughnessFactor = 1.0f;
+    float                    alphaCutoff     = 0.5f;
+    bool                     doubleSided     = false;
+};
 
 class Material {
   public:
@@ -17,6 +30,8 @@ class Material {
     /// stored config_.  The Application can then fetch the completed config
     /// via pipelineConfig() to construct its Pipeline object.
     Material(Device &device, Renderer &renderer, const Texture &texture,
+             const PipelineConfig &config);
+    Material(Device &device, Renderer &renderer, MaterialParams params,
              const PipelineConfig &config);
     ~Material();
 
@@ -35,6 +50,8 @@ class Material {
 
     const PipelineConfig &pipelineConfig() const { return config_; }
 
+    const MaterialParams &params() const { return params_; }
+
   private:
     void createDescriptorSetLayout();
     void createDescriptorPool();
@@ -44,6 +61,7 @@ class Material {
     Renderer *renderer_ = nullptr;
 
     PipelineConfig               config_;
+    MaterialParams               params_;
     VkDescriptorSetLayout        descriptorSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool             descriptorPool_ = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> descriptorSets_;

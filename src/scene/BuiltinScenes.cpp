@@ -25,7 +25,9 @@ PipelineConfig makeStandardConfig(Device &device, const std::string &vp,
     cfg.fragShaderPath = fp;
     cfg.vertexLayout = defaultVertexLayout();
     cfg.msaaSamples = device.msaaSamples();
-    cfg.pushConstants = {{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float) * 16}};
+    cfg.pushConstants = {{VK_SHADER_STAGE_VERTEX_BIT |
+                              VK_SHADER_STAGE_FRAGMENT_BIT,
+                          0, 128}};
     return cfg;
 }
 
