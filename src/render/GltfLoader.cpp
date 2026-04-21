@@ -105,7 +105,7 @@ std::vector<std::unique_ptr<Mesh>> GltfLoader::load(const std::string &path,
                 const float *p = reinterpret_cast<const float *>(
                     posBase + static_cast<size_t>(i) * posStride);
                 v.pos = {p[0], p[1], p[2]};
-                v.color = {1.0f, 1.0f, 1.0f};
+                v.normal = {0.0f, 1.0f, 0.0f}; // Step 5: read NORMAL accessor
                 if (uvBase) {
                     const float *uv = reinterpret_cast<const float *>(
                         uvBase + static_cast<size_t>(i) * uvStride);
