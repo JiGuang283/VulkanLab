@@ -13,8 +13,31 @@ namespace vkr {
 
 Texture::Texture(Device &device, FrameSync &frameSync, const std::string &path)
     : device_(&device) {
-    loadFromFile(frameSync, path);
-    createSampler();
+    int      w = 0, h = 0, c = 0;
+    stbi_uc *pixels = stbi_load(path.c_str(), &w, &h, &c, STBI_rgb_alpha);
+    if (!pixels) {
+        throw std::runtime_error("failed to load texture image!");
+    }
+    createFromPixels(frameSync, pixels, static_cast<uint32_t>(w),
+                     static_cast<uint32_t>(h), VK_FORMAT_R8G8B8A8_SRGB,
+                     /*generateMipmapsFlag*/ true);
+    stbi_image_free(pixels);
+    createSamplerFrom(VK_FILTER_LINEAR, VK_FILTER_LINEAR,
+                      VK_SAMPLER_MIPMAP_MODE_LINEAR,
+                      VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                      VK_SAMPLER_ADDRESS_MODE_REPEAT);
+}
+
+Texture::Texture(Device &device, FrameSync &frameSync,
+                 const TextureCreateInfo &info)
+    : device_(&device) {
+    if (!info.pixels || info.width == 0 || info.height == 0) {
+        throw std::runtime_error("TextureCreateInfo: missing pixels/size");
+    }
+    createFromPixels(frameSync, info.pixels, info.width, info.height,
+                     info.format, info.generateMipmaps);
+    createSamplerFrom(info.minFilter, info.magFilter, info.mipmapMode,
+                      info.wrapU, info.wrapV);
 }
 
 Texture::~Texture() {
@@ -23,74 +46,80 @@ Texture::~Texture() {
     }
 }
 
-void Texture::loadFromFile(FrameSync &frameSync, const std::string &path) {
-    int          texWidth, texHeight, texChannels;
-    stbi_uc     *pixels = stbi_load(path.c_str(), &texWidth, &texHeight,
-                                    &texChannels, STBI_rgb_alpha);
-    VkDeviceSize imageSize = texWidth * texHeight * 4;
+void Texture::createFromPixels(FrameSync &frameSync, const void *pixels,
+                               uint32_t width, uint32_t height, VkFormat format,
+                               bool generateMipmapsFlag) {
+    VkDeviceSize imageSize =
+        static_cast<VkDeviceSize>(width) * height * 4; // RGBA8
 
-    if (!pixels) {
-        throw std::runtime_error("failed to load texture image!");
-    }
-
-    mipLevels_ = static_cast<uint32_t>(
-                     std::floor(std::log2(std::max(texWidth, texHeight)))) +
-                 1;
+    mipLevels_ =
+        generateMipmapsFlag
+            ? (static_cast<uint32_t>(
+                   std::floor(std::log2(std::max(width, height)))) +
+               1)
+            : 1u;
 
     Buffer staging(*device_, imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-    void *data = staging.map();
-    memcpy(data, pixels, static_cast<size_t>(imageSize));
+    void *mapped = staging.map();
+    memcpy(mapped, pixels, static_cast<size_t>(imageSize));
     staging.unmap();
 
-    stbi_image_free(pixels);
-
     image_ = std::make_unique<Image>(
-        *device_, texWidth, texHeight, mipLevels_, VK_SAMPLE_COUNT_1_BIT,
-        VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
+        *device_, static_cast<int>(width), static_cast<int>(height), mipLevels_,
+        VK_SAMPLE_COUNT_1_BIT, format, VK_IMAGE_TILING_OPTIMAL,
         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
             VK_IMAGE_USAGE_SAMPLED_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-    // transition + copy in a single command submission
+    // transition UNDEFINED → TRANSFER_DST_OPTIMAL + copy
     VkCommandBuffer cmd = frameSync.beginSingleTimeCommands();
-    transitionImageLayout(cmd, image_->handle(), VK_FORMAT_R8G8B8A8_SRGB,
+    transitionImageLayout(cmd, image_->handle(), format,
                           VK_IMAGE_LAYOUT_UNDEFINED,
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevels_);
-    copyBufferToImage(cmd, staging.handle(), image_->handle(),
-                      static_cast<uint32_t>(texWidth),
-                      static_cast<uint32_t>(texHeight));
+    copyBufferToImage(cmd, staging.handle(), image_->handle(), width, height);
     frameSync.endSingleTimeCommands(cmd);
 
-    generateMipmaps(frameSync, image_->handle(), VK_FORMAT_R8G8B8A8_SRGB,
-                    texWidth, texHeight, mipLevels_);
+    if (generateMipmapsFlag) {
+        generateMipmaps(frameSync, image_->handle(), format,
+                        static_cast<int32_t>(width),
+                        static_cast<int32_t>(height), mipLevels_);
+    } else {
+        // 单独把 mip 0 从 TRANSFER_DST_OPTIMAL → SHADER_READ_ONLY_OPTIMAL
+        VkCommandBuffer cmd2 = frameSync.beginSingleTimeCommands();
+        transitionImageLayout(cmd2, image_->handle(), format,
+                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                              /*mipLevels*/ 1);
+        frameSync.endSingleTimeCommands(cmd2);
+    }
 
-    image_->createView(VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT,
-                       mipLevels_);
+    image_->createView(format, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels_);
 }
 
-void Texture::createSampler() {
+void Texture::createSamplerFrom(VkFilter minFilter, VkFilter magFilter,
+                                VkSamplerMipmapMode  mipmapMode,
+                                VkSamplerAddressMode wrapU,
+                                VkSamplerAddressMode wrapV) {
     VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerInfo.magFilter = VK_FILTER_LINEAR;
-    samplerInfo.minFilter = VK_FILTER_LINEAR;
-    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.magFilter = magFilter;
+    samplerInfo.minFilter = minFilter;
+    samplerInfo.addressModeU = wrapU;
+    samplerInfo.addressModeV = wrapV;
+    samplerInfo.addressModeW = wrapU; // 2D 贴图，用 U 兜底
     samplerInfo.anisotropyEnable = VK_TRUE;
 
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(device_->physicalDevice(), &properties);
-
     samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
 
     samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
     samplerInfo.unnormalizedCoordinates = VK_FALSE;
     samplerInfo.compareEnable = VK_FALSE;
     samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
-    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.mipmapMode = mipmapMode;
     samplerInfo.mipLodBias = 0.0f;
     samplerInfo.minLod = 0.0f;
     samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
