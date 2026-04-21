@@ -22,10 +22,9 @@ Texture::Texture(Device &device, FrameSync &frameSync, const std::string &path)
                      static_cast<uint32_t>(h), VK_FORMAT_R8G8B8A8_SRGB,
                      /*generateMipmapsFlag*/ true);
     stbi_image_free(pixels);
-    createSamplerFrom(VK_FILTER_LINEAR, VK_FILTER_LINEAR,
-                      VK_SAMPLER_MIPMAP_MODE_LINEAR,
-                      VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                      VK_SAMPLER_ADDRESS_MODE_REPEAT);
+    createSamplerFrom(
+        VK_FILTER_LINEAR, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        VK_SAMPLER_ADDRESS_MODE_REPEAT, VK_SAMPLER_ADDRESS_MODE_REPEAT);
 }
 
 Texture::Texture(Device &device, FrameSync &frameSync,
@@ -52,17 +51,16 @@ void Texture::createFromPixels(FrameSync &frameSync, const void *pixels,
     VkDeviceSize imageSize =
         static_cast<VkDeviceSize>(width) * height * 4; // RGBA8
 
-    mipLevels_ =
-        generateMipmapsFlag
-            ? (static_cast<uint32_t>(
-                   std::floor(std::log2(std::max(width, height)))) +
-               1)
-            : 1u;
+    mipLevels_ = generateMipmapsFlag
+                     ? (static_cast<uint32_t>(
+                            std::floor(std::log2(std::max(width, height)))) +
+                        1)
+                     : 1u;
 
     Buffer staging(*device_, imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    void *mapped = staging.map();
+    void  *mapped = staging.map();
     memcpy(mapped, pixels, static_cast<size_t>(imageSize));
     staging.unmap();
 
