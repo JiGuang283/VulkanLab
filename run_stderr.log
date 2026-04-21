@@ -1,8 +1,0 @@
-validation layer: windows_get_device_registry_files: GUID for 3 is not SoftwareComponent skipping
-validation layer: Searching for ICD drivers named .\igvk64.dll
-validation layer: Searching for ICD drivers named .\nvoglv64.dll
-validation layer: Loading layer library C:\VulkanSDK\1.4.335.0\Bin\.\VkLayer_khronos_validation.dll
-validation layer: Loading layer library C:\Program Files (x86)\Overwolf\0.294.2.2\.\ow-graphics-vulkan.dll
-validation layer: Loading layer library C:\Program Files (x86)\Overwolf\0.294.2.2\.\owclient.dll
-validation layer: Loading layer library C:\Windows\System32\DriverStore\FileRepository\nvamsi.inf_amd64_43815c5afeca21b4\.\nvoglv64.dll
-validation layer: Loading layer library C:\Windows\System32\DriverStore\FileRepository\nvamsi.inf_amd64_43815c5afeca21b4\.\nvoglv64.dll

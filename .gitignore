@@ -1,10 +1,12 @@
-# Build artifacts
+# ---------- Build artifacts ----------
 build/
+build-*/
+out/
 Debug/
 Release/
 x64/
 
-# Visual Studio
+# ---------- Visual Studio / IDE ----------
 .vs/
 *.sln
 *.vcxproj
@@ -15,7 +17,7 @@ x64/
 *.opendb
 *.VC.db
 
-# CMake generated
+# ---------- CMake generated ----------
 CMakeCache.txt
 CMakeFiles/
 CMakeScripts/
@@ -26,15 +28,29 @@ compile_commands.json
 CTestTestfile.cmake
 _deps/
 
-# Compiled files
+# ---------- Compiled / linker output ----------
 *.obj
+*.o
 *.exe
 *.pdb
 *.ilk
 *.lib
 *.dll
 *.exp
+*.a
 
-# OS files
+# ---------- Binary assets ----------
+# glTF binary models are ignored by default; explicitly allow the ones
+# the app depends on at runtime.
+*.glb
+!models/*.glb
+
+# ---------- Runtime / scratch ----------
+*.log
+tem/
+run_*.log
+run_*.txt
+
+# ---------- OS files ----------
 .DS_Store
 Thumbs.db
