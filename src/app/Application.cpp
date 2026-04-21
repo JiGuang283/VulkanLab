@@ -3,6 +3,8 @@
 
 #include "core/Device.h"
 #include "core/FrameSync.h"
+#include "core/Pipeline.h"
+#include "core/PipelineConfig.h"
 #include "core/SwapChain.h"
 #include "core/VulkanContext.h"
 #include "render/GltfLoader.h"
@@ -58,9 +60,26 @@ void Application::init() {
 
     texture_ =
         std::make_shared<Texture>(*device_, *frameSync_, config_.texturePath);
-    material_ = std::make_shared<Material>(*device_, *renderer_, *texture_,
-                                           config_.vertShaderPath,
-                                           config_.fragShaderPath);
+
+    // Build the pipeline config that this material will require.
+    // descriptorLayouts is intentionally left empty here — Material appends
+    // its own descriptor set layout after construction.
+    PipelineConfig pipeConfig;
+    pipeConfig.vertShaderPath = config_.vertShaderPath;
+    pipeConfig.fragShaderPath = config_.fragShaderPath;
+    pipeConfig.vertexLayout = defaultVertexLayout();
+    pipeConfig.msaaSamples = device_->msaaSamples();
+    pipeConfig.pushConstants = {
+        {VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float) * 16}};
+
+    material_ =
+        std::make_shared<Material>(*device_, *renderer_, *texture_, pipeConfig);
+
+    // Create the single opaque pipeline from the Material's finalized config
+    // (which now has the descriptor set layout Material created).
+    opaquePipeline_ = std::make_unique<Pipeline>(
+        *device_, renderer_->renderPass(), material_->pipelineConfig());
+
     // Branch on file extension: .glb/.gltf -> GltfLoader, otherwise OBJ
     const std::string &modelPath = config_.modelPath;
     const bool         isGltf =
@@ -151,7 +170,7 @@ void Application::mainLoop() {
                         glm::vec3(0.0f, 0.0f, 1.0f));
 
         renderer_->beginRenderPass(ctx->cmd, ctx->imageIndex);
-        scene_.render(ctx->cmd, ctx->frameIndex);
+        scene_.render(ctx->cmd, ctx->frameIndex, *opaquePipeline_);
         renderer_->endRenderPass(ctx->cmd);
         frameSync_->endFrame(*ctx);
 

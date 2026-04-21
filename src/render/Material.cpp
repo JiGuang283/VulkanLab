@@ -7,21 +7,13 @@
 namespace vkr {
 
 Material::Material(Device &device, Renderer &renderer, const Texture &texture,
-                   const std::string &vertShader, const std::string &fragShader)
-    : device_(&device), renderer_(&renderer) {
+                   const PipelineConfig &config)
+    : device_(&device), renderer_(&renderer), config_(config) {
     createDescriptorSetLayout();
 
-    PipelineConfig config;
-    config.vertShaderPath = vertShader;
-    config.fragShaderPath = fragShader;
-    config.vertexLayout = defaultVertexLayout();
-    config.msaaSamples = device.msaaSamples();
-    config.descriptorLayouts = {descriptorSetLayout_};
-    config.pushConstants = {
-        {VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float) * 16}};
-
-    pipeline_ =
-        std::make_unique<Pipeline>(device, renderer.renderPass(), config);
+    // Material owns the descriptor set layout used by this pipeline, so append
+    // it to the config it exposes to whoever will build the Pipeline.
+    config_.descriptorLayouts.push_back(descriptorSetLayout_);
 
     createDescriptorPool();
     createDescriptorSets(texture);
@@ -31,16 +23,12 @@ Material::~Material() {
     VkDevice d = device_->logicalDevice();
     // DescriptorSets are freed automatically when pool is destroyed
     vkDestroyDescriptorPool(d, descriptorPool_, nullptr);
-    // Pipeline destroyed by unique_ptr before we destroy the layout
-    pipeline_.reset();
     vkDestroyDescriptorSetLayout(d, descriptorSetLayout_, nullptr);
 }
 
-void Material::bind(VkCommandBuffer cmd, uint32_t frameIndex) const {
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                      pipeline_->handle());
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            pipeline_->layout(), 0, 1,
+void Material::bindDescriptors(VkCommandBuffer cmd, VkPipelineLayout layout,
+                               uint32_t frameIndex) const {
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1,
                             &descriptorSets_[frameIndex], 0, nullptr);
 }
 

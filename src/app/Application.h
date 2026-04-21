@@ -20,6 +20,7 @@ class Renderer;
 class Texture;
 class Material;
 class Mesh;
+class Pipeline;
 
 class Application {
   public:
@@ -53,6 +54,8 @@ class Application {
     std::shared_ptr<Material>          material_;
     std::shared_ptr<Mesh>              mesh_;       // OBJ path
     std::vector<std::shared_ptr<Mesh>> gltfMeshes_; // glTF path
+
+    std::unique_ptr<Pipeline> opaquePipeline_;
 
     Scene  scene_;
     Camera camera_;

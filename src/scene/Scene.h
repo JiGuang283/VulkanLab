@@ -6,11 +6,14 @@
 
 namespace vkr {
 
+class Pipeline;
+
 class Scene {
   public:
     void addObject(SceneObject obj);
 
-    void render(VkCommandBuffer cmd, uint32_t frameIndex) const;
+    void render(VkCommandBuffer cmd, uint32_t frameIndex,
+                Pipeline &pipeline) const;
 
     std::vector<SceneObject>       &objects() { return objects_; }
     const std::vector<SceneObject> &objects() const { return objects_; }
