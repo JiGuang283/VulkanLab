@@ -25,9 +25,8 @@ PipelineConfig makeStandardConfig(Device &device, const std::string &vp,
     cfg.fragShaderPath = fp;
     cfg.vertexLayout = defaultVertexLayout();
     cfg.msaaSamples = device.msaaSamples();
-    cfg.pushConstants = {{VK_SHADER_STAGE_VERTEX_BIT |
-                              VK_SHADER_STAGE_FRAGMENT_BIT,
-                          0, 128}};
+    cfg.pushConstants = {
+        {VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 128}};
     return cfg;
 }
 
@@ -66,26 +65,26 @@ SceneFactory vikingRoomSceneFactory(std::string tex, std::string vp,
 
 SceneFactory sheenChairSceneFactory(std::string tex, std::string vp,
                                     std::string fp) {
-    return [tex = std::move(tex), vp = std::move(vp),
-            fp = std::move(fp)](Device &device, FrameSync &frameSync,
-                                Renderer &renderer) -> std::unique_ptr<Scene> {
+    (void)tex; // ignored in v1; Step 7 will drop the parameter
+    return [vp = std::move(vp), fp = std::move(fp)](
+               Device &device, FrameSync &frameSync,
+               Renderer &renderer) -> std::unique_ptr<Scene> {
         auto scene = std::make_unique<Scene>();
+        auto baseCfg = makeStandardConfig(device, vp, fp);
+        auto asset = GltfLoader::load("models/SheenChair.glb", device,
+                                      frameSync, renderer, baseCfg);
 
-        auto texture = std::make_shared<Texture>(device, frameSync, tex);
-        auto material = std::make_shared<Material>(
-            device, renderer, *texture, makeStandardConfig(device, vp, fp));
+        for (auto &t : asset.textures)
+            scene->addTexture(t);
+        for (auto &m : asset.materials)
+            scene->addMaterial(m);
+        for (auto &mesh : asset.meshes)
+            scene->addMesh(mesh);
+        for (auto &o : asset.objects)
+            scene->addObject(o);
 
-        scene->addTexture(texture);
-        scene->addMaterial(material);
-
-        auto raw = GltfLoader::load("models/SheenChair.glb", device, frameSync);
-        for (auto &rm : raw) {
-            auto sp = std::shared_ptr<Mesh>(std::move(rm));
-            scene->addMesh(sp);
-            scene->addObject({sp, material, glm::mat4(1.0f)});
-        }
-
-        scene->initialCamera = CameraPose{{1.5f, 1.5f, 1.0f}, -135.0f, -20.0f};
+        scene->initialCamera = asset.suggestedCamera.value_or(
+            CameraPose{{1.5f, 1.5f, 1.0f}, -135.0f, -20.0f});
         return scene;
     };
 }

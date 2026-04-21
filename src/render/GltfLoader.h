@@ -1,25 +1,35 @@
 #pragma once
 
+#include "GltfAsset.h"
+
 #include <memory>
 #include <string>
-#include <vector>
 
 namespace vkr {
 
 class Device;
 class FrameSync;
-class Mesh;
+class Renderer;
+class Texture;
+struct PipelineConfig;
 
-/// Loads geometry from a glTF 2.0 (.gltf / .glb) file.
-/// Only POSITION and TEXCOORD_0 attributes are extracted; normals, materials,
-/// and textures are ignored in this stage.  Each triangle primitive becomes
-/// one Mesh object with device-local vertex + index buffers.
+/// Loads a glTF 2.0 (.gltf/.glb) file into a self-contained GltfAsset:
+/// decoded textures, materials with PBR factors, meshes (one per primitive)
+/// and SceneObject instances. v1 uses identity transforms (Step 6 will add
+/// node hierarchy), default samplers, and only baseColor textures.
 class GltfLoader {
   public:
-    /// Returns one Mesh per triangle primitive found in the file.
-    /// Throws std::runtime_error on load failure or if no primitives exist.
-    static std::vector<std::unique_ptr<Mesh>>
-    load(const std::string &path, Device &device, FrameSync &frameSync);
+    struct Options {
+        bool                     generateMissingNormals = true;
+        std::shared_ptr<Texture> fallbackWhite;
+    };
+
+    static GltfAsset load(const std::string    &path,
+                          Device               &device,
+                          FrameSync            &frameSync,
+                          Renderer             &renderer,
+                          const PipelineConfig &baseConfig,
+                          const Options        &opts = {});
 };
 
 } // namespace vkr
