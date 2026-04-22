@@ -16,7 +16,7 @@ int main() {
                                      config.fragShaderPath)});
     app.registerScene(
         {"Sheen Chair",
-         vkr::sheenChairSceneFactory(config.texturePath, config.vertShaderPath,
+         vkr::sheenChairSceneFactory(config.vertShaderPath,
                                      config.fragShaderPath)});
 
     try {

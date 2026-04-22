@@ -63,12 +63,10 @@ SceneFactory vikingRoomSceneFactory(std::string tex, std::string vp,
     };
 }
 
-SceneFactory sheenChairSceneFactory(std::string tex, std::string vp,
-                                    std::string fp) {
-    (void)tex; // ignored in v1; Step 7 will drop the parameter
-    return [vp = std::move(vp), fp = std::move(fp)](
-               Device &device, FrameSync &frameSync,
-               Renderer &renderer) -> std::unique_ptr<Scene> {
+SceneFactory sheenChairSceneFactory(std::string vp, std::string fp) {
+    return [vp = std::move(vp),
+            fp = std::move(fp)](Device &device, FrameSync &frameSync,
+                                Renderer &renderer) -> std::unique_ptr<Scene> {
         auto scene = std::make_unique<Scene>();
         auto baseCfg = makeStandardConfig(device, vp, fp);
         auto asset = GltfLoader::load("models/SheenChair.glb", device,

@@ -11,10 +11,9 @@ SceneFactory vikingRoomSceneFactory(std::string texturePath,
                                     std::string vertShaderPath,
                                     std::string fragShaderPath);
 
-/// Factory for `models/SheenChair.glb` (glTF).  Static (no animation), with
-/// a camera pose framing the chair.
-SceneFactory sheenChairSceneFactory(std::string texturePath,
-                                    std::string vertShaderPath,
+/// Factory for `models/SheenChair.glb` (glTF).  Static (no animation); all
+/// textures/materials come from the glb itself.
+SceneFactory sheenChairSceneFactory(std::string vertShaderPath,
                                     std::string fragShaderPath);
 
 } // namespace vkr
