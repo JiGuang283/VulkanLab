@@ -14,10 +14,14 @@
 #include <stb_image.h>
 
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -57,12 +61,25 @@ static std::shared_ptr<Texture> makeWhite1x1(Device &d, FrameSync &fs) {
     return std::make_shared<Texture>(d, fs, ci);
 }
 
+static glm::mat4 nodeLocalMatrix(const tg3_node &n) {
+    if (n.has_matrix) {
+        // glTF matrix is column-major double[16]; make_mat4<double*> -> dmat4
+        return glm::mat4(glm::make_mat4(n.matrix));
+    }
+    glm::vec3 t{(float)n.translation[0], (float)n.translation[1],
+                (float)n.translation[2]};
+    // glTF stores quaternion as (x,y,z,w); glm::quat constructor is (w,x,y,z)
+    glm::quat q{(float)n.rotation[3], (float)n.rotation[0],
+                (float)n.rotation[1], (float)n.rotation[2]};
+    glm::vec3 s{(float)n.scale[0], (float)n.scale[1], (float)n.scale[2]};
+    return glm::translate(glm::mat4(1.0f), t) * glm::mat4_cast(q) *
+           glm::scale(glm::mat4(1.0f), s);
+}
+
 // ---- GltfLoader::load ------------------------------------------------------
 
-GltfAsset GltfLoader::load(const std::string    &path,
-                           Device               &device,
-                           FrameSync            &frameSync,
-                           Renderer             &renderer,
+GltfAsset GltfLoader::load(const std::string &path, Device &device,
+                           FrameSync &frameSync, Renderer &renderer,
                            const PipelineConfig &baseConfig,
                            const Options        &opts) {
     // 1. Parse
@@ -89,8 +106,8 @@ GltfAsset GltfLoader::load(const std::string    &path,
     GltfAsset        asset;
 
     // 2. Fallback white 1x1
-    auto whiteTex =
-        opts.fallbackWhite ? opts.fallbackWhite : makeWhite1x1(device, frameSync);
+    auto whiteTex = opts.fallbackWhite ? opts.fallbackWhite
+                                       : makeWhite1x1(device, frameSync);
 
     // 3. Decode images -> intermediate textures (manual decode via stb_image,
     // since tg3 does not invoke its declared image callbacks).
@@ -113,10 +130,10 @@ GltfAsset GltfLoader::load(const std::string    &path,
 
         int      w = 0, h = 0, c = 0;
         stbi_uc *pixels =
-            encoded ? stbi_load_from_memory(encoded,
-                                            static_cast<int>(encodedSize), &w,
-                                            &h, &c, STBI_rgb_alpha)
-                    : nullptr;
+            encoded
+                ? stbi_load_from_memory(encoded, static_cast<int>(encodedSize),
+                                        &w, &h, &c, STBI_rgb_alpha)
+                : nullptr;
         if (!pixels) {
             imageTextures.push_back(whiteTex);
             std::fprintf(stderr,
@@ -276,15 +293,44 @@ GltfAsset GltfLoader::load(const std::string    &path,
         }
     }
 
-    // 7. v1: identity transform per primitive (Step 6 replaces with node walk)
-    for (auto &list : primsByMesh) {
-        for (auto &pe : list) {
-            auto mat = (pe.materialIdx >= 0 &&
-                        pe.materialIdx < (int)m->materials_count)
-                           ? asset.materials[pe.materialIdx]
-                           : asset.materials[fallbackMatIdx];
-            asset.objects.push_back({pe.mesh, mat, glm::mat4(1.0f)});
-        }
+    // 7. Walk the node hierarchy: local TRS/matrix -> world; emit SceneObjects.
+    std::function<void(int, const glm::mat4 &)> walk =
+        [&](int nodeIdx, const glm::mat4 &parent) {
+            if (nodeIdx < 0 || nodeIdx >= (int)m->nodes_count)
+                return;
+            const tg3_node &n = m->nodes[nodeIdx];
+            glm::mat4       world = parent * nodeLocalMatrix(n);
+
+            if (n.mesh >= 0 && n.mesh < (int)primsByMesh.size()) {
+                for (auto &pe : primsByMesh[n.mesh]) {
+                    auto mat = (pe.materialIdx >= 0 &&
+                                pe.materialIdx < (int)m->materials_count)
+                                   ? asset.materials[pe.materialIdx]
+                                   : asset.materials[fallbackMatIdx];
+                    asset.objects.push_back({pe.mesh, mat, world});
+                }
+            }
+            for (uint32_t c = 0; c < n.children_count; ++c)
+                walk(n.children[c], world);
+        };
+
+    int sceneIdx = -1;
+    if (m->default_scene >= 0 && m->default_scene < (int)m->scenes_count)
+        sceneIdx = m->default_scene;
+    else if (m->scenes_count > 0)
+        sceneIdx = 0;
+
+    if (sceneIdx >= 0) {
+        const tg3_scene &scn = m->scenes[sceneIdx];
+        for (uint32_t r = 0; r < scn.nodes_count; ++r)
+            walk(scn.nodes[r], glm::mat4(1.0f));
+    } else {
+        // No scenes array -- drop each mesh at identity (extreme fallback).
+        for (auto &list : primsByMesh)
+            for (auto &pe : list)
+                asset.objects.push_back(
+                    {pe.mesh, asset.materials[fallbackMatIdx],
+                     glm::mat4(1.0f)});
     }
 
     if (asset.meshes.empty())
