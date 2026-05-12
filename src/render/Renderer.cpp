@@ -1,4 +1,5 @@
 #include "Renderer.h"
+#include "core/DescriptorAllocator.h"
 #include "core/Device.h"
 #include "core/FrameSync.h"
 #include "core/SwapChain.h"
@@ -9,14 +10,18 @@
 namespace vkr {
 
 Renderer::Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
+                   DescriptorAllocator &descriptorAllocator,
                    VkDeviceSize uniformBufferSize)
     : device_(&device), swapChain_(&swapChain), frameSync_(&frameSync),
+      descriptorAllocator_(&descriptorAllocator),
       uniformBufferSize_(uniformBufferSize) {
     createRenderPass();
     createColorResources();
     createDepthResources();
     createFramebuffers();
     createUniformBuffers();
+    createGlobalDescriptorSetLayout();
+    createGlobalDescriptorSets();
 }
 
 Renderer::~Renderer() {
@@ -25,6 +30,8 @@ Renderer::~Renderer() {
     cleanupSwapChainResources();
     uniformBuffers_.clear();
 
+    vkDestroyDescriptorSetLayout(device_->logicalDevice(),
+                                 globalDescriptorSetLayout_, nullptr);
     vkDestroyRenderPass(device_->logicalDevice(), renderPass_, nullptr);
 }
 
@@ -302,12 +309,60 @@ void Renderer::createUniformBuffers() {
     }
 }
 
+void Renderer::createGlobalDescriptorSetLayout() {
+    VkDescriptorSetLayoutBinding uboLayoutBinding{};
+    uboLayoutBinding.binding = 0;
+    uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uboLayoutBinding.descriptorCount = 1;
+    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &uboLayoutBinding;
+
+    VK_CHECK(vkCreateDescriptorSetLayout(device_->logicalDevice(), &layoutInfo,
+                                         nullptr,
+                                         &globalDescriptorSetLayout_));
+}
+
+void Renderer::createGlobalDescriptorSets() {
+    if (uniformBuffers_.empty())
+        return;
+
+    globalDescriptorSets_.resize(MAX_FRAMES_IN_FLIGHT);
+    for (auto &set : globalDescriptorSets_)
+        set = descriptorAllocator_->allocate(globalDescriptorSetLayout_);
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        VkDescriptorBufferInfo bufferInfo{};
+        bufferInfo.buffer = uniformBuffers_[i]->handle();
+        bufferInfo.offset = 0;
+        bufferInfo.range = uniformBufferSize_;
+
+        VkWriteDescriptorSet descriptorWrite{};
+        descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrite.dstSet = globalDescriptorSets_[i];
+        descriptorWrite.dstBinding = 0;
+        descriptorWrite.dstArrayElement = 0;
+        descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptorWrite.descriptorCount = 1;
+        descriptorWrite.pBufferInfo = &bufferInfo;
+
+        vkUpdateDescriptorSets(device_->logicalDevice(), 1, &descriptorWrite, 0,
+                               nullptr);
+    }
+}
+
 void *Renderer::mappedUniformBuffer(uint32_t frameIndex) const {
     return uniformBuffers_[frameIndex]->mappedData();
 }
 
-VkBuffer Renderer::uniformBufferHandle(uint32_t frameIndex) const {
-    return uniformBuffers_[frameIndex]->handle();
+void Renderer::bindGlobalDescriptors(VkCommandBuffer cmd,
+                                     VkPipelineLayout layout,
+                                     uint32_t frameIndex) const {
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1,
+                            &globalDescriptorSets_[frameIndex], 0, nullptr);
 }
 
 } // namespace vkr

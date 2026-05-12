@@ -1,6 +1,5 @@
 #pragma once
 
-#include "Renderer.h"
 #include "Texture.h"
 #include "core/DescriptorAllocator.h"
 #include "core/FrameSync.h"
@@ -26,24 +25,20 @@ struct MaterialParams {
 
 class Material {
   public:
-    /// The caller provides a PipelineConfig **without** descriptorLayouts —
-    /// Material creates its own VkDescriptorSetLayout and appends it to the
-    /// stored config_.  The Application can then fetch the completed config
-    /// via pipelineConfig() to construct its Pipeline object.
-    Material(Device &device, Renderer &renderer,
-             DescriptorAllocator &descriptorAllocator, const Texture &texture,
-             const PipelineConfig &config);
-    Material(Device &device, Renderer &renderer,
-             DescriptorAllocator &descriptorAllocator, MaterialParams params,
+    /// Material owns only the material texture descriptor set layout. Global
+    /// frame descriptors are owned and bound separately by Renderer.
+    Material(Device &device, DescriptorAllocator &descriptorAllocator,
+             const Texture &texture, const PipelineConfig &config);
+    Material(Device &device, DescriptorAllocator &descriptorAllocator,
+             MaterialParams params,
              const PipelineConfig &config);
     ~Material();
 
     Material(const Material &) = delete;
     Material &operator=(const Material &) = delete;
 
-    /// Bind per-material descriptor set for the given in-flight frame.
-    /// The pipeline layout must come from the Pipeline object created with
-    /// this Material's pipelineConfig().
+    /// Bind the material descriptor set at set = 1. Set 0 is reserved for
+    /// Renderer-owned frame/global descriptors.
     void bindDescriptors(VkCommandBuffer cmd, VkPipelineLayout layout,
                          uint32_t frameIndex) const;
 
@@ -60,7 +55,6 @@ class Material {
     void createDescriptorSets(const Texture &texture);
 
     Device              *device_ = nullptr;
-    Renderer            *renderer_ = nullptr;
     DescriptorAllocator *descriptorAllocator_ = nullptr;
 
     PipelineConfig               config_;

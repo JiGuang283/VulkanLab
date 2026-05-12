@@ -64,8 +64,9 @@ void Application::init() {
             return window_->framebufferExtent();
         });
     frameSync_ = std::make_unique<FrameSync>(*device_, *swapChain_);
-    renderer_ = std::make_unique<Renderer>(*device_, *swapChain_, *frameSync_,
-                                           sizeof(GlobalUBO));
+    renderer_ = std::make_unique<Renderer>(
+        *device_, *swapChain_, *frameSync_, *descriptorAllocator_,
+        sizeof(GlobalUBO));
 
     window_->setResizeCallback(
         [this](int, int) { frameSync_->notifyResize(); });
@@ -77,19 +78,23 @@ void Application::init() {
         throw std::runtime_error("No scenes registered; call "
                                  "Application::registerScene before run().");
 
-    // Bootstrap: build the first scene so we can harvest its Material's
-    // descriptor set layout, then create the shared opaque pipeline.
+    // Bootstrap: build the first scene so we can compose the global and
+    // material descriptor set layouts for the shared opaque pipeline.
     const int start = std::clamp(config_.defaultSceneIndex, 0,
                                  static_cast<int>(sceneRegistry_.size()) - 1);
     currentScene_ = sceneRegistry_[start].factory(
-        *device_, *frameSync_, *renderer_, *descriptorAllocator_);
+        *device_, *frameSync_, *descriptorAllocator_);
     currentSceneIndex_ = start;
 
     if (currentScene_->objects().empty())
         throw std::runtime_error("Bootstrap scene has no objects.");
     const auto &firstMat = *currentScene_->objects().front().material;
+    auto        pipelineConfig = firstMat.pipelineConfig();
+    pipelineConfig.descriptorLayouts.insert(
+        pipelineConfig.descriptorLayouts.begin(),
+        renderer_->globalDescriptorSetLayout());
     opaquePipeline_ = std::make_unique<Pipeline>(
-        *device_, renderer_->renderPass(), firstMat.pipelineConfig());
+        *device_, renderer_->renderPass(), pipelineConfig);
 
     if (currentScene_->initialCamera) {
         const auto &p = *currentScene_->initialCamera;
@@ -114,7 +119,7 @@ void Application::switchScene(int index) {
 
     const auto &entry = sceneRegistry_[index];
     currentScene_ =
-        entry.factory(*device_, *frameSync_, *renderer_, *descriptorAllocator_);
+        entry.factory(*device_, *frameSync_, *descriptorAllocator_);
     currentSceneIndex_ = index;
 
     if (currentScene_->initialCamera) {
@@ -254,6 +259,8 @@ void Application::mainLoop() {
         updateUniforms(ctx->frameIndex);
 
         renderer_->beginRenderPass(ctx->cmd, ctx->imageIndex);
+        renderer_->bindGlobalDescriptors(ctx->cmd, opaquePipeline_->layout(),
+                                         ctx->frameIndex);
         if (currentScene_)
             currentScene_->render(ctx->cmd, ctx->frameIndex, *opaquePipeline_);
         gui_->render(ctx->cmd);

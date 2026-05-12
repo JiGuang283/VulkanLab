@@ -10,7 +10,6 @@ namespace vkr {
 class Device;
 class DescriptorAllocator;
 class FrameSync;
-class Renderer;
 class Texture;
 struct PipelineConfig;
 
@@ -26,7 +25,7 @@ class GltfLoader {
     };
 
     static GltfAsset load(const std::string &path, Device &device,
-                          FrameSync &frameSync, Renderer &renderer,
+                          FrameSync &frameSync,
                           DescriptorAllocator  &descriptorAllocator,
                           const PipelineConfig &baseConfig,
                           const Options        &opts = {});

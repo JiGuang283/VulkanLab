@@ -80,7 +80,7 @@ static glm::mat4 nodeLocalMatrix(const tg3_node &n) {
 // ---- GltfLoader::load ------------------------------------------------------
 
 GltfAsset GltfLoader::load(const std::string &path, Device &device,
-                           FrameSync &frameSync, Renderer &renderer,
+                           FrameSync &frameSync,
                            DescriptorAllocator  &descriptorAllocator,
                            const PipelineConfig &baseConfig,
                            const Options        &opts) {
@@ -164,9 +164,8 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
     }
 
     // 5. materials
-    auto fallbackMat =
-        std::make_shared<Material>(device, renderer, descriptorAllocator,
-                                   MaterialParams{whiteTex}, baseConfig);
+    auto fallbackMat = std::make_shared<Material>(
+        device, descriptorAllocator, MaterialParams{whiteTex}, baseConfig);
 
     asset.materials.reserve(m->materials_count + 1);
     for (uint32_t i = 0; i < m->materials_count; ++i) {
@@ -186,7 +185,7 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
         p.alphaCutoff = (float)gm.alpha_cutoff;
         p.doubleSided = gm.double_sided != 0;
         asset.materials.push_back(std::make_shared<Material>(
-            device, renderer, descriptorAllocator, std::move(p), baseConfig));
+            device, descriptorAllocator, std::move(p), baseConfig));
     }
     asset.materials.push_back(fallbackMat);
     const size_t fallbackMatIdx = asset.materials.size() - 1;

@@ -9,7 +9,6 @@ namespace vkr {
 class Device;
 class DescriptorAllocator;
 class FrameSync;
-class Renderer;
 class Scene;
 
 /// Constructs a scene given already-created core objects. The factory
@@ -20,7 +19,7 @@ class Scene;
 /// then shared across all scenes (all scenes currently use the same shaders
 /// and therefore pipeline-layout-compatible descriptor sets).
 using SceneFactory = std::function<std::unique_ptr<Scene>(
-    Device &, FrameSync &, Renderer &, DescriptorAllocator &)>;
+    Device &, FrameSync &, DescriptorAllocator &)>;
 
 struct SceneEntry {
     std::string  name;

@@ -8,7 +8,6 @@
 #include "render/GltfLoader.h"
 #include "render/Material.h"
 #include "render/Mesh.h"
-#include "render/Renderer.h"
 #include "render/Texture.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -35,14 +34,14 @@ PipelineConfig makeStandardConfig(Device &device, const std::string &vp,
 SceneFactory vikingRoomSceneFactory(std::string tex, std::string vp,
                                     std::string fp) {
     return [tex = std::move(tex), vp = std::move(vp), fp = std::move(fp)](
-               Device &device, FrameSync &frameSync, Renderer &renderer,
+               Device &device, FrameSync &frameSync,
                DescriptorAllocator &descriptorAllocator)
                -> std::unique_ptr<Scene> {
         auto scene = std::make_unique<Scene>();
 
         auto texture = std::make_shared<Texture>(device, frameSync, tex);
         auto material = std::make_shared<Material>(
-            device, renderer, descriptorAllocator, *texture,
+            device, descriptorAllocator, *texture,
             makeStandardConfig(device, vp, fp));
         auto mesh = std::shared_ptr<Mesh>(
             Mesh::fromOBJ(device, frameSync, "models/viking_room.obj")
@@ -74,12 +73,11 @@ SceneFactory gltfSceneFactory(std::string modelPath, std::string vp,
                               std::string fp) {
     return [modelPath = std::move(modelPath), vp = std::move(vp),
             fp = std::move(fp)](Device &device, FrameSync &frameSync,
-                                Renderer            &renderer,
                                 DescriptorAllocator &descriptorAllocator)
                -> std::unique_ptr<Scene> {
         auto scene = std::make_unique<Scene>();
         auto baseCfg = makeStandardConfig(device, vp, fp);
-        auto asset = GltfLoader::load(modelPath, device, frameSync, renderer,
+        auto asset = GltfLoader::load(modelPath, device, frameSync,
                                       descriptorAllocator, baseCfg);
 
         for (auto &t : asset.textures)

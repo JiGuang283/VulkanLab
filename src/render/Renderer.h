@@ -12,9 +12,12 @@
 
 namespace vkr {
 
+class DescriptorAllocator;
+
 class Renderer {
   public:
     Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
+             DescriptorAllocator &descriptorAllocator,
              VkDeviceSize uniformBufferSize);
     ~Renderer();
 
@@ -30,11 +33,14 @@ class Renderer {
 
     // ---- 访问器 ----
     VkRenderPass renderPass() const { return renderPass_; }
+    VkDescriptorSetLayout globalDescriptorSetLayout() const {
+        return globalDescriptorSetLayout_;
+    }
 
     // ---- per-frame UBO 访问器 ----
-    void        *mappedUniformBuffer(uint32_t frameIndex) const;
-    VkBuffer     uniformBufferHandle(uint32_t frameIndex) const;
-    VkDeviceSize uniformBufferSize() const { return uniformBufferSize_; }
+    void *mappedUniformBuffer(uint32_t frameIndex) const;
+    void  bindGlobalDescriptors(VkCommandBuffer cmd, VkPipelineLayout layout,
+                                uint32_t frameIndex) const;
 
   private:
     void createRenderPass();
@@ -42,6 +48,8 @@ class Renderer {
     void createColorResources();
     void createDepthResources();
     void createUniformBuffers();
+    void createGlobalDescriptorSetLayout();
+    void createGlobalDescriptorSets();
 
     void cleanupSwapChainResources();
 
@@ -53,6 +61,7 @@ class Renderer {
     Device    *device_;
     SwapChain *swapChain_;
     FrameSync *frameSync_;
+    DescriptorAllocator *descriptorAllocator_;
 
     VkRenderPass renderPass_ = VK_NULL_HANDLE;
 
@@ -63,6 +72,8 @@ class Renderer {
 
     std::vector<std::unique_ptr<Buffer>> uniformBuffers_;
     VkDeviceSize                         uniformBufferSize_ = 0;
+    VkDescriptorSetLayout globalDescriptorSetLayout_ = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> globalDescriptorSets_;
 };
 
 } // namespace vkr
