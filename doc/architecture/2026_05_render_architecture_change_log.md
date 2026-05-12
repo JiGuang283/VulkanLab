@@ -206,7 +206,7 @@ cmake --build build-debug
 
 ## 3. Phase D：Pass 抽象和 RenderPipeline
 
-状态：进行中。
+状态：已完成。
 
 分支：
 
@@ -279,7 +279,7 @@ git diff --check -- . ':(exclude).vscode/settings.json'
 
 运行时验证：
 
-- 待用户本地运行确认。
+- 已由用户本地运行确认结果正常。
 
 ### 3.3 当前边界
 
