@@ -1,7 +1,7 @@
 #include "Device.h"
+#include "Log.h"
 #include "VulkanCheck.h"
 
-#include <iostream>
 #include <set>
 #include <string>
 #include <vector>
@@ -67,10 +67,7 @@ void Device::pickPhysicalDevice() {
 
     VkPhysicalDevice fallbackDevice = VK_NULL_HANDLE;
 
-    auto printDeviceInfo = [](VkPhysicalDeviceProperties &props) {
-        std::cout << "---------------------------------" << std::endl;
-        std::cout << "Selected GPU: " << props.deviceName << std::endl;
-
+    auto printDeviceInfo = [](const VkPhysicalDeviceProperties &props) {
         std::string typeStr;
         switch (props.deviceType) {
         case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
@@ -89,11 +86,12 @@ void Device::pickPhysicalDevice() {
             typeStr = "Other";
             break;
         }
-        std::cout << "Device Type : " << typeStr << std::endl;
-        std::cout << "API Version : " << VK_VERSION_MAJOR(props.apiVersion)
-                  << "." << VK_VERSION_MINOR(props.apiVersion) << "."
-                  << VK_VERSION_PATCH(props.apiVersion) << std::endl;
-        std::cout << "---------------------------------" << std::endl;
+        VKR_LOG_INFO("Device", "Selected GPU: {}", props.deviceName);
+        VKR_LOG_INFO("Device", "Device Type: {}", typeStr);
+        VKR_LOG_INFO("Device", "API Version: {}.{}.{}",
+                     VK_VERSION_MAJOR(props.apiVersion),
+                     VK_VERSION_MINOR(props.apiVersion),
+                     VK_VERSION_PATCH(props.apiVersion));
     };
 
     for (const auto &device : devices) {

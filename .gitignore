@@ -39,11 +39,15 @@ _deps/
 *.exp
 *.a
 
-# ---------- Binary assets ----------
-# glTF binary models are ignored by default; explicitly allow the ones
-# the app depends on at runtime.
+# ---------- Runtime model assets ----------
+# Keep required small sample assets trackable, but do not commit large local
+# glTF samples by default. Add new assets here intentionally if a scene depends
+# on them in a fresh checkout.
+!models/viking_room.obj
 *.glb
-!models/*.glb
+!models/SheenChair.glb
+models/local/
+models/sample/
 
 # ---------- Runtime / scratch ----------
 *.log

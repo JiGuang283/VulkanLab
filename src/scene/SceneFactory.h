@@ -7,6 +7,7 @@
 namespace vkr {
 
 class Device;
+class DescriptorAllocator;
 class FrameSync;
 class Renderer;
 class Scene;
@@ -18,8 +19,8 @@ class Scene;
 /// built by Application once from the first Material's descriptor layout, and
 /// then shared across all scenes (all scenes currently use the same shaders
 /// and therefore pipeline-layout-compatible descriptor sets).
-using SceneFactory =
-    std::function<std::unique_ptr<Scene>(Device &, FrameSync &, Renderer &)>;
+using SceneFactory = std::function<std::unique_ptr<Scene>(
+    Device &, FrameSync &, Renderer &, DescriptorAllocator &)>;
 
 struct SceneEntry {
     std::string  name;

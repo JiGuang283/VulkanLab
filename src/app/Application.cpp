@@ -1,9 +1,12 @@
 #include "Application.h"
 #include "UniformData.h"
 
+#include "core/DescriptorAllocator.h"
 #include "core/Device.h"
 #include "core/FrameSync.h"
+#include "core/Log.h"
 #include "core/Pipeline.h"
+#include "core/ResourcePoolSelfTest.h"
 #include "core/SwapChain.h"
 #include "core/VulkanContext.h"
 #include "render/GuiSystem.h"
@@ -18,7 +21,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
-#include <iostream>
 #include <stdexcept>
 
 #include <glm/glm.hpp>
@@ -43,6 +45,10 @@ void Application::registerScene(SceneEntry entry) {
 }
 
 void Application::init() {
+#ifndef NDEBUG
+    runResourcePoolSelfTest();
+#endif
+
     window_ = std::make_unique<Window>(
         config_.windowWidth, config_.windowHeight, config_.windowTitle);
     input_ = std::make_unique<InputManager>(*window_);
@@ -52,6 +58,7 @@ void Application::init() {
         [this](VkInstance inst) { return window_->createSurface(inst); },
         std::move(extensions));
     device_ = std::make_unique<Device>(*context_);
+    descriptorAllocator_ = std::make_unique<DescriptorAllocator>(*device_);
     swapChain_ =
         std::make_unique<SwapChain>(*device_, context_->surface(), [this]() {
             return window_->framebufferExtent();
@@ -74,8 +81,8 @@ void Application::init() {
     // descriptor set layout, then create the shared opaque pipeline.
     const int start = std::clamp(config_.defaultSceneIndex, 0,
                                  static_cast<int>(sceneRegistry_.size()) - 1);
-    currentScene_ =
-        sceneRegistry_[start].factory(*device_, *frameSync_, *renderer_);
+    currentScene_ = sceneRegistry_[start].factory(
+        *device_, *frameSync_, *renderer_, *descriptorAllocator_);
     currentSceneIndex_ = start;
 
     if (currentScene_->objects().empty())
@@ -106,7 +113,8 @@ void Application::switchScene(int index) {
     currentScene_.reset();
 
     const auto &entry = sceneRegistry_[index];
-    currentScene_ = entry.factory(*device_, *frameSync_, *renderer_);
+    currentScene_ =
+        entry.factory(*device_, *frameSync_, *renderer_, *descriptorAllocator_);
     currentSceneIndex_ = index;
 
     if (currentScene_->initialCamera) {
@@ -115,7 +123,7 @@ void Application::switchScene(int index) {
         camera_.setYawPitch(p.yaw, p.pitch);
     }
 
-    std::cout << "[Scene] switched to " << entry.name << std::endl;
+    VKR_LOG_INFO("Scene", "Switched to {}", entry.name);
 }
 
 void Application::updateInputMode() {
@@ -150,14 +158,14 @@ void Application::processCameraInput(float dt) {
         move.x -= config_.moveSpeed * dt;
     if (input_->isKeyDown(Key::D))
         move.x += config_.moveSpeed * dt;
-    if (input_->isKeyDown(Key::Space))
-        move.y += config_.moveSpeed * dt;
-    if (input_->isKeyDown(Key::LeftShift))
+    if (input_->isKeyDown(Key::Q))
         move.y -= config_.moveSpeed * dt;
+    if (input_->isKeyDown(Key::E))
+        move.y += config_.moveSpeed * dt;
     camera_.translate(move);
 
     const auto d = input_->mouseDelta();
-    camera_.rotate(d.x * config_.mouseSensitivity,
+    camera_.rotate(-d.x * config_.mouseSensitivity,
                    -d.y * config_.mouseSensitivity);
 }
 
@@ -184,7 +192,7 @@ void Application::drawGui() {
     ImGui::Text("Mode:   %s", mode_ == InputMode::UI ? "UI" : "CameraDrag");
     if (currentScene_)
         ImGui::Text("Objects: %zu", currentScene_->objects().size());
-    ImGui::Text("(Hold RMB in viewport to fly, WASD/Space/Shift to move)");
+    ImGui::Text("(Hold RMB in viewport to fly, WASD/Q/E to move)");
     ImGui::End();
 }
 
@@ -239,6 +247,7 @@ void Application::mainLoop() {
             if (frameSync_->swapChainNeedsRecreation())
                 handleSwapChainRecreate();
             ImGui::EndFrame();
+            input_->endFrame();
             continue;
         }
 
@@ -253,6 +262,9 @@ void Application::mainLoop() {
 
         if (frameSync_->swapChainNeedsRecreation())
             handleSwapChainRecreate();
+
+        // 8. 帧末：丢弃本帧鼠标增量
+        input_->endFrame();
     }
 
     vkDeviceWaitIdle(device_->logicalDevice());

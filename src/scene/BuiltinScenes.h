@@ -16,4 +16,8 @@ SceneFactory vikingRoomSceneFactory(std::string texturePath,
 SceneFactory sheenChairSceneFactory(std::string vertShaderPath,
                                     std::string fragShaderPath);
 
+/// Generic glTF scene factory.  Loads any .glb/.gltf at `modelPath`.
+SceneFactory gltfSceneFactory(std::string modelPath, std::string vertShaderPath,
+                              std::string fragShaderPath);
+
 } // namespace vkr

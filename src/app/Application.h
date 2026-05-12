@@ -17,6 +17,7 @@ class Window;
 class InputManager;
 class VulkanContext;
 class Device;
+class DescriptorAllocator;
 class SwapChain;
 class FrameSync;
 class Renderer;
@@ -56,15 +57,16 @@ class Application {
     Config config_;
 
     // 基础设施（创建顺序 = 析构逆序）
-    std::unique_ptr<Window>        window_;
-    std::unique_ptr<InputManager>  input_;
-    std::unique_ptr<VulkanContext> context_;
-    std::unique_ptr<Device>        device_;
-    std::unique_ptr<SwapChain>     swapChain_;
-    std::unique_ptr<FrameSync>     frameSync_;
-    std::unique_ptr<Renderer>      renderer_;
-    std::unique_ptr<Pipeline>      opaquePipeline_;
-    std::unique_ptr<GuiSystem>     gui_;
+    std::unique_ptr<Window>              window_;
+    std::unique_ptr<InputManager>        input_;
+    std::unique_ptr<VulkanContext>       context_;
+    std::unique_ptr<Device>              device_;
+    std::unique_ptr<DescriptorAllocator> descriptorAllocator_;
+    std::unique_ptr<SwapChain>           swapChain_;
+    std::unique_ptr<FrameSync>           frameSync_;
+    std::unique_ptr<Renderer>            renderer_;
+    std::unique_ptr<Pipeline>            opaquePipeline_;
+    std::unique_ptr<GuiSystem>           gui_;
 
     // 场景切换
     std::vector<SceneEntry> sceneRegistry_;

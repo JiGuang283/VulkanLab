@@ -25,6 +25,7 @@ set(TINYOBJ_DIR "${CMAKE_SOURCE_DIR}/external/tiny_obj_loader.h")
 set(VMA_DIR "${CMAKE_SOURCE_DIR}/external/vma")
 set(GLTF_DIR "${CMAKE_SOURCE_DIR}/external/gltf")
 set(IMGUI_DIR "${CMAKE_SOURCE_DIR}/external/imgui")
+set(SPDLOG_ROOT "${CMAKE_SOURCE_DIR}/external")
 
 # 添加 GLFW 头文件目录
 include_directories(${GLFW_DIR}/include)
@@ -57,7 +58,20 @@ set(IMGUI_SOURCES
 add_executable(VulkanLab ${SOURCES} ${IMGUI_SOURCES})
 
 # 添加 src 目录及 GLM 头文件为搜索路径
-target_include_directories(VulkanLab PRIVATE ${CMAKE_SOURCE_DIR}/src ${GLM_INCLUDE_DIR})
+target_include_directories(VulkanLab PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${GLM_INCLUDE_DIR}
+    ${SPDLOG_ROOT}
+)
+
+target_compile_definitions(VulkanLab PRIVATE
+    $<$<CONFIG:Debug>:SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE>
+    $<$<NOT:$<CONFIG:Debug>>:SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_INFO>
+)
+
+target_compile_options(VulkanLab PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:/utf-8 /FS>
+)
 
 # 4. 链接库
 # 链接 Vulkan 和 GLFW
@@ -71,10 +85,6 @@ target_link_libraries(VulkanLab PRIVATE
 # 解决一些 GLFW 静态链接时的 Windows 依赖问题
 if(WIN32)
     target_link_libraries(VulkanLab PRIVATE user32 shell32 gdi32)
-endif()
-
-if(MSVC)
-    add_compile_options(/utf-8 /FS)
 endif()
 
 # Find glslc to compile shaders

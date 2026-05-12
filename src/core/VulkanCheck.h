@@ -2,16 +2,12 @@
 
 #include <vulkan/vulkan.h>
 
-#include <stdexcept>
-#include <string>
+#include "VulkanException.h"
 
 #define VK_CHECK(expr)                                                         \
     do {                                                                       \
-        VkResult _vk_result = (expr);                                          \
-        if (_vk_result != VK_SUCCESS) {                                        \
-            throw std::runtime_error(                                          \
-                std::string("Vulkan error ") +                                 \
-                std::to_string(static_cast<int>(_vk_result)) + " at " +        \
-                __FILE__ + ":" + std::to_string(__LINE__));                     \
+        const VkResult vkResult = (expr);                                      \
+        if (vkResult != VK_SUCCESS) {                                          \
+            throw ::vkr::VulkanException(vkResult, #expr, __FILE__, __LINE__); \
         }                                                                      \
     } while (0)

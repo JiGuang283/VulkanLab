@@ -22,7 +22,8 @@ layout(location = 1) out vec2 fragTexCoord;
 
 void main(){
     gl_Position = ubo.proj * ubo.view * push.model * vec4(inPosition, 1.0);
-    // Rigid + uniform-scale assumption; non-uniform scale needs a normal matrix.
-    fragNormalWS = mat3(push.model) * inNormal;
+    // Correct normal transformation for any affine model matrix including
+    // non-uniform scale: use the transpose of the inverse (normal matrix).
+    fragNormalWS = normalize(transpose(inverse(mat3(push.model))) * inNormal);
     fragTexCoord = inTexCoord;
 }

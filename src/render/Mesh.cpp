@@ -2,11 +2,11 @@
 #include "Vertex.h"
 #include "core/Device.h"
 #include "core/FrameSync.h"
+#include "core/Log.h"
 
 #include <tiny_obj_loader.h>
 
 #include <cstring>
-#include <iostream>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -100,8 +100,8 @@ std::unique_ptr<Mesh> Mesh::fromOBJ(Device &device, FrameSync &frameSync,
         }
     }
 
-    std::cout << "Vertices: " << vertices.size()
-              << ", Indices: " << indices.size() << std::endl;
+    VKR_LOG_DEBUG("Mesh", "Loaded OBJ '{}': vertices={}, indices={}", path,
+                  vertices.size(), indices.size());
 
     return std::make_unique<Mesh>(
         device, frameSync, vertices.data(),

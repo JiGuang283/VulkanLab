@@ -34,8 +34,7 @@ void Scene::render(VkCommandBuffer cmd, uint32_t frameIndex,
         GpuPushBlock blk{};
         blk.model = obj.transform;
         blk.baseColorFactor = p.baseColorFactor;
-        blk.emissiveMetallic =
-            glm::vec4(p.emissiveFactor, p.metallicFactor);
+        blk.emissiveMetallic = glm::vec4(p.emissiveFactor, p.metallicFactor);
         blk.roughnessAlpha =
             glm::vec4(p.roughnessFactor, p.alphaCutoff, 0.0f, 0.0f);
 

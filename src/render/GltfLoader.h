@@ -8,6 +8,7 @@
 namespace vkr {
 
 class Device;
+class DescriptorAllocator;
 class FrameSync;
 class Renderer;
 class Texture;
@@ -24,10 +25,9 @@ class GltfLoader {
         std::shared_ptr<Texture> fallbackWhite;
     };
 
-    static GltfAsset load(const std::string    &path,
-                          Device               &device,
-                          FrameSync            &frameSync,
-                          Renderer             &renderer,
+    static GltfAsset load(const std::string &path, Device &device,
+                          FrameSync &frameSync, Renderer &renderer,
+                          DescriptorAllocator  &descriptorAllocator,
                           const PipelineConfig &baseConfig,
                           const Options        &opts = {});
 };

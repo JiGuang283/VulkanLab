@@ -19,7 +19,9 @@ void InputManager::update() {
         currKeys_[k] = glfwGetKey(window_, k) == GLFW_PRESS;
     for (int b = 0; b < kButtonCount; ++b)
         currButtons_[b] = glfwGetMouseButton(window_, b) == GLFW_PRESS;
+}
 
+void InputManager::endFrame() {
     mouseDelta_ = {0.0f, 0.0f};
     rawMouseDelta_ = {0.0f, 0.0f};
 }

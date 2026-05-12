@@ -2,6 +2,7 @@
 
 #include "Renderer.h"
 #include "Texture.h"
+#include "core/DescriptorAllocator.h"
 #include "core/FrameSync.h"
 #include "core/PipelineConfig.h"
 
@@ -17,10 +18,10 @@ struct MaterialParams {
     std::shared_ptr<Texture> baseColor;
     glm::vec4                baseColorFactor{1.0f};
     glm::vec3                emissiveFactor{0.0f};
-    float                    metallicFactor  = 1.0f;
+    float                    metallicFactor = 1.0f;
     float                    roughnessFactor = 1.0f;
-    float                    alphaCutoff     = 0.5f;
-    bool                     doubleSided     = false;
+    float                    alphaCutoff = 0.5f;
+    bool                     doubleSided = false;
 };
 
 class Material {
@@ -29,9 +30,11 @@ class Material {
     /// Material creates its own VkDescriptorSetLayout and appends it to the
     /// stored config_.  The Application can then fetch the completed config
     /// via pipelineConfig() to construct its Pipeline object.
-    Material(Device &device, Renderer &renderer, const Texture &texture,
+    Material(Device &device, Renderer &renderer,
+             DescriptorAllocator &descriptorAllocator, const Texture &texture,
              const PipelineConfig &config);
-    Material(Device &device, Renderer &renderer, MaterialParams params,
+    Material(Device &device, Renderer &renderer,
+             DescriptorAllocator &descriptorAllocator, MaterialParams params,
              const PipelineConfig &config);
     ~Material();
 
@@ -54,16 +57,15 @@ class Material {
 
   private:
     void createDescriptorSetLayout();
-    void createDescriptorPool();
     void createDescriptorSets(const Texture &texture);
 
-    Device   *device_ = nullptr;
-    Renderer *renderer_ = nullptr;
+    Device              *device_ = nullptr;
+    Renderer            *renderer_ = nullptr;
+    DescriptorAllocator *descriptorAllocator_ = nullptr;
 
     PipelineConfig               config_;
     MaterialParams               params_;
     VkDescriptorSetLayout        descriptorSetLayout_ = VK_NULL_HANDLE;
-    VkDescriptorPool             descriptorPool_ = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> descriptorSets_;
 };
 

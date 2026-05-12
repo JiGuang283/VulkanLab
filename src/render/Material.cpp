@@ -8,36 +8,36 @@
 
 namespace vkr {
 
-Material::Material(Device &device, Renderer &renderer, const Texture &texture,
-                   const PipelineConfig &config)
-    : device_(&device), renderer_(&renderer), config_(config) {
+Material::Material(Device &device, Renderer &renderer,
+                   DescriptorAllocator &descriptorAllocator,
+                   const Texture &texture, const PipelineConfig &config)
+    : device_(&device), renderer_(&renderer),
+      descriptorAllocator_(&descriptorAllocator), config_(config) {
     createDescriptorSetLayout();
 
     // Material owns the descriptor set layout used by this pipeline, so append
     // it to the config it exposes to whoever will build the Pipeline.
     config_.descriptorLayouts.push_back(descriptorSetLayout_);
 
-    createDescriptorPool();
     createDescriptorSets(texture);
     // params_ keeps default factors; baseColor stays null because the legacy
     // ctor does not own the Texture. Scene::render only reads factors.
 }
 
-Material::Material(Device &device, Renderer &renderer, MaterialParams params,
-                   const PipelineConfig &config)
-    : device_(&device), renderer_(&renderer), config_(config),
+Material::Material(Device &device, Renderer &renderer,
+                   DescriptorAllocator &descriptorAllocator,
+                   MaterialParams params, const PipelineConfig &config)
+    : device_(&device), renderer_(&renderer),
+      descriptorAllocator_(&descriptorAllocator), config_(config),
       params_(std::move(params)) {
     assert(params_.baseColor && "MaterialParams.baseColor must not be null");
     createDescriptorSetLayout();
     config_.descriptorLayouts.push_back(descriptorSetLayout_);
-    createDescriptorPool();
     createDescriptorSets(*params_.baseColor);
 }
 
 Material::~Material() {
     VkDevice d = device_->logicalDevice();
-    // DescriptorSets are freed automatically when pool is destroyed
-    vkDestroyDescriptorPool(d, descriptorPool_, nullptr);
     vkDestroyDescriptorSetLayout(d, descriptorSetLayout_, nullptr);
 }
 
@@ -75,35 +75,10 @@ void Material::createDescriptorSetLayout() {
                                          nullptr, &descriptorSetLayout_));
 }
 
-void Material::createDescriptorPool() {
-    std::array<VkDescriptorPoolSize, 2> poolSizes{};
-    poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-    poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-
-    VkDescriptorPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
-    poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-
-    VK_CHECK(vkCreateDescriptorPool(device_->logicalDevice(), &poolInfo,
-                                    nullptr, &descriptorPool_));
-}
-
 void Material::createDescriptorSets(const Texture &texture) {
-    std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT,
-                                               descriptorSetLayout_);
-    VkDescriptorSetAllocateInfo        allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocInfo.descriptorPool = descriptorPool_;
-    allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-    allocInfo.pSetLayouts = layouts.data();
-
     descriptorSets_.resize(MAX_FRAMES_IN_FLIGHT);
-    VK_CHECK(vkAllocateDescriptorSets(device_->logicalDevice(), &allocInfo,
-                                      descriptorSets_.data()));
+    for (auto &set : descriptorSets_)
+        set = descriptorAllocator_->allocate(descriptorSetLayout_);
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         VkDescriptorBufferInfo bufferInfo{};

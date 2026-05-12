@@ -1,8 +1,8 @@
 #include "VulkanContext.h"
+#include "Log.h"
 #include "VulkanCheck.h"
 
 #include <cstring>
-#include <iostream>
 #include <vector>
 
 namespace {
@@ -41,7 +41,19 @@ debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT      messageSeverity,
               VkDebugUtilsMessageTypeFlagsEXT             messageType,
               const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
               void                                       *pUserData) {
-    std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
+    (void)messageType;
+    (void)pUserData;
+
+    if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+        VKR_LOG_ERROR("Vulkan", "[Validation] {}", pCallbackData->pMessage);
+    } else if (messageSeverity &
+               VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+        VKR_LOG_WARN("Vulkan", "[Validation] {}", pCallbackData->pMessage);
+    } else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
+        VKR_LOG_DEBUG("Vulkan", "[Validation] {}", pCallbackData->pMessage);
+    } else {
+        VKR_LOG_TRACE("Vulkan", "[Validation] {}", pCallbackData->pMessage);
+    }
     return VK_FALSE;
 }
 
@@ -118,7 +130,6 @@ void VulkanContext::populateDebugMessengerCreateInfo(
     createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
     createInfo.messageSeverity =
-        VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
         VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
         VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
     createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |

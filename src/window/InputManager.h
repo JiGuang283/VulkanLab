@@ -14,6 +14,8 @@ enum class Key : int {
     A = 65,          // GLFW_KEY_A
     S = 83,          // GLFW_KEY_S
     D = 68,          // GLFW_KEY_D
+    Q = 81,          // GLFW_KEY_Q
+    E = 69,          // GLFW_KEY_E
     Space = 32,      // GLFW_KEY_SPACE
     LeftShift = 340, // GLFW_KEY_LEFT_SHIFT
     Escape = 256,    // GLFW_KEY_ESCAPE
@@ -33,8 +35,11 @@ class InputManager {
     InputManager(const InputManager &) = delete;
     InputManager &operator=(const InputManager &) = delete;
 
-    /// 每帧 glfwPollEvents 之后调用一次：刷新边沿触发状态并清零本帧鼠标增量。
+    /// 每帧 glfwPollEvents 之后调用一次：刷新边沿触发状态。
     void update();
+
+    /// 帧末调用：清零本帧鼠标增量（在已被消费之后）。
+    void endFrame();
 
     // ---- 键盘 ----
     bool isKeyDown(int key) const;

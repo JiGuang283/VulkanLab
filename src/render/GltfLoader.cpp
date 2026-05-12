@@ -3,8 +3,10 @@
 #include "Mesh.h"
 #include "Texture.h"
 #include "Vertex.h"
+#include "core/DescriptorAllocator.h"
 #include "core/Device.h"
 #include "core/FrameSync.h"
+#include "core/Log.h"
 #include "core/PipelineConfig.h"
 
 // Only the declarations are needed here; the implementation lives in
@@ -19,7 +21,6 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <stdexcept>
@@ -80,6 +81,7 @@ static glm::mat4 nodeLocalMatrix(const tg3_node &n) {
 
 GltfAsset GltfLoader::load(const std::string &path, Device &device,
                            FrameSync &frameSync, Renderer &renderer,
+                           DescriptorAllocator  &descriptorAllocator,
                            const PipelineConfig &baseConfig,
                            const Options        &opts) {
     // 1. Parse
@@ -136,9 +138,8 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
                 : nullptr;
         if (!pixels) {
             imageTextures.push_back(whiteTex);
-            std::fprintf(stderr,
-                         "[GltfLoader] image[%u] decode failed, using white.\n",
-                         i);
+            VKR_LOG_WARN("Gltf", "{} image[{}] decode failed, using white.",
+                         path, i);
             continue;
         }
         TextureCreateInfo ci;
@@ -163,8 +164,9 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
     }
 
     // 5. materials
-    auto fallbackMat = std::make_shared<Material>(
-        device, renderer, MaterialParams{whiteTex}, baseConfig);
+    auto fallbackMat =
+        std::make_shared<Material>(device, renderer, descriptorAllocator,
+                                   MaterialParams{whiteTex}, baseConfig);
 
     asset.materials.reserve(m->materials_count + 1);
     for (uint32_t i = 0; i < m->materials_count; ++i) {
@@ -184,7 +186,7 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
         p.alphaCutoff = (float)gm.alpha_cutoff;
         p.doubleSided = gm.double_sided != 0;
         asset.materials.push_back(std::make_shared<Material>(
-            device, renderer, std::move(p), baseConfig));
+            device, renderer, descriptorAllocator, std::move(p), baseConfig));
     }
     asset.materials.push_back(fallbackMat);
     const size_t fallbackMatIdx = asset.materials.size() - 1;
@@ -322,15 +324,30 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
 
     if (sceneIdx >= 0) {
         const tg3_scene &scn = m->scenes[sceneIdx];
+        // glTF: right-handed, +Y up, +Z is the asset's front (faces the
+        // default camera looking down -Z).
+        // Project: right-handed, +Z up; the default camera sits in the
+        // (+X,+Y,+Z) octant looking at the origin, so "toward viewer" is
+        // roughly +Y.  Compose two rotations:
+        //   Rx(+90°): glTF +Y -> project +Z  (fix up axis)
+        //   Rz(180°): rotate around the new up so the asset front (glTF +Z)
+        //             maps to project +Y instead of -Y  (face the viewer)
+        // Net basis mapping: +X -> -X, +Y -> +Z, +Z -> +Y.  Pure rotation
+        // (det = +1), so the normal matrix in the shader remains valid.
+        const glm::mat4 yupToZup =
+            glm::rotate(glm::mat4(1.0f), glm::radians(180.0f),
+                        glm::vec3(0.0f, 0.0f, 1.0f)) *
+            glm::rotate(glm::mat4(1.0f), glm::radians(90.0f),
+                        glm::vec3(1.0f, 0.0f, 0.0f));
         for (uint32_t r = 0; r < scn.nodes_count; ++r)
-            walk(scn.nodes[r], glm::mat4(1.0f));
+            walk(scn.nodes[r], yupToZup);
     } else {
         // No scenes array -- drop each mesh at identity (extreme fallback).
         for (auto &list : primsByMesh)
             for (auto &pe : list)
-                asset.objects.push_back(
-                    {pe.mesh, asset.materials[fallbackMatIdx],
-                     glm::mat4(1.0f)});
+                asset.objects.push_back({pe.mesh,
+                                         asset.materials[fallbackMatIdx],
+                                         glm::mat4(1.0f)});
     }
 
     if (asset.meshes.empty())
