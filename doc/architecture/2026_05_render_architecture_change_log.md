@@ -201,3 +201,93 @@ cmake --build build-debug
 ```text
 进入 Phase D：Pass 抽象和 RenderPipeline。
 ```
+
+---
+
+## 3. Phase D：Pass 抽象和 RenderPipeline
+
+状态：进行中。
+
+分支：
+
+```text
+feature/pass-pipeline-phase-d
+```
+
+### 3.1 实际改动
+
+新增：
+
+```text
+src/render/RenderFrame.h
+src/render/RenderPipeline.h
+src/render/RenderPipeline.cpp
+src/render/pass/IRenderPass.h
+src/render/pass/MainForwardPass.h
+src/render/pass/MainForwardPass.cpp
+```
+
+`RenderFrameContext`：
+
+- 新增每帧渲染执行上下文，用于向 pass 传递 command buffer、frame index、image index、viewport extent，以及当前过渡期仍需要的 opaque pipeline 和 GUI 系统指针。
+
+`IRenderPass`：
+
+- 新增 pass 抽象接口。
+- 当前接口包含 `name()`、`onResize()` 和 `execute()`。
+
+`RenderPipeline`：
+
+- 新增 pass 容器。
+- 支持按顺序添加 pass。
+- 支持交换链重建后广播 `onResize()`。
+- 支持每帧顺序执行 pass。
+
+`MainForwardPass`：
+
+- 从 `Renderer` 接管主 `VkRenderPass`。
+- 从 `Renderer` 接管 framebuffer、MSAA color attachment 和 depth attachment。
+- 从 `Renderer` 接管 opaque draw queue 编码。
+- 当前过渡版仍在同一个 pass 内执行 GUI 绘制。
+
+`Renderer`：
+
+- 不再直接持有主 framebuffer、color/depth attachment 和主 `VkRenderPass`。
+- 新增 `renderFrame()`，负责绑定 global descriptor set 并调度 `RenderPipeline`。
+- 保留 per-frame uniform buffer 和 global descriptor set 责任。
+- `renderPass()` 改为从 `MainForwardPass` 读取，用于现阶段创建 graphics pipeline 和 GUI。
+
+`Application`：
+
+- 主循环不再直接调用 `beginRenderPass()`、`drawQueue()`、`gui.render()` 和 `endRenderPass()`。
+- 主循环改为调用 `renderer.renderFrame(...)`。
+
+### 3.2 验证
+
+已执行：
+
+```text
+cmake --build build-debug
+git diff --check -- . ':(exclude).vscode/settings.json'
+```
+
+结果：
+
+- 构建通过。
+- Phase D 相关文件无 whitespace 错误。
+- `Application` 不再直接调用旧的 render pass begin/end 和 draw helper。
+
+运行时验证：
+
+- 待用户本地运行确认。
+
+### 3.3 当前边界
+
+本阶段当前仍未引入：
+
+- 独立 GUI pass。
+- shadow/depth prepass。
+- transparent pass。
+- frame graph。
+- 资源 handle 化。
+- pass 之间的自动资源依赖和 barrier 管理。

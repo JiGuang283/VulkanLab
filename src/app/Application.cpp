@@ -262,13 +262,7 @@ void Application::mainLoop() {
             currentScene_->collectRenderCommands(renderQueue_);
         renderQueue_.sortOpaque();
 
-        renderer_->beginRenderPass(ctx->cmd, ctx->imageIndex);
-        renderer_->bindGlobalDescriptors(ctx->cmd, opaquePipeline_->layout(),
-                                         ctx->frameIndex);
-        renderer_->drawQueue(ctx->cmd, ctx->frameIndex, *opaquePipeline_,
-                             renderQueue_);
-        gui_->render(ctx->cmd);
-        renderer_->endRenderPass(ctx->cmd);
+        renderer_->renderFrame(*ctx, renderQueue_, *opaquePipeline_, *gui_);
         frameSync_->endFrame(*ctx);
 
         if (frameSync_->swapChainNeedsRecreation())
