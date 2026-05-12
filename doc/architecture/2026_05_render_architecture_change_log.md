@@ -100,7 +100,107 @@ git diff --check
 下一步建议：
 
 ```text
-运行程序做 B-lite 目视回归。
-若画面和 validation 无异常，提交本阶段。
-然后进入 Phase C：RenderQueue 替代 Scene::render。
+进入 Phase C：RenderQueue 替代 Scene::render。
+```
+
+---
+
+## 2. Phase C：RenderQueue 替代 Scene::render
+
+状态：进行中。过渡版代码已实现，构建通过，尚未运行时目视验证。
+
+分支：
+
+```text
+feature/render-queue-phase-c
+```
+
+### 2.1 实际改动
+
+新增：
+
+```text
+src/render/RenderCommand.h
+src/render/RenderQueue.h
+src/render/RenderQueue.cpp
+```
+
+`RenderCommand` 当前为过渡版：
+
+```text
+mesh      = const Mesh*
+material  = const Material*
+world     = glm::mat4
+queue     = RenderQueueType
+```
+
+`RenderQueue`：
+
+- 支持 `clear()`。
+- 支持 `add(RenderCommand)`。
+- 支持 opaque 队列。
+- 支持按 `material`、`mesh` 指针稳定排序。
+- 提供 draw/material/mesh 计数入口。
+
+`Scene`：
+
+- 移除 `Scene::render()`。
+- 新增 `Scene::collectRenderCommands(RenderQueue&)`。
+- `Scene.cpp` 不再调用 `vkCmd*`。
+
+`Renderer`：
+
+- 新增 `drawQueue(cmd, frameIndex, pipeline, queue)`。
+- 原 `Scene::render()` 中的 pipeline bind、material descriptor bind、push constants、mesh bind/draw 迁入 `Renderer`。
+
+`Application`：
+
+- 新增成员 `RenderQueue renderQueue_`。
+- 每帧渲染前执行：
+
+```text
+renderQueue.clear()
+currentScene.collectRenderCommands(renderQueue)
+renderQueue.sortOpaque()
+renderer.drawQueue(...)
+```
+
+`CMakeLists.txt`：
+
+- `file(GLOB_RECURSE SOURCES ...)` 增加 `CONFIGURE_DEPENDS`，避免新增 `.cpp` 后未进入目标。
+
+### 2.2 验证
+
+已执行：
+
+```text
+cmake --build build-debug
+```
+
+结果：
+
+- 构建通过。
+- `RenderQueue.cpp` 已被纳入目标。
+
+尚未执行：
+
+- 启动程序目视确认 Viking Room / Sheen Chair 画面。
+- 场景切换运行确认。
+- Vulkan validation layer 运行时日志检查。
+
+### 2.3 当前边界
+
+本阶段当前仍未引入：
+
+- handle 化资源引用。
+- culling。
+- transparent 专用队列。
+- Pass 抽象。
+- RenderPipeline。
+
+下一步建议：
+
+```text
+运行程序做 Phase C 目视回归。
+若画面和 validation 无异常，提交并合并 Phase C。
 ```

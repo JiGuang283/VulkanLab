@@ -257,12 +257,16 @@ void Application::mainLoop() {
         }
 
         updateUniforms(ctx->frameIndex);
+        renderQueue_.clear();
+        if (currentScene_)
+            currentScene_->collectRenderCommands(renderQueue_);
+        renderQueue_.sortOpaque();
 
         renderer_->beginRenderPass(ctx->cmd, ctx->imageIndex);
         renderer_->bindGlobalDescriptors(ctx->cmd, opaquePipeline_->layout(),
                                          ctx->frameIndex);
-        if (currentScene_)
-            currentScene_->render(ctx->cmd, ctx->frameIndex, *opaquePipeline_);
+        renderer_->drawQueue(ctx->cmd, ctx->frameIndex, *opaquePipeline_,
+                             renderQueue_);
         gui_->render(ctx->cmd);
         renderer_->endRenderPass(ctx->cmd);
         frameSync_->endFrame(*ctx);

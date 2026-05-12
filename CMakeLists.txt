@@ -40,7 +40,7 @@ include_directories(${IMGUI_DIR}/backends)
 link_directories(${GLFW_DIR}/lib-vc2022)
 
 # 3. 添加可执行文件
-file(GLOB_RECURSE SOURCES
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/src/*.cpp"
     "${CMAKE_SOURCE_DIR}/src/*.h"
 )

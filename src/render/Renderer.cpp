@@ -4,10 +4,26 @@
 #include "core/FrameSync.h"
 #include "core/SwapChain.h"
 #include "core/VulkanCheck.h"
+#include "core/Pipeline.h"
+#include "Material.h"
+#include "Mesh.h"
+#include "RenderQueue.h"
 
 #include <array>
+#include <glm/glm.hpp>
 
 namespace vkr {
+
+namespace {
+struct GpuPushBlock {
+    glm::mat4 model;
+    glm::vec4 baseColorFactor;
+    glm::vec4 emissiveMetallic; // xyz=emissive, w=metallic
+    glm::vec4 roughnessAlpha;   // x=roughness, y=alphaCutoff
+    glm::vec4 reserved;         // padding to reach 128B (Vulkan min)
+};
+static_assert(sizeof(GpuPushBlock) == 128, "push block must be 128B");
+} // namespace
 
 Renderer::Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
                    DescriptorAllocator &descriptorAllocator,
@@ -71,6 +87,33 @@ void Renderer::beginRenderPass(VkCommandBuffer cmd, uint32_t imageIndex) {
 
 void Renderer::endRenderPass(VkCommandBuffer cmd) {
     vkCmdEndRenderPass(cmd);
+}
+
+void Renderer::drawQueue(VkCommandBuffer cmd, uint32_t frameIndex,
+                         Pipeline &pipeline, const RenderQueue &queue) {
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+
+    for (const auto &command : queue.opaque()) {
+        if (!command.mesh || !command.material)
+            continue;
+
+        command.material->bindDescriptors(cmd, pipeline.layout(), frameIndex);
+
+        const auto  &p = command.material->params();
+        GpuPushBlock blk{};
+        blk.model = command.world;
+        blk.baseColorFactor = p.baseColorFactor;
+        blk.emissiveMetallic = glm::vec4(p.emissiveFactor, p.metallicFactor);
+        blk.roughnessAlpha =
+            glm::vec4(p.roughnessFactor, p.alphaCutoff, 0.0f, 0.0f);
+
+        vkCmdPushConstants(cmd, pipeline.layout(),
+                           VK_SHADER_STAGE_VERTEX_BIT |
+                               VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(GpuPushBlock), &blk);
+        command.mesh->bind(cmd);
+        command.mesh->draw(cmd);
+    }
 }
 
 // ---- 单次命令辅助（委托给 FrameSync）----

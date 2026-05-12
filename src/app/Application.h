@@ -2,6 +2,7 @@
 
 #include "Config.h"
 
+#include "render/RenderQueue.h"
 #include "scene/Camera.h"
 #include "scene/Scene.h"
 #include "scene/SceneFactory.h"
@@ -67,6 +68,7 @@ class Application {
     std::unique_ptr<Renderer>            renderer_;
     std::unique_ptr<Pipeline>            opaquePipeline_;
     std::unique_ptr<GuiSystem>           gui_;
+    RenderQueue                          renderQueue_;
 
     // 场景切换
     std::vector<SceneEntry> sceneRegistry_;

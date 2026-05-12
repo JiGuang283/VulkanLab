@@ -13,6 +13,8 @@
 namespace vkr {
 
 class DescriptorAllocator;
+class Pipeline;
+class RenderQueue;
 
 class Renderer {
   public:
@@ -27,6 +29,8 @@ class Renderer {
     // ---- RenderPass 辅助 ----
     void beginRenderPass(VkCommandBuffer cmd, uint32_t imageIndex);
     void endRenderPass(VkCommandBuffer cmd);
+    void drawQueue(VkCommandBuffer cmd, uint32_t frameIndex,
+                   Pipeline &pipeline, const RenderQueue &queue);
 
     // ---- 交换链重建 ----
     void recreateSwapChain();

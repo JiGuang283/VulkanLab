@@ -5,16 +5,16 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include <glm/glm.hpp>
-#include <vulkan/vulkan.h>
 
 namespace vkr {
 
-class Pipeline;
 class Mesh;
 class Material;
+class RenderQueue;
 class Texture;
 
 struct CameraPose {
@@ -37,9 +37,8 @@ class Scene {
     void addMesh(std::shared_ptr<Mesh> m) { meshes_.push_back(std::move(m)); }
     void addObject(SceneObject obj);
 
-    // ---- 渲染 ----
-    void render(VkCommandBuffer cmd, uint32_t frameIndex,
-                Pipeline &pipeline) const;
+    // ---- 渲染提交 ----
+    void collectRenderCommands(RenderQueue &queue) const;
 
     // ---- 每帧 tick（可选） ----
     void setUpdateFn(UpdateFn fn) { updateFn_ = std::move(fn); }
