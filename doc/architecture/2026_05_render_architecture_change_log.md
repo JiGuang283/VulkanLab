@@ -107,7 +107,7 @@ git diff --check
 
 ## 2. Phase C：RenderQueue 替代 Scene::render
 
-状态：进行中。过渡版代码已实现，构建通过，尚未运行时目视验证。
+状态：已完成。
 
 分支：
 
@@ -182,11 +182,9 @@ cmake --build build-debug
 - 构建通过。
 - `RenderQueue.cpp` 已被纳入目标。
 
-尚未执行：
+运行时验证：
 
-- 启动程序目视确认 Viking Room / Sheen Chair 画面。
-- 场景切换运行确认。
-- Vulkan validation layer 运行时日志检查。
+- 已由用户本地运行确认结果正常。
 
 ### 2.3 当前边界
 
@@ -201,6 +199,5 @@ cmake --build build-debug
 下一步建议：
 
 ```text
-运行程序做 Phase C 目视回归。
-若画面和 validation 无异常，提交并合并 Phase C。
+进入 Phase D：Pass 抽象和 RenderPipeline。
 ```
