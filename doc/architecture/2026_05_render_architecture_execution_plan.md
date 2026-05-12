@@ -1152,3 +1152,44 @@ models/sample/              本地样例资产目录，忽略
 - 如果某个新场景必须作为回归样例长期存在，应先在本文说明理由，再在 `.gitignore` 中显式白名单该具体文件。
 
 同时，`main.cpp` 中的额外 glTF 场景应按“文件存在才注册”的方式处理。这样本地可以继续使用大模型测试，但 fresh checkout 不会因为缺少未提交资产而出现不可加载场景。
+
+### 14.7 Master 基线状态
+
+状态：已合并到 `master`，可以开始 B-lite。
+
+基线提交：
+
+```text
+eef974d chore: prepare render architecture baseline
+```
+
+合并方式：
+
+```text
+feature/gltf-v1 -> master
+fast-forward
+```
+
+验证：
+
+```text
+cmake --build build-debug
+```
+
+结果：
+
+- `master` 构建通过。
+- `shader/shader.vert` 和 `shader/shader.frag` 会在构建中自动编译。
+- 本地额外大模型仍被 Git 忽略：
+  - `models/ABeautifulGame.glb`
+  - `models/AnisotropyBarnLamp.glb`
+  - `models/CarConcept.glb`
+  - `models/ChronographWatch.glb`
+  - `models/DiffuseTransmissionTeacup.glb`
+  - `models/PotOfCoals.glb`
+
+B-lite 应从当前 `master` 开始，第一步仍是：
+
+```text
+Task 1: Global descriptor set
+```
