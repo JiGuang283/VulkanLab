@@ -10,8 +10,8 @@ namespace vkr {
 class Device;
 class DescriptorAllocator;
 class FrameSync;
+class MaterialTemplate;
 class Texture;
-struct PipelineConfig;
 
 /// Loads a glTF 2.0 (.gltf/.glb) file into a self-contained GltfAsset:
 /// decoded textures, materials with PBR factors, meshes (one per primitive)
@@ -27,7 +27,7 @@ class GltfLoader {
     static GltfAsset load(const std::string &path, Device &device,
                           FrameSync &frameSync,
                           DescriptorAllocator  &descriptorAllocator,
-                          const PipelineConfig &baseConfig,
+                          std::shared_ptr<MaterialTemplate> materialTemplate,
                           const Options        &opts = {});
 };
 

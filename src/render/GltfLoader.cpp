@@ -1,5 +1,6 @@
 #include "GltfLoader.h"
 #include "Material.h"
+#include "MaterialTemplate.h"
 #include "Mesh.h"
 #include "Texture.h"
 #include "Vertex.h"
@@ -7,7 +8,6 @@
 #include "core/Device.h"
 #include "core/FrameSync.h"
 #include "core/Log.h"
-#include "core/PipelineConfig.h"
 
 // Only the declarations are needed here; the implementation lives in
 // src/tiny_gltf.cpp (TINYGLTF3_IMPLEMENTATION + TINYGLTF3_ENABLE_FS).
@@ -82,7 +82,7 @@ static glm::mat4 nodeLocalMatrix(const tg3_node &n) {
 GltfAsset GltfLoader::load(const std::string &path, Device &device,
                            FrameSync &frameSync,
                            DescriptorAllocator  &descriptorAllocator,
-                           const PipelineConfig &baseConfig,
+                           std::shared_ptr<MaterialTemplate> materialTemplate,
                            const Options        &opts) {
     // 1. Parse
     tinygltf3::Model      model;
@@ -165,7 +165,7 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
 
     // 5. materials
     auto fallbackMat = std::make_shared<Material>(
-        device, descriptorAllocator, MaterialParams{whiteTex}, baseConfig);
+        device, descriptorAllocator, materialTemplate, MaterialParams{whiteTex});
 
     asset.materials.reserve(m->materials_count + 1);
     for (uint32_t i = 0; i < m->materials_count; ++i) {
@@ -185,7 +185,7 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
         p.alphaCutoff = (float)gm.alpha_cutoff;
         p.doubleSided = gm.double_sided != 0;
         asset.materials.push_back(std::make_shared<Material>(
-            device, descriptorAllocator, std::move(p), baseConfig));
+            device, descriptorAllocator, materialTemplate, std::move(p)));
     }
     asset.materials.push_back(fallbackMat);
     const size_t fallbackMatIdx = asset.materials.size() - 1;

@@ -291,3 +291,94 @@ git diff --check -- . ':(exclude).vscode/settings.json'
 - frame graph。
 - 资源 handle 化。
 - pass 之间的自动资源依赖和 barrier 管理。
+
+---
+
+## 4. Phase B-complete：MaterialTemplate / PipelineCache 第一刀
+
+状态：进行中。
+
+分支：
+
+```text
+feature/material-template-phase-b-complete
+```
+
+### 4.1 实际改动
+
+新增：
+
+```text
+src/render/MaterialTemplate.h
+src/render/MaterialTemplate.cpp
+src/render/PipelineCache.h
+src/render/PipelineCache.cpp
+```
+
+`MaterialTemplate`：
+
+- 新增材质模板对象。
+- 接管 material descriptor set layout。
+- 保存用于创建 graphics pipeline 的 `PipelineConfig`。
+- 将 material descriptor set layout 追加为 pipeline layout 的 material set。
+
+`Material`：
+
+- 不再拥有 descriptor set layout。
+- 不再保存 `PipelineConfig`。
+- 改为持有 `std::shared_ptr<MaterialTemplate>`。
+- 当前仍负责 per-frame material descriptor set 分配和 baseColor texture 写入。
+
+`Scene`：
+
+- 新增 material template 持有列表。
+- 新增 `primaryMaterialTemplate()`，用于当前过渡期创建 opaque pipeline。
+
+`BuiltinScenes / GltfLoader`：
+
+- 场景工厂先创建共享 `MaterialTemplate`。
+- 同一场景内多个 `Material` 共享同一个 `MaterialTemplate`。
+- glTF 多个 material 现在共享同一套 shader/layout/state 模板。
+
+`PipelineCache`：
+
+- 新增按 `PipelineConfig + VkRenderPass` 生成 key 的 pipeline cache。
+- `Application` 不再直接持有 `std::unique_ptr<Pipeline>`。
+- 场景切换时从当前场景的 `MaterialTemplate` 获取或创建 opaque pipeline。
+- 交换链重建后清空 cache，并用新的 render pass 刷新 pipeline。
+
+`Application`：
+
+- 不再通过“第一个对象的材质”推导 pipeline config。
+- 改为通过 `Scene::primaryMaterialTemplate()` 推导 pipeline config。
+
+### 4.2 验证
+
+已执行：
+
+```text
+cmake --build build-debug
+git diff --cached --check
+```
+
+结果：
+
+- 构建通过。
+- 暂存改动无 whitespace 错误。
+- 新增 `.cpp` 已被 CMake `CONFIGURE_DEPENDS` 自动纳入目标。
+- 静态检查未发现旧的“第一个对象材质创建 pipeline”路径。
+- 仍存在既有链接警告：`LNK4098: 默认库“MSVCRT”与其他库的使用冲突`。
+
+运行时验证：
+
+- 待用户本地运行确认。
+
+### 4.3 当前边界
+
+本次只完成 B-complete 的第一刀，仍未完成：
+
+- 多 texture slot：normal、metallicRoughness、occlusion、emissive。
+- 真正的 `MaterialInstance` 独立类型。
+- `PipelineKey` 强类型结构。
+- 按 pass id 区分 pipeline。
+- 资源 handle 化。

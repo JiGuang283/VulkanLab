@@ -7,6 +7,7 @@
 #include "core/PipelineConfigBuilder.h"
 #include "render/GltfLoader.h"
 #include "render/Material.h"
+#include "render/MaterialTemplate.h"
 #include "render/Mesh.h"
 #include "render/Texture.h"
 
@@ -39,14 +40,16 @@ SceneFactory vikingRoomSceneFactory(std::string tex, std::string vp,
                -> std::unique_ptr<Scene> {
         auto scene = std::make_unique<Scene>();
 
+        auto materialTemplate = std::make_shared<MaterialTemplate>(
+            device, makeStandardConfig(device, vp, fp));
         auto texture = std::make_shared<Texture>(device, frameSync, tex);
         auto material = std::make_shared<Material>(
-            device, descriptorAllocator, *texture,
-            makeStandardConfig(device, vp, fp));
+            device, descriptorAllocator, materialTemplate, *texture);
         auto mesh = std::shared_ptr<Mesh>(
             Mesh::fromOBJ(device, frameSync, "models/viking_room.obj")
                 .release());
 
+        scene->addMaterialTemplate(materialTemplate);
         scene->addTexture(texture);
         scene->addMaterial(material);
         scene->addMesh(mesh);
@@ -76,9 +79,11 @@ SceneFactory gltfSceneFactory(std::string modelPath, std::string vp,
                                 DescriptorAllocator &descriptorAllocator)
                -> std::unique_ptr<Scene> {
         auto scene = std::make_unique<Scene>();
-        auto baseCfg = makeStandardConfig(device, vp, fp);
+        auto materialTemplate = std::make_shared<MaterialTemplate>(
+            device, makeStandardConfig(device, vp, fp));
+        scene->addMaterialTemplate(materialTemplate);
         auto asset = GltfLoader::load(modelPath, device, frameSync,
-                                      descriptorAllocator, baseCfg);
+                                      descriptorAllocator, materialTemplate);
 
         for (auto &t : asset.textures)
             scene->addTexture(t);

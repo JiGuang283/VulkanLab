@@ -3,7 +3,6 @@
 #include "Texture.h"
 #include "core/DescriptorAllocator.h"
 #include "core/FrameSync.h"
-#include "core/PipelineConfig.h"
 
 #include <glm/glm.hpp>
 
@@ -12,6 +11,8 @@
 #include <vulkan/vulkan.h>
 
 namespace vkr {
+
+class MaterialTemplate;
 
 struct MaterialParams {
     std::shared_ptr<Texture> baseColor;
@@ -25,13 +26,12 @@ struct MaterialParams {
 
 class Material {
   public:
-    /// Material owns only the material texture descriptor set layout. Global
-    /// frame descriptors are owned and bound separately by Renderer.
     Material(Device &device, DescriptorAllocator &descriptorAllocator,
-             const Texture &texture, const PipelineConfig &config);
+             std::shared_ptr<MaterialTemplate> materialTemplate,
+             const Texture &texture);
     Material(Device &device, DescriptorAllocator &descriptorAllocator,
-             MaterialParams params,
-             const PipelineConfig &config);
+             std::shared_ptr<MaterialTemplate> materialTemplate,
+             MaterialParams params);
     ~Material();
 
     Material(const Material &) = delete;
@@ -42,24 +42,20 @@ class Material {
     void bindDescriptors(VkCommandBuffer cmd, VkPipelineLayout layout,
                          uint32_t frameIndex) const;
 
-    VkDescriptorSetLayout descriptorSetLayout() const {
-        return descriptorSetLayout_;
-    }
+    VkDescriptorSetLayout descriptorSetLayout() const;
 
-    const PipelineConfig &pipelineConfig() const { return config_; }
+    const MaterialTemplate &materialTemplate() const;
 
     const MaterialParams &params() const { return params_; }
 
   private:
-    void createDescriptorSetLayout();
     void createDescriptorSets(const Texture &texture);
 
     Device              *device_ = nullptr;
     DescriptorAllocator *descriptorAllocator_ = nullptr;
 
-    PipelineConfig               config_;
+    std::shared_ptr<MaterialTemplate> materialTemplate_;
     MaterialParams               params_;
-    VkDescriptorSetLayout        descriptorSetLayout_ = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> descriptorSets_;
 };
 

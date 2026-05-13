@@ -14,10 +14,9 @@ class Scene;
 /// Constructs a scene given already-created core objects. The factory
 /// captures by value anything it needs (paths, etc.).
 ///
-/// Note: a Pipeline is intentionally NOT passed here. The opaque pipeline is
-/// built by Application once from the first Material's descriptor layout, and
-/// then shared across all scenes (all scenes currently use the same shaders
-/// and therefore pipeline-layout-compatible descriptor sets).
+/// Note: a Pipeline is intentionally NOT passed here. Scene factories create
+/// material templates; Application builds the shared opaque pipeline from the
+/// scene's primary template.
 using SceneFactory = std::function<std::unique_ptr<Scene>(
     Device &, FrameSync &, DescriptorAllocator &)>;
 
