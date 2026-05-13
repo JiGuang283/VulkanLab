@@ -57,7 +57,9 @@ void MaterialInstance::createDescriptorSets() {
     descriptorSets_.resize(MAX_FRAMES_IN_FLIGHT);
     for (auto &set : descriptorSets_)
         set = descriptorAllocator_->allocate(
-            materialTemplate_->descriptorSetLayout());
+            materialTemplate_->descriptorSetLayout(),
+            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+              static_cast<uint32_t>(kMaterialTextureSlotCount)}});
 
     for (size_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
         std::array<VkDescriptorImageInfo, kMaterialTextureSlotCount>

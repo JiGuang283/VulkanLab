@@ -100,7 +100,9 @@ void Renderer::createGlobalDescriptorSets() {
 
     globalDescriptorSets_.resize(MAX_FRAMES_IN_FLIGHT);
     for (auto &set : globalDescriptorSets_)
-        set = descriptorAllocator_->allocate(globalDescriptorSetLayout_);
+        set = descriptorAllocator_->allocate(
+            globalDescriptorSetLayout_,
+            {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}});
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         VkDescriptorBufferInfo bufferInfo{};

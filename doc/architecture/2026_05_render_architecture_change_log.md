@@ -383,6 +383,13 @@ src/render/Material.cpp
 - `PipelineCache` 不再使用字符串拼接 key。
 - 交换链重建后清空 cache，后续 draw 以新 render pass 延迟重建 pipeline。
 
+`DescriptorAllocator`：
+
+- descriptor pool page 容量扩大，适配每个材质实例 5 个 sampler binding。
+- `allocate()` 支持传入本次 descriptor set 的 descriptor 需求。
+- allocator 在调用 `vkAllocateDescriptorSets()` 前检查当前 pool 剩余容量，不再依赖先触发 `VK_ERROR_OUT_OF_POOL_MEMORY` 后换 pool。
+- 修复大型 glTF 场景切换时 validation layer 报告 sampler descriptor pool 剩余容量不足的问题。
+
 `MainForwardPass / Renderer`：
 
 - pipeline 选择从 `Application` 下沉到 `MainForwardPass`。
@@ -402,12 +409,14 @@ src/render/Material.cpp
 
 ```text
 cmake --build build-debug
+cmake --build build --config Release
 git diff --check
 ```
 
 结果：
 
 - 构建通过。
+- Release 构建通过。
 - 当前改动无 whitespace 错误。
 - 新增 `.cpp` 已被 CMake `CONFIGURE_DEPENDS` 自动纳入目标。
 - 静态检查未发现旧的“第一个对象材质创建 pipeline”路径。

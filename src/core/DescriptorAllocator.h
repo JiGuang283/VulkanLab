@@ -1,5 +1,7 @@
 #pragma once
 
+#include <initializer_list>
+#include <unordered_map>
 #include <vector>
 
 #include <vulkan/vulkan.h>
@@ -17,15 +19,32 @@ class DescriptorAllocator {
     DescriptorAllocator &operator=(const DescriptorAllocator &) = delete;
 
     VkDescriptorSet allocate(VkDescriptorSetLayout layout);
+    VkDescriptorSet allocate(
+        VkDescriptorSetLayout layout,
+        std::initializer_list<VkDescriptorPoolSize> descriptorCounts);
     void            resetPools();
 
   private:
-    VkDescriptorPool createPool();
-    VkDescriptorPool currentPool();
+    struct PoolState {
+        VkDescriptorPool pool = VK_NULL_HANDLE;
+        uint32_t remainingSets = 0;
+        std::unordered_map<VkDescriptorType, uint32_t> remainingDescriptors;
+    };
+
+    PoolState createPool();
+    PoolState &currentPool(
+        std::initializer_list<VkDescriptorPoolSize> descriptorCounts);
+    bool canAllocate(const PoolState &pool,
+                     std::initializer_list<VkDescriptorPoolSize>
+                         descriptorCounts) const;
+    void consume(PoolState &pool,
+                 std::initializer_list<VkDescriptorPoolSize>
+                     descriptorCounts) const;
+    void resetState(PoolState &pool) const;
 
     Device                       *device_ = nullptr;
-    std::vector<VkDescriptorPool> usedPools_;
-    std::vector<VkDescriptorPool> freePools_;
+    std::vector<PoolState> usedPools_;
+    std::vector<PoolState> freePools_;
 };
 
 } // namespace vkr
