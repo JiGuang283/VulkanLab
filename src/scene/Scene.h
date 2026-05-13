@@ -13,7 +13,7 @@
 namespace vkr {
 
 class Mesh;
-class Material;
+class MaterialInstance;
 class MaterialTemplate;
 class RenderQueue;
 class Texture;
@@ -32,7 +32,7 @@ class Scene {
     void addTexture(std::shared_ptr<Texture> t) {
         textures_.push_back(std::move(t));
     }
-    void addMaterial(std::shared_ptr<Material> m) {
+    void addMaterial(std::shared_ptr<MaterialInstance> m) {
         materials_.push_back(std::move(m));
     }
     void addMaterialTemplate(std::shared_ptr<MaterialTemplate> t) {
@@ -54,14 +54,12 @@ class Scene {
     // ---- 访问器 ----
     std::vector<SceneObject>       &objects() { return objects_; }
     const std::vector<SceneObject> &objects() const { return objects_; }
-    const MaterialTemplate &primaryMaterialTemplate() const;
-
     std::optional<CameraPose> initialCamera;
 
   private:
     std::vector<std::shared_ptr<Texture>>  textures_;
     std::vector<std::shared_ptr<MaterialTemplate>> materialTemplates_;
-    std::vector<std::shared_ptr<Material>> materials_;
+    std::vector<std::shared_ptr<MaterialInstance>> materials_;
     std::vector<std::shared_ptr<Mesh>>     meshes_;
     std::vector<SceneObject>               objects_;
     UpdateFn                               updateFn_;

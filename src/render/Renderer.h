@@ -15,7 +15,7 @@ namespace vkr {
 class DescriptorAllocator;
 class GuiSystem;
 class MainForwardPass;
-class Pipeline;
+class PipelineCache;
 class RenderQueue;
 
 class Renderer {
@@ -29,7 +29,7 @@ class Renderer {
     Renderer &operator=(const Renderer &) = delete;
 
     void renderFrame(const FrameSync::FrameContext &frame,
-                     const RenderQueue &queue, Pipeline &pipeline,
+                     const RenderQueue &queue, PipelineCache &pipelineCache,
                      GuiSystem &gui);
 
     // ---- 交换链重建 ----
@@ -49,8 +49,7 @@ class Renderer {
     void createGlobalDescriptorSetLayout();
     void createGlobalDescriptorSets();
     void createRenderPipeline();
-    void bindGlobalDescriptors(VkCommandBuffer cmd, VkPipelineLayout layout,
-                               uint32_t frameIndex) const;
+    VkDescriptorSet globalDescriptorSet(uint32_t frameIndex) const;
 
     Device    *device_;
     SwapChain *swapChain_;

@@ -294,9 +294,9 @@ git diff --check -- . ':(exclude).vscode/settings.json'
 
 ---
 
-## 4. Phase B-complete：MaterialTemplate / PipelineCache 第一刀
+## 4. Phase B-complete：材质系统完整化
 
-状态：进行中。
+状态：代码完成，待运行时验证。
 
 分支：
 
@@ -309,11 +309,30 @@ feature/material-template-phase-b-complete
 新增：
 
 ```text
+doc/architecture/2026_05_b_complete_material_system_plan.md
+src/render/FallbackTextures.h
+src/render/FallbackTextures.cpp
+src/render/MaterialTextureSlot.h
+src/render/MaterialInstance.h
+src/render/MaterialInstance.cpp
 src/render/MaterialTemplate.h
 src/render/MaterialTemplate.cpp
+src/render/PipelineKey.h
 src/render/PipelineCache.h
 src/render/PipelineCache.cpp
 ```
+
+删除：
+
+```text
+src/render/Material.h
+src/render/Material.cpp
+```
+
+`B-complete 方案文档`：
+
+- 新增 B-complete 专项执行方案。
+- 明确材质实例、texture slots、typed pipeline key、pipeline 选择下沉到 pass 的完成路径。
 
 `MaterialTemplate`：
 
@@ -321,36 +340,61 @@ src/render/PipelineCache.cpp
 - 接管 material descriptor set layout。
 - 保存用于创建 graphics pipeline 的 `PipelineConfig`。
 - 将 material descriptor set layout 追加为 pipeline layout 的 material set。
+- material descriptor layout 从单一 `baseColor` 扩展为固定 PBR texture slots。
 
-`Material`：
+`MaterialTextureSlot / FallbackTextures`：
 
-- 不再拥有 descriptor set layout。
+- 新增固定材质贴图槽位：
+  - baseColor
+  - normal
+  - metallicRoughness
+  - occlusion
+  - emissive
+- 新增 white、black、flatNormal fallback textures。
+- 缺失 glTF texture slot 会写入 fallback texture，避免 descriptor 未写入。
+
+`MaterialInstance`：
+
+- 替代旧 `Material`。
+- 持有 `std::shared_ptr<MaterialTemplate>`。
+- 持有 `MaterialParams`。
+- 持有 5 个材质 texture slot。
+- 负责 per-frame material descriptor set 分配和写入。
 - 不再保存 `PipelineConfig`。
-- 改为持有 `std::shared_ptr<MaterialTemplate>`。
-- 当前仍负责 per-frame material descriptor set 分配和 baseColor texture 写入。
+- 不依赖 `Renderer`。
 
 `Scene`：
 
 - 新增 material template 持有列表。
-- 新增 `primaryMaterialTemplate()`，用于当前过渡期创建 opaque pipeline。
+- `SceneObject` 和 `RenderCommand` 改为引用 `MaterialInstance`。
+- 移除过渡接口 `primaryMaterialTemplate()`。
 
 `BuiltinScenes / GltfLoader`：
 
 - 场景工厂先创建共享 `MaterialTemplate`。
-- 同一场景内多个 `Material` 共享同一个 `MaterialTemplate`。
+- 同一场景内多个 `MaterialInstance` 共享同一个 `MaterialTemplate`。
 - glTF 多个 material 现在共享同一套 shader/layout/state 模板。
+- glTF loader 解析 baseColor、normal、metallicRoughness、occlusion、emissive texture slot。
 
-`PipelineCache`：
+`PipelineKey / PipelineCache`：
 
-- 新增按 `PipelineConfig + VkRenderPass` 生成 key 的 pipeline cache。
-- `Application` 不再直接持有 `std::unique_ptr<Pipeline>`。
-- 场景切换时从当前场景的 `MaterialTemplate` 获取或创建 opaque pipeline。
-- 交换链重建后清空 cache，并用新的 render pass 刷新 pipeline。
+- 新增强类型 `PipelineKey`。
+- key 当前包含 material template、pass id、render pass、subpass、MSAA samples。
+- `PipelineCache` 不再使用字符串拼接 key。
+- 交换链重建后清空 cache，后续 draw 以新 render pass 延迟重建 pipeline。
+
+`MainForwardPass / Renderer`：
+
+- pipeline 选择从 `Application` 下沉到 `MainForwardPass`。
+- `MainForwardPass` 按 `RenderCommand.material->materialTemplate()` 从 `PipelineCache` 获取 pipeline。
+- pipeline 切换时在当前 pipeline layout 上绑定 set 0 global descriptor set。
+- `RenderFrameContext` 不再持有 `opaquePipeline`，改为持有 global descriptor set、global descriptor set layout 和 `PipelineCache*`。
+- `Renderer::renderFrame()` 不再接收 `Pipeline&`。
 
 `Application`：
 
-- 不再通过“第一个对象的材质”推导 pipeline config。
-- 改为通过 `Scene::primaryMaterialTemplate()` 推导 pipeline config。
+- 不再创建、持有或传递 opaque pipeline。
+- 只持有 `PipelineCache`，并在场景切换和 swapchain 重建时清空 cache。
 
 ### 4.2 验证
 
@@ -358,15 +402,16 @@ src/render/PipelineCache.cpp
 
 ```text
 cmake --build build-debug
-git diff --cached --check
+git diff --check
 ```
 
 结果：
 
 - 构建通过。
-- 暂存改动无 whitespace 错误。
+- 当前改动无 whitespace 错误。
 - 新增 `.cpp` 已被 CMake `CONFIGURE_DEPENDS` 自动纳入目标。
 - 静态检查未发现旧的“第一个对象材质创建 pipeline”路径。
+- 静态检查未发现 `Application` 持有或传递 opaque pipeline。
 - 仍存在既有链接警告：`LNK4098: 默认库“MSVCRT”与其他库的使用冲突`。
 
 运行时验证：
@@ -375,10 +420,10 @@ git diff --cached --check
 
 ### 4.3 当前边界
 
-本次只完成 B-complete 的第一刀，仍未完成：
+本阶段仍未引入：
 
-- 多 texture slot：normal、metallicRoughness、occlusion、emissive。
-- 真正的 `MaterialInstance` 独立类型。
-- `PipelineKey` 强类型结构。
-- 按 pass id 区分 pipeline。
-- 资源 handle 化。
+- 全量 ResourceManager / Handle 化。
+- Material parameter buffer / SSBO。
+- shader variant/permutation 系统。
+- normal/metallicRoughness/occlusion/emissive 的 shader 使用。
+- glTF 非 baseColor texture 的精确色彩空间处理；当前 descriptor slot 已接入，但 shader 尚未采样这些 slot。

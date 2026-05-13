@@ -1,11 +1,10 @@
 #pragma once
 
 #include "core/PipelineConfig.h"
+#include "render/PipelineKey.h"
 
 #include <memory>
-#include <string>
 #include <unordered_map>
-#include <vulkan/vulkan.h>
 
 namespace vkr {
 
@@ -14,23 +13,21 @@ class Pipeline;
 
 class PipelineCache {
   public:
-    PipelineCache(Device &device, VkRenderPass renderPass);
+    explicit PipelineCache(Device &device);
     ~PipelineCache();
 
     PipelineCache(const PipelineCache &) = delete;
     PipelineCache &operator=(const PipelineCache &) = delete;
 
-    void setRenderPass(VkRenderPass renderPass);
     void clear();
 
-    Pipeline &getOrCreate(const PipelineConfig &config);
+    Pipeline &getOrCreate(const PipelineKey &key,
+                          const PipelineConfig &config);
 
   private:
-    std::string makeKey(const PipelineConfig &config) const;
-
-    Device       *device_ = nullptr;
-    VkRenderPass  renderPass_ = VK_NULL_HANDLE;
-    std::unordered_map<std::string, std::unique_ptr<Pipeline>> pipelines_;
+    Device *device_ = nullptr;
+    std::unordered_map<PipelineKey, std::unique_ptr<Pipeline>, PipelineKeyHash>
+        pipelines_;
 };
 
 } // namespace vkr

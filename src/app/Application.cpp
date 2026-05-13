@@ -9,7 +9,6 @@
 #include "core/SwapChain.h"
 #include "core/VulkanContext.h"
 #include "render/GuiSystem.h"
-#include "render/MaterialTemplate.h"
 #include "render/PipelineCache.h"
 #include "render/Renderer.h"
 #include "scene/SceneFactory.h"
@@ -78,17 +77,13 @@ void Application::init() {
         throw std::runtime_error("No scenes registered; call "
                                  "Application::registerScene before run().");
 
-    // Bootstrap the first scene so we can use its material template for the
-    // shared opaque pipeline cache.
     const int start = std::clamp(config_.defaultSceneIndex, 0,
                                  static_cast<int>(sceneRegistry_.size()) - 1);
     currentScene_ = sceneRegistry_[start].factory(
         *device_, *frameSync_, *descriptorAllocator_);
     currentSceneIndex_ = start;
 
-    pipelineCache_ =
-        std::make_unique<PipelineCache>(*device_, renderer_->renderPass());
-    updateOpaquePipeline();
+    pipelineCache_ = std::make_unique<PipelineCache>(*device_);
 
     if (currentScene_->initialCamera) {
         const auto &p = *currentScene_->initialCamera;
@@ -110,14 +105,12 @@ void Application::switchScene(int index) {
 
     vkDeviceWaitIdle(device_->logicalDevice());
     pipelineCache_->clear();
-    opaquePipeline_ = nullptr;
     currentScene_.reset();
 
     const auto &entry = sceneRegistry_[index];
     currentScene_ =
         entry.factory(*device_, *frameSync_, *descriptorAllocator_);
     currentSceneIndex_ = index;
-    updateOpaquePipeline();
 
     if (currentScene_->initialCamera) {
         const auto &p = *currentScene_->initialCamera;
@@ -201,21 +194,10 @@ void Application::drawGui() {
 void Application::handleSwapChainRecreate() {
     renderer_->recreateSwapChain();
     pipelineCache_->clear();
-    pipelineCache_->setRenderPass(renderer_->renderPass());
-    updateOpaquePipeline();
     frameSync_->onSwapChainRecreated();
     gui_->onSwapChainRecreated(swapChain_->imageCount());
     camera_.setAspect(static_cast<float>(swapChain_->extent().width) /
                       static_cast<float>(swapChain_->extent().height));
-}
-
-void Application::updateOpaquePipeline() {
-    auto pipelineConfig =
-        currentScene_->primaryMaterialTemplate().pipelineConfig();
-    pipelineConfig.descriptorLayouts.insert(
-        pipelineConfig.descriptorLayouts.begin(),
-        renderer_->globalDescriptorSetLayout());
-    opaquePipeline_ = &pipelineCache_->getOrCreate(pipelineConfig);
 }
 
 void Application::mainLoop() {
@@ -271,7 +253,7 @@ void Application::mainLoop() {
             currentScene_->collectRenderCommands(renderQueue_);
         renderQueue_.sortOpaque();
 
-        renderer_->renderFrame(*ctx, renderQueue_, *opaquePipeline_, *gui_);
+        renderer_->renderFrame(*ctx, renderQueue_, *pipelineCache_, *gui_);
         frameSync_->endFrame(*ctx);
 
         if (frameSync_->swapChainNeedsRecreation())

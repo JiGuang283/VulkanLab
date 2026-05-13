@@ -6,8 +6,11 @@
 #include "core/SwapChain.h"
 #include "core/VulkanCheck.h"
 #include "render/GuiSystem.h"
-#include "render/Material.h"
+#include "render/MaterialInstance.h"
+#include "render/MaterialTemplate.h"
 #include "render/Mesh.h"
+#include "render/PipelineCache.h"
+#include "render/PipelineKey.h"
 #include "render/RenderFrame.h"
 #include "render/RenderQueue.h"
 
@@ -53,8 +56,7 @@ void MainForwardPass::onResize(const SwapChain &) {
 void MainForwardPass::execute(const RenderFrameContext &frame,
                               const RenderQueue &queue) {
     begin(frame.cmd, frame.imageIndex);
-    if (frame.opaquePipeline)
-        drawQueue(frame.cmd, frame.frameIndex, *frame.opaquePipeline, queue);
+    drawQueue(frame, queue);
     if (frame.gui)
         frame.gui->render(frame.cmd);
     end(frame.cmd);
@@ -95,15 +97,44 @@ void MainForwardPass::end(VkCommandBuffer cmd) {
     vkCmdEndRenderPass(cmd);
 }
 
-void MainForwardPass::drawQueue(VkCommandBuffer cmd, uint32_t frameIndex,
-                                Pipeline &pipeline, const RenderQueue &queue) {
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle());
+void MainForwardPass::drawQueue(const RenderFrameContext &frame,
+                                const RenderQueue &queue) {
+    if (!frame.pipelineCache)
+        return;
+
+    Pipeline *boundPipeline = nullptr;
 
     for (const auto &command : queue.opaque()) {
         if (!command.mesh || !command.material)
             continue;
 
-        command.material->bindDescriptors(cmd, pipeline.layout(), frameIndex);
+        const auto &materialTemplate = command.material->materialTemplate();
+        auto        pipelineConfig = materialTemplate.pipelineConfig();
+        pipelineConfig.descriptorLayouts.insert(
+            pipelineConfig.descriptorLayouts.begin(),
+            frame.globalDescriptorSetLayout);
+
+        PipelineKey key{};
+        key.materialTemplate = &materialTemplate;
+        key.pass = PassId::MainForward;
+        key.renderPass = renderPass_;
+        key.subpass = 0;
+        key.samples = device_->msaaSamples();
+
+        Pipeline &pipeline =
+            frame.pipelineCache->getOrCreate(key, pipelineConfig);
+
+        if (boundPipeline != &pipeline) {
+            vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              pipeline.handle());
+            vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipeline.layout(), 0, 1,
+                                    &frame.globalDescriptorSet, 0, nullptr);
+            boundPipeline = &pipeline;
+        }
+
+        command.material->bindDescriptors(frame.cmd, pipeline.layout(),
+                                          frame.frameIndex);
 
         const auto  &p = command.material->params();
         GpuPushBlock blk{};
@@ -113,12 +144,12 @@ void MainForwardPass::drawQueue(VkCommandBuffer cmd, uint32_t frameIndex,
         blk.roughnessAlpha =
             glm::vec4(p.roughnessFactor, p.alphaCutoff, 0.0f, 0.0f);
 
-        vkCmdPushConstants(cmd, pipeline.layout(),
+        vkCmdPushConstants(frame.cmd, pipeline.layout(),
                            VK_SHADER_STAGE_VERTEX_BIT |
                                VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(GpuPushBlock), &blk);
-        command.mesh->bind(cmd);
-        command.mesh->draw(cmd);
+        command.mesh->bind(frame.cmd);
+        command.mesh->draw(frame.cmd);
     }
 }
 

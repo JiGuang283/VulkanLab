@@ -1,7 +1,6 @@
 #include "Scene.h"
 #include "render/RenderQueue.h"
 
-#include <stdexcept>
 #include <utility>
 
 namespace vkr {
@@ -19,12 +18,6 @@ void Scene::collectRenderCommands(RenderQueue &queue) const {
             RenderQueueType::Opaque,
         });
     }
-}
-
-const MaterialTemplate &Scene::primaryMaterialTemplate() const {
-    if (materialTemplates_.empty())
-        throw std::runtime_error("Scene has no material template.");
-    return *materialTemplates_.front();
 }
 
 } // namespace vkr

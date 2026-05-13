@@ -4,7 +4,7 @@
 
 namespace vkr {
 
-class Material;
+class MaterialInstance;
 class Mesh;
 
 enum class RenderQueueType {
@@ -13,9 +13,9 @@ enum class RenderQueueType {
 };
 
 struct RenderCommand {
-    const Mesh     *mesh = nullptr;
-    const Material *material = nullptr;
-    glm::mat4      world{1.0f};
+    const Mesh             *mesh = nullptr;
+    const MaterialInstance *material = nullptr;
+    glm::mat4              world{1.0f};
     RenderQueueType queue = RenderQueueType::Opaque;
 };
 

@@ -5,8 +5,9 @@
 #include "core/Device.h"
 #include "core/FrameSync.h"
 #include "core/PipelineConfigBuilder.h"
+#include "render/FallbackTextures.h"
 #include "render/GltfLoader.h"
-#include "render/Material.h"
+#include "render/MaterialInstance.h"
 #include "render/MaterialTemplate.h"
 #include "render/Mesh.h"
 #include "render/Texture.h"
@@ -42,9 +43,12 @@ SceneFactory vikingRoomSceneFactory(std::string tex, std::string vp,
 
         auto materialTemplate = std::make_shared<MaterialTemplate>(
             device, makeStandardConfig(device, vp, fp));
+        auto fallbackTextures =
+            std::make_shared<FallbackTextures>(device, frameSync);
         auto texture = std::make_shared<Texture>(device, frameSync, tex);
-        auto material = std::make_shared<Material>(
-            device, descriptorAllocator, materialTemplate, *texture);
+        auto material = std::make_shared<MaterialInstance>(
+            device, descriptorAllocator, materialTemplate,
+            MaterialInstance::makeTextureSet(texture, *fallbackTextures));
         auto mesh = std::shared_ptr<Mesh>(
             Mesh::fromOBJ(device, frameSync, "models/viking_room.obj")
                 .release());
@@ -82,8 +86,13 @@ SceneFactory gltfSceneFactory(std::string modelPath, std::string vp,
         auto materialTemplate = std::make_shared<MaterialTemplate>(
             device, makeStandardConfig(device, vp, fp));
         scene->addMaterialTemplate(materialTemplate);
+        auto fallbackTextures =
+            std::make_shared<FallbackTextures>(device, frameSync);
+        GltfLoader::Options options{};
+        options.fallbackTextures = fallbackTextures;
         auto asset = GltfLoader::load(modelPath, device, frameSync,
-                                      descriptorAllocator, materialTemplate);
+                                      descriptorAllocator, materialTemplate,
+                                      options);
 
         for (auto &t : asset.textures)
             scene->addTexture(t);

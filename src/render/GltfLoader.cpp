@@ -1,5 +1,7 @@
 #include "GltfLoader.h"
-#include "Material.h"
+#include "FallbackTextures.h"
+#include "MaterialInstance.h"
+#include "MaterialTextureSlot.h"
 #include "MaterialTemplate.h"
 #include "Mesh.h"
 #include "Texture.h"
@@ -51,17 +53,6 @@ static int32_t accessorStride(const tg3_model *m, int accIdx) {
     return tg3_accessor_byte_stride(&acc, &bv);
 }
 
-static std::shared_ptr<Texture> makeWhite1x1(Device &d, FrameSync &fs) {
-    static const uint8_t kWhite[4] = {255, 255, 255, 255};
-    TextureCreateInfo    ci;
-    ci.pixels = kWhite;
-    ci.width = 1;
-    ci.height = 1;
-    ci.generateMipmaps = false;
-    ci.format = VK_FORMAT_R8G8B8A8_SRGB;
-    return std::make_shared<Texture>(d, fs, ci);
-}
-
 static glm::mat4 nodeLocalMatrix(const tg3_node &n) {
     if (n.has_matrix) {
         // glTF matrix is column-major double[16]; make_mat4<double*> -> dmat4
@@ -107,9 +98,12 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
     const tg3_model *m = model.get();
     GltfAsset        asset;
 
-    // 2. Fallback white 1x1
-    auto whiteTex = opts.fallbackWhite ? opts.fallbackWhite
-                                       : makeWhite1x1(device, frameSync);
+    // 2. Fallback textures
+    auto fallbackTextures =
+        opts.fallbackTextures
+            ? opts.fallbackTextures
+            : std::make_shared<FallbackTextures>(device, frameSync);
+    auto whiteTex = fallbackTextures->white();
 
     // 3. Decode images -> intermediate textures (manual decode via stb_image,
     // since tg3 does not invoke its declared image callbacks).
@@ -164,17 +158,21 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
     }
 
     // 5. materials
-    auto fallbackMat = std::make_shared<Material>(
-        device, descriptorAllocator, materialTemplate, MaterialParams{whiteTex});
+    auto defaultTextureSet =
+        MaterialInstance::makeTextureSet(whiteTex, *fallbackTextures);
+    auto fallbackMat = std::make_shared<MaterialInstance>(
+        device, descriptorAllocator, materialTemplate, defaultTextureSet);
 
     asset.materials.reserve(m->materials_count + 1);
+    auto pickTexture = [&](int index, MaterialTextureSlot slot) {
+        if (index >= 0 && index < static_cast<int>(asset.textures.size()))
+            return asset.textures[index];
+        return fallbackTextures->textureFor(slot);
+    };
+
     for (uint32_t i = 0; i < m->materials_count; ++i) {
         const tg3_material &gm = m->materials[i];
         MaterialParams      p;
-        int bc = gm.pbr_metallic_roughness.base_color_texture.index;
-        p.baseColor = (bc >= 0 && bc < (int)asset.textures.size())
-                          ? asset.textures[bc]
-                          : whiteTex;
         const double *bcf = gm.pbr_metallic_roughness.base_color_factor;
         p.baseColorFactor = {(float)bcf[0], (float)bcf[1], (float)bcf[2],
                              (float)bcf[3]};
@@ -184,8 +182,25 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
         p.emissiveFactor = {(float)ef[0], (float)ef[1], (float)ef[2]};
         p.alphaCutoff = (float)gm.alpha_cutoff;
         p.doubleSided = gm.double_sided != 0;
-        asset.materials.push_back(std::make_shared<Material>(
-            device, descriptorAllocator, materialTemplate, std::move(p)));
+
+        MaterialTextureSet textures{};
+        textures[indexOf(MaterialTextureSlot::BaseColor)] = pickTexture(
+            gm.pbr_metallic_roughness.base_color_texture.index,
+            MaterialTextureSlot::BaseColor);
+        textures[indexOf(MaterialTextureSlot::Normal)] =
+            pickTexture(gm.normal_texture.index, MaterialTextureSlot::Normal);
+        textures[indexOf(MaterialTextureSlot::MetallicRoughness)] =
+            pickTexture(
+                gm.pbr_metallic_roughness.metallic_roughness_texture.index,
+                MaterialTextureSlot::MetallicRoughness);
+        textures[indexOf(MaterialTextureSlot::Occlusion)] = pickTexture(
+            gm.occlusion_texture.index, MaterialTextureSlot::Occlusion);
+        textures[indexOf(MaterialTextureSlot::Emissive)] = pickTexture(
+            gm.emissive_texture.index, MaterialTextureSlot::Emissive);
+
+        asset.materials.push_back(std::make_shared<MaterialInstance>(
+            device, descriptorAllocator, materialTemplate, std::move(textures),
+            std::move(p)));
     }
     asset.materials.push_back(fallbackMat);
     const size_t fallbackMatIdx = asset.materials.size() - 1;

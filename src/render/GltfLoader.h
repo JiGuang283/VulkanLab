@@ -9,9 +9,9 @@ namespace vkr {
 
 class Device;
 class DescriptorAllocator;
+class FallbackTextures;
 class FrameSync;
 class MaterialTemplate;
-class Texture;
 
 /// Loads a glTF 2.0 (.gltf/.glb) file into a self-contained GltfAsset:
 /// decoded textures, materials with PBR factors, meshes (one per primitive)
@@ -21,7 +21,7 @@ class GltfLoader {
   public:
     struct Options {
         bool                     generateMissingNormals = true;
-        std::shared_ptr<Texture> fallbackWhite;
+        std::shared_ptr<FallbackTextures> fallbackTextures;
     };
 
     static GltfAsset load(const std::string &path, Device &device,

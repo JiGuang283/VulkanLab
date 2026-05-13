@@ -11,9 +11,9 @@ namespace vkr {
 
 class Device;
 class FrameSync;
-class Pipeline;
 class RenderQueue;
 class SwapChain;
+struct RenderFrameContext;
 
 class MainForwardPass final : public IRenderPass {
   public:
@@ -39,8 +39,7 @@ class MainForwardPass final : public IRenderPass {
 
     void begin(VkCommandBuffer cmd, uint32_t imageIndex);
     void end(VkCommandBuffer cmd);
-    void drawQueue(VkCommandBuffer cmd, uint32_t frameIndex, Pipeline &pipeline,
-                   const RenderQueue &queue);
+    void drawQueue(const RenderFrameContext &frame, const RenderQueue &queue);
 
     VkFormat findDepthFormat();
     VkFormat findSupportedFormat(const std::vector<VkFormat> &candidates,

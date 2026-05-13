@@ -6,14 +6,16 @@
 namespace vkr {
 
 class GuiSystem;
-class Pipeline;
+class PipelineCache;
 
 struct RenderFrameContext {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     uint32_t        frameIndex = 0;
     uint32_t        imageIndex = 0;
     VkExtent2D      extent{};
-    Pipeline       *opaquePipeline = nullptr;
+    VkDescriptorSet globalDescriptorSet = VK_NULL_HANDLE;
+    VkDescriptorSetLayout globalDescriptorSetLayout = VK_NULL_HANDLE;
+    PipelineCache  *pipelineCache = nullptr;
     GuiSystem      *gui = nullptr;
 };
 

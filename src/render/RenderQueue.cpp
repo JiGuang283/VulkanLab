@@ -1,5 +1,7 @@
 #include "RenderQueue.h"
 
+#include "MaterialInstance.h"
+
 #include <algorithm>
 #include <unordered_set>
 
@@ -23,6 +25,14 @@ void RenderQueue::add(RenderCommand command) {
 void RenderQueue::sortOpaque() {
     std::stable_sort(opaque_.begin(), opaque_.end(),
                      [](const RenderCommand &a, const RenderCommand &b) {
+                         const auto *at = a.material
+                                              ? &a.material->materialTemplate()
+                                              : nullptr;
+                         const auto *bt = b.material
+                                              ? &b.material->materialTemplate()
+                                              : nullptr;
+                         if (at != bt)
+                             return at < bt;
                          if (a.material != b.material)
                              return a.material < b.material;
                          return a.mesh < b.mesh;
@@ -30,7 +40,7 @@ void RenderQueue::sortOpaque() {
 }
 
 size_t RenderQueue::uniqueMaterialCount() const {
-    std::unordered_set<const Material *> materials;
+    std::unordered_set<const MaterialInstance *> materials;
     for (const auto &command : opaque_)
         materials.insert(command.material);
     return materials.size();

@@ -22,7 +22,6 @@ class DescriptorAllocator;
 class SwapChain;
 class FrameSync;
 class Renderer;
-class Pipeline;
 class PipelineCache;
 class GuiSystem;
 
@@ -53,7 +52,6 @@ class Application {
     void updateUniforms(uint32_t frameIndex);
     void drawGui();
     void handleSwapChainRecreate();
-    void updateOpaquePipeline();
 
     void switchScene(int index);
 
@@ -69,7 +67,6 @@ class Application {
     std::unique_ptr<FrameSync>           frameSync_;
     std::unique_ptr<Renderer>            renderer_;
     std::unique_ptr<PipelineCache>       pipelineCache_;
-    Pipeline                            *opaquePipeline_ = nullptr;
     std::unique_ptr<GuiSystem>           gui_;
     RenderQueue                          renderQueue_;
 

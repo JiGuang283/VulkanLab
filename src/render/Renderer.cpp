@@ -3,10 +3,10 @@
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
 #include "core/FrameSync.h"
-#include "core/Pipeline.h"
 #include "core/SwapChain.h"
 #include "core/VulkanCheck.h"
 #include "render/GuiSystem.h"
+#include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
 #include "render/RenderQueue.h"
 #include "render/pass/MainForwardPass.h"
@@ -37,16 +37,17 @@ Renderer::~Renderer() {
 }
 
 void Renderer::renderFrame(const FrameSync::FrameContext &frame,
-                           const RenderQueue &queue, Pipeline &pipeline,
+                           const RenderQueue &queue,
+                           PipelineCache &pipelineCache,
                            GuiSystem &gui) {
-    bindGlobalDescriptors(frame.cmd, pipeline.layout(), frame.frameIndex);
-
     RenderFrameContext renderFrame{};
     renderFrame.cmd = frame.cmd;
     renderFrame.frameIndex = frame.frameIndex;
     renderFrame.imageIndex = frame.imageIndex;
     renderFrame.extent = swapChain_->extent();
-    renderFrame.opaquePipeline = &pipeline;
+    renderFrame.globalDescriptorSet = globalDescriptorSet(frame.frameIndex);
+    renderFrame.globalDescriptorSetLayout = globalDescriptorSetLayout_;
+    renderFrame.pipelineCache = &pipelineCache;
     renderFrame.gui = &gui;
 
     pipeline_.execute(renderFrame, queue);
@@ -132,11 +133,8 @@ void *Renderer::mappedUniformBuffer(uint32_t frameIndex) const {
     return uniformBuffers_[frameIndex]->mappedData();
 }
 
-void Renderer::bindGlobalDescriptors(VkCommandBuffer cmd,
-                                     VkPipelineLayout layout,
-                                     uint32_t frameIndex) const {
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1,
-                            &globalDescriptorSets_[frameIndex], 0, nullptr);
+VkDescriptorSet Renderer::globalDescriptorSet(uint32_t frameIndex) const {
+    return globalDescriptorSets_[frameIndex];
 }
 
 } // namespace vkr
