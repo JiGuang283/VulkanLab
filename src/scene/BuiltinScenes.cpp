@@ -46,9 +46,12 @@ SceneFactory vikingRoomSceneFactory(std::string tex, std::string vp,
         auto fallbackTextures =
             std::make_shared<FallbackTextures>(device, frameSync);
         auto texture = std::make_shared<Texture>(device, frameSync, tex);
+        MaterialParams params;
+        params.debugName = "Viking Room Material";
         auto material = std::make_shared<MaterialInstance>(
             device, descriptorAllocator, materialTemplate,
-            MaterialInstance::makeTextureSet(texture, *fallbackTextures));
+            MaterialInstance::makeTextureSet(texture, *fallbackTextures),
+            params);
         auto mesh = std::shared_ptr<Mesh>(
             Mesh::fromOBJ(device, frameSync, "models/viking_room.obj")
                 .release());

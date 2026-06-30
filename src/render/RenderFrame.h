@@ -7,6 +7,7 @@ namespace vkr {
 
 class GuiSystem;
 class PipelineCache;
+struct ShaderVariant;
 
 struct RenderFrameContext {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
@@ -17,6 +18,7 @@ struct RenderFrameContext {
     VkDescriptorSetLayout globalDescriptorSetLayout = VK_NULL_HANDLE;
     PipelineCache  *pipelineCache = nullptr;
     GuiSystem      *gui = nullptr;
+    const ShaderVariant *shaderVariant = nullptr;
 };
 
 } // namespace vkr

@@ -1,0 +1,45 @@
+#version 450
+
+layout(location = 0) in vec3 fragNormalWS;
+layout(location = 1) in vec2 fragTexCoord;
+layout(location = 2) in vec4 fragTangentWS;
+
+layout(set = 1, binding = 0) uniform sampler2D baseColorTexture;
+layout(set = 1, binding = 1) uniform sampler2D normalTexture;
+
+layout(push_constant) uniform PushConstants {
+    mat4 model;
+    vec4 baseColorFactor;
+    vec4 emissiveMetallic;
+    vec4 roughnessAlpha;
+    vec4 reserved;
+} push;
+
+layout(location = 0) out vec4 outColor;
+
+bool isMaskAlphaMode()
+{
+    return abs(push.reserved.x - 1.0) < 0.5;
+}
+
+void applyAlphaCutoff(float alpha)
+{
+    if (isMaskAlphaMode() && alpha < push.roughnessAlpha.y) discard;
+}
+
+void main()
+{
+    float baseAlpha = texture(baseColorTexture, fragTexCoord).a *
+                      push.baseColorFactor.a;
+    applyAlphaCutoff(baseAlpha);
+
+    vec3 n = normalize(fragNormalWS);
+    vec3 t = normalize(fragTangentWS.xyz);
+    t = normalize(t - n * dot(n, t));
+    vec3 b = normalize(cross(n, t) * fragTangentWS.w);
+    vec3 tangentNormal = texture(normalTexture, fragTexCoord).xyz * 2.0 - 1.0;
+    vec3 normalWS = normalize(mat3(t, b, n) * tangentNormal);
+    if (!gl_FrontFacing)
+        normalWS = -normalWS;
+    outColor = vec4(normalWS * 0.5 + 0.5, 1.0);
+}

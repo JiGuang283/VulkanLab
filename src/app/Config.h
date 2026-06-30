@@ -13,8 +13,8 @@ struct Config {
 
     // ---- 资源路径 ----
     std::string texturePath = "textures/viking_room.png";
-    std::string vertShaderPath = "shader/vert.spv";
-    std::string fragShaderPath = "shader/frag.spv";
+    std::string vertShaderPath = "shader/legacy/forward.vert.spv";
+    std::string fragShaderPath = "shader/legacy/forward.frag.spv";
 
     // ---- 渲染设置 ----
     bool enableValidation = true;

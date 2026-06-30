@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SceneLight.h"
 #include "SceneObject.h"
 
 #include <functional>
@@ -40,6 +41,7 @@ class Scene {
     }
     void addMesh(std::shared_ptr<Mesh> m) { meshes_.push_back(std::move(m)); }
     void addObject(SceneObject obj);
+    void addLight(SceneLight light) { lights_.push_back(light); }
 
     // ---- 渲染提交 ----
     void collectRenderCommands(RenderQueue &queue) const;
@@ -54,6 +56,11 @@ class Scene {
     // ---- 访问器 ----
     std::vector<SceneObject>       &objects() { return objects_; }
     const std::vector<SceneObject> &objects() const { return objects_; }
+    const std::vector<std::shared_ptr<MaterialInstance>> &materials() const {
+        return materials_;
+    }
+    std::vector<SceneLight>        &lights() { return lights_; }
+    const std::vector<SceneLight>  &lights() const { return lights_; }
     std::optional<CameraPose> initialCamera;
 
   private:
@@ -62,6 +69,7 @@ class Scene {
     std::vector<std::shared_ptr<MaterialInstance>> materials_;
     std::vector<std::shared_ptr<Mesh>>     meshes_;
     std::vector<SceneObject>               objects_;
+    std::vector<SceneLight>                lights_;
     UpdateFn                               updateFn_;
 };
 

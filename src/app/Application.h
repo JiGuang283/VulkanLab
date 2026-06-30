@@ -3,12 +3,14 @@
 #include "Config.h"
 
 #include "render/RenderQueue.h"
+#include "render/ShaderVariant.h"
 #include "scene/Camera.h"
 #include "scene/Scene.h"
 #include "scene/SceneFactory.h"
 
 #include <glm/glm.hpp>
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -52,6 +54,7 @@ class Application {
     void updateUniforms(uint32_t frameIndex);
     void drawGui();
     void handleSwapChainRecreate();
+    const ShaderVariant &currentShaderVariant() const;
 
     void switchScene(int index);
 
@@ -69,6 +72,8 @@ class Application {
     std::unique_ptr<PipelineCache>       pipelineCache_;
     std::unique_ptr<GuiSystem>           gui_;
     RenderQueue                          renderQueue_;
+    std::vector<ShaderVariant>           shaderVariants_;
+    int                                  currentShaderVariantIndex_ = 0;
 
     // 场景切换
     std::vector<SceneEntry> sceneRegistry_;
@@ -81,6 +86,15 @@ class Application {
     glm::dvec2 savedCursor_{};
 
     Camera camera_;
+
+    glm::vec3 ambientColor_{1.0f};
+    float     ambientIntensity_ = 0.08f;
+    glm::vec3 defaultSunDirection_{0.3f, 0.8f, 0.5f};
+    glm::vec3 defaultSunColor_{1.0f};
+    float     defaultSunIntensity_ = 3.0f;
+    uint32_t  lastUploadedDirectionalLights_ = 0;
+    uint32_t  lastUploadedPunctualLights_ = 0;
+    uint32_t  lastIgnoredLights_ = 0;
 };
 
 } // namespace vkr

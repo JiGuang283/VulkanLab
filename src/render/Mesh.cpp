@@ -1,4 +1,5 @@
 #include "Mesh.h"
+#include "TangentGenerator.h"
 #include "Vertex.h"
 #include "core/Device.h"
 #include "core/FrameSync.h"
@@ -9,6 +10,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <unordered_map>
+#include <vector>
 
 namespace vkr {
 
@@ -79,9 +81,14 @@ std::unique_ptr<Mesh> Mesh::fromOBJ(Device &device, FrameSync &frameSync,
             vertex.pos = {attrib.vertices[3 * index.vertex_index + 0],
                           attrib.vertices[3 * index.vertex_index + 1],
                           attrib.vertices[3 * index.vertex_index + 2]};
-            vertex.texCoord = {
-                attrib.texcoords[2 * index.texcoord_index + 0],
-                1.0f - attrib.texcoords[2 * index.texcoord_index + 1]};
+            if (!attrib.texcoords.empty() && index.texcoord_index >= 0) {
+                vertex.texCoord = {
+                    attrib.texcoords[2 * index.texcoord_index + 0],
+                    1.0f - attrib.texcoords[2 * index.texcoord_index + 1]};
+            } else {
+                vertex.texCoord = {0.0f, 0.0f};
+            }
+            vertex.texCoord1 = vertex.texCoord;
             if (!attrib.normals.empty() && index.normal_index >= 0) {
                 vertex.normal = {
                     attrib.normals[3 * index.normal_index + 0],
@@ -99,6 +106,8 @@ std::unique_ptr<Mesh> Mesh::fromOBJ(Device &device, FrameSync &frameSync,
             indices.push_back(uniqueVertices[vertex]);
         }
     }
+
+    generateTangents(vertices, indices);
 
     VKR_LOG_DEBUG("Mesh", "Loaded OBJ '{}': vertices={}, indices={}", path,
                   vertices.size(), indices.size());

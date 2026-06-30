@@ -9,6 +9,7 @@
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
 #include "render/RenderQueue.h"
+#include "render/ShaderVariant.h"
 #include "render/pass/MainForwardPass.h"
 
 #include <memory>
@@ -39,7 +40,8 @@ Renderer::~Renderer() {
 void Renderer::renderFrame(const FrameSync::FrameContext &frame,
                            const RenderQueue &queue,
                            PipelineCache &pipelineCache,
-                           GuiSystem &gui) {
+                           GuiSystem &gui,
+                           const ShaderVariant &shaderVariant) {
     RenderFrameContext renderFrame{};
     renderFrame.cmd = frame.cmd;
     renderFrame.frameIndex = frame.frameIndex;
@@ -49,6 +51,7 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.globalDescriptorSetLayout = globalDescriptorSetLayout_;
     renderFrame.pipelineCache = &pipelineCache;
     renderFrame.gui = &gui;
+    renderFrame.shaderVariant = &shaderVariant;
 
     pipeline_.execute(renderFrame, queue);
 }
@@ -82,7 +85,8 @@ void Renderer::createGlobalDescriptorSetLayout() {
     uboLayoutBinding.binding = 0;
     uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     uboLayoutBinding.descriptorCount = 1;
-    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    uboLayoutBinding.stageFlags =
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;

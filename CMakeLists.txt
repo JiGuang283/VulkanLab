@@ -89,12 +89,38 @@ endif()
 
 # Find glslc to compile shaders
 find_program(GLSLC glslc HINTS $ENV{VULKAN_SDK}/Bin REQUIRED)
-# Compile shaders before building
+
+set(SHADER_SOURCES
+    legacy/forward.vert
+    legacy/forward.frag
+    pbr_lite/forward.vert
+    pbr_lite/forward.frag
+    pbr_lite/forward_normal_mapped.vert
+    pbr_lite/forward_normal_mapped.frag
+    material_debug/material.vert
+    material_debug/base_color.frag
+    material_debug/normal.frag
+    material_debug/roughness.frag
+    material_debug/metallic.frag
+    material_debug/occlusion.frag
+    material_debug/emissive.frag
+    material_debug/alpha.frag
+    material_debug/transmission.frag
+)
+
+set(SHADER_COMPILE_COMMANDS)
+foreach(SHADER_SOURCE ${SHADER_SOURCES})
+    list(APPEND SHADER_COMPILE_COMMANDS
+        COMMAND ${GLSLC}
+            ${CMAKE_SOURCE_DIR}/shader/${SHADER_SOURCE}
+            -o ${CMAKE_SOURCE_DIR}/shader/${SHADER_SOURCE}.spv
+    )
+endforeach()
+
+# Compile shader variants before building
 add_custom_command(TARGET VulkanLab PRE_BUILD
-    COMMAND ${GLSLC} shader.vert -o vert.spv
-    COMMAND ${GLSLC} shader.frag -o frag.spv
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/shader
-    COMMENT "Compiling shaders..."
+    ${SHADER_COMPILE_COMMANDS}
+    COMMENT "Compiling shader variants..."
 )
 
 # Copy shaders to build directory

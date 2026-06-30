@@ -1,5 +1,8 @@
 #pragma once
 
+#include "render/RenderCommand.h"
+#include "render/ShaderVariant.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -16,12 +19,17 @@ enum class PassId : uint32_t {
 struct PipelineKey {
     const MaterialTemplate *materialTemplate = nullptr;
     PassId                 pass = PassId::MainForward;
+    ShaderVariantId        shaderVariant = ShaderVariantId::LegacyForward;
+    RenderQueueType        queue = RenderQueueType::Opaque;
+    VkCullModeFlags        cullMode = VK_CULL_MODE_BACK_BIT;
     VkRenderPass           renderPass = VK_NULL_HANDLE;
     uint32_t               subpass = 0;
     VkSampleCountFlagBits  samples = VK_SAMPLE_COUNT_1_BIT;
 
     bool operator==(const PipelineKey &rhs) const {
         return materialTemplate == rhs.materialTemplate && pass == rhs.pass &&
+               shaderVariant == rhs.shaderVariant &&
+               queue == rhs.queue && cullMode == rhs.cullMode &&
                renderPass == rhs.renderPass && subpass == rhs.subpass &&
                samples == rhs.samples;
     }
@@ -32,6 +40,9 @@ struct PipelineKeyHash {
         size_t seed = 0;
         combine(seed, key.materialTemplate);
         combine(seed, static_cast<uint32_t>(key.pass));
+        combine(seed, static_cast<uint32_t>(key.shaderVariant));
+        combine(seed, static_cast<uint32_t>(key.queue));
+        combine(seed, key.cullMode);
         combine(seed, key.renderPass);
         combine(seed, key.subpass);
         combine(seed, key.samples);

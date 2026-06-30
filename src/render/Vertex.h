@@ -17,6 +17,8 @@ struct Vertex {
     glm::vec3 pos;
     glm::vec3 normal;
     glm::vec2 texCoord;
+    glm::vec4 tangent{1.0f, 0.0f, 0.0f, 1.0f};
+    glm::vec2 texCoord1{0.0f, 0.0f};
 
     static VkVertexInputBindingDescription getBindingDescription() {
         VkVertexInputBindingDescription bindingDescription{};
@@ -26,9 +28,9 @@ struct Vertex {
         return bindingDescription;
     }
 
-    static std::array<VkVertexInputAttributeDescription, 3>
+    static std::array<VkVertexInputAttributeDescription, 5>
     getAttributeDescriptions() {
-        std::array<VkVertexInputAttributeDescription, 3> attrs{};
+        std::array<VkVertexInputAttributeDescription, 5> attrs{};
 
         attrs[0].binding = 0;
         attrs[0].location = 0;
@@ -45,12 +47,23 @@ struct Vertex {
         attrs[2].format = VK_FORMAT_R32G32_SFLOAT;
         attrs[2].offset = offsetof(Vertex, texCoord);
 
+        attrs[3].binding = 0;
+        attrs[3].location = 3;
+        attrs[3].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        attrs[3].offset = offsetof(Vertex, tangent);
+
+        attrs[4].binding = 0;
+        attrs[4].location = 4;
+        attrs[4].format = VK_FORMAT_R32G32_SFLOAT;
+        attrs[4].offset = offsetof(Vertex, texCoord1);
+
         return attrs;
     }
 
     bool operator==(const Vertex &other) const {
         return pos == other.pos && normal == other.normal &&
-               texCoord == other.texCoord;
+               texCoord == other.texCoord && tangent == other.tangent &&
+               texCoord1 == other.texCoord1;
     }
 };
 
@@ -60,10 +73,16 @@ struct Vertex {
 namespace std {
 template <> struct hash<vkr::Vertex> {
     size_t operator()(vkr::Vertex const &vertex) const {
-        return ((hash<glm::vec3>()(vertex.pos) ^
-                 (hash<glm::vec3>()(vertex.normal) << 1)) >>
-                1) ^
-               (hash<glm::vec2>()(vertex.texCoord) << 1);
+        size_t seed = hash<glm::vec3>()(vertex.pos);
+        seed ^= hash<glm::vec3>()(vertex.normal) + 0x9e3779b9u +
+                (seed << 6) + (seed >> 2);
+        seed ^= hash<glm::vec2>()(vertex.texCoord) + 0x9e3779b9u +
+                (seed << 6) + (seed >> 2);
+        seed ^= hash<glm::vec4>()(vertex.tangent) + 0x9e3779b9u +
+                (seed << 6) + (seed >> 2);
+        seed ^= hash<glm::vec2>()(vertex.texCoord1) + 0x9e3779b9u +
+                (seed << 6) + (seed >> 2);
+        return seed;
     }
 };
 } // namespace std

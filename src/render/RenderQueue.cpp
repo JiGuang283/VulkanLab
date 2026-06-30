@@ -3,21 +3,23 @@
 #include "MaterialInstance.h"
 
 #include <algorithm>
+#include <glm/glm.hpp>
 #include <unordered_set>
 
 namespace vkr {
 
 void RenderQueue::clear() {
     opaque_.clear();
+    transparent_.clear();
 }
 
 void RenderQueue::add(RenderCommand command) {
     switch (command.queue) {
     case RenderQueueType::Opaque:
-    case RenderQueueType::Transparent:
-        // Transparent is intentionally routed through opaque in this
-        // transition step. A dedicated transparent queue comes later.
         opaque_.push_back(command);
+        break;
+    case RenderQueueType::Transparent:
+        transparent_.push_back(command);
         break;
     }
 }
@@ -39,9 +41,25 @@ void RenderQueue::sortOpaque() {
                      });
 }
 
+void RenderQueue::sortTransparent(const glm::vec3 &cameraPosition) {
+    std::stable_sort(transparent_.begin(), transparent_.end(),
+                     [&cameraPosition](const RenderCommand &a,
+                                       const RenderCommand &b) {
+                         const glm::vec3 apos(a.world[3]);
+                         const glm::vec3 bpos(b.world[3]);
+                         const float     ad = glm::dot(apos - cameraPosition,
+                                                   apos - cameraPosition);
+                         const float     bd = glm::dot(bpos - cameraPosition,
+                                                   bpos - cameraPosition);
+                         return ad > bd;
+                     });
+}
+
 size_t RenderQueue::uniqueMaterialCount() const {
     std::unordered_set<const MaterialInstance *> materials;
     for (const auto &command : opaque_)
+        materials.insert(command.material);
+    for (const auto &command : transparent_)
         materials.insert(command.material);
     return materials.size();
 }
@@ -49,6 +67,8 @@ size_t RenderQueue::uniqueMaterialCount() const {
 size_t RenderQueue::uniqueMeshCount() const {
     std::unordered_set<const Mesh *> meshes;
     for (const auto &command : opaque_)
+        meshes.insert(command.mesh);
+    for (const auto &command : transparent_)
         meshes.insert(command.mesh);
     return meshes.size();
 }

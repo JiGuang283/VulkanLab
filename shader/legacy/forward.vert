@@ -16,14 +16,13 @@ layout(push_constant) uniform PushConstants {
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inTexCoord;
+layout(location = 4) in vec2 inTexCoord1;
 
 layout(location = 0) out vec3 fragNormalWS;
 layout(location = 1) out vec2 fragTexCoord;
 
 void main(){
     gl_Position = ubo.proj * ubo.view * push.model * vec4(inPosition, 1.0);
-    // Correct normal transformation for any affine model matrix including
-    // non-uniform scale: use the transpose of the inverse (normal matrix).
     fragNormalWS = normalize(transpose(inverse(mat3(push.model))) * inNormal);
     fragTexCoord = inTexCoord;
 }

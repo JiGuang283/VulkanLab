@@ -13,6 +13,7 @@
 #include "render/PipelineKey.h"
 #include "render/RenderFrame.h"
 #include "render/RenderQueue.h"
+#include "render/ShaderVariant.h"
 
 #include <array>
 #include <glm/glm.hpp>
@@ -25,10 +26,22 @@ struct GpuPushBlock {
     glm::mat4 model;
     glm::vec4 baseColorFactor;
     glm::vec4 emissiveMetallic; // xyz=emissive, w=metallic
-    glm::vec4 roughnessAlpha;   // x=roughness, y=alphaCutoff
+    glm::vec4 roughnessAlpha;   // x=roughness, y=alphaCutoff, z=AO strength, w=AO UV
     glm::vec4 reserved;         // padding to reach 128B (Vulkan min)
 };
 static_assert(sizeof(GpuPushBlock) == 128, "push block must be 128B");
+
+float alphaModeToShaderValue(AlphaMode mode) {
+    switch (mode) {
+    case AlphaMode::Mask:
+        return 1.0f;
+    case AlphaMode::Blend:
+        return 2.0f;
+    case AlphaMode::Opaque:
+    default:
+        return 0.0f;
+    }
+}
 } // namespace
 
 MainForwardPass::MainForwardPass(Device &device, SwapChain &swapChain,
@@ -102,55 +115,88 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
     if (!frame.pipelineCache)
         return;
 
-    Pipeline *boundPipeline = nullptr;
+    const auto drawCommands = [&](const std::vector<RenderCommand> &commands,
+                                  RenderQueueType queueType) {
+        const bool transparent = queueType == RenderQueueType::Transparent;
+        Pipeline  *boundPipeline = nullptr;
 
-    for (const auto &command : queue.opaque()) {
-        if (!command.mesh || !command.material)
-            continue;
+        for (const auto &command : commands) {
+            if (!command.mesh || !command.material)
+                continue;
 
-        const auto &materialTemplate = command.material->materialTemplate();
-        auto        pipelineConfig = materialTemplate.pipelineConfig();
-        pipelineConfig.descriptorLayouts.insert(
-            pipelineConfig.descriptorLayouts.begin(),
-            frame.globalDescriptorSetLayout);
+            const auto &materialTemplate = command.material->materialTemplate();
+            const auto &p = command.material->params();
+            const VkCullModeFlags cullMode =
+                p.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
+            auto        pipelineConfig = materialTemplate.pipelineConfig();
+            pipelineConfig.blendEnable = transparent;
+            pipelineConfig.depthTest = true;
+            pipelineConfig.depthWrite = !transparent;
+            pipelineConfig.cullMode = cullMode;
+            if (frame.shaderVariant) {
+                pipelineConfig.vertShaderPath =
+                    frame.shaderVariant->vertSpvPath;
+                pipelineConfig.fragShaderPath =
+                    frame.shaderVariant->fragSpvPath;
+            }
+            pipelineConfig.descriptorLayouts.insert(
+                pipelineConfig.descriptorLayouts.begin(),
+                frame.globalDescriptorSetLayout);
 
-        PipelineKey key{};
-        key.materialTemplate = &materialTemplate;
-        key.pass = PassId::MainForward;
-        key.renderPass = renderPass_;
-        key.subpass = 0;
-        key.samples = device_->msaaSamples();
+            PipelineKey key{};
+            key.materialTemplate = &materialTemplate;
+            key.pass = PassId::MainForward;
+            key.shaderVariant = frame.shaderVariant
+                                    ? frame.shaderVariant->id
+                                    : ShaderVariantId::LegacyForward;
+            key.queue = queueType;
+            key.cullMode = cullMode;
+            key.renderPass = renderPass_;
+            key.subpass = 0;
+            key.samples = device_->msaaSamples();
 
-        Pipeline &pipeline =
-            frame.pipelineCache->getOrCreate(key, pipelineConfig);
+            Pipeline &pipeline =
+                frame.pipelineCache->getOrCreate(key, pipelineConfig);
 
-        if (boundPipeline != &pipeline) {
-            vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              pipeline.handle());
-            vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    pipeline.layout(), 0, 1,
-                                    &frame.globalDescriptorSet, 0, nullptr);
-            boundPipeline = &pipeline;
+            if (boundPipeline != &pipeline) {
+                vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                  pipeline.handle());
+                vkCmdBindDescriptorSets(
+                    frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    pipeline.layout(), 0, 1, &frame.globalDescriptorSet, 0,
+                    nullptr);
+                boundPipeline = &pipeline;
+            }
+
+            command.material->bindDescriptors(frame.cmd, pipeline.layout(),
+                                              frame.frameIndex);
+
+            GpuPushBlock blk{};
+            blk.model = command.world;
+            blk.baseColorFactor = p.baseColorFactor;
+            blk.emissiveMetallic =
+                glm::vec4(p.emissiveFactor * p.emissiveStrength,
+                          p.metallicFactor);
+            blk.roughnessAlpha =
+                glm::vec4(p.roughnessFactor, p.alphaCutoff,
+                          glm::clamp(p.occlusionStrength, 0.0f, 1.0f),
+                          p.occlusionTexCoord == 1 ? 1.0f : 0.0f);
+            blk.reserved =
+                glm::vec4(alphaModeToShaderValue(p.alphaMode),
+                          glm::clamp(p.transmissionFactor, 0.0f, 1.0f), 0.0f,
+                          0.0f);
+
+            vkCmdPushConstants(frame.cmd, pipeline.layout(),
+                               VK_SHADER_STAGE_VERTEX_BIT |
+                                   VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(GpuPushBlock), &blk);
+            command.mesh->bind(frame.cmd);
+            command.mesh->draw(frame.cmd);
         }
+    };
 
-        command.material->bindDescriptors(frame.cmd, pipeline.layout(),
-                                          frame.frameIndex);
-
-        const auto  &p = command.material->params();
-        GpuPushBlock blk{};
-        blk.model = command.world;
-        blk.baseColorFactor = p.baseColorFactor;
-        blk.emissiveMetallic = glm::vec4(p.emissiveFactor, p.metallicFactor);
-        blk.roughnessAlpha =
-            glm::vec4(p.roughnessFactor, p.alphaCutoff, 0.0f, 0.0f);
-
-        vkCmdPushConstants(frame.cmd, pipeline.layout(),
-                           VK_SHADER_STAGE_VERTEX_BIT |
-                               VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(GpuPushBlock), &blk);
-        command.mesh->bind(frame.cmd);
-        command.mesh->draw(frame.cmd);
-    }
+    drawCommands(queue.opaque(), RenderQueueType::Opaque);
+    drawCommands(queue.transparent(), RenderQueueType::Transparent);
 }
 
 void MainForwardPass::cleanupSwapChainResources() {
