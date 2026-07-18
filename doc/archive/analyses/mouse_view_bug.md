@@ -7,7 +7,7 @@
 
 ## 1. 现场复盘
 
-`Application::mainLoop()` 的每帧顺序（[src/app/Application.cpp](../../src/app/Application.cpp)）：
+`Application::mainLoop()` 的每帧顺序（[src/app/Application.cpp](../../../src/app/Application.cpp)）：
 
 ```cpp
 while (!window_->shouldClose()) {
@@ -21,7 +21,7 @@ while (!window_->shouldClose()) {
 }
 ```
 
-`InputManager::update()`（[src/window/InputManager.cpp](../../src/window/InputManager.cpp)）：
+`InputManager::update()`（[src/window/InputManager.cpp](../../../src/window/InputManager.cpp)）：
 
 ```cpp
 void InputManager::update() {
@@ -61,7 +61,7 @@ void InputManager::update() {
 
 **策略**：鼠标增量在 *消费之后* 清零，而不是 *接收之后* 立刻清零。
 
-把 [src/window/InputManager.cpp](../../src/window/InputManager.cpp) 里 `update()` 内的两行清零**删除**；在 [src/window/InputManager.h](../../src/window/InputManager.h) 给增量 getter 改为"取出并清零"语义，或者新增显式 `endFrame()`。
+把 [src/window/InputManager.cpp](../../../src/window/InputManager.cpp) 里 `update()` 内的两行清零**删除**；在 [src/window/InputManager.h](../../../src/window/InputManager.h) 给增量 getter 改为"取出并清零"语义，或者新增显式 `endFrame()`。
 
 **方案 A — 新增 `endFrame()`（语义最清晰）**：
 
@@ -119,9 +119,9 @@ processCameraInput(dt);
 ### 3.2 推荐实施 = 方案 A
 
 改动文件：
-- [src/window/InputManager.h](../../src/window/InputManager.h) — 声明 `void endFrame();`
-- [src/window/InputManager.cpp](../../src/window/InputManager.cpp) — `update()` 去掉两行清零；新增 `endFrame()`。
-- [src/app/Application.cpp](../../src/app/Application.cpp) — `mainLoop()` 每帧末尾调 `input_->endFrame();`（放在渲染提交**之后**即可，场景切换分支也会途经这里，无需特殊处理）。
+- [src/window/InputManager.h](../../../src/window/InputManager.h) — 声明 `void endFrame();`
+- [src/window/InputManager.cpp](../../../src/window/InputManager.cpp) — `update()` 去掉两行清零；新增 `endFrame()`。
+- [src/app/Application.cpp](../../../src/app/Application.cpp) — `mainLoop()` 每帧末尾调 `input_->endFrame();`（放在渲染提交**之后**即可，场景切换分支也会途经这里，无需特殊处理）。
 
 ---
 

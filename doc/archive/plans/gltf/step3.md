@@ -10,12 +10,12 @@
 
 | 文件 | 改动 |
 | --- | --- |
-| [src/render/Material.h](../../src/render/Material.h) | 新增 `MaterialParams` 结构、新构造重载、`params()` 访问器、私有字段 `params_` |
-| [src/render/Material.cpp](../../src/render/Material.cpp) | 新构造实现：从 `params_.baseColor` 拿 `Texture`；旧构造内填 `params_` 默认值 |
-| [src/scene/Scene.cpp](../../src/scene/Scene.cpp) | `GpuPushBlock` 128B；`vkCmdPushConstants` size 改 128，stageFlags = VS\|FS |
-| [src/scene/BuiltinScenes.cpp](../../src/scene/BuiltinScenes.cpp) | `makeStandardConfig` 中 push range size 128 + stageFlags VS\|FS |
-| [shader/shader.vert](../../shader/shader.vert) | push block 扩到 128B（仅声明，使用仅 model） |
-| [shader/shader.frag](../../shader/shader.frag) | push block 同上；消费 `baseColorFactor`、`emissiveFactor`、`alphaCutoff` |
+| `src/render/Material.h`（旧路径：`../../../../src/render/Material.h`） | 新增 `MaterialParams` 结构、新构造重载、`params()` 访问器、私有字段 `params_` |
+| `src/render/Material.cpp`（旧路径：`../../../../src/render/Material.cpp`） | 新构造实现：从 `params_.baseColor` 拿 `Texture`；旧构造内填 `params_` 默认值 |
+| [src/scene/Scene.cpp](../../../../src/scene/Scene.cpp) | `GpuPushBlock` 128B；`vkCmdPushConstants` size 改 128，stageFlags = VS\|FS |
+| [src/scene/BuiltinScenes.cpp](../../../../src/scene/BuiltinScenes.cpp) | `makeStandardConfig` 中 push range size 128 + stageFlags VS\|FS |
+| `shader/shader.vert`（旧路径：`../../../../shader/shader.vert`） | push block 扩到 128B（仅声明，使用仅 model） |
+| `shader/shader.frag`（旧路径：`../../../../shader/shader.frag`） | push block 同上；消费 `baseColorFactor`、`emissiveFactor`、`alphaCutoff` |
 
 **不动**：调用点（`vikingRoomSceneFactory` / `sheenChairSceneFactory`）继续用旧 `Material(...)` 重载；视觉与 Step 2 完全一致（factors 默认 = 1，emissive = 0）。
 
@@ -64,7 +64,7 @@ static_assert(sizeof(GpuPushBlock) == 128);
 
 ## 3.3 分阶段编辑清单
 
-### 3.3.1 [src/render/Material.h](../../src/render/Material.h)
+### 3.3.1 `src/render/Material.h`（旧路径：`../../../../src/render/Material.h`）
 
 - 在 `class Material` 之前新增 `struct MaterialParams { ... };`
 - 在原构造声明下方添加：
@@ -76,7 +76,7 @@ static_assert(sizeof(GpuPushBlock) == 128);
 - 私有字段：`MaterialParams params_;`
 - 头部需要 `#include <glm/glm.hpp>` 和 `#include <memory>`（`shared_ptr<Texture>`）。
 
-### 3.3.2 [src/render/Material.cpp](../../src/render/Material.cpp)
+### 3.3.2 `src/render/Material.cpp`（旧路径：`../../../../src/render/Material.cpp`）
 
 旧构造体内最后追加一行：
 ```cpp
@@ -97,7 +97,7 @@ Material::Material(Device &device, Renderer &renderer, MaterialParams params,
 ```
 头：`#include <cassert>`。
 
-### 3.3.3 [src/scene/Scene.cpp](../../src/scene/Scene.cpp)
+### 3.3.3 [src/scene/Scene.cpp](../../../../src/scene/Scene.cpp)
 
 完整 render 体替换为：
 ```cpp
@@ -133,7 +133,7 @@ void Scene::render(VkCommandBuffer cmd, uint32_t frameIndex,
 }
 ```
 
-### 3.3.4 [src/scene/BuiltinScenes.cpp](../../src/scene/BuiltinScenes.cpp)
+### 3.3.4 [src/scene/BuiltinScenes.cpp](../../../../src/scene/BuiltinScenes.cpp)
 
 `makeStandardConfig`：
 ```cpp
@@ -142,7 +142,7 @@ cfg.pushConstants = {{
 }};
 ```
 
-### 3.3.5 [shader/shader.vert](../../shader/shader.vert)
+### 3.3.5 `shader/shader.vert`（旧路径：`../../../../shader/shader.vert`）
 
 push block 扩容（其余不变）：
 ```glsl
@@ -154,7 +154,7 @@ layout(push_constant) uniform PushConstants {
 } push;
 ```
 
-### 3.3.6 [shader/shader.frag](../../shader/shader.frag)
+### 3.3.6 `shader/shader.frag`（旧路径：`../../../../shader/shader.frag`）
 
 ```glsl
 layout(push_constant) uniform PushConstants {

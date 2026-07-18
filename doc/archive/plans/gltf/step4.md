@@ -1,7 +1,7 @@
 # Step 4 具体执行计划
 
 > 上游：[implementation_steps.md#step-4](./implementation_steps.md) · 前置 commit：Step 3 (`1fa1738`)
-> 产出：单个 commit，**仅新增**一个头文件 [src/render/GltfAsset.h](../../src/render/GltfAsset.h)。无消费者，零行为变化。
+> 产出：单个 commit，**仅新增**一个头文件 [src/render/GltfAsset.h](../../../../src/render/GltfAsset.h)。无消费者，零行为变化。
 > 关键约束：纯头文件、不动 CMakeLists（src/* 通配收集；如非通配需要补 `add_*`）；编译通过即视为完成。
 
 ---
@@ -10,8 +10,8 @@
 
 | 文件 | 动作 |
 | --- | --- |
-| 新建 [src/render/GltfAsset.h](../../src/render/GltfAsset.h) | 定义 `struct GltfAsset` |
-| [CMakeLists.txt](../../CMakeLists.txt) | **检查**是否用通配（`file(GLOB ...)`）；若是则无需改；否则补 `${CMAKE_SOURCE_DIR}/src/render/GltfAsset.h` |
+| 新建 [src/render/GltfAsset.h](../../../../src/render/GltfAsset.h) | 定义 `struct GltfAsset` |
+| [CMakeLists.txt](../../../../CMakeLists.txt) | **检查**是否用通配（`file(GLOB ...)`）；若是则无需改；否则补 `${CMAKE_SOURCE_DIR}/src/render/GltfAsset.h` |
 
 **不改**：任何 .cpp / 任何调用点 / 任何 shader / 任何场景工厂。
 
@@ -19,7 +19,7 @@
 
 ## 4.2 文件内容
 
-参照 [implementation_steps.md Step 4](./implementation_steps.md#step-4--新增-gltfasset-数据包) 与 [SceneObject.h](../../src/scene/SceneObject.h)（已确认 `SceneObject` 字段：`mesh / material / transform`）和 [Scene.h](../../src/scene/Scene.h)（`CameraPose` 在此声明）。
+参照 [implementation_steps.md Step 4](./implementation_steps.md#step-4--新增-gltfasset-数据包) 与 [SceneObject.h](../../../../src/scene/SceneObject.h)（已确认 `SceneObject` 字段：`mesh / material / transform`）和 [Scene.h](../../../../src/scene/Scene.h)（`CameraPose` 在此声明）。
 
 完整内容：
 

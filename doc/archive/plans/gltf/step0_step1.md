@@ -76,7 +76,7 @@ git commit -m "docs(gltf): step0 baseline screenshots and working branch"
 
 ### 1.1 目标复述
 
-仅重构 [src/render/Texture.h](../../src/render/Texture.h) / [src/render/Texture.cpp](../../src/render/Texture.cpp)：
+仅重构 [src/render/Texture.h](../../../../src/render/Texture.h) / [src/render/Texture.cpp](../../../../src/render/Texture.cpp)：
 
 - 新增 `struct TextureCreateInfo` + `Texture(Device&, FrameSync&, const TextureCreateInfo&)` 构造。
 - 抽取私有辅助 `createFromPixels(...)` 和 `createSamplerFrom(...)`。
@@ -91,14 +91,14 @@ rg -n "std::make_(shared|unique)<Texture>|new Texture\(|Texture\s*\w*\(" src inc
 ```
 
 预期结果（当前）：
-- [src/scene/BuiltinScenes.cpp](../../src/scene/BuiltinScenes.cpp) 内 `std::make_shared<Texture>(device, frameSync, tex)` — 旧签名，**不动**。
-- [src/render/Material.cpp](../../src/render/Material.cpp) / [.h](../../src/render/Material.h) — 只引用 `Texture&`，不构造。
+- [src/scene/BuiltinScenes.cpp](../../../../src/scene/BuiltinScenes.cpp) 内 `std::make_shared<Texture>(device, frameSync, tex)` — 旧签名，**不动**。
+- `src/render/Material.cpp`（旧路径：`../../../../src/render/Material.cpp`） / `.h`（旧路径：`../../../../src/render/Material.h`） — 只引用 `Texture&`，不构造。
 
 若出现未预期的调用点，在动工前记录下来。
 
 ### 1.3 文件改动详单
 
-#### 1.3.1 [src/render/Texture.h](../../src/render/Texture.h) — 新增 + 扩展
+#### 1.3.1 [src/render/Texture.h](../../../../src/render/Texture.h) — 新增 + 扩展
 
 在 `namespace vkr {` 内，`class Texture` 之前添加结构体：
 
@@ -140,7 +140,7 @@ void createSamplerFrom(VkFilter minFilter, VkFilter magFilter,
 
 现有的 `transitionImageLayout` / `copyBufferToImage` / `generateMipmaps` 保持不变。
 
-#### 1.3.2 [src/render/Texture.cpp](../../src/render/Texture.cpp) — 实现重排
+#### 1.3.2 [src/render/Texture.cpp](../../../../src/render/Texture.cpp) — 实现重排
 
 现有代码：
 ```

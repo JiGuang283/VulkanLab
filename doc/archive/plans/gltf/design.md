@@ -11,16 +11,16 @@
 
 | 位置 | 作用 | 现状 |
 | --- | --- | --- |
-| [src/render/GltfLoader.h](../../src/render/GltfLoader.h) | 对外 API | 只有 `static vector<unique_ptr<Mesh>> load(path, device, frameSync)` |
-| [src/render/GltfLoader.cpp](../../src/render/GltfLoader.cpp) | 解析 | 遍历 `model.meshes[*].primitives[*]`，只读 `POSITION` + `TEXCOORD_0` + `indices`；`opts.images_as_is = 1`；完全忽略 `primitive.material / model.materials / model.textures / model.images / model.samplers / model.nodes / model.scenes` |
-| [src/scene/BuiltinScenes.cpp](../../src/scene/BuiltinScenes.cpp) `sheenChairSceneFactory` | 组装场景 | 用外部传入的 `config.texturePath`（viking_room 纹理）给 SheenChair 的 **所有 primitive** 套同一 `Material`，节点 transform 全为单位阵 |
-| [src/render/Vertex.h](../../src/render/Vertex.h) | 顶点格式 | `pos + color + texCoord`，**无 normal / tangent / 第二套 UV** |
-| [src/render/Material.h](../../src/render/Material.h) | 材质 | 1 sampler2D（binding=1）+ push-constant model，**无 PBR 因子、无第二张贴图** |
-| [shader/shader.frag](../../shader/shader.frag) | 片元 | `outColor = texture(texSampler, uv)`，**无光照、无 baseColorFactor、无 alpha** |
+| [src/render/GltfLoader.h](../../../../src/render/GltfLoader.h) | 对外 API | 只有 `static vector<unique_ptr<Mesh>> load(path, device, frameSync)` |
+| [src/render/GltfLoader.cpp](../../../../src/render/GltfLoader.cpp) | 解析 | 遍历 `model.meshes[*].primitives[*]`，只读 `POSITION` + `TEXCOORD_0` + `indices`；`opts.images_as_is = 1`；完全忽略 `primitive.material / model.materials / model.textures / model.images / model.samplers / model.nodes / model.scenes` |
+| [src/scene/BuiltinScenes.cpp](../../../../src/scene/BuiltinScenes.cpp) `sheenChairSceneFactory` | 组装场景 | 用外部传入的 `config.texturePath`（viking_room 纹理）给 SheenChair 的 **所有 primitive** 套同一 `Material`，节点 transform 全为单位阵 |
+| [src/render/Vertex.h](../../../../src/render/Vertex.h) | 顶点格式 | `pos + color + texCoord`，**无 normal / tangent / 第二套 UV** |
+| `src/render/Material.h`（旧路径：`../../../../src/render/Material.h`） | 材质 | 1 sampler2D（binding=1）+ push-constant model，**无 PBR 因子、无第二张贴图** |
+| `shader/shader.frag`（旧路径：`../../../../shader/shader.frag`） | 片元 | `outColor = texture(texSampler, uv)`，**无光照、无 baseColorFactor、无 alpha** |
 
 ### 1.2 为什么 SheenChair 显示的是 viking_room 纹理
 
-[main.cpp](../../src/main.cpp) 第 17 行：
+[main.cpp](../../../../src/main.cpp) 第 17 行：
 ```cpp
 vkr::sheenChairSceneFactory(config.texturePath, ...)   // = textures/viking_room.png
 ```
@@ -82,7 +82,7 @@ Loader 不产出纹理，所以场景工厂只能把这张外部贴图强行塞�
 
 ### 4.1 新增顶层结构 `GltfAsset`
 
-新建 [src/render/GltfAsset.h](../../src/render/GltfAsset.h)：
+新建 [src/render/GltfAsset.h](../../../../src/render/GltfAsset.h)：
 ```cpp
 struct GltfAsset {
     std::vector<std::shared_ptr<Texture>>  textures;   // 与 model.textures 一一对应，缺省用 1x1 白贴图兜底

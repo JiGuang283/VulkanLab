@@ -25,10 +25,10 @@ validation layer: Unloading layer library ...\nvoglv64.dll                  ← 
 | # | 来源 | 文件 / 代码位置 | 性质 |
 |---|---|---|---|
 | ① | **Loader 调试输出**（不是我们的代码，也不是 validation callback） | Vulkan Loader 自己，通过环境变量 `VK_LOADER_DEBUG` / `VK_LOADER_LAYERS_ENABLE` 触发 | 噪音 |
-| ② | GPU 信息 | [src/core/Device.cpp](../../src/core/Device.cpp) L70–96 `std::cout` | 有用，偶尔看 |
-| ③ | OBJ 载入完成统计 | [src/render/Mesh.cpp](../../src/render/Mesh.cpp) L103 `std::cout` | 信息级 |
-| ④ | 场景切换 | [src/app/Application.cpp](../../src/app/Application.cpp) L118 `std::cout` | 信息级 |
-| — | validation callback | [src/core/VulkanContext.cpp](../../src/core/VulkanContext.cpp) L44 `std::cerr` | 有用，不过目前**与 ① 的前缀相同**，容易混淆 |
+| ② | GPU 信息 | [src/core/Device.cpp](../../../../src/core/Device.cpp) L70–96 `std::cout` | 有用，偶尔看 |
+| ③ | OBJ 载入完成统计 | [src/render/Mesh.cpp](../../../../src/render/Mesh.cpp) L103 `std::cout` | 信息级 |
+| ④ | 场景切换 | [src/app/Application.cpp](../../../../src/app/Application.cpp) L118 `std::cout` | 信息级 |
+| — | validation callback | [src/core/VulkanContext.cpp](../../../../src/core/VulkanContext.cpp) L44 `std::cerr` | 有用，不过目前**与 ① 的前缀相同**，容易混淆 |
 
 ### 1.2 核心问题
 
@@ -94,7 +94,7 @@ void log(Level lv, const char* tag, const char* fmt, ...);
 
 ### 3.2 Validation callback 重构
 
-[src/core/VulkanContext.cpp](../../src/core/VulkanContext.cpp) 的 `debugCallback`：
+[src/core/VulkanContext.cpp](../../../../src/core/VulkanContext.cpp) 的 `debugCallback`：
 
 - 按 `messageSeverity` 映射到 `Level`：
   - `VERBOSE` → Trace
@@ -138,12 +138,12 @@ _putenv_s("DISABLE_VK_LAYER_OW_OBS_HOOK_1", "1"); // 或 Overwolf 的具体 laye
 
 | 文件 | 现在 | 改成 |
 |---|---|---|
-| [src/core/Device.cpp](../../src/core/Device.cpp) L70–96 | 6 行 `std::cout` + 分隔线 | 单行 `VKR_LOG_INFO("Device", "Selected GPU: %s (%s, API %d.%d.%d)", ...)` |
-| [src/render/Mesh.cpp](../../src/render/Mesh.cpp) L103 | `std::cout << "Vertices: ..."` | `VKR_LOG_INFO("Mesh", "%s: %zu verts / %u idx", path, verts, idx)` |
-| [src/app/Application.cpp](../../src/app/Application.cpp) L118 | `std::cout << "[Scene] switched to "` | `VKR_LOG_INFO("Scene", "Switched to \"%s\"", entry.name.c_str())` |
-| [src/render/GltfLoader.cpp](../../src/render/GltfLoader.cpp) L139 | `std::fprintf(stderr, ...)` | `VKR_LOG_WARN("Gltf", ...)` |
-| [src/main.cpp](../../src/main.cpp) L48 | `std::cerr << e.what()` | `VKR_LOG_ERROR("App", "Fatal: %s", e.what())` |
-| [src/core/VulkanContext.cpp](../../src/core/VulkanContext.cpp) `debugCallback` | `std::cerr << "validation layer: " << ...` | 映射到 `VKR_LOG_WARN/ERROR("Vulkan", ...)` |
+| [src/core/Device.cpp](../../../../src/core/Device.cpp) L70–96 | 6 行 `std::cout` + 分隔线 | 单行 `VKR_LOG_INFO("Device", "Selected GPU: %s (%s, API %d.%d.%d)", ...)` |
+| [src/render/Mesh.cpp](../../../../src/render/Mesh.cpp) L103 | `std::cout << "Vertices: ..."` | `VKR_LOG_INFO("Mesh", "%s: %zu verts / %u idx", path, verts, idx)` |
+| [src/app/Application.cpp](../../../../src/app/Application.cpp) L118 | `std::cout << "[Scene] switched to "` | `VKR_LOG_INFO("Scene", "Switched to \"%s\"", entry.name.c_str())` |
+| [src/render/GltfLoader.cpp](../../../../src/render/GltfLoader.cpp) L139 | `std::fprintf(stderr, ...)` | `VKR_LOG_WARN("Gltf", ...)` |
+| [src/main.cpp](../../../../src/main.cpp) L48 | `std::cerr << e.what()` | `VKR_LOG_ERROR("App", "Fatal: %s", e.what())` |
+| [src/core/VulkanContext.cpp](../../../../src/core/VulkanContext.cpp) `debugCallback` | `std::cerr << "validation layer: " << ...` | 映射到 `VKR_LOG_WARN/ERROR("Vulkan", ...)` |
 
 ### 3.6 配置开关
 
@@ -196,10 +196,10 @@ validation layer: Unloading layer library ... (× 5)
 
 ## 5. 实施步骤
 
-1. 新增 [src/core/Log.h](../../src/core/Log.h) / `Log.cpp` — 实现上面描述的门面 + 彩色 + 时间戳。
-2. [src/main.cpp](../../src/main.cpp) 入口加 `_putenv_s("VK_LOADER_DEBUG", "");`。
+1. 新增 [src/core/Log.h](../../../../src/core/Log.h) / `Log.cpp` — 实现上面描述的门面 + 彩色 + 时间戳。
+2. [src/main.cpp](../../../../src/main.cpp) 入口加 `_putenv_s("VK_LOADER_DEBUG", "");`。
 3. 替换 3.5 节列表里的 6 个调用点。
-4. [src/core/VulkanContext.cpp](../../src/core/VulkanContext.cpp) 里：
+4. [src/core/VulkanContext.cpp](../../../../src/core/VulkanContext.cpp) 里：
    - `createInfo.messageSeverity` 去掉 `VERBOSE_BIT` 与 `INFO_BIT`
    - `debugCallback` 按 severity 映射到 `VKR_LOG_WARN/ERROR`
 5. 编译 Debug+Release，对比输出。

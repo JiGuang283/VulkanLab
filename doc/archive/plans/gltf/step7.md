@@ -1,7 +1,7 @@
 # Step 7 具体执行计划
 
 > 上游：[implementation_steps.md#step-7](./implementation_steps.md) · 前置 commit：Step 6 (`79ffc24`)
-> 产出：单个 commit，去掉 `sheenChairSceneFactory` 残留的 `tex` 形参、同步 [src/main.cpp](../../src/main.cpp)，完成全部 7 步收尾。
+> 产出：单个 commit，去掉 `sheenChairSceneFactory` 残留的 `tex` 形参、同步 [src/main.cpp](../../../../src/main.cpp)，完成全部 7 步收尾。
 > 非目标：本步不改 Loader / Material / Texture / shader / GltfAsset。
 
 ---
@@ -10,9 +10,9 @@
 
 | 文件 | 动作 |
 | --- | --- |
-| [src/scene/BuiltinScenes.h](../../src/scene/BuiltinScenes.h) | `sheenChairSceneFactory` 签名从 `(tex, vp, fp)` 改为 `(vp, fp)` |
-| [src/scene/BuiltinScenes.cpp](../../src/scene/BuiltinScenes.cpp) | 去掉 `(void)tex;` 与 `tex` 形参；`vikingRoomSceneFactory` 不动 |
-| [src/main.cpp](../../src/main.cpp) | 注册 Sheen Chair 的调用改成两参数 |
+| [src/scene/BuiltinScenes.h](../../../../src/scene/BuiltinScenes.h) | `sheenChairSceneFactory` 签名从 `(tex, vp, fp)` 改为 `(vp, fp)` |
+| [src/scene/BuiltinScenes.cpp](../../../../src/scene/BuiltinScenes.cpp) | 去掉 `(void)tex;` 与 `tex` 形参；`vikingRoomSceneFactory` 不动 |
+| [src/main.cpp](../../../../src/main.cpp) | 注册 Sheen Chair 的调用改成两参数 |
 
 **不改**：`vikingRoomSceneFactory`（仍然吃 `config.texturePath`）、`Config` 本体、`Application`、Loader、shader。
 
@@ -27,7 +27,7 @@
 
 ### 7.2.2 相机
 
-保留 [src/scene/BuiltinScenes.cpp](../../src/scene/BuiltinScenes.cpp) 里现有的 `asset.suggestedCamera.value_or(...)` 逻辑。当前 Loader 不填 `suggestedCamera`，实际仍走 fallback `CameraPose{{1.5,1.5,1.0}, -135, -20}` — 与 Step 5/6 观测一致，Step 7 不改动。
+保留 [src/scene/BuiltinScenes.cpp](../../../../src/scene/BuiltinScenes.cpp) 里现有的 `asset.suggestedCamera.value_or(...)` 逻辑。当前 Loader 不填 `suggestedCamera`，实际仍走 fallback `CameraPose{{1.5,1.5,1.0}, -135, -20}` — 与 Step 5/6 观测一致，Step 7 不改动。
 
 ### 7.2.3 `Config::texturePath` 去留
 
@@ -38,7 +38,7 @@
 
 ## 7.3 代码骨架
 
-### 7.3.1 [src/scene/BuiltinScenes.h](../../src/scene/BuiltinScenes.h)
+### 7.3.1 [src/scene/BuiltinScenes.h](../../../../src/scene/BuiltinScenes.h)
 
 ```cpp
 /// Factory for `models/SheenChair.glb` (glTF).  Static (no animation); all
@@ -49,7 +49,7 @@ SceneFactory sheenChairSceneFactory(std::string vertShaderPath,
 
 `vikingRoomSceneFactory` 签名不动。
 
-### 7.3.2 [src/scene/BuiltinScenes.cpp](../../src/scene/BuiltinScenes.cpp)
+### 7.3.2 [src/scene/BuiltinScenes.cpp](../../../../src/scene/BuiltinScenes.cpp)
 
 ```cpp
 SceneFactory sheenChairSceneFactory(std::string vp, std::string fp) {
@@ -82,7 +82,7 @@ SceneFactory sheenChairSceneFactory(std::string vp, std::string fp) {
 - 函数体开头的 `(void)tex;`
 - lambda capture 中已不捕获 `tex`，无需动作
 
-### 7.3.3 [src/main.cpp](../../src/main.cpp)
+### 7.3.3 [src/main.cpp](../../../../src/main.cpp)
 
 ```cpp
 app.registerScene(

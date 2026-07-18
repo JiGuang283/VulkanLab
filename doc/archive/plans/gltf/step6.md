@@ -1,7 +1,7 @@
 # Step 6 具体执行计划
 
 > 上游：[implementation_steps.md#step-6](./implementation_steps.md) · 前置 commit：Step 5 (`70586a5`)
-> 产出：单个 commit，在 `GltfLoader::load` 内部用 **node 层级递归** 替换 Step 5 末尾的"identity transform per primitive"段。只动 [src/render/GltfLoader.cpp](../../src/render/GltfLoader.cpp) 一个文件。
+> 产出：单个 commit，在 `GltfLoader::load` 内部用 **node 层级递归** 替换 Step 5 末尾的"identity transform per primitive"段。只动 [src/render/GltfLoader.cpp](../../../../src/render/GltfLoader.cpp) 一个文件。
 > 视觉验收：SheenChair 各组件（椅面 / 椅腿 / 靠背）位置与朝向正确，不再散开。
 
 ---
@@ -10,7 +10,7 @@
 
 | 文件 | 动作 |
 | --- | --- |
-| [src/render/GltfLoader.cpp](../../src/render/GltfLoader.cpp) | 仅替换第 7 段（`// 7. v1: identity transform …` 到 `asset.meshes.empty()` 前）；新增 `#include <glm/gtc/...>` 与 `<functional>` |
+| [src/render/GltfLoader.cpp](../../../../src/render/GltfLoader.cpp) | 仅替换第 7 段（`// 7. v1: identity transform …` 到 `asset.meshes.empty()` 前）；新增 `#include <glm/gtc/...>` 与 `<functional>` |
 
 **不改**：GltfLoader.h / GltfAsset.h / BuiltinScenes / main.cpp / Material / Texture / Mesh / shader。
 > Step 7 才会把 `sheenChairSceneFactory(tex, vp, fp)` 的 `tex` 形参删掉，与 main.cpp 同步清理。
@@ -190,7 +190,7 @@ git commit -m "feat(gltf): walk node hierarchy to compute world transforms
 
 Step 6 完成后，SheenChair 视觉上应已"看起来对"。Step 7 纯接线：
 - 删 `sheenChairSceneFactory` 的 `tex` 形参 + `(void)tex;` 行
-- 改 [src/main.cpp](../../src/main.cpp) 调用签名
+- 改 [src/main.cpp](../../../../src/main.cpp) 调用签名
 - 清理不再需要的 viking_room.png 注入
 
 不涉及 Loader 再改动。

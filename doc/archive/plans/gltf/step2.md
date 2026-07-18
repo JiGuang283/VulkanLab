@@ -12,12 +12,12 @@
 
 | 文件 | 行 | 语句 | 本次动作 |
 | --- | --- | --- | --- |
-| [src/render/Vertex.h](../../src/render/Vertex.h) | 17 / 52 / 64 | `glm::vec3 color;` + `==` + `hash` | `color` → `normal` |
-| [src/render/Vertex.h](../../src/render/Vertex.h) | 38–41 | attribute location 1 `offsetof(Vertex, color)` | `offsetof(Vertex, normal)` |
-| [src/render/Mesh.cpp](../../src/render/Mesh.cpp) | 85 | `vertex.color = {1,1,1};` | 改为读 `attrib.normals` / fallback |
-| [src/render/GltfLoader.cpp](../../src/render/GltfLoader.cpp) | 108 | `v.color = {1,1,1};` | 改为读 `NORMAL` accessor / fallback；**此时先最小改** |
-| [shader/shader.vert](../../shader/shader.vert) | — | `inColor` / `fragColor` | `inNormal` / `fragNormalWS` |
-| [shader/shader.frag](../../shader/shader.frag) | — | 读 `fragColor`（未使用）+ 吐贴图 | 读 `fragNormalWS`，做软光照 |
+| [src/render/Vertex.h](../../../../src/render/Vertex.h) | 17 / 52 / 64 | `glm::vec3 color;` + `==` + `hash` | `color` → `normal` |
+| [src/render/Vertex.h](../../../../src/render/Vertex.h) | 38–41 | attribute location 1 `offsetof(Vertex, color)` | `offsetof(Vertex, normal)` |
+| [src/render/Mesh.cpp](../../../../src/render/Mesh.cpp) | 85 | `vertex.color = {1,1,1};` | 改为读 `attrib.normals` / fallback |
+| [src/render/GltfLoader.cpp](../../../../src/render/GltfLoader.cpp) | 108 | `v.color = {1,1,1};` | 改为读 `NORMAL` accessor / fallback；**此时先最小改** |
+| `shader/shader.vert`（旧路径：`../../../../shader/shader.vert`） | — | `inColor` / `fragColor` | `inNormal` / `fragNormalWS` |
+| `shader/shader.frag`（旧路径：`../../../../shader/shader.frag`） | — | 读 `fragColor`（未使用）+ 吐贴图 | 读 `fragNormalWS`，做软光照 |
 
 **不在本步范围**：Renderer/SwapChain/Pipeline 里的 `color*` 命名全是 Vulkan 附件/混合相关，与 `Vertex.color` 同名不同义，**不动**。
 
@@ -31,7 +31,7 @@ GltfLoader 的 `v.color = {1,1,1}` 行当前（Step 2）只做**最简处理**�
 
 > **注意**：所有编辑必须在一个 commit 内完成，但执行顺序按照下面来，能让每一次 Save 后被 LSP 发现的错误数最少。
 
-### 2.2.1 [src/render/Vertex.h](../../src/render/Vertex.h)
+### 2.2.1 [src/render/Vertex.h](../../../../src/render/Vertex.h)
 
 3 处改动：
 1. 字段：`glm::vec3 color;` → `glm::vec3 normal;`
@@ -39,7 +39,7 @@ GltfLoader 的 `v.color = {1,1,1}` 行当前（Step 2）只做**最简处理**�
 3. `operator==`：`color == other.color` → `normal == other.normal`
 4. `std::hash<vkr::Vertex>`：`hash<glm::vec3>()(vertex.color)` → `hash<glm::vec3>()(vertex.normal)`
 
-### 2.2.2 [src/render/Mesh.cpp](../../src/render/Mesh.cpp) — `fromOBJ`
+### 2.2.2 [src/render/Mesh.cpp](../../../../src/render/Mesh.cpp) — `fromOBJ`
 
 把 `vertex.color = {1.0f, 1.0f, 1.0f};` 替换为：
 
@@ -57,7 +57,7 @@ if (!attrib.normals.empty() && index.normal_index >= 0) {
 
 注意 viking_room.obj 实际包含法线数据，所以这个分支会命中上分支，视觉上光照会正确。
 
-### 2.2.3 [src/render/GltfLoader.cpp](../../src/render/GltfLoader.cpp) — 最小修复
+### 2.2.3 [src/render/GltfLoader.cpp](../../../../src/render/GltfLoader.cpp) — 最小修复
 
 当前第 108 行：
 
@@ -73,7 +73,7 @@ v.normal = {0.0f, 1.0f, 0.0f};   // Step 5 会换成真正读 NORMAL accessor
 
 **不**在本步引入 NORMAL accessor 的完整读取 —— 保持 Step 5 的职责边界清晰。SheenChair 在 Step 2 之后看起来会**更黑**（假法线全朝 +Y，光只从一个方向打），这是预期的；本步不追求它好看。
 
-### 2.2.4 [shader/shader.vert](../../shader/shader.vert)
+### 2.2.4 `shader/shader.vert`（旧路径：`../../../../shader/shader.vert`）
 
 完整替换：
 
@@ -104,7 +104,7 @@ void main() {
 }
 ```
 
-### 2.2.5 [shader/shader.frag](../../shader/shader.frag)
+### 2.2.5 `shader/shader.frag`（旧路径：`../../../../shader/shader.frag`）
 
 完整替换：
 

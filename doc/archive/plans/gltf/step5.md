@@ -10,9 +10,9 @@
 
 | 文件 | 动作 |
 | --- | --- |
-| [src/render/GltfLoader.h](../../src/render/GltfLoader.h) | 接口替换：返回 `GltfAsset`，新增 `Options` |
-| [src/render/GltfLoader.cpp](../../src/render/GltfLoader.cpp) | 全文重写：images→Texture, materials→Material, primitives→Mesh, **node 暂用单位阵** |
-| [src/scene/BuiltinScenes.cpp](../../src/scene/BuiltinScenes.cpp) | `sheenChairSceneFactory` 改为消费 `GltfAsset`（保留 `tex` 形参以避免改 main.cpp，本步骤内**忽略** `tex`） |
+| [src/render/GltfLoader.h](../../../../src/render/GltfLoader.h) | 接口替换：返回 `GltfAsset`，新增 `Options` |
+| [src/render/GltfLoader.cpp](../../../../src/render/GltfLoader.cpp) | 全文重写：images→Texture, materials→Material, primitives→Mesh, **node 暂用单位阵** |
+| [src/scene/BuiltinScenes.cpp](../../../../src/scene/BuiltinScenes.cpp) | `sheenChairSceneFactory` 改为消费 `GltfAsset`（保留 `tex` 形参以避免改 main.cpp，本步骤内**忽略** `tex`） |
 
 **不改**：`vikingRoomSceneFactory` / main.cpp / shader / Material / Texture / Mesh / GltfAsset.h。
 

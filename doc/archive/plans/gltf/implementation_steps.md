@@ -42,8 +42,8 @@
 为 Step 5 做准备：让 `Texture` 能直接吃"已解码 RGBA8 + 宽高 + sampler 参数"，不依赖磁盘路径。
 
 ### 改动文件
-- [src/render/Texture.h](../../src/render/Texture.h)
-- [src/render/Texture.cpp](../../src/render/Texture.cpp)
+- [src/render/Texture.h](../../../../src/render/Texture.h)
+- [src/render/Texture.cpp](../../../../src/render/Texture.cpp)
 
 ### 代码骨架
 
@@ -86,11 +86,11 @@ Texture(Device& device, FrameSync& frameSync, const TextureCreateInfo& info);
 为 PBR / 软光照准备顶点法线通道。本步骤会**同时**改 `Vertex`、`shader.vert/frag`、`Mesh::fromOBJ`。若分开改会中间态崩溃。
 
 ### 改动文件
-- [src/render/Vertex.h](../../src/render/Vertex.h)
-- [src/render/Mesh.cpp](../../src/render/Mesh.cpp)
-- [shader/shader.vert](../../shader/shader.vert)
-- [shader/shader.frag](../../shader/shader.frag)
-- [shader/compile.bat](../../shader/compile.bat)（如需重新触发）
+- [src/render/Vertex.h](../../../../src/render/Vertex.h)
+- [src/render/Mesh.cpp](../../../../src/render/Mesh.cpp)
+- `shader/shader.vert`（旧路径：`../../../../shader/shader.vert`）
+- `shader/shader.frag`（旧路径：`../../../../shader/shader.frag`）
+- [shader/compile.bat](../../../../shader/compile.bat)（如需重新触发）
 
 ### 代码骨架
 
@@ -151,12 +151,12 @@ outColor = vec4(tex.rgb * (0.25 + 0.75 * ndl), tex.a);
 让 `Material` 持有 PBR 因子；`Scene::render` push 一个 128B 结构。**注意**：此步保持旧的 `Material(Device&, Renderer&, const Texture&, const PipelineConfig&)` 构造**不删**，仅新增一个重载，避免调用点改动爆炸。
 
 ### 改动文件
-- [src/render/Material.h](../../src/render/Material.h)
-- [src/render/Material.cpp](../../src/render/Material.cpp)
-- [src/scene/Scene.cpp](../../src/scene/Scene.cpp)
-- [src/scene/BuiltinScenes.cpp](../../src/scene/BuiltinScenes.cpp)（只改 `makeStandardConfig` 里的 push size）
-- [shader/shader.vert](../../shader/shader.vert)（push 结构扩容）
-- [shader/shader.frag](../../shader/shader.frag)（消费 factors）
+- `src/render/Material.h`（旧路径：`../../../../src/render/Material.h`）
+- `src/render/Material.cpp`（旧路径：`../../../../src/render/Material.cpp`）
+- [src/scene/Scene.cpp](../../../../src/scene/Scene.cpp)
+- [src/scene/BuiltinScenes.cpp](../../../../src/scene/BuiltinScenes.cpp)（只改 `makeStandardConfig` 里的 push size）
+- `shader/shader.vert`（旧路径：`../../../../shader/shader.vert`）（push 结构扩容）
+- `shader/shader.frag`（旧路径：`../../../../shader/shader.frag`）（消费 factors）
 
 ### 代码骨架
 
@@ -224,7 +224,7 @@ cfg.pushConstants = {{ VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
 纯新增类型，不动任何现有代码。为 Step 5 铺路。
 
 ### 改动文件
-- 新增 [src/render/GltfAsset.h](../../src/render/GltfAsset.h)
+- 新增 [src/render/GltfAsset.h](../../../../src/render/GltfAsset.h)
 
 ### 代码骨架
 ```cpp
@@ -264,8 +264,8 @@ struct GltfAsset {
 把 Loader 从"只解几何"升级到"解 images + textures + samplers + materials + primitives"，输出 `GltfAsset`。**node 层级暂用单位阵**（放 Step 6）。
 
 ### 改动文件
-- [src/render/GltfLoader.h](../../src/render/GltfLoader.h)
-- [src/render/GltfLoader.cpp](../../src/render/GltfLoader.cpp)
+- [src/render/GltfLoader.h](../../../../src/render/GltfLoader.h)
+- [src/render/GltfLoader.cpp](../../../../src/render/GltfLoader.cpp)
 
 ### 代码骨架
 
@@ -405,7 +405,7 @@ static std::vector<uint8_t> expandToRgba8(const uint8_t* src, int w, int h, int 
 Loader 内部递归 `m->scenes[m->scene].nodes`（或 `scenes[0]`）展开 TRS/matrix 到 world matrix。替换 Step 5 末尾的临时"identity transform"段。
 
 ### 改动文件
-- [src/render/GltfLoader.cpp](../../src/render/GltfLoader.cpp)（仅第 7 段）
+- [src/render/GltfLoader.cpp](../../../../src/render/GltfLoader.cpp)（仅第 7 段）
 
 ### 代码骨架
 ```cpp
@@ -469,9 +469,9 @@ if (m->scenes_count > 0) {
 收尾：把"临时接入"扶正，去掉 `sheenChairSceneFactory` 的 `tex` 参数，main.cpp 同步。
 
 ### 改动文件
-- [src/scene/BuiltinScenes.h](../../src/scene/BuiltinScenes.h)
-- [src/scene/BuiltinScenes.cpp](../../src/scene/BuiltinScenes.cpp)
-- [src/main.cpp](../../src/main.cpp)
+- [src/scene/BuiltinScenes.h](../../../../src/scene/BuiltinScenes.h)
+- [src/scene/BuiltinScenes.cpp](../../../../src/scene/BuiltinScenes.cpp)
+- [src/main.cpp](../../../../src/main.cpp)
 
 ### 代码骨架
 
@@ -550,7 +550,7 @@ app.registerScene({"Sheen Chair",
 | wrap `33648` MIRRORED_REPEAT | `VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT` |
 | `sampler == -1`（未指定） | 默认 `LINEAR / LINEAR / REPEAT / REPEAT` |
 
-对应常量见 [tiny_gltf_v3.h](../../external/gltf/tiny_gltf_v3.h) 第 142–152 行。
+对应常量见 [tiny_gltf_v3.h](../../../../external/gltf/tiny_gltf_v3.h) 第 142–152 行。
 
 ---
 
