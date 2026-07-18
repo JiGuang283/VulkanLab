@@ -9,15 +9,15 @@
 namespace vkr {
 
 class Device;
-class UploadContext;
+class UploadRecorder;
 
 class Mesh {
   public:
     static std::unique_ptr<Mesh> fromOBJ(Device &device,
-                                         UploadContext &upload,
+                                         UploadRecorder &upload,
                                          const std::string &path);
 
-    Mesh(Device &device, UploadContext &upload, const void *vertexData,
+    Mesh(Device &device, UploadRecorder &upload, const void *vertexData,
          VkDeviceSize vertexSize, const uint32_t *indexData,
          uint32_t indexCount);
     ~Mesh() = default;

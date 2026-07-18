@@ -19,10 +19,22 @@ MaterialInstance::MaterialInstance(
     assert(materialTemplate_ && "MaterialInstance requires a MaterialTemplate");
     for (const auto &texture : textures_)
         assert(texture && "MaterialInstance texture slot must be populated");
-    createDescriptorSets();
+    try {
+        createDescriptorSets();
+    } catch (...) {
+        for (VkDescriptorSet set : descriptorSets_)
+            descriptorAllocator_->free(set);
+        descriptorSets_.clear();
+        throw;
+    }
 }
 
-MaterialInstance::~MaterialInstance() = default;
+MaterialInstance::~MaterialInstance() {
+    if (!descriptorAllocator_)
+        return;
+    for (VkDescriptorSet set : descriptorSets_)
+        descriptorAllocator_->free(set);
+}
 
 MaterialTextureSet MaterialInstance::makeTextureSet(
     std::shared_ptr<Texture> baseColor,

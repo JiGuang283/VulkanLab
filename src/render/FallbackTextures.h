@@ -8,11 +8,14 @@ namespace vkr {
 
 class Device;
 class Texture;
-class UploadContext;
+class UploadRecorder;
 
 class FallbackTextures {
   public:
-    FallbackTextures(Device &device, UploadContext &upload);
+    FallbackTextures(Device &device, UploadRecorder &upload);
+    FallbackTextures(std::shared_ptr<Texture> white,
+                     std::shared_ptr<Texture> black,
+                     std::shared_ptr<Texture> flatNormal);
 
     std::shared_ptr<Texture> textureFor(MaterialTextureSlot slot) const;
     std::shared_ptr<Texture> white() const { return white_; }

@@ -52,6 +52,10 @@ VkDescriptorSet DescriptorAllocator::allocate(
 
     if (result == VK_SUCCESS) {
         consume(*pool, descriptorCounts);
+        allocations_.emplace(
+            set, AllocationState{
+                     pool->pool,
+                     std::vector<VkDescriptorPoolSize>(descriptorCounts)});
         return set;
     }
 
@@ -64,12 +68,46 @@ VkDescriptorSet DescriptorAllocator::allocate(
                                           &set);
         if (result == VK_SUCCESS) {
             consume(*pool, descriptorCounts);
+            allocations_.emplace(
+                set, AllocationState{
+                         pool->pool,
+                         std::vector<VkDescriptorPoolSize>(descriptorCounts)});
             return set;
         }
     }
 
     throw VulkanException(result, "vkAllocateDescriptorSets", __FILE__,
                           __LINE__);
+}
+
+void DescriptorAllocator::free(VkDescriptorSet set) noexcept {
+    if (set == VK_NULL_HANDLE || !device_)
+        return;
+    const auto allocation = allocations_.find(set);
+    if (allocation == allocations_.end())
+        return;
+
+    if (vkFreeDescriptorSets(device_->logicalDevice(),
+                             allocation->second.pool, 1, &set) ==
+        VK_SUCCESS) {
+        auto restore = [&](std::vector<PoolState> &pools) {
+            for (PoolState &pool : pools) {
+                if (pool.pool != allocation->second.pool)
+                    continue;
+                ++pool.remainingSets;
+                for (const auto &count :
+                     allocation->second.descriptorCounts) {
+                    pool.remainingDescriptors[count.type] +=
+                        count.descriptorCount;
+                }
+                return true;
+            }
+            return false;
+        };
+        if (!restore(usedPools_))
+            restore(freePools_);
+    }
+    allocations_.erase(allocation);
 }
 
 void DescriptorAllocator::resetPools() {
@@ -80,11 +118,13 @@ void DescriptorAllocator::resetPools() {
         freePools_.push_back(std::move(pool));
     }
     usedPools_.clear();
+    allocations_.clear();
 }
 
 DescriptorAllocator::PoolState DescriptorAllocator::createPool() {
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     poolInfo.maxSets = kMaxSetsPerPool;
     poolInfo.poolSizeCount = static_cast<uint32_t>(kPoolSizes.size());
     poolInfo.pPoolSizes = kPoolSizes.data();

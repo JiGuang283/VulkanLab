@@ -3,7 +3,7 @@
 #include "Vertex.h"
 #include "core/Device.h"
 #include "core/Log.h"
-#include "core/UploadContext.h"
+#include "core/UploadRecorder.h"
 #include "diagnostics/SceneLoadStats.h"
 
 #include <tiny_obj_loader.h>
@@ -43,7 +43,7 @@ Bounds computeBounds(const void *vertexData, VkDeviceSize vertexSize) {
 
 } // namespace
 
-Mesh::Mesh(Device &device, UploadContext &upload, const void *vertexData,
+Mesh::Mesh(Device &device, UploadRecorder &upload, const void *vertexData,
            VkDeviceSize vertexSize, const uint32_t *indexData,
            uint32_t indexCount)
     : indexCount_(indexCount) {
@@ -52,29 +52,23 @@ Mesh::Mesh(Device &device, UploadContext &upload, const void *vertexData,
     ScopedLoadTimer uploadTimer(loadStats ? &loadStats->meshUploadMs
                                           : nullptr);
 
-    // ---- 顶点缓冲 ----
-    {
-        vertexBuffer_ =
-            std::make_unique<Buffer>(device, vertexSize,
-                                     VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    const VkDeviceSize indexSize =
+        static_cast<VkDeviceSize>(indexCount) * sizeof(uint32_t);
 
-        upload.uploadBuffer(vertexData, vertexSize, vertexBuffer_->handle());
-    }
+    // Complete every fallible allocation before recording copies. This keeps
+    // constructor failure from destroying a buffer referenced by a batch.
+    vertexBuffer_ =
+        std::make_unique<Buffer>(device, vertexSize,
+                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    indexBuffer_ = std::make_unique<Buffer>(
+        device, indexSize,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-    // ---- 索引缓冲 ----
-    {
-        VkDeviceSize indexSize =
-            static_cast<VkDeviceSize>(indexCount) * sizeof(uint32_t);
-
-        indexBuffer_ = std::make_unique<Buffer>(
-            device, indexSize,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
-        upload.uploadBuffer(indexData, indexSize, indexBuffer_->handle());
-    }
+    upload.uploadBuffer(vertexData, vertexSize, vertexBuffer_->handle());
+    upload.uploadBuffer(indexData, indexSize, indexBuffer_->handle());
 
     if (loadStats) {
         ++loadStats->gpuMeshCount;
@@ -86,7 +80,7 @@ Mesh::Mesh(Device &device, UploadContext &upload, const void *vertexData,
     }
 }
 
-std::unique_ptr<Mesh> Mesh::fromOBJ(Device &device, UploadContext &upload,
+std::unique_ptr<Mesh> Mesh::fromOBJ(Device &device, UploadRecorder &upload,
                                     const std::string &path) {
     tinyobj::attrib_t                attrib;
     std::vector<tinyobj::shape_t>    shapes;

@@ -17,6 +17,7 @@ struct ResourceLoadStats {
     double textureUploadMs = 0.0;
     double meshUploadMs = 0.0;
     double batchSubmitWaitMs = 0.0;
+    double maxUploadPumpMs = 0.0;
 
     uint64_t textureDecodeCount = 0;
     uint64_t gpuTextureCount = 0;
@@ -35,12 +36,20 @@ struct ResourceLoadStats {
     uint64_t singleTimeSubmits = 0;
     uint64_t queueWaitIdleCalls = 0;
     uint64_t batchSubmits = 0;
+    uint64_t completedBatchSubmits = 0;
     uint64_t fenceWaitCalls = 0;
+    uint64_t fencePollCalls = 0;
+    uint64_t peakInFlightBatches = 0;
     uint64_t peakStagingBytes = 0;
+    uint64_t uploadPumpCalls = 0;
+    uint64_t maxUploadBytesPerPump = 0;
 };
 
 struct SceneLoadStats {
+    uint64_t    taskId = 0;
+    uint64_t    generation = 0;
     std::string sceneName;
+    std::string finalState;
     uint32_t    maxTextureSize = 0;
     bool        success = false;
 
@@ -54,10 +63,15 @@ struct SceneLoadStats {
     double materialSetupMs = 0.0;
     double meshCpuMs = 0.0;
     double hierarchyMs = 0.0;
+    double workerQueueWaitMs = 0.0;
+    double cpuPrepareMs = 0.0;
+    double gpuBuildMs = 0.0;
+    double timeToFirstUploadMs = 0.0;
 
     uint64_t deviceWaitIdleCalls = 0;
     uint64_t materialCount = 0;
     uint64_t objectCount = 0;
+    uint64_t preparedCpuBytes = 0;
 
     AllocatorMemorySnapshot allocatorBefore;
     AllocatorMemorySnapshot allocatorAfter;

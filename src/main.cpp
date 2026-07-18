@@ -63,8 +63,9 @@ int main(int argc, char **argv) {
                                                        config.vertShaderPath,
                                                        config.fragShaderPath)});
         app.registerScene({"Sheen Chair",
+                           {},
                            vkr::sheenChairSceneFactory(config.vertShaderPath,
-                                                        config.fragShaderPath)});
+                                                       config.fragShaderPath)});
 
         auto registerOptionalGltf =
             [&](const char *name, const char *path,
@@ -74,10 +75,10 @@ int main(int argc, char **argv) {
                              name, path);
                 return;
             }
-            app.registerScene(
-                {name, vkr::gltfSceneFactory(path, config.vertShaderPath,
-                                             config.fragShaderPath,
-                                             cameraOverride)});
+            app.registerScene({
+                name, {},
+                vkr::gltfSceneFactory(path, config.vertShaderPath,
+                                      config.fragShaderPath, cameraOverride)});
         };
 
         registerOptionalGltf("A Beautiful Game",

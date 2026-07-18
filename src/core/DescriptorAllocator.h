@@ -22,6 +22,7 @@ class DescriptorAllocator {
     VkDescriptorSet allocate(
         VkDescriptorSetLayout layout,
         std::initializer_list<VkDescriptorPoolSize> descriptorCounts);
+    void free(VkDescriptorSet set) noexcept;
     void            resetPools();
 
   private:
@@ -29,6 +30,11 @@ class DescriptorAllocator {
         VkDescriptorPool pool = VK_NULL_HANDLE;
         uint32_t remainingSets = 0;
         std::unordered_map<VkDescriptorType, uint32_t> remainingDescriptors;
+    };
+
+    struct AllocationState {
+        VkDescriptorPool pool = VK_NULL_HANDLE;
+        std::vector<VkDescriptorPoolSize> descriptorCounts;
     };
 
     PoolState createPool();
@@ -45,6 +51,7 @@ class DescriptorAllocator {
     Device                       *device_ = nullptr;
     std::vector<PoolState> usedPools_;
     std::vector<PoolState> freePools_;
+    std::unordered_map<VkDescriptorSet, AllocationState> allocations_;
 };
 
 } // namespace vkr

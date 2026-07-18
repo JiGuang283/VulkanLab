@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-18
-> Verified against: `0516951`
+> Verified against: Stage 2 working tree based on `d4539b7`
 
 Runtime Control 允许在 VulkanLab 已经运行时，从另一个终端切换场景、纹理限制和 Shader，并读取加载统计或关闭程序。控制接口仅用于本机调试，通过 Windows Named Pipe 通信，不开放网络端口。
 
@@ -68,11 +68,19 @@ cd build\Release
 .\VulkanLabCtl.exe scene current
 .\VulkanLabCtl.exe scene load "Main Sponza"
 .\VulkanLabCtl.exe scene reload
+.\VulkanLabCtl.exe --no-wait scene load "Main Sponza"
+.\VulkanLabCtl.exe load status
+.\VulkanLabCtl.exe load status 12
+.\VulkanLabCtl.exe load cancel 12
 ```
 
 场景名称使用完整显示名称匹配，不区分 ASCII 大小写。名称中包含空格时必须加引号。可选模型文件不存在时，对应场景不会注册，也不会出现在 `scene list` 中。
 
-`scene load` 和 `scene reload` 会等待场景加载完成，然后输出本次 LoadStats 摘要。例如：
+协议中的 `scene.load` 和 `scene.reload` 会立即返回 taskId。VulkanLabCtl 默认每 100 ms 轮询 `load.status`，因此命令行行为仍是等待完成后输出 LoadStats。使用 `--no-wait` 会立即返回；之后可按 taskId 查询或取消。
+
+任务状态包括 `Queued`、`PreparingCpu`、`ReadyForUpload`、`Uploading`、`WaitingForGpu`、`Completed`、`Cancelling`、`Cancelled` 和 `Failed`。加载失败或取消时，默认等待的控制命令返回退出码 `1`。
+
+完成摘要例如：
 
 ```text
 scene: Main Sponza
@@ -80,7 +88,7 @@ success: true
 load: 40737.21 ms
 textures: 75, meshes: 405, upload: 1335.58 MiB
 legacy submits/waits: 0/0
-batch submits/fence waits: 13/13
+batch submits/fence waits: 13/0
 ```
 
 ### 纹理限制
@@ -93,7 +101,7 @@ batch submits/fence waits: 13/13
 .\VulkanLabCtl.exe texture-limit set full
 ```
 
-修改纹理限制会同步重载当前场景。`full` 表示不限制 glTF 纹理尺寸，大场景可能因此耗尽显存。
+修改纹理限制会为当前 glTF 场景创建新的异步加载任务；VulkanLabCtl 默认等待该任务完成。`full` 表示不限制 glTF 纹理尺寸，大场景可能因此耗尽显存。
 
 ### Shader Variant
 
@@ -132,7 +140,8 @@ Shader 名称使用完整显示名称匹配，不区分 ASCII 大小写。切换
 - 各加载阶段耗时。
 - 纹理、Mesh、顶点、索引、材质和对象数量。
 - 解码、上传和 staging 字节数。
-- legacy submit、queue wait、batch submit 和 fence wait 数量。
+- worker/CPU prepare/GPU build、逐帧 upload pump 和总 wall time。
+- legacy submit、queue wait、batch submit/completion、fence poll/wait 和 peak in-flight 数量。
 - VMA 加载前后快照及差值。
 
 ## 自动化示例
@@ -178,11 +187,11 @@ if ($LASTEXITCODE -ne 0) {
 
 ## 行为与限制
 
-- v1 只支持 Windows，并使用固定管道 `\\.\pipe\VulkanLab`。
+- v2 只支持 Windows，并使用固定管道 `\\.\pipe\VulkanLab`。
 - Runtime Control 默认关闭，只有 `VulkanLab.exe --runtime-control` 会创建管道和控制线程。
-- 同一时间只支持一个 VulkanLab 控制实例和一个在途请求。
-- 场景加载仍在渲染主线程同步执行。控制工具会等待加载完成，此时窗口仍可能显示无响应。
-- 同步加载期间不能执行新的状态查询、切换或取消命令。
+- Named Pipe 每个连接处理一条短请求；客户端等待通过重复的 `load.status` 请求实现。
+- glTF CPU prepare 在 worker 执行，GPU build 在主线程按帧推进；加载期间仍可 ping、查询、切换 Shader 和取消任务。
+- 新的 scene 请求会取消旧 generation，只有最新任务可以发布。
 - Runtime Control 不支持截图、材质编辑、相机控制或远程访问。
 - `models/main_sponza` 和 `models/pkg_a_curtains` 是本地可选资产，不提交到仓库。
 
@@ -194,7 +203,7 @@ if ($LASTEXITCODE -ne 0) {
 
 ### scene load 长时间没有输出
 
-这是当前同步完成语义。命令会在文件读取、图片解码、纹理缩放和 GPU 上传全部结束后返回。Main Sponza 2048 在当前基线上约需要 40 秒。
+VulkanLabCtl 默认等待任务完成。另开终端执行 `load status`，或改用 `--no-wait` 获取 taskId。Debug 下 Main Sponza 的 PNG 解码和 bilinear resize 仍可能耗时较长，但渲染器主循环和控制接口会继续响应。
 
 ### scene_not_found
 
@@ -206,9 +215,9 @@ if ($LASTEXITCODE -ne 0) {
 
 确认名称和模型资产是否存在。场景匹配不区分大小写，但必须提供完整显示名称。
 
-### 第二条命令连接超时
+### 取消后任务仍短暂显示 Cancelling
 
-v1 只有一个管道实例。前一条长命令执行期间，不要并行发送其他命令。等待前一条命令完成后重试。
+取消保证任务不会发布，不代表已经提交的 GPU copy 会立即停止。渲染器会轮询对应 fence，完成后释放 staging 和半成品资源，再进入 `Cancelled`。
 
 ## 协议摘要
 
@@ -232,9 +241,16 @@ v1 只有一个管道实例。前一条长命令执行期间，不要并行发�
 {
   "id": 1,
   "ok": true,
-  "result": {}
+  "result": {
+    "taskId": 12,
+    "generation": 7,
+    "state": "Queued",
+    "terminal": false
+  }
 }
 ```
+
+Runtime Control v2 新增 `load.status` 与 `load.cancel`。`system.info.protocolVersion` 可用于脚本确认协议版本。
 
 失败响应：
 

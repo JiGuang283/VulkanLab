@@ -11,6 +11,9 @@ class Device;
 class DescriptorAllocator;
 class Scene;
 class UploadContext;
+class CancellationToken;
+struct PreparedSceneData;
+struct SceneLoadProgress;
 struct SceneLoadStats;
 
 struct SceneLoadContext {
@@ -28,9 +31,18 @@ using SceneFactory = std::function<std::unique_ptr<Scene>(
     Device &, UploadContext &, DescriptorAllocator &,
     const SceneLoadContext &)>;
 
+using ScenePrepareFactory = std::function<PreparedSceneData(
+    const SceneLoadContext &, const CancellationToken &,
+    SceneLoadProgress &)>;
+
 struct SceneEntry {
-    std::string  name;
-    SceneFactory factory;
+    std::string         name;
+    SceneFactory        factory;
+    ScenePrepareFactory prepareFactory;
+
+    bool supportsBackgroundPrepare() const {
+        return static_cast<bool>(prepareFactory);
+    }
 };
 
 } // namespace vkr

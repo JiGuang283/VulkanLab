@@ -7,7 +7,7 @@
 #include "core/UploadContext.h"
 #include "diagnostics/SceneLoadStats.h"
 #include "render/FallbackTextures.h"
-#include "render/GltfLoader.h"
+#include "render/GltfPreparer.h"
 #include "render/MaterialInstance.h"
 #include "render/MaterialTemplate.h"
 #include "render/Mesh.h"
@@ -83,50 +83,28 @@ SceneFactory vikingRoomSceneFactory(std::string tex, std::string vp,
     };
 }
 
-SceneFactory sheenChairSceneFactory(std::string vp, std::string fp) {
+ScenePrepareFactory sheenChairSceneFactory(std::string vp, std::string fp) {
     return gltfSceneFactory("models/SheenChair.glb", std::move(vp),
                             std::move(fp));
 }
 
-SceneFactory gltfSceneFactory(std::string modelPath, std::string vp,
-                              std::string fp,
-                              std::optional<CameraPose> cameraOverride) {
+ScenePrepareFactory gltfSceneFactory(std::string modelPath, std::string vp,
+                                     std::string fp,
+                                     std::optional<CameraPose> cameraOverride) {
     return [modelPath = std::move(modelPath), vp = std::move(vp),
             fp = std::move(fp), cameraOverride](
-               Device &device, UploadContext &upload,
-               DescriptorAllocator &descriptorAllocator,
-               const SceneLoadContext &loadContext)
-               -> std::unique_ptr<Scene> {
-        auto scene = std::make_unique<Scene>();
-        auto materialTemplate = std::make_shared<MaterialTemplate>(
-            device, makeStandardConfig(device, vp, fp));
-        scene->addMaterialTemplate(materialTemplate);
-        auto fallbackTextures =
-            std::make_shared<FallbackTextures>(device, upload);
-        GltfLoader::Options options{};
+               const SceneLoadContext &loadContext,
+               const CancellationToken &cancellation,
+               SceneLoadProgress &progress) -> PreparedSceneData {
+        GltfPreparer::Options options{};
         options.maxTextureSize = loadContext.maxTextureSize;
-        options.fallbackTextures = fallbackTextures;
         options.loadStats = loadContext.loadStats;
-        auto asset = GltfLoader::load(modelPath, device, upload,
-                                      descriptorAllocator, materialTemplate,
-                                      options);
-
-        for (auto &t : asset.textures)
-            scene->addTexture(t);
-        for (auto &m : asset.materials)
-            scene->addMaterial(m);
-        for (auto &mesh : asset.meshes)
-            scene->addMesh(mesh);
-        for (auto &o : asset.objects)
-            scene->addObject(o);
-
-        if (cameraOverride) {
-            scene->initialCamera = *cameraOverride;
-        } else {
-            scene->initialCamera = asset.suggestedCamera.value_or(
-                CameraPose{{1.5f, 1.5f, 1.0f}, -135.0f, -20.0f});
-        }
-        return scene;
+        options.vertShaderPath = vp;
+        options.fragShaderPath = fp;
+        options.cameraOverride = cameraOverride.value_or(
+            CameraPose{{1.5f, 1.5f, 1.0f}, -135.0f, -20.0f});
+        return GltfPreparer::prepare(modelPath, options, cancellation,
+                                     &progress);
     };
 }
 

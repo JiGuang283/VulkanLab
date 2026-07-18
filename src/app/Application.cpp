@@ -17,8 +17,12 @@
 #include "render/MaterialTextureSlot.h"
 #include "render/PipelineCache.h"
 #include "render/Renderer.h"
+#include "scene/PreparedSceneData.h"
 #include "scene/SceneFactory.h"
+#include "scene/SceneGpuBuilder.h"
 #include "scene/SceneLight.h"
+#include "scene/SceneLoadManager.h"
+#include "scene/SceneLoadTask.h"
 #include "window/InputManager.h"
 #include "window/Window.h"
 
@@ -29,8 +33,11 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 
 #include <glm/glm.hpp>
@@ -163,6 +170,9 @@ ControlJson sceneLoadStatsToJson(const SceneLoadStats &stats) {
     const ResourceLoadStats &r = stats.resources;
     return {
         {"scene", stats.sceneName},
+        {"taskId", stats.taskId},
+        {"generation", stats.generation},
+        {"finalState", stats.finalState},
         {"textureLimit", stats.maxTextureSize},
         {"success", stats.success},
         {"timingsMs",
@@ -179,7 +189,12 @@ ControlJson sceneLoadStatsToJson(const SceneLoadStats &stats) {
           {"meshCpu", stats.meshCpuMs},
           {"meshUpload", r.meshUploadMs},
           {"batchSubmitWait", r.batchSubmitWaitMs},
-          {"hierarchy", stats.hierarchyMs}}},
+          {"hierarchy", stats.hierarchyMs},
+          {"workerQueueWait", stats.workerQueueWaitMs},
+          {"cpuPrepare", stats.cpuPrepareMs},
+          {"gpuBuild", stats.gpuBuildMs},
+          {"timeToFirstUpload", stats.timeToFirstUploadMs},
+          {"maxUploadPump", r.maxUploadPumpMs}}},
         {"counts",
          {{"deviceWaitIdleCalls", stats.deviceWaitIdleCalls},
           {"materials", stats.materialCount},
@@ -198,11 +213,18 @@ ControlJson sceneLoadStatsToJson(const SceneLoadStats &stats) {
           {"vertexUpload", r.vertexUploadBytes},
           {"indexUpload", r.indexUploadBytes},
           {"peakStaging", r.peakStagingBytes}}},
+        {"async",
+         {{"preparedCpuBytes", stats.preparedCpuBytes},
+          {"uploadPumpCalls", r.uploadPumpCalls},
+          {"maxUploadBytesPerPump", r.maxUploadBytesPerPump}}},
         {"synchronization",
          {{"legacySubmits", r.singleTimeSubmits},
           {"queueWaitIdleCalls", r.queueWaitIdleCalls},
           {"batchSubmits", r.batchSubmits},
-          {"fenceWaitCalls", r.fenceWaitCalls}}},
+          {"completedBatchSubmits", r.completedBatchSubmits},
+          {"fenceWaitCalls", r.fenceWaitCalls},
+          {"fencePollCalls", r.fencePollCalls},
+          {"peakInFlightBatches", r.peakInFlightBatches}}},
         {"vma",
          {{"before", allocatorSnapshotToJson(stats.allocatorBefore)},
           {"after", allocatorSnapshotToJson(stats.allocatorAfter)},
@@ -215,6 +237,45 @@ ControlJson sceneLoadStatsToJson(const SceneLoadStats &stats) {
                          stats.allocatorBefore.allocationBytes)},
             {"blockBytes", memoryDelta(stats.allocatorAfter.blockBytes,
                                         stats.allocatorBefore.blockBytes)}}}}}};
+}
+
+ControlJson sceneLoadTaskToJson(
+    const std::shared_ptr<SceneLoadTask> &task,
+    bool allowUnfinalizedTerminal = false) {
+    if (!task)
+        return nullptr;
+    const SceneLoadState state = task->state.load();
+    const bool finalized = task->finalized.load();
+    const bool terminal =
+        finalized ||
+        (allowUnfinalizedTerminal && isTerminalSceneLoadState(state));
+    ControlJson result = {
+        {"taskId", task->id},
+        {"generation", task->generation},
+        {"scene", task->sceneName},
+        {"sceneIndex", task->sceneIndex},
+        {"textureLimit", task->textureLimit},
+        {"state", sceneLoadStateName(state)},
+        {"terminal", terminal},
+        {"finalized", finalized},
+        {"progress",
+         {{"texturesCompleted", task->progress.completedTextures.load()},
+          {"texturesTotal", task->progress.totalTextures.load()},
+          {"meshesCompleted", task->progress.completedMeshes.load()},
+          {"meshesTotal", task->progress.totalMeshes.load()},
+          {"texturesUploaded", task->progress.uploadedTextures.load()},
+          {"textureUploadTotal", task->progress.uploadTextureTotal.load()},
+          {"meshesUploaded", task->progress.uploadedMeshes.load()},
+          {"meshUploadTotal", task->progress.uploadMeshTotal.load()},
+          {"processedBytes", task->progress.processedBytes.load()}}}};
+    {
+        std::lock_guard<std::mutex> lock(task->mutex);
+        if (!task->error.empty())
+            result["error"] = task->error;
+    }
+    if (finalized)
+        result["loadStats"] = sceneLoadStatsToJson(task->stats);
+    return result;
 }
 
 class RuntimeCommandError : public std::runtime_error {
@@ -267,12 +328,21 @@ void validateSceneLoadStats(const SceneLoadStats &stats) {
                      "upload bytes.",
                      stats.sceneName);
     }
-    if (stats.resources.batchSubmits != stats.resources.fenceWaitCalls) {
+    if (stats.resources.fenceWaitCalls > stats.resources.batchSubmits) {
         VKR_LOG_WARN("LoadStats",
-                     "Scene '{}' has mismatched batch synchronization: "
+                     "Scene '{}' has invalid batch synchronization: "
                      "submits={}, fence waits={}.",
                      stats.sceneName, stats.resources.batchSubmits,
                      stats.resources.fenceWaitCalls);
+    }
+    if (stats.resources.completedBatchSubmits >
+        stats.resources.batchSubmits) {
+        VKR_LOG_WARN("LoadStats",
+                     "Scene '{}' completed more upload batches than it "
+                     "submitted: completed={}, submits={}.",
+                     stats.sceneName,
+                     stats.resources.completedBatchSubmits,
+                     stats.resources.batchSubmits);
     }
 }
 
@@ -288,6 +358,7 @@ void logSceneLoadStats(const SceneLoadStats &stats) {
         "scene='{}' success={} limit={} total={:.2f}ms factory={:.2f}ms "
         "textures={} meshes={} materials={} objects={} upload={:.2f}MiB "
         "legacySubmits={} batchSubmits={} queueWaits={} fenceWaits={} "
+        "fencePolls={} "
         "vmaAllocationDelta={:.2f}MiB vmaBlockDelta={:.2f}MiB",
         stats.sceneName, stats.success,
         stats.maxTextureSize == 0 ? std::string("Full")
@@ -302,6 +373,7 @@ void logSceneLoadStats(const SceneLoadStats &stats) {
         stats.resources.batchSubmits,
         stats.resources.queueWaitIdleCalls,
         stats.resources.fenceWaitCalls,
+        stats.resources.fencePollCalls,
         signedBytesToMiB(allocationDelta), signedBytesToMiB(blockDelta));
 
     VKR_LOG_DEBUG(
@@ -341,6 +413,11 @@ Application::Application(const Config &config) : config_(config) {}
 Application::~Application() {
     if (runtimeControlServer_)
         runtimeControlServer_->stop();
+    if (sceneGpuBuilder_)
+        sceneGpuBuilder_->cancel();
+    sceneGpuBuilder_.reset();
+    if (sceneLoadManager_)
+        sceneLoadManager_->shutdown();
     if (device_)
         vkDeviceWaitIdle(device_->logicalDevice());
 }
@@ -411,6 +488,7 @@ void Application::init() {
     const int start = std::clamp(config_.defaultSceneIndex, 0,
                                  static_cast<int>(sceneRegistry_.size()) - 1);
     pipelineCache_ = std::make_unique<PipelineCache>(*device_);
+    sceneLoadManager_ = std::make_unique<SceneLoadManager>();
     sceneLoadContext_.maxTextureSize = config_.gltfMaxTextureSize;
     loadScene(start);
 
@@ -448,11 +526,43 @@ void Application::loadScene(int index, bool replaceCurrent) {
         std::unique_ptr<Scene> loadedScene;
         {
             ScopedLoadTimer factoryTimer(&stats.sceneFactoryMs);
-            UploadContext upload(*device_, &stats.resources);
-            loadedScene = entry.factory(*device_, upload,
-                                        *descriptorAllocator_,
-                                        sceneLoadContext_);
-            upload.finish();
+            if (entry.factory) {
+                UploadContext upload(*device_, &stats.resources);
+                loadedScene = entry.factory(*device_, upload,
+                                            *descriptorAllocator_,
+                                            sceneLoadContext_);
+                upload.finish();
+            } else if (entry.prepareFactory) {
+                auto task = std::make_shared<SceneLoadTask>();
+                task->sceneIndex = index;
+                task->sceneName = entry.name;
+                task->textureLimit = sceneLoadContext_.maxTextureSize;
+                task->stats = stats;
+                SceneLoadContext context = sceneLoadContext_;
+                context.loadStats = &task->stats;
+                auto prepared = std::make_unique<PreparedSceneData>(
+                    entry.prepareFactory(context,
+                                         CancellationToken(task->cancellation),
+                                         task->progress));
+                SceneGpuBuilder builder(*device_, *descriptorAllocator_, task,
+                                        std::move(prepared));
+                const SceneGpuBuilder::Budget startupBudget{
+                    std::numeric_limits<uint64_t>::max(), 1000.0};
+                while (!builder.finished()) {
+                    builder.pump(startupBudget);
+                    std::this_thread::yield();
+                }
+                if (!builder.ready()) {
+                    std::lock_guard<std::mutex> lock(task->mutex);
+                    throw std::runtime_error(
+                        task->error.empty() ? "Initial scene load failed"
+                                            : task->error);
+                }
+                loadedScene = builder.takeScene();
+                stats = task->stats;
+            } else {
+                throw std::runtime_error("Scene entry has no load factory");
+            }
         }
         sceneLoadContext_.loadStats = nullptr;
 
@@ -505,7 +615,15 @@ void Application::reloadCurrentScene() {
         return;
 
     const int index = currentSceneIndex_;
-    loadScene(index, true);
+    const uint64_t taskId = requestSceneLoad(index);
+    if (taskId != 0) {
+        VKR_LOG_INFO("Scene", "Requested reload of {} with glTF texture limit {}",
+                     sceneRegistry_[index].name,
+                     sceneLoadContext_.maxTextureSize == 0
+                         ? std::string("Full")
+                         : std::to_string(sceneLoadContext_.maxTextureSize));
+        return;
+    }
 
     VKR_LOG_INFO("Scene", "Reloaded {} with glTF texture limit {}",
                  sceneRegistry_[index].name,
@@ -517,10 +635,17 @@ void Application::reloadCurrentScene() {
 void Application::switchScene(int index) {
     if (index < 0 || index >= static_cast<int>(sceneRegistry_.size()))
         return;
-    if (index == currentSceneIndex_)
+    if (index == currentSceneIndex_ && !sceneGpuBuilder_ &&
+        (!latestSceneLoadTask_ ||
+         isTerminalSceneLoadState(latestSceneLoadTask_->state.load())))
         return;
 
-    loadScene(index, true);
+    const uint64_t taskId = requestSceneLoad(index);
+    if (taskId != 0) {
+        VKR_LOG_INFO("Scene", "Requested switch to {}",
+                     sceneRegistry_[index].name);
+        return;
+    }
 
     VKR_LOG_INFO("Scene", "Switched to {}", sceneRegistry_[index].name);
 }
@@ -536,7 +661,139 @@ void Application::setTextureLimit(uint32_t limit) {
     sceneLoadContext_.maxTextureSize = limit;
     VKR_LOG_INFO("Renderer", "glTF texture limit set to {}",
                  textureLimitLabel(limit));
-    reloadCurrentScene();
+    if (latestSceneLoadTask_ &&
+        !isTerminalSceneLoadState(latestSceneLoadTask_->state.load())) {
+        requestSceneLoad(latestSceneLoadTask_->sceneIndex);
+    } else {
+        reloadCurrentScene();
+    }
+}
+
+uint64_t Application::requestSceneLoad(int index) {
+    if (index < 0 || index >= static_cast<int>(sceneRegistry_.size()))
+        throw RuntimeCommandError("invalid_scene", "Invalid scene index.");
+    const SceneEntry &entry = sceneRegistry_[index];
+    if (!entry.prepareFactory) {
+        if (sceneLoadManager_) {
+            if (latestSceneLoadTask_)
+                sceneLoadManager_->cancel(latestSceneLoadTask_->id);
+            else
+                sceneLoadManager_->cancelActive();
+        }
+        if (sceneGpuBuilder_) {
+            const auto cancelledTask = sceneGpuBuilder_->task();
+            sceneGpuBuilder_->cancel();
+            vkDeviceWaitIdle(device_->logicalDevice());
+            sceneGpuBuilder_.reset();
+            cancelledTask->stats.allocatorAfter =
+                device_->allocatorMemorySnapshot();
+            finalizeSceneLoad(cancelledTask, false);
+        }
+        latestSceneLoadTask_.reset();
+        loadScene(index, true);
+        return 0;
+    }
+    if (sceneGpuBuilder_)
+        sceneGpuBuilder_->cancel();
+    latestSceneLoadTask_ = sceneLoadManager_->request(
+        index, entry.name, entry.prepareFactory, sceneLoadContext_);
+    latestSceneLoadTask_->stats.allocatorBefore =
+        device_->allocatorMemorySnapshot();
+    VKR_LOG_INFO("Scene", "Queued load task {} for {}",
+                 latestSceneLoadTask_->id, entry.name);
+    return latestSceneLoadTask_->id;
+}
+
+bool Application::cancelSceneLoad(uint64_t taskId) {
+    if (sceneGpuBuilder_ && sceneGpuBuilder_->task()->id == taskId) {
+        sceneGpuBuilder_->cancel();
+        return true;
+    }
+    return sceneLoadManager_ && sceneLoadManager_->cancel(taskId);
+}
+
+void Application::updateSceneLoading() {
+    if (sceneGpuBuilder_) {
+        sceneGpuBuilder_->pump();
+        const auto task = sceneGpuBuilder_->task();
+        if (sceneGpuBuilder_->ready()) {
+            currentScene_ = sceneGpuBuilder_->takeScene();
+            currentSceneIndex_ = task->sceneIndex;
+            if (currentScene_ && currentScene_->initialCamera) {
+                const auto &pose = *currentScene_->initialCamera;
+                camera_.setPosition(pose.position);
+                camera_.setYawPitch(pose.yaw, pose.pitch);
+            }
+            applySceneCameraDefaults();
+            sceneGpuBuilder_.reset();
+            task->stats.allocatorAfter = device_->allocatorMemorySnapshot();
+            finalizeSceneLoad(task, true);
+        } else if (sceneGpuBuilder_->finished()) {
+            sceneGpuBuilder_.reset();
+            task->stats.allocatorAfter = device_->allocatorMemorySnapshot();
+            finalizeSceneLoad(task, false);
+        }
+    }
+
+    if (sceneGpuBuilder_ || !latestSceneLoadTask_)
+        return;
+
+    const SceneLoadState state = latestSceneLoadTask_->state.load();
+    if (state == SceneLoadState::ReadyForUpload) {
+        auto prepared =
+            sceneLoadManager_->takePrepared(latestSceneLoadTask_->id);
+        if (!prepared)
+            return;
+        latestSceneLoadTask_->state =
+            SceneLoadState::ReleasingPreviousScene;
+        {
+            ScopedLoadTimer idleTimer(
+                &latestSceneLoadTask_->stats.deviceIdleMs);
+            ++latestSceneLoadTask_->stats.deviceWaitIdleCalls;
+            vkDeviceWaitIdle(device_->logicalDevice());
+        }
+        {
+            ScopedLoadTimer teardownTimer(
+                &latestSceneLoadTask_->stats.teardownMs);
+            pipelineCache_->clear();
+            currentScene_.reset();
+            currentSceneIndex_ = -1;
+        }
+        latestSceneLoadTask_->stats.allocatorBefore =
+            device_->allocatorMemorySnapshot();
+        sceneGpuBuilder_ = std::make_unique<SceneGpuBuilder>(
+            *device_, *descriptorAllocator_, latestSceneLoadTask_,
+            std::move(prepared));
+    } else if ((state == SceneLoadState::Failed ||
+                state == SceneLoadState::Cancelled) &&
+               latestSceneLoadTask_->id != lastFinalizedTaskId_) {
+        latestSceneLoadTask_->stats.allocatorAfter =
+            device_->allocatorMemorySnapshot();
+        finalizeSceneLoad(latestSceneLoadTask_, false);
+    }
+}
+
+void Application::finalizeSceneLoad(
+    const std::shared_ptr<SceneLoadTask> &task, bool success) {
+    if (!task || task->id == lastFinalizedTaskId_)
+        return;
+    task->stats.success = success;
+    task->stats.totalMs =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - task->requestedAt)
+            .count();
+    if (success)
+        task->state = SceneLoadState::Completed;
+    else if (task->cancellation->load())
+        task->state = SceneLoadState::Cancelled;
+    else
+        task->state = SceneLoadState::Failed;
+    task->stats.finalState = sceneLoadStateName(task->state.load());
+    lastSceneLoadStats_ = task->stats;
+    lastFinalizedTaskId_ = task->id;
+    validateSceneLoadStats(task->stats);
+    logSceneLoadStats(task->stats);
+    task->finalized = true;
 }
 
 void Application::setShaderVariant(int index) {
@@ -581,22 +838,25 @@ void Application::processRuntimeCommand() {
             result = {
                 {"application", "VulkanLab"},
                 {"protocolVersion", control::kProtocolVersion},
+                {"capabilities",
+                 {"async_scene_load", "load_status", "load_cancel"}},
                 {"pipe", control::kPipeNameUtf8},
-                {"scene", currentSceneIndex_ >= 0
+                {"scene", currentScene_ && currentSceneIndex_ >= 0
                               ? ControlJson(sceneRegistry_[currentSceneIndex_]
                                                 .name)
                               : ControlJson(nullptr)},
                 {"textureLimit", sceneLoadContext_.maxTextureSize},
                 {"shader", shaderVariants_.empty()
                                ? ControlJson(nullptr)
-                               : ControlJson(currentShaderVariant().displayName)}};
+                               : ControlJson(currentShaderVariant().displayName)},
+                {"loadTask", sceneLoadTaskToJson(latestSceneLoadTask_)}};
         } else if (command->method == "scene.list") {
             ControlJson scenes = ControlJson::array();
             for (const auto &entry : sceneRegistry_)
                 scenes.push_back(entry.name);
             result = {{"scenes", std::move(scenes)}};
         } else if (command->method == "scene.current") {
-            result = {{"name", currentSceneIndex_ >= 0
+            result = {{"name", currentScene_ && currentSceneIndex_ >= 0
                                    ? ControlJson(sceneRegistry_[currentSceneIndex_]
                                                      .name)
                                    : ControlJson(nullptr)}};
@@ -613,20 +873,68 @@ void Application::processRuntimeCommand() {
                         candidates.dump());
             }
             pendingSceneIndex_ = -1;
-            switchScene(index);
-            result = {{"scene", sceneRegistry_[index].name}};
-            if (lastSceneLoadStats_)
+            const uint64_t taskId = requestSceneLoad(index);
+            if (taskId != 0) {
+                result = sceneLoadTaskToJson(latestSceneLoadTask_);
+            } else {
+                result = {{"scene", sceneRegistry_[index].name},
+                          {"completed", true}};
+            }
+            if (taskId == 0 && lastSceneLoadStats_)
                 result["loadStats"] =
                     sceneLoadStatsToJson(*lastSceneLoadStats_);
         } else if (command->method == "scene.reload") {
             if (currentSceneIndex_ < 0)
                 throw RuntimeCommandError("no_current_scene",
                                           "No scene is currently loaded.");
-            reloadCurrentScene();
-            result = {{"scene", sceneRegistry_[currentSceneIndex_].name}};
-            if (lastSceneLoadStats_)
+            const int index = currentSceneIndex_;
+            const uint64_t taskId = requestSceneLoad(index);
+            if (taskId != 0) {
+                result = sceneLoadTaskToJson(latestSceneLoadTask_);
+            } else {
+                result = {{"scene", sceneRegistry_[index].name},
+                          {"completed", true}};
+            }
+            if (taskId == 0 && lastSceneLoadStats_)
                 result["loadStats"] =
                     sceneLoadStatsToJson(*lastSceneLoadStats_);
+        } else if (command->method == "load.status") {
+            std::shared_ptr<SceneLoadTask> task;
+            if (command->params.contains("taskId")) {
+                if (!command->params["taskId"].is_number_unsigned()) {
+                    throw RuntimeCommandError(
+                        "invalid_params",
+                        "Parameter 'taskId' must be an unsigned integer.");
+                }
+                task = sceneLoadManager_->task(
+                    command->params["taskId"].get<uint64_t>());
+            } else {
+                task = latestSceneLoadTask_;
+            }
+            if (!task)
+                throw RuntimeCommandError("load_not_found",
+                                          "Load task was not found.");
+            const bool superseded =
+                !latestSceneLoadTask_ ||
+                latestSceneLoadTask_->id != task->id;
+            result = sceneLoadTaskToJson(task, superseded);
+        } else if (command->method == "load.cancel") {
+            uint64_t taskId = latestSceneLoadTask_
+                                  ? latestSceneLoadTask_->id
+                                  : 0;
+            if (command->params.contains("taskId")) {
+                if (!command->params["taskId"].is_number_unsigned()) {
+                    throw RuntimeCommandError(
+                        "invalid_params",
+                        "Parameter 'taskId' must be an unsigned integer.");
+                }
+                taskId = command->params["taskId"].get<uint64_t>();
+            }
+            if (taskId == 0 || !cancelSceneLoad(taskId)) {
+                throw RuntimeCommandError("load_not_cancellable",
+                                          "Load task cannot be cancelled.");
+            }
+            result = {{"taskId", taskId}, {"cancelRequested", true}};
         } else if (command->method == "texture_limit.get") {
             result = {{"value", sceneLoadContext_.maxTextureSize}};
         } else if (command->method == "texture_limit.set") {
@@ -638,9 +946,15 @@ void Application::processRuntimeCommand() {
             }
             setTextureLimit(command->params["value"].get<uint32_t>());
             result = {{"value", sceneLoadContext_.maxTextureSize}};
-            if (lastSceneLoadStats_)
+            if (latestSceneLoadTask_ &&
+                !isTerminalSceneLoadState(
+                    latestSceneLoadTask_->state.load())) {
+                result["loadTask"] =
+                    sceneLoadTaskToJson(latestSceneLoadTask_);
+            } else if (lastSceneLoadStats_) {
                 result["loadStats"] =
                     sceneLoadStatsToJson(*lastSceneLoadStats_);
+            }
         } else if (command->method == "shader.list") {
             ControlJson shaders = ControlJson::array();
             for (const auto &variant : shaderVariants_)
@@ -865,6 +1179,50 @@ void Application::drawGui() {
     }
     ImGui::End();
 
+    ImGui::Begin("Loading");
+    if (!latestSceneLoadTask_) {
+        ImGui::Text("No active load task");
+    } else {
+        const auto task = latestSceneLoadTask_;
+        const SceneLoadState state = task->state.load();
+        ImGui::Text("Task: %llu",
+                    static_cast<unsigned long long>(task->id));
+        ImGui::Text("Scene: %s", task->sceneName.c_str());
+        ImGui::Text("State: %s", sceneLoadStateName(state));
+        const uint64_t textureTotal = task->progress.totalTextures.load();
+        const uint64_t textureDone =
+            task->progress.completedTextures.load();
+        const uint64_t meshTotal = task->progress.totalMeshes.load();
+        const uint64_t meshDone = task->progress.completedMeshes.load();
+        ImGui::Text("Textures: %llu / %llu",
+                    static_cast<unsigned long long>(textureDone),
+                    static_cast<unsigned long long>(textureTotal));
+        ImGui::Text("Meshes: %llu / %llu",
+                    static_cast<unsigned long long>(meshDone),
+                    static_cast<unsigned long long>(meshTotal));
+        ImGui::Text("GPU Textures: %llu / %llu",
+                    static_cast<unsigned long long>(
+                        task->progress.uploadedTextures.load()),
+                    static_cast<unsigned long long>(
+                        task->progress.uploadTextureTotal.load()));
+        ImGui::Text("GPU Meshes: %llu / %llu",
+                    static_cast<unsigned long long>(
+                        task->progress.uploadedMeshes.load()),
+                    static_cast<unsigned long long>(
+                        task->progress.uploadMeshTotal.load()));
+        ImGui::Text("Processed: %.2f MiB",
+                    bytesToMiB(task->progress.processedBytes.load()));
+        if (!isTerminalSceneLoadState(state) &&
+            state != SceneLoadState::ReadyToPublish) {
+            if (ImGui::Button("Cancel Load"))
+                cancelSceneLoad(task->id);
+        }
+        std::lock_guard<std::mutex> lock(task->mutex);
+        if (!task->error.empty())
+            ImGui::TextWrapped("Error: %s", task->error.c_str());
+    }
+    ImGui::End();
+
     ImGui::Begin("Lighting");
     ImGui::ColorEdit3("Ambient Color", &ambientColor_.x);
     ImGui::DragFloat("Ambient Intensity", &ambientIntensity_, 0.01f, 0.0f,
@@ -991,6 +1349,11 @@ void Application::drawGui() {
 
         ImGui::Text("Scene: %s", stats.sceneName.c_str());
         ImGui::Text("Status: %s", stats.success ? "Success" : "Failed");
+        if (stats.taskId != 0) {
+            ImGui::Text("Task: %llu  Generation: %llu",
+                        static_cast<unsigned long long>(stats.taskId),
+                        static_cast<unsigned long long>(stats.generation));
+        }
         ImGui::Text("Texture Limit: %s",
                     textureLimitLabel(stats.maxTextureSize));
         ImGui::Separator();
@@ -1012,6 +1375,11 @@ void Application::drawGui() {
         ImGui::Text("Batch Submit/Wait: %.2f ms",
                     resources.batchSubmitWaitMs);
         ImGui::Text("Hierarchy: %.2f ms", stats.hierarchyMs);
+        ImGui::Text("Worker Queue: %.2f ms", stats.workerQueueWaitMs);
+        ImGui::Text("CPU Prepare: %.2f ms", stats.cpuPrepareMs);
+        ImGui::Text("GPU Build: %.2f ms", stats.gpuBuildMs);
+        ImGui::Text("Max Upload Pump: %.2f ms",
+                    resources.maxUploadPumpMs);
         ImGui::Separator();
         ImGui::Text("Textures: %llu decoded, %llu GPU, %llu resized",
                     static_cast<unsigned long long>(
@@ -1044,8 +1412,18 @@ void Application::drawGui() {
                     static_cast<unsigned long long>(resources.batchSubmits),
                     static_cast<unsigned long long>(
                         resources.fenceWaitCalls));
+        ImGui::Text("Completed batches: %llu  Fence polls: %llu",
+                    static_cast<unsigned long long>(
+                        resources.completedBatchSubmits),
+                    static_cast<unsigned long long>(
+                        resources.fencePollCalls));
+        ImGui::Text("Peak in-flight batches: %llu",
+                    static_cast<unsigned long long>(
+                        resources.peakInFlightBatches));
         ImGui::Text("Peak staging: %.2f MiB",
                     bytesToMiB(resources.peakStagingBytes));
+        ImGui::Text("Prepared CPU: %.2f MiB",
+                    bytesToMiB(stats.preparedCpuBytes));
         ImGui::Separator();
         ImGui::Text("VMA allocations: %llu -> %llu",
                     static_cast<unsigned long long>(
@@ -1103,6 +1481,7 @@ void Application::mainLoop() {
             switchScene(pendingSceneIndex_);
             pendingSceneIndex_ = -1;
         }
+        updateSceneLoading();
 
         // 2. 时间
         auto  now = std::chrono::high_resolution_clock::now();

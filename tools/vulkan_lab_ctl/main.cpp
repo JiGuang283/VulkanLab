@@ -3,6 +3,7 @@
 #include <json.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <iomanip>
 #include <iostream>
 #include <stdexcept>
@@ -39,6 +40,7 @@ struct ParsedCommand {
     std::string method;
     Json params = Json::object();
     bool jsonOutput = false;
+    bool waitForLoad = true;
 };
 
 void printUsage() {
@@ -46,7 +48,9 @@ void printUsage() {
         << "Usage:\n"
         << "  VulkanLabCtl [--json] ping|info|quit\n"
         << "  VulkanLabCtl [--json] scene list|current|reload\n"
-        << "  VulkanLabCtl [--json] scene load <name>\n"
+        << "  VulkanLabCtl [--json] [--no-wait] scene load <name>\n"
+        << "  VulkanLabCtl [--json] load status [task-id]\n"
+        << "  VulkanLabCtl [--json] load cancel [task-id]\n"
         << "  VulkanLabCtl [--json] texture-limit get\n"
         << "  VulkanLabCtl [--json] texture-limit set <full|512|1024|2048>\n"
         << "  VulkanLabCtl [--json] shader list|current\n"
@@ -70,9 +74,12 @@ uint32_t parseTextureLimit(const std::string &value) {
 ParsedCommand parseCommand(int argc, char **argv) {
     std::vector<std::string> args;
     bool jsonOutput = false;
+    bool waitForLoad = true;
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--json")
             jsonOutput = true;
+        else if (std::string(argv[i]) == "--no-wait")
+            waitForLoad = false;
         else
             args.emplace_back(argv[i]);
     }
@@ -81,6 +88,7 @@ ParsedCommand parseCommand(int argc, char **argv) {
 
     ParsedCommand parsed;
     parsed.jsonOutput = jsonOutput;
+    parsed.waitForLoad = waitForLoad;
     if (args == std::vector<std::string>{"ping"}) {
         parsed.method = "system.ping";
     } else if (args == std::vector<std::string>{"info"}) {
@@ -102,6 +110,16 @@ ParsedCommand parseCommand(int argc, char **argv) {
                args[1] == "load") {
         parsed.method = "scene.load";
         parsed.params = {{"name", args[2]}};
+    } else if ((args.size() == 2 || args.size() == 3) &&
+               args[0] == "load" && args[1] == "status") {
+        parsed.method = "load.status";
+        if (args.size() == 3)
+            parsed.params = {{"taskId", std::stoull(args[2])}};
+    } else if ((args.size() == 2 || args.size() == 3) &&
+               args[0] == "load" && args[1] == "cancel") {
+        parsed.method = "load.cancel";
+        if (args.size() == 3)
+            parsed.params = {{"taskId", std::stoull(args[2])}};
     } else if (args.size() == 2 && args[0] == "texture-limit" &&
                args[1] == "get") {
         parsed.method = "texture_limit.get";
@@ -188,6 +206,32 @@ Json sendRequest(const Json &request) {
     return Json::parse(responsePayload);
 }
 
+std::optional<uint64_t> loadTaskId(const Json &result) {
+    if (result.contains("taskId") && result["taskId"].is_number_unsigned())
+        return result["taskId"].get<uint64_t>();
+    if (result.contains("loadTask") && result["loadTask"].is_object() &&
+        result["loadTask"].contains("taskId")) {
+        return result["loadTask"]["taskId"].get<uint64_t>();
+    }
+    return std::nullopt;
+}
+
+Json waitForLoad(uint64_t taskId) {
+    for (;;) {
+        Sleep(100);
+        const Json request = {
+            {"id", 2},
+            {"method", "load.status"},
+            {"params", {{"taskId", taskId}}}};
+        const Json response = sendRequest(request);
+        if (!response.value("ok", false))
+            return response;
+        const Json &result = response.at("result");
+        if (result.value("terminal", false))
+            return response;
+    }
+}
+
 void printStats(const Json &stats) {
     const auto &timings = stats.at("timingsMs");
     const auto &counts = stats.at("counts");
@@ -239,8 +283,22 @@ void printHuman(const std::string &method, const Json &result) {
     } else if (method == "scene.load" || method == "scene.reload") {
         if (result.contains("loadStats"))
             printStats(result.at("loadStats"));
+        else if (result.contains("taskId"))
+            std::cout << "task " << result.at("taskId").get<uint64_t>()
+                      << ": " << result.value("state", "Queued") << '\n';
         else
             std::cout << result.at("scene").get<std::string>() << '\n';
+    } else if (method == "load.status") {
+        std::cout << "task " << result.at("taskId").get<uint64_t>()
+                  << ": " << result.at("state").get<std::string>() << '\n';
+        if (result.contains("loadStats"))
+            printStats(result.at("loadStats"));
+        if (result.contains("error"))
+            std::cout << "error: " << result.at("error").get<std::string>()
+                      << '\n';
+    } else if (method == "load.cancel") {
+        std::cout << "cancel requested for task "
+                  << result.at("taskId").get<uint64_t>() << '\n';
     } else if (method == "shader.set") {
         std::cout << result.at("shader").get<std::string>() << '\n';
     } else if (method == "stats.last_load") {
@@ -260,7 +318,18 @@ int main(int argc, char **argv) {
         const Json request = {{"id", 1},
                               {"method", command.method},
                               {"params", command.params}};
-        const Json response = sendRequest(request);
+        Json response = sendRequest(request);
+
+        const bool startsLoad = command.method == "scene.load" ||
+                                command.method == "scene.reload" ||
+                                command.method == "texture_limit.set";
+        if (response.value("ok", false) && command.waitForLoad &&
+            startsLoad) {
+            const auto taskId = loadTaskId(response.at("result"));
+            if (taskId)
+                response = waitForLoad(*taskId);
+        }
+
         if (command.jsonOutput)
             std::cout << response.dump(2) << '\n';
 
@@ -273,8 +342,19 @@ int main(int argc, char **argv) {
             }
             return 1;
         }
-        if (!command.jsonOutput)
-            printHuman(command.method, response.at("result"));
+        if (!command.jsonOutput) {
+            const Json &result = response.at("result");
+            const std::string outputMethod =
+                startsLoad && result.contains("state") ? "load.status"
+                                                        : command.method;
+            printHuman(outputMethod, result);
+        }
+        if (startsLoad && response.at("result").contains("state")) {
+            const std::string state =
+                response.at("result").at("state").get<std::string>();
+            if (state == "Failed" || state == "Cancelled")
+                return 1;
+        }
         return 0;
     } catch (const std::invalid_argument &e) {
         std::cerr << "error: " << e.what() << '\n';

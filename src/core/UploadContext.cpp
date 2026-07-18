@@ -201,6 +201,11 @@ void UploadContext::flushAndWait() {
                              UINT64_MAX));
     if (stats_)
         ++stats_->fenceWaitCalls;
+    if (stats_) {
+        ++stats_->completedBatchSubmits;
+        stats_->peakInFlightBatches =
+            std::max<uint64_t>(stats_->peakInFlightBatches, 1);
+    }
 
     VK_CHECK(vkResetFences(device_->logicalDevice(), 1, &fence_));
     VK_CHECK(vkResetCommandPool(device_->logicalDevice(), commandPool_, 0));

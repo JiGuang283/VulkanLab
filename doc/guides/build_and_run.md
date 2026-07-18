@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-18
-> Verified against: `0516951`
+> Verified against: Stage 2 working tree based on `d4539b7`
 
 ## 环境要求
 
@@ -74,6 +74,8 @@ Runtime Control 默认关闭。需要从另一个终端控制运行中的渲染�
 
 ## 运行注意事项
 
-- glTF 纹理尺寸默认限制为 `2048`，可在 Renderer 面板切换为 `Full`、`2048`、`1024` 或 `512`。切换会同步重载当前场景。
-- 大场景的解析、图片解码、CPU 缩放和 GPU 上传仍在主线程完成，加载期间窗口可能被 Windows 标记为无响应。
+- glTF 纹理尺寸默认限制为 `2048`，可在 Renderer 面板切换为 `Full`、`2048`、`1024` 或 `512`。切换会创建新的场景加载任务。
+- glTF 解析、图片解码和 CPU 缩放在 worker 执行；GPU 创建和上传由主线程按帧推进。加载进度和取消操作位于 ImGui `Loading` 面板。
+- GPU build 前会释放旧 Scene 以控制大场景切换时的显存峰值，因此该阶段可能只显示 ImGui 和空场景。
+- `Full` 对 Main Sponza 仍是高风险选项；当前运行时使用 RGBA8，尚未接入 KTX2/BasisU 压缩资产。
 - 日志写入运行目录下的 `logs/VulkanLab.log`。加载统计也显示在 ImGui 的 `Stats -> Last Scene Load`。

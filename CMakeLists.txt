@@ -57,6 +57,24 @@ set(IMGUI_SOURCES
 
 add_executable(VulkanLab ${SOURCES} ${IMGUI_SOURCES})
 
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(VulkanLabCpuTests
+        "${CMAKE_SOURCE_DIR}/tests/PreparedSceneDataTests.cpp"
+        "${CMAKE_SOURCE_DIR}/src/render/TangentGenerator.cpp"
+        "${CMAKE_SOURCE_DIR}/src/render/TextureData.cpp"
+    )
+    target_include_directories(VulkanLabCpuTests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${GLM_INCLUDE_DIR}
+    )
+    target_link_libraries(VulkanLabCpuTests PRIVATE Vulkan::Vulkan)
+    target_compile_options(VulkanLabCpuTests PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/utf-8>
+    )
+    add_test(NAME VulkanLabCpuTests COMMAND VulkanLabCpuTests)
+endif()
+
 if(WIN32)
     add_executable(VulkanLabCtl
         "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_ctl/main.cpp"

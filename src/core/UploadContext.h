@@ -1,5 +1,7 @@
 #pragma once
 
+#include "UploadRecorder.h"
+
 #include <cstdint>
 #include <memory>
 #include <vulkan/vulkan.h>
@@ -10,13 +12,7 @@ class Buffer;
 class Device;
 struct ResourceLoadStats;
 
-struct StagedSlice {
-    VkBuffer     buffer = VK_NULL_HANDLE;
-    VkDeviceSize offset = 0;
-    VkDeviceSize size = 0;
-};
-
-class UploadContext {
+class UploadContext : public UploadRecorder {
   public:
     static constexpr VkDeviceSize kDefaultStagingCapacity =
         128ull * 1024ull * 1024ull;
@@ -31,13 +27,13 @@ class UploadContext {
     UploadContext(const UploadContext &) = delete;
     UploadContext &operator=(const UploadContext &) = delete;
 
-    StagedSlice stageBytes(const void *data, VkDeviceSize size);
+    StagedSlice stageBytes(const void *data, VkDeviceSize size) override;
     void uploadBuffer(const void *data, VkDeviceSize size, VkBuffer dst,
                       VkDeviceSize dstOffset = 0);
-    VkCommandBuffer commandBuffer();
+    VkCommandBuffer commandBuffer() override;
     void finish();
 
-    ResourceLoadStats *stats() const { return stats_; }
+    ResourceLoadStats *stats() const override { return stats_; }
 
   private:
     static VkDeviceSize alignUp(VkDeviceSize value, VkDeviceSize alignment);

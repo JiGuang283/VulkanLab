@@ -9,7 +9,7 @@
 
 namespace vkr {
 
-class UploadContext;
+class UploadRecorder;
 
 struct TextureCreateInfo {
     const void          *pixels = nullptr; // RGBA8，tightly packed
@@ -27,8 +27,8 @@ struct TextureCreateInfo {
 
 class Texture {
   public:
-    Texture(Device &device, UploadContext &upload, const std::string &path);
-    Texture(Device &device, UploadContext &upload,
+    Texture(Device &device, UploadRecorder &upload, const std::string &path);
+    Texture(Device &device, UploadRecorder &upload,
             const TextureCreateInfo &info);
     ~Texture();
 
@@ -41,7 +41,7 @@ class Texture {
   private:
     // 从已解码 RGBA8 像素创建 Image + 上传 + (可选) mipmap。
     // 结束时 image_ 处于 SHADER_READ_ONLY_OPTIMAL 布局，view 已创建。
-    void createFromPixels(UploadContext &upload, const void *pixels,
+    void createFromPixels(UploadRecorder &upload, const void *pixels,
                           uint32_t width, uint32_t height, VkFormat format,
                           bool generateMipmapsFlag, uint32_t maxExtent);
 
