@@ -5,6 +5,14 @@
 
 namespace vkr {
 
+namespace {
+
+constexpr float kMinNearPlane = 0.001f;
+constexpr float kMinFarPlane = 1.0f;
+constexpr float kMinClipDistance = 0.001f;
+
+} // namespace
+
 Camera::Camera() {
     updateVectors();
 }
@@ -15,8 +23,14 @@ void Camera::setPerspective(float fovDeg, float aspect, float nearPlane,
                             float farPlane) {
     fov_ = fovDeg;
     aspect_ = aspect;
-    nearPlane_ = nearPlane;
-    farPlane_ = farPlane;
+    setClipPlanes(nearPlane, farPlane);
+}
+
+void Camera::setClipPlanes(float nearPlane, float farPlane) {
+    nearPlane_ = glm::max(nearPlane, kMinNearPlane);
+    farPlane_ = glm::max(farPlane, kMinFarPlane);
+    if (farPlane_ <= nearPlane_)
+        farPlane_ = nearPlane_ + kMinClipDistance;
 }
 
 void Camera::setAspect(float aspect) {

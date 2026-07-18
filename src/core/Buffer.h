@@ -9,7 +9,8 @@ class Device;
 class Buffer {
   public:
     Buffer(Device &device, VkDeviceSize size, VkBufferUsageFlags usage,
-           VkMemoryPropertyFlags memProps);
+           VkMemoryPropertyFlags memProps,
+           VmaAllocationCreateFlags allocationFlags = 0);
     ~Buffer();
 
     Buffer(const Buffer &) = delete;

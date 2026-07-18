@@ -12,6 +12,11 @@ class SwapChain;
 
 inline constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
+struct UploadSyncCounters {
+    uint64_t singleTimeSubmits = 0;
+    uint64_t queueWaitIdleCalls = 0;
+};
+
 class FrameSync {
   public:
     struct FrameContext {
@@ -41,10 +46,11 @@ class FrameSync {
     void            endSingleTimeCommands(VkCommandBuffer cmd);
 
     // ---- GPU 传输辅助 ----
-    void copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size);
-
     // ---- 访问器 ----
     VkCommandPool commandPool() const { return commandPool_; }
+    const UploadSyncCounters &uploadSyncCounters() const {
+        return uploadSyncCounters_;
+    }
 
   private:
     struct PerFrame {
@@ -68,6 +74,7 @@ class FrameSync {
     uint32_t currentFrame_ = 0;
     bool     framebufferResized_ = false;
     bool     swapChainOutOfDate_ = false;
+    UploadSyncCounters uploadSyncCounters_{};
 };
 
 } // namespace vkr

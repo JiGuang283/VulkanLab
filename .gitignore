@@ -48,6 +48,8 @@ _deps/
 !models/SheenChair.glb
 models/local/
 models/sample/
+models/main_sponza/
+models/pkg_a_curtains/
 
 # ---------- Runtime / scratch ----------
 *.log

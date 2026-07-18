@@ -3,8 +3,9 @@
 #include "Scene.h"
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
-#include "core/FrameSync.h"
 #include "core/PipelineConfigBuilder.h"
+#include "core/UploadContext.h"
+#include "diagnostics/SceneLoadStats.h"
 #include "render/FallbackTextures.h"
 #include "render/GltfLoader.h"
 #include "render/MaterialInstance.h"
@@ -36,24 +37,32 @@ PipelineConfig makeStandardConfig(Device &device, const std::string &vp,
 SceneFactory vikingRoomSceneFactory(std::string tex, std::string vp,
                                     std::string fp) {
     return [tex = std::move(tex), vp = std::move(vp), fp = std::move(fp)](
-               Device &device, FrameSync &frameSync,
-               DescriptorAllocator &descriptorAllocator)
+               Device &device, UploadContext &upload,
+               DescriptorAllocator &descriptorAllocator,
+               const SceneLoadContext &loadContext)
                -> std::unique_ptr<Scene> {
         auto scene = std::make_unique<Scene>();
 
         auto materialTemplate = std::make_shared<MaterialTemplate>(
             device, makeStandardConfig(device, vp, fp));
         auto fallbackTextures =
-            std::make_shared<FallbackTextures>(device, frameSync);
-        auto texture = std::make_shared<Texture>(device, frameSync, tex);
+            std::make_shared<FallbackTextures>(device, upload);
+        auto texture = std::make_shared<Texture>(device, upload, tex);
         MaterialParams params;
         params.debugName = "Viking Room Material";
-        auto material = std::make_shared<MaterialInstance>(
-            device, descriptorAllocator, materialTemplate,
-            MaterialInstance::makeTextureSet(texture, *fallbackTextures),
-            params);
+        std::shared_ptr<MaterialInstance> material;
+        {
+            ScopedLoadTimer materialTimer(
+                loadContext.loadStats
+                    ? &loadContext.loadStats->materialSetupMs
+                    : nullptr);
+            material = std::make_shared<MaterialInstance>(
+                device, descriptorAllocator, materialTemplate,
+                MaterialInstance::makeTextureSet(texture, *fallbackTextures),
+                params);
+        }
         auto mesh = std::shared_ptr<Mesh>(
-            Mesh::fromOBJ(device, frameSync, "models/viking_room.obj")
+            Mesh::fromOBJ(device, upload, "models/viking_room.obj")
                 .release());
 
         scene->addMaterialTemplate(materialTemplate);
@@ -80,20 +89,25 @@ SceneFactory sheenChairSceneFactory(std::string vp, std::string fp) {
 }
 
 SceneFactory gltfSceneFactory(std::string modelPath, std::string vp,
-                              std::string fp) {
+                              std::string fp,
+                              std::optional<CameraPose> cameraOverride) {
     return [modelPath = std::move(modelPath), vp = std::move(vp),
-            fp = std::move(fp)](Device &device, FrameSync &frameSync,
-                                DescriptorAllocator &descriptorAllocator)
+            fp = std::move(fp), cameraOverride](
+               Device &device, UploadContext &upload,
+               DescriptorAllocator &descriptorAllocator,
+               const SceneLoadContext &loadContext)
                -> std::unique_ptr<Scene> {
         auto scene = std::make_unique<Scene>();
         auto materialTemplate = std::make_shared<MaterialTemplate>(
             device, makeStandardConfig(device, vp, fp));
         scene->addMaterialTemplate(materialTemplate);
         auto fallbackTextures =
-            std::make_shared<FallbackTextures>(device, frameSync);
+            std::make_shared<FallbackTextures>(device, upload);
         GltfLoader::Options options{};
+        options.maxTextureSize = loadContext.maxTextureSize;
         options.fallbackTextures = fallbackTextures;
-        auto asset = GltfLoader::load(modelPath, device, frameSync,
+        options.loadStats = loadContext.loadStats;
+        auto asset = GltfLoader::load(modelPath, device, upload,
                                       descriptorAllocator, materialTemplate,
                                       options);
 
@@ -106,8 +120,12 @@ SceneFactory gltfSceneFactory(std::string modelPath, std::string vp,
         for (auto &o : asset.objects)
             scene->addObject(o);
 
-        scene->initialCamera = asset.suggestedCamera.value_or(
-            CameraPose{{1.5f, 1.5f, 1.0f}, -135.0f, -20.0f});
+        if (cameraOverride) {
+            scene->initialCamera = *cameraOverride;
+        } else {
+            scene->initialCamera = asset.suggestedCamera.value_or(
+                CameraPose{{1.5f, 1.5f, 1.0f}, -135.0f, -20.0f});
+        }
         return scene;
     };
 }

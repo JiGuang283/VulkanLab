@@ -282,6 +282,14 @@ QueueFamilyIndices Device::queueFamilies() const {
     return findQueueFamilies(physicalDevice_);
 }
 
+AllocatorMemorySnapshot Device::allocatorMemorySnapshot() const {
+    VmaTotalStatistics stats{};
+    vmaCalculateStatistics(allocator_, &stats);
+    return {static_cast<uint64_t>(stats.total.statistics.allocationCount),
+            static_cast<uint64_t>(stats.total.statistics.allocationBytes),
+            static_cast<uint64_t>(stats.total.statistics.blockBytes)};
+}
+
 void Device::createAllocator() {
     VmaAllocatorCreateInfo info{};
     info.physicalDevice = physicalDevice_;

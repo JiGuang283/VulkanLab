@@ -28,6 +28,7 @@ layout(location = 0) in vec3 fragPositionWS;
 layout(location = 1) in vec3 fragNormalWS;
 layout(location = 2) in vec2 fragTexCoord;
 layout(location = 4) in vec2 fragTexCoord1;
+layout(location = 5) in vec4 fragColor;
 
 layout(set = 1, binding = 0) uniform sampler2D baseColorTexture;
 layout(set = 1, binding = 2) uniform sampler2D metallicRoughnessTexture;
@@ -215,7 +216,7 @@ vec3 evaluateDirectLighting(vec3 n, vec3 v, vec3 positionWS, vec3 albedo,
 void main()
 {
     vec4 baseSample = texture(baseColorTexture, fragTexCoord);
-    vec4 baseColor = baseSample * push.baseColorFactor;
+    vec4 baseColor = baseSample * push.baseColorFactor * fragColor;
     applyAlphaCutoff(baseColor.a);
 
     vec4 mr = texture(metallicRoughnessTexture, fragTexCoord);

@@ -1,6 +1,9 @@
 #pragma once
 
+#include "Scene.h"
 #include "SceneFactory.h"
+
+#include <optional>
 
 namespace vkr {
 
@@ -18,6 +21,8 @@ SceneFactory sheenChairSceneFactory(std::string vertShaderPath,
 
 /// Generic glTF scene factory.  Loads any .glb/.gltf at `modelPath`.
 SceneFactory gltfSceneFactory(std::string modelPath, std::string vertShaderPath,
-                              std::string fragShaderPath);
+                              std::string fragShaderPath,
+                              std::optional<CameraPose> cameraOverride =
+                                  std::nullopt);
 
 } // namespace vkr

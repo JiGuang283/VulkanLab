@@ -27,7 +27,7 @@ struct GpuPushBlock {
     glm::vec4 baseColorFactor;
     glm::vec4 emissiveMetallic; // xyz=emissive, w=metallic
     glm::vec4 roughnessAlpha;   // x=roughness, y=alphaCutoff, z=AO strength, w=AO UV
-    glm::vec4 reserved;         // padding to reach 128B (Vulkan min)
+    glm::vec4 reserved;         // x=alpha mode, y=transmission, z=normal scale
 };
 static_assert(sizeof(GpuPushBlock) == 128, "push block must be 128B");
 
@@ -183,7 +183,8 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                           p.occlusionTexCoord == 1 ? 1.0f : 0.0f);
             blk.reserved =
                 glm::vec4(alphaModeToShaderValue(p.alphaMode),
-                          glm::clamp(p.transmissionFactor, 0.0f, 1.0f), 0.0f,
+                          glm::clamp(p.transmissionFactor, 0.0f, 1.0f),
+                          glm::max(p.normalScale, 0.0f),
                           0.0f);
 
             vkCmdPushConstants(frame.cmd, pipeline.layout(),

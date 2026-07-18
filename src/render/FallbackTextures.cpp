@@ -2,14 +2,15 @@
 
 #include "Texture.h"
 #include "core/Device.h"
-#include "core/FrameSync.h"
+#include "core/UploadContext.h"
 
 #include <array>
 
 namespace vkr {
 
 namespace {
-std::shared_ptr<Texture> makeSolidTexture(Device &device, FrameSync &frameSync,
+std::shared_ptr<Texture> makeSolidTexture(Device &device,
+                                          UploadContext &upload,
                                           std::array<uint8_t, 4> rgba,
                                           VkFormat format) {
     TextureCreateInfo info{};
@@ -19,16 +20,16 @@ std::shared_ptr<Texture> makeSolidTexture(Device &device, FrameSync &frameSync,
     info.generateMipmaps = false;
     info.format = format;
     info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    return std::make_shared<Texture>(device, frameSync, info);
+    return std::make_shared<Texture>(device, upload, info);
 }
 } // namespace
 
-FallbackTextures::FallbackTextures(Device &device, FrameSync &frameSync)
-    : white_(makeSolidTexture(device, frameSync, {255, 255, 255, 255},
+FallbackTextures::FallbackTextures(Device &device, UploadContext &upload)
+    : white_(makeSolidTexture(device, upload, {255, 255, 255, 255},
                               VK_FORMAT_R8G8B8A8_SRGB)),
-      black_(makeSolidTexture(device, frameSync, {0, 0, 0, 255},
+      black_(makeSolidTexture(device, upload, {0, 0, 0, 255},
                               VK_FORMAT_R8G8B8A8_SRGB)),
-      flatNormal_(makeSolidTexture(device, frameSync, {128, 128, 255, 255},
+      flatNormal_(makeSolidTexture(device, upload, {128, 128, 255, 255},
                                    VK_FORMAT_R8G8B8A8_UNORM)) {}
 
 std::shared_ptr<Texture>

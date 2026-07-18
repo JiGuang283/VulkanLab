@@ -29,6 +29,7 @@ layout(location = 1) in vec3 fragNormalWS;
 layout(location = 2) in vec2 fragTexCoord;
 layout(location = 3) in vec4 fragTangentWS;
 layout(location = 4) in vec2 fragTexCoord1;
+layout(location = 5) in vec4 fragColor;
 
 layout(set = 1, binding = 0) uniform sampler2D baseColorTexture;
 layout(set = 1, binding = 1) uniform sampler2D normalTexture;
@@ -221,13 +222,14 @@ vec3 normalFromMap()
     t = normalize(t - n * dot(n, t));
     vec3 b = normalize(cross(n, t) * fragTangentWS.w);
     vec3 tangentNormal = texture(normalTexture, fragTexCoord).xyz * 2.0 - 1.0;
+    tangentNormal.xy *= max(push.reserved.z, 0.0);
     return normalize(mat3(t, b, n) * tangentNormal);
 }
 
 void main()
 {
     vec4 baseSample = texture(baseColorTexture, fragTexCoord);
-    vec4 baseColor = baseSample * push.baseColorFactor;
+    vec4 baseColor = baseSample * push.baseColorFactor * fragColor;
     applyAlphaCutoff(baseColor.a);
 
     vec4 mr = texture(metallicRoughnessTexture, fragTexCoord);

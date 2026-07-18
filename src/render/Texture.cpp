@@ -1,40 +1,138 @@
 #include "Texture.h"
-#include "core/Buffer.h"
-#include "core/FrameSync.h"
+#include "core/Log.h"
+#include "core/UploadContext.h"
 #include "core/VulkanCheck.h"
+#include "diagnostics/SceneLoadStats.h"
 
 #include <stb_image.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
+#include <vector>
 
 namespace vkr {
 
-Texture::Texture(Device &device, FrameSync &frameSync, const std::string &path)
+namespace {
+
+uint8_t sampleBilinearChannel(const uint8_t *src, uint32_t srcWidth,
+                              uint32_t srcHeight, float x, float y,
+                              uint32_t channel) {
+    x = std::clamp(x, 0.0f, static_cast<float>(srcWidth - 1));
+    y = std::clamp(y, 0.0f, static_cast<float>(srcHeight - 1));
+
+    const uint32_t x0 = static_cast<uint32_t>(std::floor(x));
+    const uint32_t y0 = static_cast<uint32_t>(std::floor(y));
+    const uint32_t x1 = std::min(x0 + 1, srcWidth - 1);
+    const uint32_t y1 = std::min(y0 + 1, srcHeight - 1);
+    const float    tx = x - static_cast<float>(x0);
+    const float    ty = y - static_cast<float>(y0);
+
+    const auto at = [&](uint32_t px, uint32_t py) {
+        return static_cast<float>(src[(static_cast<size_t>(py) * srcWidth +
+                                       px) *
+                                          4 +
+                                      channel]);
+    };
+
+    const float top = at(x0, y0) * (1.0f - tx) + at(x1, y0) * tx;
+    const float bottom = at(x0, y1) * (1.0f - tx) + at(x1, y1) * tx;
+    const float value = top * (1.0f - ty) + bottom * ty;
+    return static_cast<uint8_t>(
+        std::clamp(std::lround(value), 0l, 255l));
+}
+
+std::vector<uint8_t> resizeRgba8Bilinear(const uint8_t *src,
+                                         uint32_t srcWidth,
+                                         uint32_t srcHeight,
+                                         uint32_t dstWidth,
+                                         uint32_t dstHeight) {
+    std::vector<uint8_t> dst(static_cast<size_t>(dstWidth) * dstHeight * 4);
+    const float scaleX = static_cast<float>(srcWidth) / dstWidth;
+    const float scaleY = static_cast<float>(srcHeight) / dstHeight;
+
+    for (uint32_t y = 0; y < dstHeight; ++y) {
+        const float srcY = (static_cast<float>(y) + 0.5f) * scaleY - 0.5f;
+        for (uint32_t x = 0; x < dstWidth; ++x) {
+            const float srcX =
+                (static_cast<float>(x) + 0.5f) * scaleX - 0.5f;
+            const size_t dstOffset =
+                (static_cast<size_t>(y) * dstWidth + x) * 4;
+            for (uint32_t c = 0; c < 4; ++c) {
+                dst[dstOffset + c] =
+                    sampleBilinearChannel(src, srcWidth, srcHeight, srcX,
+                                          srcY, c);
+            }
+        }
+    }
+
+    return dst;
+}
+
+bool limitedExtent(uint32_t width, uint32_t height, uint32_t maxExtent,
+                   uint32_t &outWidth, uint32_t &outHeight) {
+    const uint32_t maxSourceExtent = std::max(width, height);
+    if (maxExtent == 0 || maxSourceExtent <= maxExtent) {
+        outWidth = width;
+        outHeight = height;
+        return false;
+    }
+
+    const float scale = static_cast<float>(maxExtent) /
+                        static_cast<float>(maxSourceExtent);
+    outWidth = std::max(1u, static_cast<uint32_t>(
+                                std::lround(static_cast<float>(width) *
+                                            scale)));
+    outHeight = std::max(1u, static_cast<uint32_t>(
+                                 std::lround(static_cast<float>(height) *
+                                             scale)));
+    return outWidth != width || outHeight != height;
+}
+
+uint64_t rgba8MipChainBytes(uint32_t width, uint32_t height,
+                            uint32_t mipLevels) {
+    uint64_t total = 0;
+    for (uint32_t level = 0; level < mipLevels; ++level) {
+        total += static_cast<uint64_t>(width) * height * 4;
+        width = std::max(1u, width / 2);
+        height = std::max(1u, height / 2);
+    }
+    return total;
+}
+
+} // namespace
+
+Texture::Texture(Device &device, UploadContext &upload, const std::string &path)
     : device_(&device) {
+    ResourceLoadStats *loadStats = upload.stats();
     int      w = 0, h = 0, c = 0;
     stbi_uc *pixels = stbi_load(path.c_str(), &w, &h, &c, STBI_rgb_alpha);
     if (!pixels) {
         throw std::runtime_error("failed to load texture image!");
     }
-    createFromPixels(frameSync, pixels, static_cast<uint32_t>(w),
+    if (loadStats) {
+        ++loadStats->textureDecodeCount;
+        loadStats->decodedRgbaBytes +=
+            static_cast<uint64_t>(w) * static_cast<uint64_t>(h) * 4;
+    }
+    createFromPixels(upload, pixels, static_cast<uint32_t>(w),
                      static_cast<uint32_t>(h), VK_FORMAT_R8G8B8A8_SRGB,
-                     /*generateMipmapsFlag*/ true);
+                     /*generateMipmapsFlag*/ true, /*maxExtent*/ 0);
     stbi_image_free(pixels);
     createSamplerFrom(
         VK_FILTER_LINEAR, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR,
         VK_SAMPLER_ADDRESS_MODE_REPEAT, VK_SAMPLER_ADDRESS_MODE_REPEAT);
 }
 
-Texture::Texture(Device &device, FrameSync &frameSync,
+Texture::Texture(Device &device, UploadContext &upload,
                  const TextureCreateInfo &info)
     : device_(&device) {
     if (!info.pixels || info.width == 0 || info.height == 0) {
         throw std::runtime_error("TextureCreateInfo: missing pixels/size");
     }
-    createFromPixels(frameSync, info.pixels, info.width, info.height,
-                     info.format, info.generateMipmaps);
+    createFromPixels(upload, info.pixels, info.width, info.height, info.format,
+                     info.generateMipmaps, info.maxExtent);
     createSamplerFrom(info.minFilter, info.magFilter, info.mipmapMode,
                       info.wrapU, info.wrapV);
 }
@@ -45,55 +143,76 @@ Texture::~Texture() {
     }
 }
 
-void Texture::createFromPixels(FrameSync &frameSync, const void *pixels,
+void Texture::createFromPixels(UploadContext &upload, const void *pixels,
                                uint32_t width, uint32_t height, VkFormat format,
-                               bool generateMipmapsFlag) {
+                               bool generateMipmapsFlag, uint32_t maxExtent) {
+    ResourceLoadStats *loadStats = upload.stats();
+    uint32_t uploadWidth = width;
+    uint32_t uploadHeight = height;
+    std::vector<uint8_t> resizedPixels;
+    const auto *uploadPixels = static_cast<const uint8_t *>(pixels);
+    if (limitedExtent(width, height, maxExtent, uploadWidth, uploadHeight)) {
+        ScopedLoadTimer resizeTimer(loadStats ? &loadStats->textureResizeMs
+                                              : nullptr);
+        resizedPixels = resizeRgba8Bilinear(uploadPixels, width, height,
+                                            uploadWidth, uploadHeight);
+        uploadPixels = resizedPixels.data();
+        if (loadStats)
+            ++loadStats->resizedTextureCount;
+        VKR_LOG_INFO("Texture", "Resized texture {}x{} -> {}x{} (limit {})",
+                     width, height, uploadWidth, uploadHeight, maxExtent);
+    }
+
     VkDeviceSize imageSize =
-        static_cast<VkDeviceSize>(width) * height * 4; // RGBA8
+        static_cast<VkDeviceSize>(uploadWidth) * uploadHeight * 4; // RGBA8
 
     mipLevels_ = generateMipmapsFlag
                      ? (static_cast<uint32_t>(
-                            std::floor(std::log2(std::max(width, height)))) +
+                            std::floor(std::log2(std::max(uploadWidth,
+                                                          uploadHeight)))) +
                         1)
                      : 1u;
 
-    Buffer staging(*device_, imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    void  *mapped = staging.map();
-    memcpy(mapped, pixels, static_cast<size_t>(imageSize));
-    staging.unmap();
+    ScopedLoadTimer uploadTimer(loadStats ? &loadStats->textureUploadMs
+                                          : nullptr);
+
+    const StagedSlice staged = upload.stageBytes(uploadPixels, imageSize);
 
     image_ = std::make_unique<Image>(
-        *device_, static_cast<int>(width), static_cast<int>(height), mipLevels_,
-        VK_SAMPLE_COUNT_1_BIT, format, VK_IMAGE_TILING_OPTIMAL,
+        *device_, static_cast<int>(uploadWidth), static_cast<int>(uploadHeight),
+        mipLevels_, VK_SAMPLE_COUNT_1_BIT, format, VK_IMAGE_TILING_OPTIMAL,
         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
             VK_IMAGE_USAGE_SAMPLED_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
     // transition UNDEFINED → TRANSFER_DST_OPTIMAL + copy
-    VkCommandBuffer cmd = frameSync.beginSingleTimeCommands();
+    VkCommandBuffer cmd = upload.commandBuffer();
     transitionImageLayout(cmd, image_->handle(), format,
                           VK_IMAGE_LAYOUT_UNDEFINED,
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevels_);
-    copyBufferToImage(cmd, staging.handle(), image_->handle(), width, height);
-    frameSync.endSingleTimeCommands(cmd);
+    copyBufferToImage(cmd, staged.buffer, staged.offset, image_->handle(),
+                      uploadWidth, uploadHeight);
 
     if (generateMipmapsFlag) {
-        generateMipmaps(frameSync, image_->handle(), format,
-                        static_cast<int32_t>(width),
-                        static_cast<int32_t>(height), mipLevels_);
+        generateMipmaps(cmd, image_->handle(), format,
+                        static_cast<int32_t>(uploadWidth),
+                        static_cast<int32_t>(uploadHeight), mipLevels_);
     } else {
         // 单独把 mip 0 从 TRANSFER_DST_OPTIMAL → SHADER_READ_ONLY_OPTIMAL
-        VkCommandBuffer cmd2 = frameSync.beginSingleTimeCommands();
-        transitionImageLayout(cmd2, image_->handle(), format,
+        transitionImageLayout(cmd, image_->handle(), format,
                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                               /*mipLevels*/ 1);
-        frameSync.endSingleTimeCommands(cmd2);
     }
 
     image_->createView(format, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels_);
+
+    if (loadStats) {
+        ++loadStats->gpuTextureCount;
+        loadStats->textureUploadBytes += static_cast<uint64_t>(imageSize);
+        loadStats->textureGpuBytesEstimated +=
+            rgba8MipChainBytes(uploadWidth, uploadHeight, mipLevels_);
+    }
 }
 
 void Texture::createSamplerFrom(VkFilter minFilter, VkFilter magFilter,
@@ -187,10 +306,10 @@ void Texture::transitionImageLayout(VkCommandBuffer cmd, VkImage image,
 }
 
 void Texture::copyBufferToImage(VkCommandBuffer cmd, VkBuffer buffer,
-                                VkImage image, uint32_t width,
-                                uint32_t height) {
+                                VkDeviceSize bufferOffset, VkImage image,
+                                uint32_t width, uint32_t height) {
     VkBufferImageCopy region{};
-    region.bufferOffset = 0;
+    region.bufferOffset = bufferOffset;
     region.bufferRowLength = 0;
     region.bufferImageHeight = 0;
 
@@ -206,7 +325,7 @@ void Texture::copyBufferToImage(VkCommandBuffer cmd, VkBuffer buffer,
                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 }
 
-void Texture::generateMipmaps(FrameSync &frameSync, VkImage image,
+void Texture::generateMipmaps(VkCommandBuffer commandBuffer, VkImage image,
                               VkFormat format, int32_t width, int32_t height,
                               uint32_t mipLevels) {
     VkFormatProperties formatProperties;
@@ -218,8 +337,6 @@ void Texture::generateMipmaps(FrameSync &frameSync, VkImage image,
         throw std::runtime_error(
             "texture image format does not support linear blitting!");
     }
-
-    VkCommandBuffer commandBuffer = frameSync.beginSingleTimeCommands();
 
     VkImageMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -289,7 +406,6 @@ void Texture::generateMipmaps(FrameSync &frameSync, VkImage image,
                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
                          0, nullptr, 1, &barrier);
 
-    frameSync.endSingleTimeCommands(commandBuffer);
 }
 
 } // namespace vkr

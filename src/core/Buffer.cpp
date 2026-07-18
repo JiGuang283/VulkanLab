@@ -5,7 +5,8 @@
 namespace vkr {
 
 Buffer::Buffer(Device &device, VkDeviceSize size, VkBufferUsageFlags usage,
-               VkMemoryPropertyFlags memProps)
+               VkMemoryPropertyFlags memProps,
+               VmaAllocationCreateFlags allocationFlags)
     : device_(&device), size_(size) {
     VkBufferCreateInfo bufferInfo{};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -15,6 +16,7 @@ Buffer::Buffer(Device &device, VkDeviceSize size, VkBufferUsageFlags usage,
 
     VmaAllocationCreateInfo allocCI{};
     allocCI.requiredFlags = memProps;
+    allocCI.flags = allocationFlags;
 
     VK_CHECK(vmaCreateBuffer(device.allocator(), &bufferInfo, &allocCI,
                              &buffer_, &allocation_, nullptr));

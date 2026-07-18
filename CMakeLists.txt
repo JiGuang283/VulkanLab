@@ -57,6 +57,19 @@ set(IMGUI_SOURCES
 
 add_executable(VulkanLab ${SOURCES} ${IMGUI_SOURCES})
 
+if(WIN32)
+    add_executable(VulkanLabCtl
+        "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_ctl/main.cpp"
+    )
+    target_include_directories(VulkanLabCtl PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${GLTF_DIR}
+    )
+    target_compile_options(VulkanLabCtl PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/utf-8>
+    )
+endif()
+
 # 添加 src 目录及 GLM 头文件为搜索路径
 target_include_directories(VulkanLab PRIVATE
     ${CMAKE_SOURCE_DIR}/src

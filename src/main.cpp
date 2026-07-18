@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <optional>
 
 int main() {
     vkr::log::init();
@@ -24,7 +25,9 @@ int main() {
                            vkr::sheenChairSceneFactory(config.vertShaderPath,
                                                         config.fragShaderPath)});
 
-        auto registerOptionalGltf = [&](const char *name, const char *path) {
+        auto registerOptionalGltf =
+            [&](const char *name, const char *path,
+                std::optional<vkr::CameraPose> cameraOverride = std::nullopt) {
             if (!std::filesystem::exists(path)) {
                 VKR_LOG_INFO("App", "Skipping optional scene '{}': missing {}",
                              name, path);
@@ -32,7 +35,8 @@ int main() {
             }
             app.registerScene(
                 {name, vkr::gltfSceneFactory(path, config.vertShaderPath,
-                                             config.fragShaderPath)});
+                                             config.fragShaderPath,
+                                             cameraOverride)});
         };
 
         registerOptionalGltf("A Beautiful Game",
@@ -45,6 +49,9 @@ int main() {
         registerOptionalGltf("Diffuse Transmission Teacup",
                              "models/DiffuseTransmissionTeacup.glb");
         registerOptionalGltf("Pot of Coals", "models/PotOfCoals.glb");
+        registerOptionalGltf(
+            "Main Sponza", "models/main_sponza/NewSponza_Main_glTF_003.gltf",
+            vkr::CameraPose{{0.0f, -35.0f, 10.0f}, 93.0f, -2.0f});
 
         app.run();
     } catch (const std::exception &e) {

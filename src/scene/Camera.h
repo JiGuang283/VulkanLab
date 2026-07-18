@@ -11,6 +11,7 @@ class Camera {
     // ---- 投影参数 ----
     void setPerspective(float fovDeg, float aspect, float nearPlane,
                         float farPlane);
+    void setClipPlanes(float nearPlane, float farPlane);
     void setAspect(float aspect);
 
     // ---- 位置与朝向 ----
@@ -31,6 +32,8 @@ class Camera {
     glm::vec3 front() const { return front_; }
     glm::vec3 right() const { return right_; }
     glm::vec3 up() const { return up_; }
+    float nearPlane() const { return nearPlane_; }
+    float farPlane() const { return farPlane_; }
 
   private:
     void updateVectors();
@@ -48,8 +51,8 @@ class Camera {
 
     float fov_ = 45.0f;
     float aspect_ = 800.0f / 600.0f;
-    float nearPlane_ = 0.1f;
-    float farPlane_ = 10.0f;
+    float nearPlane_ = 0.05f;
+    float farPlane_ = 200.0f;
 };
 
 } // namespace vkr

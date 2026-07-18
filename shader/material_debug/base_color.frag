@@ -1,6 +1,7 @@
 #version 450
 
 layout(location = 1) in vec2 fragTexCoord;
+layout(location = 5) in vec4 fragColor;
 
 layout(set = 1, binding = 0) uniform sampler2D baseColorTexture;
 
@@ -27,7 +28,7 @@ void applyAlphaCutoff(float alpha)
 void main()
 {
     vec4 baseColor = texture(baseColorTexture, fragTexCoord) *
-                     push.baseColorFactor;
+                     push.baseColorFactor * fragColor;
     applyAlphaCutoff(baseColor.a);
     outColor = vec4(baseColor.rgb, 1.0);
 }

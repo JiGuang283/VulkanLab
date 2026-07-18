@@ -36,6 +36,7 @@ struct MaterialParams {
     float     emissiveStrength = 1.0f;
     float     occlusionStrength = 1.0f;
     uint32_t  occlusionTexCoord = 0;
+    float     normalScale = 1.0f;
     float     thicknessFactor = 0.0f;
     glm::vec3 attenuationColor{1.0f};
     float     attenuationDistance = 0.0f;

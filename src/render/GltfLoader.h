@@ -10,8 +10,9 @@ namespace vkr {
 class Device;
 class DescriptorAllocator;
 class FallbackTextures;
-class FrameSync;
 class MaterialTemplate;
+class UploadContext;
+struct SceneLoadStats;
 
 /// Loads a glTF 2.0 (.gltf/.glb) file into a self-contained GltfAsset:
 /// decoded textures, materials with PBR factors, meshes (one per primitive)
@@ -21,11 +22,13 @@ class GltfLoader {
   public:
     struct Options {
         bool                     generateMissingNormals = true;
+        uint32_t                 maxTextureSize = 2048; // 0 = Full resolution
         std::shared_ptr<FallbackTextures> fallbackTextures;
+        SceneLoadStats          *loadStats = nullptr;
     };
 
     static GltfAsset load(const std::string &path, Device &device,
-                          FrameSync &frameSync,
+                          UploadContext &upload,
                           DescriptorAllocator  &descriptorAllocator,
                           std::shared_ptr<MaterialTemplate> materialTemplate,
                           const Options        &opts = {});

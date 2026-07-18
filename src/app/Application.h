@@ -2,6 +2,7 @@
 
 #include "Config.h"
 
+#include "diagnostics/SceneLoadStats.h"
 #include "render/RenderQueue.h"
 #include "render/ShaderVariant.h"
 #include "scene/Camera.h"
@@ -12,6 +13,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace vkr {
@@ -26,6 +28,9 @@ class FrameSync;
 class Renderer;
 class PipelineCache;
 class GuiSystem;
+struct RuntimeCommand;
+class RuntimeCommandQueue;
+class NamedPipeServerWin32;
 
 enum class InputMode {
     UI,         // 光标可见，ImGui 接管
@@ -55,8 +60,16 @@ class Application {
     void drawGui();
     void handleSwapChainRecreate();
     const ShaderVariant &currentShaderVariant() const;
+    void applySceneCameraDefaults();
+    void processRuntimeCommand();
 
+    void loadScene(int index, bool replaceCurrent = false);
+    void reloadCurrentScene();
     void switchScene(int index);
+    void setTextureLimit(uint32_t limit);
+    void setShaderVariant(int index);
+    int findSceneIndexByName(const std::string &name) const;
+    int findShaderVariantIndexByName(const std::string &name) const;
 
     Config config_;
 
@@ -77,9 +90,15 @@ class Application {
 
     // 场景切换
     std::vector<SceneEntry> sceneRegistry_;
+    SceneLoadContext        sceneLoadContext_;
     std::unique_ptr<Scene>  currentScene_;
     int                     currentSceneIndex_ = -1;
     int                     pendingSceneIndex_ = -1;
+    std::optional<SceneLoadStats> lastSceneLoadStats_;
+
+    std::unique_ptr<RuntimeCommandQueue> runtimeCommandQueue_;
+    std::unique_ptr<NamedPipeServerWin32> runtimeControlServer_;
+    std::shared_ptr<RuntimeCommand> pendingQuitCommand_;
 
     // 输入模式
     InputMode  mode_ = InputMode::UI;

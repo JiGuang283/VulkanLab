@@ -7,12 +7,12 @@
 namespace vkr {
 
 class Device;
-class FrameSync;
 class Texture;
+class UploadContext;
 
 class FallbackTextures {
   public:
-    FallbackTextures(Device &device, FrameSync &frameSync);
+    FallbackTextures(Device &device, UploadContext &upload);
 
     std::shared_ptr<Texture> textureFor(MaterialTextureSlot slot) const;
     std::shared_ptr<Texture> white() const { return white_; }

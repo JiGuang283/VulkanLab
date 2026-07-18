@@ -6,6 +6,7 @@
 
 #include "VulkanContext.h"
 #include "VulkanTypes.h"
+#include "diagnostics/SceneLoadStats.h"
 #include "vk_mem_alloc.h"
 
 namespace vkr {
@@ -28,6 +29,7 @@ class Device {
     SwapChainSupportDetails querySwapChainSupport() const;
 
     VmaAllocator allocator() const { return allocator_; }
+    AllocatorMemorySnapshot allocatorMemorySnapshot() const;
 
   private:
     void pickPhysicalDevice();

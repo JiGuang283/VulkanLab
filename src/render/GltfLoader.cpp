@@ -9,8 +9,9 @@
 #include "Vertex.h"
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
-#include "core/FrameSync.h"
 #include "core/Log.h"
+#include "core/UploadContext.h"
+#include "diagnostics/SceneLoadStats.h"
 
 // Only the declarations are needed here; the implementation lives in
 // src/tiny_gltf.cpp (TINYGLTF3_IMPLEMENTATION + TINYGLTF3_ENABLE_FS).
@@ -23,8 +24,11 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <stdexcept>
 #include <string>
@@ -47,6 +51,27 @@ static std::string toString(tg3_str str) {
     if (!str.data || str.len == 0)
         return {};
     return std::string(str.data, str.len);
+}
+
+static bool isRemoteUri(const std::string &uri) {
+    return uri.rfind("http://", 0) == 0 || uri.rfind("https://", 0) == 0;
+}
+
+static bool readFileBytes(const std::filesystem::path &path,
+                          std::vector<uint8_t> &out) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file)
+        return false;
+
+    file.seekg(0, std::ios::end);
+    const std::streamoff size = file.tellg();
+    if (size <= 0)
+        return false;
+    file.seekg(0, std::ios::beg);
+
+    out.resize(static_cast<size_t>(size));
+    file.read(reinterpret_cast<char *>(out.data()), size);
+    return file.good();
 }
 
 static const uint8_t *accessorBase(const tg3_model *m, int accIdx) {
@@ -241,7 +266,7 @@ static void parseMaterialExtensions(const tg3_material &gm,
 // ---- GltfLoader::load ------------------------------------------------------
 
 GltfAsset GltfLoader::load(const std::string &path, Device &device,
-                           FrameSync &frameSync,
+                           UploadContext &upload,
                            DescriptorAllocator  &descriptorAllocator,
                            std::shared_ptr<MaterialTemplate> materialTemplate,
                            const Options        &opts) {
@@ -253,8 +278,13 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
     tg3_parse_options_init(&popts);
     popts.images_as_is = 1; // we decode images ourselves below
 
-    tg3_error_code rc =
-        tinygltf3::parse_file(model, errors, path.c_str(), &popts);
+    tg3_error_code rc = TG3_OK;
+    {
+        ScopedLoadTimer parseTimer(opts.loadStats
+                                       ? &opts.loadStats->gltfParseMs
+                                       : nullptr);
+        rc = tinygltf3::parse_file(model, errors, path.c_str(), &popts);
+    }
     if (rc != TG3_OK || errors.has_error()) {
         std::string msg = "GltfLoader: failed to load '" + path + "'";
         for (uint32_t i = 0; i < errors.count(); ++i) {
@@ -267,12 +297,17 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
 
     const tg3_model *m = model.get();
     GltfAsset        asset;
+    const std::filesystem::path modelPath(path);
+    const std::filesystem::path modelDir = modelPath.has_parent_path()
+                                               ? modelPath.parent_path()
+                                               : std::filesystem::path(".");
 
     // 2. Fallback textures
     auto fallbackTextures =
         opts.fallbackTextures
             ? opts.fallbackTextures
-            : std::make_shared<FallbackTextures>(device, frameSync);
+            : std::make_shared<FallbackTextures>(
+                  device, upload);
     auto whiteTex = fallbackTextures->white();
 
     // 3. Lazily decode textures by glTF texture index and required GPU format.
@@ -319,6 +354,7 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
         const tg3_image &img = m->images[tex.source];
         const uint8_t   *encoded = nullptr;
         size_t           encodedSize = 0;
+        std::vector<uint8_t> externalBytes;
         if (img.buffer_view >= 0 &&
             img.buffer_view < (int)m->buffer_views_count) {
             const tg3_buffer_view &bv = m->buffer_views[img.buffer_view];
@@ -328,14 +364,57 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
         } else if (img.image.data && img.image.count > 0) {
             encoded = img.image.data;
             encodedSize = static_cast<size_t>(img.image.count);
+        } else {
+            const std::string uri = toString(img.uri);
+            if (!uri.empty()) {
+                if (isRemoteUri(uri) || uri.rfind("data:", 0) == 0) {
+                    VKR_LOG_WARN("Gltf",
+                                 "{} texture[{}] image[{}] uses unsupported "
+                                 "image URI '{}', using fallback.",
+                                 path, textureIndex, tex.source, uri);
+                    return fallbackTextures->textureFor(slot);
+                }
+
+                const std::filesystem::path imagePath =
+                    std::filesystem::path(uri).is_absolute()
+                        ? std::filesystem::path(uri)
+                        : modelDir / std::filesystem::path(uri);
+                bool readSucceeded = false;
+                {
+                    ScopedLoadTimer readTimer(
+                        opts.loadStats ? &opts.loadStats->textureFileReadMs
+                                       : nullptr);
+                    readSucceeded = readFileBytes(imagePath, externalBytes);
+                }
+                if (readSucceeded) {
+                    encoded = externalBytes.data();
+                    encodedSize = externalBytes.size();
+                } else {
+                    VKR_LOG_WARN("Gltf",
+                                 "{} texture[{}] image[{}] file '{}' could "
+                                 "not be read, using fallback.",
+                                 path, textureIndex, tex.source,
+                                 imagePath.string());
+                    return fallbackTextures->textureFor(slot);
+                }
+            }
         }
 
+        if (opts.loadStats)
+            opts.loadStats->resources.encodedSourceBytes += encodedSize;
+
         int      w = 0, h = 0, c = 0;
-        stbi_uc *pixels =
-            encoded
-                ? stbi_load_from_memory(encoded, static_cast<int>(encodedSize),
-                                        &w, &h, &c, STBI_rgb_alpha)
-                : nullptr;
+        stbi_uc *pixels = nullptr;
+        {
+            ScopedLoadTimer decodeTimer(
+                opts.loadStats ? &opts.loadStats->textureDecodeMs : nullptr);
+            pixels =
+                encoded
+                    ? stbi_load_from_memory(
+                          encoded, static_cast<int>(encodedSize), &w, &h, &c,
+                          STBI_rgb_alpha)
+                    : nullptr;
+        }
         if (!pixels) {
             VKR_LOG_WARN("Gltf",
                          "{} texture[{}] image[{}] decode failed, using "
@@ -344,14 +423,21 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
             return fallbackTextures->textureFor(slot);
         }
 
+        if (opts.loadStats) {
+            ++opts.loadStats->resources.textureDecodeCount;
+            opts.loadStats->resources.decodedRgbaBytes +=
+                static_cast<uint64_t>(w) * static_cast<uint64_t>(h) * 4;
+        }
+
         TextureCreateInfo ci;
         ci.pixels = pixels;
         ci.width = static_cast<uint32_t>(w);
         ci.height = static_cast<uint32_t>(h);
+        ci.maxExtent = opts.maxTextureSize;
         ci.generateMipmaps = true;
         ci.format = format;
         applyGltfSampler(m, tex, ci);
-        auto texture = std::make_shared<Texture>(device, frameSync, ci);
+        auto texture = std::make_shared<Texture>(device, upload, ci);
         stbi_image_free(pixels);
 
         textureCache.emplace(key, texture);
@@ -364,49 +450,64 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
         MaterialInstance::makeTextureSet(whiteTex, *fallbackTextures);
     MaterialParams fallbackParams;
     fallbackParams.debugName = "Fallback Material";
-    auto fallbackMat = std::make_shared<MaterialInstance>(
-        device, descriptorAllocator, materialTemplate, defaultTextureSet,
-        fallbackParams);
+    std::shared_ptr<MaterialInstance> fallbackMat;
+    {
+        ScopedLoadTimer materialTimer(
+            opts.loadStats ? &opts.loadStats->materialSetupMs : nullptr);
+        fallbackMat = std::make_shared<MaterialInstance>(
+            device, descriptorAllocator, materialTemplate, defaultTextureSet,
+            fallbackParams);
+    }
 
     asset.materials.reserve(m->materials_count + 1);
 
     for (uint32_t i = 0; i < m->materials_count; ++i) {
         const tg3_material &gm = m->materials[i];
         MaterialParams      p;
-        p.debugName = toString(gm.name);
-        if (p.debugName.empty())
-            p.debugName = "Material #" + std::to_string(i);
-        const double *bcf = gm.pbr_metallic_roughness.base_color_factor;
-        p.baseColorFactor = {(float)bcf[0], (float)bcf[1], (float)bcf[2],
-                             (float)bcf[3]};
-        p.metallicFactor = (float)gm.pbr_metallic_roughness.metallic_factor;
-        p.roughnessFactor = (float)gm.pbr_metallic_roughness.roughness_factor;
-        const double *ef = gm.emissive_factor;
-        p.emissiveFactor = {(float)ef[0], (float)ef[1], (float)ef[2]};
-        p.alphaCutoff = (float)gm.alpha_cutoff;
-        if (tg3_str_equals_cstr(gm.alpha_mode, "MASK")) {
-            p.alphaMode = AlphaMode::Mask;
-        } else if (tg3_str_equals_cstr(gm.alpha_mode, "BLEND")) {
-            p.alphaMode = AlphaMode::Blend;
-        } else {
-            p.alphaMode = AlphaMode::Opaque;
-        }
-        parseMaterialExtensions(gm, p, path, i);
-        p.doubleSided = gm.double_sided != 0;
-        p.occlusionStrength =
-            glm::clamp(static_cast<float>(gm.occlusion_texture.strength),
-                       0.0f, 1.0f);
-        if (gm.occlusion_texture.index >= 0) {
-            if (gm.occlusion_texture.tex_coord == 0 ||
-                gm.occlusion_texture.tex_coord == 1) {
-                p.occlusionTexCoord =
-                    static_cast<uint32_t>(gm.occlusion_texture.tex_coord);
+        {
+            ScopedLoadTimer materialTimer(
+                opts.loadStats ? &opts.loadStats->materialSetupMs : nullptr);
+            p.debugName = toString(gm.name);
+            if (p.debugName.empty())
+                p.debugName = "Material #" + std::to_string(i);
+            const double *bcf = gm.pbr_metallic_roughness.base_color_factor;
+            p.baseColorFactor = {(float)bcf[0], (float)bcf[1], (float)bcf[2],
+                                 (float)bcf[3]};
+            p.metallicFactor =
+                (float)gm.pbr_metallic_roughness.metallic_factor;
+            p.roughnessFactor =
+                (float)gm.pbr_metallic_roughness.roughness_factor;
+            const double *ef = gm.emissive_factor;
+            p.emissiveFactor = {(float)ef[0], (float)ef[1], (float)ef[2]};
+            p.alphaCutoff = (float)gm.alpha_cutoff;
+            if (tg3_str_equals_cstr(gm.alpha_mode, "MASK")) {
+                p.alphaMode = AlphaMode::Mask;
+            } else if (tg3_str_equals_cstr(gm.alpha_mode, "BLEND")) {
+                p.alphaMode = AlphaMode::Blend;
             } else {
-                VKR_LOG_WARN("Gltf",
-                             "{} material[{}] uses occlusion texCoord {}, "
-                             "but only 0 and 1 are supported; using 0.",
-                             path, i, gm.occlusion_texture.tex_coord);
-                p.occlusionTexCoord = 0;
+                p.alphaMode = AlphaMode::Opaque;
+            }
+            parseMaterialExtensions(gm, p, path, i);
+            p.doubleSided = gm.double_sided != 0;
+            if (gm.normal_texture.index >= 0) {
+                p.normalScale = glm::max(
+                    static_cast<float>(gm.normal_texture.scale), 0.0f);
+            }
+            p.occlusionStrength =
+                glm::clamp(static_cast<float>(gm.occlusion_texture.strength),
+                           0.0f, 1.0f);
+            if (gm.occlusion_texture.index >= 0) {
+                if (gm.occlusion_texture.tex_coord == 0 ||
+                    gm.occlusion_texture.tex_coord == 1) {
+                    p.occlusionTexCoord = static_cast<uint32_t>(
+                        gm.occlusion_texture.tex_coord);
+                } else {
+                    VKR_LOG_WARN("Gltf",
+                                 "{} material[{}] uses occlusion texCoord {}, "
+                                 "but only 0 and 1 are supported; using 0.",
+                                 path, i, gm.occlusion_texture.tex_coord);
+                    p.occlusionTexCoord = 0;
+                }
             }
         }
 
@@ -425,9 +526,13 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
         textures[indexOf(MaterialTextureSlot::Emissive)] = pickTexture(
             gm.emissive_texture.index, MaterialTextureSlot::Emissive);
 
-        asset.materials.push_back(std::make_shared<MaterialInstance>(
-            device, descriptorAllocator, materialTemplate, std::move(textures),
-            std::move(p)));
+        {
+            ScopedLoadTimer materialTimer(
+                opts.loadStats ? &opts.loadStats->materialSetupMs : nullptr);
+            asset.materials.push_back(std::make_shared<MaterialInstance>(
+                device, descriptorAllocator, materialTemplate,
+                std::move(textures), std::move(p)));
+        }
     }
     asset.materials.push_back(fallbackMat);
     const size_t fallbackMatIdx = asset.materials.size() - 1;
@@ -449,6 +554,8 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
             const tg3_str_int_pair *posAttr = findAttr(prim, "POSITION");
             if (!posAttr)
                 continue;
+
+            const auto meshCpuStart = std::chrono::steady_clock::now();
 
             const tg3_accessor &posAcc = m->accessors[posAttr->value];
             uint64_t            vertCount = posAcc.count;
@@ -487,6 +594,26 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
                 tStride = accessorStride(m, tAttr->value);
             }
 
+            const tg3_str_int_pair *cAttr = findAttr(prim, "COLOR_0");
+            const uint8_t          *cBase = nullptr;
+            int32_t                 cStride = 0;
+            int32_t                 cType = TG3_TYPE_VEC4;
+            if (cAttr) {
+                const tg3_accessor &cAcc = m->accessors[cAttr->value];
+                if (cAcc.component_type == TG3_COMPONENT_TYPE_FLOAT &&
+                    (cAcc.type == TG3_TYPE_VEC3 ||
+                     cAcc.type == TG3_TYPE_VEC4)) {
+                    cBase = accessorBase(m, cAttr->value);
+                    cStride = accessorStride(m, cAttr->value);
+                    cType = cAcc.type;
+                } else {
+                    VKR_LOG_WARN("Gltf",
+                                 "{} mesh[{}] primitive[{}] has unsupported "
+                                 "COLOR_0 format; using white vertex color.",
+                                 path, mi, pi);
+                }
+            }
+
             std::vector<Vertex> verts(static_cast<size_t>(vertCount));
             for (uint64_t i = 0; i < vertCount; ++i) {
                 Vertex      &v = verts[i];
@@ -522,6 +649,13 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
                     const float *t = reinterpret_cast<const float *>(
                         tBase + static_cast<size_t>(i) * tStride);
                     v.tangent = {t[0], t[1], t[2], t[3]};
+                }
+
+                if (cBase) {
+                    const float *c = reinterpret_cast<const float *>(
+                        cBase + static_cast<size_t>(i) * cStride);
+                    v.color = {c[0], c[1], c[2],
+                               cType == TG3_TYPE_VEC4 ? c[3] : 1.0f};
                 }
             }
 
@@ -561,8 +695,15 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
             if (!tBase)
                 generateTangents(verts, indices);
 
+            if (opts.loadStats) {
+                opts.loadStats->meshCpuMs +=
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - meshCpuStart)
+                        .count();
+            }
+
             auto mesh = std::make_shared<Mesh>(
-                device, frameSync, verts.data(), verts.size() * sizeof(Vertex),
+                device, upload, verts.data(), verts.size() * sizeof(Vertex),
                 indices.data(), static_cast<uint32_t>(indices.size()));
             asset.meshes.push_back(mesh);
             primsByMesh[mi].push_back({mesh, prim.material});
@@ -570,6 +711,7 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
     }
 
     // 6. Walk the node hierarchy: local TRS/matrix -> world; emit SceneObjects.
+    const auto hierarchyStart = std::chrono::steady_clock::now();
     std::function<void(int, const glm::mat4 &)> walk =
         [&](int nodeIdx, const glm::mat4 &parent) {
             if (nodeIdx < 0 || nodeIdx >= (int)m->nodes_count)
@@ -622,6 +764,12 @@ GltfAsset GltfLoader::load(const std::string &path, Device &device,
                 asset.objects.push_back({pe.mesh,
                                          asset.materials[fallbackMatIdx],
                                          glm::mat4(1.0f)});
+    }
+    if (opts.loadStats) {
+        opts.loadStats->hierarchyMs +=
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - hierarchyStart)
+                .count();
     }
 
     if (asset.meshes.empty())

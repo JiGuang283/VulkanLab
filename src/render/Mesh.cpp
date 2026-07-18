@@ -2,40 +2,65 @@
 #include "TangentGenerator.h"
 #include "Vertex.h"
 #include "core/Device.h"
-#include "core/FrameSync.h"
 #include "core/Log.h"
+#include "core/UploadContext.h"
+#include "diagnostics/SceneLoadStats.h"
 
 #include <tiny_obj_loader.h>
 
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
 
 namespace vkr {
 
-Mesh::Mesh(Device &device, FrameSync &frameSync, const void *vertexData,
+namespace {
+
+Bounds computeBounds(const void *vertexData, VkDeviceSize vertexSize) {
+    Bounds bounds{};
+    if (!vertexData || vertexSize < sizeof(Vertex))
+        return bounds;
+
+    const size_t vertexCount = static_cast<size_t>(vertexSize / sizeof(Vertex));
+    const auto  *vertices = static_cast<const Vertex *>(vertexData);
+    glm::vec3    minV{std::numeric_limits<float>::max()};
+    glm::vec3    maxV{std::numeric_limits<float>::lowest()};
+
+    for (size_t i = 0; i < vertexCount; ++i) {
+        minV = glm::min(minV, vertices[i].pos);
+        maxV = glm::max(maxV, vertices[i].pos);
+    }
+
+    bounds.min = minV;
+    bounds.max = maxV;
+    bounds.center = (minV + maxV) * 0.5f;
+    bounds.radius = glm::length(maxV - bounds.center);
+    bounds.valid = true;
+    return bounds;
+}
+
+} // namespace
+
+Mesh::Mesh(Device &device, UploadContext &upload, const void *vertexData,
            VkDeviceSize vertexSize, const uint32_t *indexData,
            uint32_t indexCount)
     : indexCount_(indexCount) {
+    ResourceLoadStats *loadStats = upload.stats();
+    localBounds_ = computeBounds(vertexData, vertexSize);
+    ScopedLoadTimer uploadTimer(loadStats ? &loadStats->meshUploadMs
+                                          : nullptr);
 
     // ---- 顶点缓冲 ----
     {
-        Buffer staging(device, vertexSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                           VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        void  *mapped = staging.map();
-        memcpy(mapped, vertexData, vertexSize);
-        staging.unmap();
-
         vertexBuffer_ =
             std::make_unique<Buffer>(device, vertexSize,
                                      VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                          VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-        frameSync.copyBuffer(staging.handle(), vertexBuffer_->handle(),
-                             vertexSize);
+        upload.uploadBuffer(vertexData, vertexSize, vertexBuffer_->handle());
     }
 
     // ---- 索引缓冲 ----
@@ -43,24 +68,25 @@ Mesh::Mesh(Device &device, FrameSync &frameSync, const void *vertexData,
         VkDeviceSize indexSize =
             static_cast<VkDeviceSize>(indexCount) * sizeof(uint32_t);
 
-        Buffer staging(device, indexSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                           VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        void  *mapped = staging.map();
-        memcpy(mapped, indexData, indexSize);
-        staging.unmap();
-
         indexBuffer_ = std::make_unique<Buffer>(
             device, indexSize,
             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-        frameSync.copyBuffer(staging.handle(), indexBuffer_->handle(),
-                             indexSize);
+        upload.uploadBuffer(indexData, indexSize, indexBuffer_->handle());
+    }
+
+    if (loadStats) {
+        ++loadStats->gpuMeshCount;
+        loadStats->vertexCount += vertexSize / sizeof(Vertex);
+        loadStats->indexCount += indexCount;
+        loadStats->vertexUploadBytes += static_cast<uint64_t>(vertexSize);
+        loadStats->indexUploadBytes +=
+            static_cast<uint64_t>(indexCount) * sizeof(uint32_t);
     }
 }
 
-std::unique_ptr<Mesh> Mesh::fromOBJ(Device &device, FrameSync &frameSync,
+std::unique_ptr<Mesh> Mesh::fromOBJ(Device &device, UploadContext &upload,
                                     const std::string &path) {
     tinyobj::attrib_t                attrib;
     std::vector<tinyobj::shape_t>    shapes;
@@ -113,7 +139,7 @@ std::unique_ptr<Mesh> Mesh::fromOBJ(Device &device, FrameSync &frameSync,
                   vertices.size(), indices.size());
 
     return std::make_unique<Mesh>(
-        device, frameSync, vertices.data(),
+        device, upload, vertices.data(),
         static_cast<VkDeviceSize>(sizeof(Vertex) * vertices.size()),
         indices.data(), static_cast<uint32_t>(indices.size()));
 }

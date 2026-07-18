@@ -1,6 +1,7 @@
 #version 450
 
 layout(location = 1) in vec2 fragTexCoord;
+layout(location = 5) in vec4 fragColor;
 
 layout(set = 1, binding = 0) uniform sampler2D baseColorTexture;
 layout(set = 1, binding = 2) uniform sampler2D metallicRoughnessTexture;
@@ -28,7 +29,7 @@ void applyAlphaCutoff(float alpha)
 void main()
 {
     float baseAlpha = texture(baseColorTexture, fragTexCoord).a *
-                      push.baseColorFactor.a;
+                      push.baseColorFactor.a * fragColor.a;
     applyAlphaCutoff(baseAlpha);
 
     float metallic = texture(metallicRoughnessTexture, fragTexCoord).b *

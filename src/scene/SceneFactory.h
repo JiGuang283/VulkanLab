@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -8,8 +9,14 @@ namespace vkr {
 
 class Device;
 class DescriptorAllocator;
-class FrameSync;
 class Scene;
+class UploadContext;
+struct SceneLoadStats;
+
+struct SceneLoadContext {
+    uint32_t maxTextureSize = 2048; // 0 = Full resolution
+    SceneLoadStats *loadStats = nullptr;
+};
 
 /// Constructs a scene given already-created core objects. The factory
 /// captures by value anything it needs (paths, etc.).
@@ -18,7 +25,8 @@ class Scene;
 /// material templates; Application builds the shared opaque pipeline from the
 /// scene's primary template.
 using SceneFactory = std::function<std::unique_ptr<Scene>(
-    Device &, FrameSync &, DescriptorAllocator &)>;
+    Device &, UploadContext &, DescriptorAllocator &,
+    const SceneLoadContext &)>;
 
 struct SceneEntry {
     std::string  name;

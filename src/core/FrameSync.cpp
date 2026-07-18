@@ -156,21 +156,13 @@ void FrameSync::endSingleTimeCommands(VkCommandBuffer commandBuffer) {
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &commandBuffer;
 
+    ++uploadSyncCounters_.singleTimeSubmits;
     vkQueueSubmit(device_->graphicsQueue(), 1, &submitInfo, VK_NULL_HANDLE);
+    ++uploadSyncCounters_.queueWaitIdleCalls;
     vkQueueWaitIdle(device_->graphicsQueue());
 
     vkFreeCommandBuffers(device_->logicalDevice(), commandPool_, 1,
                          &commandBuffer);
-}
-
-void FrameSync::copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size) {
-    VkCommandBuffer cmd = beginSingleTimeCommands();
-
-    VkBufferCopy copyRegion{};
-    copyRegion.size = size;
-    vkCmdCopyBuffer(cmd, src, dst, 1, &copyRegion);
-
-    endSingleTimeCommands(cmd);
 }
 
 // ---- 内部创建 ----

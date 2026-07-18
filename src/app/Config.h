@@ -18,6 +18,7 @@ struct Config {
 
     // ---- 渲染设置 ----
     bool enableValidation = true;
+    uint32_t gltfMaxTextureSize = 2048; // 0 = Full resolution
 
     // ---- 输入参数 ----
     float moveSpeed = 2.0f;

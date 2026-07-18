@@ -2,6 +2,7 @@
 
 layout(location = 0) in vec3 fragNormalWS;
 layout(location = 1) in vec2 fragTexCoord;
+layout(location = 5) in vec4 fragColor;
 
 layout(set = 1, binding = 0) uniform sampler2D texSampler;
 
@@ -28,7 +29,7 @@ void applyAlphaCutoff(float alpha)
 void main()
 {
     vec4 tex = texture(texSampler, fragTexCoord);
-    vec4 albedo = tex * push.baseColorFactor;
+    vec4 albedo = tex * push.baseColorFactor * fragColor;
     applyAlphaCutoff(albedo.a);
 
     vec3 n = normalize(fragNormalWS);

@@ -25,6 +25,14 @@ struct CameraPose {
     float     pitch = -30.0f;
 };
 
+struct Bounds {
+    glm::vec3 min{0.0f};
+    glm::vec3 max{0.0f};
+    glm::vec3 center{0.0f};
+    float     radius = 0.0f;
+    bool      valid = false;
+};
+
 class Scene {
   public:
     using UpdateFn = std::function<void(Scene &, float dt, float time)>;
@@ -61,6 +69,7 @@ class Scene {
     }
     std::vector<SceneLight>        &lights() { return lights_; }
     const std::vector<SceneLight>  &lights() const { return lights_; }
+    const Bounds                   &bounds() const { return bounds_; }
     std::optional<CameraPose> initialCamera;
 
   private:
@@ -70,6 +79,7 @@ class Scene {
     std::vector<std::shared_ptr<Mesh>>     meshes_;
     std::vector<SceneObject>               objects_;
     std::vector<SceneLight>                lights_;
+    Bounds                                 bounds_;
     UpdateFn                               updateFn_;
 };
 
