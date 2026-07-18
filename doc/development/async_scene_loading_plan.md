@@ -1,8 +1,8 @@
 # 大型场景响应式加载路线图
 
 > Status: Active
-> Last verified: 2026-07-18
-> Verified against: `d4539b7`
+> Last verified: 2026-07-19
+> Verified against: `c3aa7eb`
 
 ## Summary
 
@@ -10,7 +10,7 @@
 
 路线图包含已经完成的诊断与批量上传基线，以及四个后续阶段：CPU 后台准备、每帧增量 GPU 上传、任务控制、压缩纹理资产管线。更复杂的纹理 residency/streaming 只有在压缩纹理完成后仍不能满足目标时才进入实施。
 
-阶段 0、1 和 2 已实现；本文件继续作为阶段 3/4 的活动路线图。当前能力以 [资源加载](../architecture/resource_loading.md) 为准。
+阶段 0、1、2 和 3 已实现；本文件继续作为阶段 4 的活动路线图。当前能力以 [资源加载](../architecture/resource_loading.md) 为准。
 
 ## Current Baseline
 
@@ -35,7 +35,7 @@
 - generation、CPU/GPU 取消、Loading UI、失败收尾和 descriptor set 回收已经接入。
 - Runtime Control v2 提供 taskId、`load.status`、`load.cancel` 和客户端 `--no-wait`。
 
-阶段 2 解决主循环响应性，但没有减少 PNG/JPEG 解码、bilinear resize、RGBA8 上传量和常驻显存。阶段 3 是当前下一项工作。
+阶段 3 已加入 KTX2 派生纹理资产管线：离线工具生成 UASTC + Zstd 缓存，worker 优先转码为 BC7 并保留 stb fallback，GPU 直接上传预生成 mip chain。Main Sponza 的最终画面和显存曲线仍需在目标 GPU 上手动验证。
 
 ## Goals
 
@@ -228,6 +228,8 @@ GPU upload 使用 graphics queue，暂不引入 transfer queue。独立上传 su
 
 ## Stage 3: KTX2 And Derived Asset Pipeline
 
+> Implementation: In progress since 2026-07-19
+
 阶段 2 解决响应性，不会减少 PNG/JPEG decode 成本和 RGBA8 纹理常驻体积。阶段 3 引入离线派生资产，优先采用成熟的 KTX-Software/libktx 与 Basis Universal，不自行设计压缩格式。
 
 ### Scope
@@ -239,12 +241,38 @@ GPU upload 使用 graphics queue，暂不引入 transfer queue。独立上传 su
 - runtime 直接上传预生成 mip，不再对这些纹理执行 CPU image decode、bilinear resize 或 GPU blit mip generation。
 - 原始 `.gltf/.glb` 保持不变，通过 manifest/cache 映射到派生纹理；缓存缺失或无效时可回退现有加载路径。
 
+### 固定设计
+
+- KTX-Software 固定为 v4.4.2，通过 `external/ktx` submodule 递归初始化；运行时只使用 libktx 读取/转码，不使用其 Vulkan upload helper。
+- `VulkanLabAssetTool texture-cache build --scene ... --texture-limit ...` 显式生成缓存；运行时不自动编码。
+- 默认缓存根目录为 `derived_assets`，profile 只接受 `0/512/1024/2048` 并要求精确匹配。
+- manifest 位于 `manifests/<scene-key>/<profile>.json`，内容寻址 KTX2 位于 `blobs/<cache-key>.ktx2`。manifest schema v1 由纯 CPU 类型负责读写和快速 file-stamp 校验。
+- KTX2 使用 UASTC LDR 4x4 + Zstd 和完整 mip chain。runtime cache hit 优先转码 BC7；设备不支持 BC7 时转为 RGBA32；任何 miss/invalid 都回退 stb。
+- 第一版统一 BC7，不修改 shader 以支持 BC5/BC4，也不引入 streaming、residency 或自动重建缓存。
+
+### 开发与验证流程
+
+1. 初始化 `external/ktx` submodule，并确保 Debug/Release 都能构建 libktx、`ktx` CLI 和 `VulkanLabAssetTool`。
+2. 用纯 CPU 单元测试覆盖 manifest path/profile、semantic/wrap 查找、save/load round trip、file-stamp 失效和未知 schema 拒绝。
+3. 在 worker 中接入 manifest lookup 和 KTX2 transcode，保留现有 stb fallback；不得从 worker 创建 Vulkan 对象。
+4. 扩展 prepared texture payload 和 Texture 上传，使 prebuilt mip chain 不再走 GPU blit。
+5. 把 cache 与 transcode 字段接入日志、Stats UI 和 Runtime Control JSON。
+6. 分别生成并验证 Main Sponza profile：
+
+```powershell
+VulkanLabAssetTool texture-cache build --scene models/main_sponza/NewSponza_Main_glTF_003.gltf --texture-limit 1024
+VulkanLabAssetTool texture-cache build --scene models/main_sponza/NewSponza_Main_glTF_003.gltf --texture-limit 2048
+```
+
+生成命令的工作目录决定默认 `derived_assets` 位置；自动化验证应显式设置 `--cache-root`，确保它与 `VulkanLab.exe` 的运行目录一致。
+
 ### Acceptance
 
 - Main Sponza 纹理 CPU decode/resize 时间显著下降。
 - texture upload bytes、VMA allocation delta 和专用显存明显低于 RGBA8 2048 基线。
 - sRGB、normal、MR、AO、alpha 和 emissive 视觉回归通过。
 - cache key 改变时正确重建，不复用不同语义或不同尺寸的旧纹理。
+- cache hit 统计与实际材质引用一致，cache miss/invalid 原因可见；无 BC7 设备走 RGBA32 prebuilt mip 路径且不崩溃。
 
 ## Stage 4: Residency And Streaming, Conditional
 

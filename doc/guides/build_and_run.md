@@ -1,8 +1,8 @@
 # 构建与运行
 
 > Status: Current
-> Last verified: 2026-07-18
-> Verified against: Stage 2 working tree based on `d4539b7`
+> Last verified: 2026-07-19
+> Verified against: `c3aa7eb`
 
 ## 环境要求
 
@@ -11,6 +11,13 @@
 - CMake 3.20 或更高版本。
 - Vulkan SDK。CMake 需要能找到 Vulkan、`glslc` 和 SDK 中的 GLM 头文件。
 - 仓库内 `external/` 依赖完整，尤其是 `glfw/lib-vc2022`、ImGui、stb、VMA 和 glTF 头文件。
+- 阶段三使用 KTX-Software v4.4.2 submodule。首次克隆或更新后必须递归初始化：
+
+```powershell
+git submodule update --init --recursive external/ktx
+```
+
+如果模型资产由 Git LFS 管理，还需要先安装 Git LFS 并在仓库根目录执行 `git lfs pull`。KTX2 派生缓存本身不提交到 Git LFS 或普通 Git。
 
 首次配置：
 
@@ -33,6 +40,13 @@ build-debug/Debug/VulkanLab.exe
 build-debug/Debug/VulkanLabCtl.exe
 build/Release/VulkanLab.exe
 build/Release/VulkanLabCtl.exe
+```
+
+阶段三的资产工具接入构建后还会生成：
+
+```text
+build-debug/Debug/VulkanLabAssetTool.exe
+build/Release/VulkanLabAssetTool.exe
 ```
 
 ## 启动
@@ -72,10 +86,41 @@ Runtime Control 默认关闭。需要从另一个终端控制运行中的渲染�
 
 `Main Sponza` 的入口是 `models/main_sponza/NewSponza_Main_glTF_003.gltf`。缺失的可选模型只会被跳过，不影响程序启动。CMake 当前复制整个 `models/` 目录，大型本地资产会明显增加构建后的复制时间。
 
+## KTX2 派生纹理缓存
+
+原始 glTF、GLB、PNG 和 JPEG 不会被修改。`VulkanLabAssetTool` 显式生成独立的 KTX2 缓存，默认目录名为 `derived_assets`。缓存路径相对于执行工具或渲染器时的工作目录，因此生成目录必须与渲染器的运行目录一致，或者通过 `--cache-root` 明确指定运行目录下的缓存。
+
+从仓库根目录为 Debug 运行目录生成 Main Sponza 1024 和 2048 两个 profile：
+
+```powershell
+.\build-debug\Debug\VulkanLabAssetTool.exe texture-cache build `
+  --scene models/main_sponza/NewSponza_Main_glTF_003.gltf `
+  --texture-limit 1024 `
+  --cache-root build-debug/Debug/derived_assets
+
+.\build-debug\Debug\VulkanLabAssetTool.exe texture-cache build `
+  --scene models/main_sponza/NewSponza_Main_glTF_003.gltf `
+  --texture-limit 2048 `
+  --cache-root build-debug/Debug/derived_assets
+```
+
+缓存按 scene 和 texture limit 精确匹配。设置为 `1024` 时不会复用 `2048` profile；`Full` 对应 `--texture-limit 0`。重新执行命令会复用有效 blob，`--force` 用于强制重新编码。工具必须完整成功后才发布新 manifest，失败不会修改源资产。
+
+使用 `build-debug/Debug` 作为工作目录启动渲染器后，默认配置会读取 `build-debug/Debug/derived_assets`：
+
+```powershell
+cd build-debug\Debug
+.\VulkanLab.exe --runtime-control
+```
+
+cache hit 时，worker 读取预生成 mip chain，并优先转码为 BC7；设备不支持 BC7 时转为 RGBA32。cache miss、manifest 过期、KTX2 损坏或 profile 不匹配时回退到现有 stb decode、CPU resize 和 GPU mip blit 路径，场景仍应可以加载。
+
+可在日志、`Stats -> Last Scene Load` 或 Runtime Control 的加载统计中检查 cache lookup/hit/miss/invalid、KTX2 读取与转码耗时、BC7/RGBA32 数量、prebuilt mip 数量和实际上传字节。首次验证建议先加载 1024 profile，再与无缓存加载结果比较。
+
 ## 运行注意事项
 
 - glTF 纹理尺寸默认限制为 `2048`，可在 Renderer 面板切换为 `Full`、`2048`、`1024` 或 `512`。切换会创建新的场景加载任务。
 - glTF 解析、图片解码和 CPU 缩放在 worker 执行；GPU 创建和上传由主线程按帧推进。加载进度和取消操作位于 ImGui `Loading` 面板。
 - GPU build 前会释放旧 Scene 以控制大场景切换时的显存峰值，因此该阶段可能只显示 ImGui 和空场景。
-- `Full` 对 Main Sponza 仍是高风险选项；当前运行时使用 RGBA8，尚未接入 KTX2/BasisU 压缩资产。
+- `Full` 对 Main Sponza 仍是高风险选项。KTX2 缓存只覆盖已经显式生成且精确匹配的 profile；未命中时仍会回退 RGBA8。
 - 日志写入运行目录下的 `logs/VulkanLab.log`。加载统计也显示在 ImGui 的 `Stats -> Last Scene Load`。
