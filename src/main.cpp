@@ -5,12 +5,53 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <iostream>
 #include <optional>
+#include <stdexcept>
+#include <string>
 
-int main() {
+namespace {
+
+void printUsage(std::ostream &out) {
+    out << "Usage: VulkanLab.exe [--runtime-control] [--help]\n"
+        << "\n"
+        << "Options:\n"
+        << "  --runtime-control  Enable the local VulkanLabCtl named-pipe "
+           "interface.\n"
+        << "  --help             Show this help and exit.\n";
+}
+
+bool parseArguments(int argc, char **argv, vkr::Config &config) {
+    for (int i = 1; i < argc; ++i) {
+        const std::string argument = argv[i];
+        if (argument == "--runtime-control") {
+            config.enableRuntimeControl = true;
+        } else if (argument == "--help") {
+            return false;
+        } else {
+            throw std::invalid_argument("Unknown argument: " + argument);
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+int main(int argc, char **argv) {
+    vkr::Config config;
+    try {
+        if (!parseArguments(argc, argv, config)) {
+            printUsage(std::cout);
+            return EXIT_SUCCESS;
+        }
+    } catch (const std::exception &e) {
+        std::cerr << "Error: " << e.what() << "\n\n";
+        printUsage(std::cerr);
+        return EXIT_FAILURE;
+    }
+
     vkr::log::init();
     try {
-        vkr::Config config;
         // 按需覆写默认配置，例如：
         // config.windowWidth  = 1280;
         // config.windowHeight = 720;

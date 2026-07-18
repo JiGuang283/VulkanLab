@@ -2,6 +2,8 @@
 
 Runtime Control 允许在 VulkanLab 已经运行时，从另一个终端切换场景、纹理限制和 Shader，并读取加载统计或关闭程序。控制接口仅用于本机调试，通过 Windows Named Pipe 通信，不开放网络端口。
 
+Runtime Control 默认关闭。需要外部控制时，必须使用 `--runtime-control` 启动 VulkanLab。
+
 ## 构建与启动
 
 构建 Debug：
@@ -29,7 +31,7 @@ VulkanLab 使用相对路径读取 Shader、模型和纹理，因此应从对应
 
 ```powershell
 cd build\Release
-.\VulkanLab.exe
+.\VulkanLab.exe --runtime-control
 ```
 
 保持 VulkanLab 运行，在另一个终端进入同一目录后使用控制工具：
@@ -138,6 +140,7 @@ $workDir = Resolve-Path .\build\Release
 $app = Start-Process `
     -FilePath "$workDir\VulkanLab.exe" `
     -WorkingDirectory $workDir `
+    -ArgumentList '--runtime-control' `
     -PassThru
 
 try {
@@ -172,6 +175,7 @@ if ($LASTEXITCODE -ne 0) {
 ## 行为与限制
 
 - v1 只支持 Windows，并使用固定管道 `\\.\pipe\VulkanLab`。
+- Runtime Control 默认关闭，只有 `VulkanLab.exe --runtime-control` 会创建管道和控制线程。
 - 同一时间只支持一个 VulkanLab 控制实例和一个在途请求。
 - 场景加载仍在渲染主线程同步执行。控制工具会等待加载完成，此时窗口仍可能显示无响应。
 - 同步加载期间不能执行新的状态查询、切换或取消命令。
@@ -182,7 +186,7 @@ if ($LASTEXITCODE -ne 0) {
 
 ### 提示 runtime control pipe is unavailable
 
-确认 VulkanLab 已启动，并已完成初始场景加载。控制服务在应用初始化完成后开始监听。如果另一个 VulkanLab 实例已经占用固定管道，新实例会继续运行，但 Runtime Control 会被禁用。
+确认 VulkanLab 使用 `--runtime-control` 启动，并已完成初始场景加载。控制服务在应用初始化完成后开始监听。如果另一个 VulkanLab 实例已经占用固定管道，新实例会继续运行，但 Runtime Control 会被禁用。未开启控制服务时，`VulkanLabCtl` 返回退出码 `2`。
 
 ### scene load 长时间没有输出
 

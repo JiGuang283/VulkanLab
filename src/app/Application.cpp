@@ -347,17 +347,25 @@ Application::~Application() {
 
 void Application::run() {
     init();
-    runtimeCommandQueue_ = std::make_unique<RuntimeCommandQueue>();
-    runtimeControlServer_ =
-        std::make_unique<NamedPipeServerWin32>(*runtimeCommandQueue_);
-    runtimeControlServer_->start();
+    if (config_.enableRuntimeControl) {
+        runtimeCommandQueue_ = std::make_unique<RuntimeCommandQueue>();
+        runtimeControlServer_ =
+            std::make_unique<NamedPipeServerWin32>(*runtimeCommandQueue_);
+        runtimeControlServer_->start();
+    } else {
+        VKR_LOG_INFO(
+            "Control",
+            "Runtime control disabled; pass --runtime-control to enable.");
+    }
     try {
         mainLoop();
     } catch (...) {
-        runtimeControlServer_->stop();
+        if (runtimeControlServer_)
+            runtimeControlServer_->stop();
         throw;
     }
-    runtimeControlServer_->stop();
+    if (runtimeControlServer_)
+        runtimeControlServer_->stop();
 }
 
 void Application::registerScene(SceneEntry entry) {

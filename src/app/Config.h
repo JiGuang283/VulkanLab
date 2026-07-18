@@ -18,6 +18,7 @@ struct Config {
 
     // ---- 渲染设置 ----
     bool enableValidation = true;
+    bool enableRuntimeControl = false;
     uint32_t gltfMaxTextureSize = 2048; // 0 = Full resolution
 
     // ---- 输入参数 ----
