@@ -1,0 +1,23 @@
+# VulkanLab 文档
+
+> Status: Current
+> Last verified: 2026-07-18
+> Verified against: `0516951`
+
+本目录按文档有效性分为 Current、Active 和 Archived 三种状态。只有 `guides/` 与 `architecture/` 中标记为 Current 的文档可以作为当前实现依据；源码始终是最终事实来源。
+
+## 当前文档
+
+- [构建与运行](guides/build_and_run.md)：环境、构建、工作目录、场景资产和启动参数。
+- [Runtime Control](guides/runtime_control.md)：通过 `VulkanLabCtl.exe` 在运行时控制渲染器。
+- [系统概览](architecture/overview.md)：模块边界、初始化顺序、线程所有权和每帧流程。
+- [渲染流程](architecture/rendering.md)：RenderQueue、Forward Pass、Pipeline、材质、Shader 和光源。
+- [资源加载](architecture/resource_loading.md)：SceneFactory、glTF、纹理限制、批量上传和加载统计。
+
+## 文档状态
+
+- **Current**：已按标注的代码提交核对，可以用于理解和操作当前版本。
+- **Active**：正在讨论或执行的开发计划，只描述目标，不代表功能已经存在。
+- **Archived**：历史计划、分析或变更记录，可能包含旧 API、旧路径和过时结论。
+
+新开发计划放在 [development/](development/README.md)。计划完成、废弃或被替代后，应移动到 [archive/](archive/README.md)，不要继续留在当前文档入口中。

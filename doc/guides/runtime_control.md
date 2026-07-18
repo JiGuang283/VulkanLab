@@ -1,5 +1,9 @@
 # VulkanLab Runtime Control 使用说明
 
+> Status: Current
+> Last verified: 2026-07-18
+> Verified against: `0516951`
+
 Runtime Control 允许在 VulkanLab 已经运行时，从另一个终端切换场景、纹理限制和 Shader，并读取加载统计或关闭程序。控制接口仅用于本机调试，通过 Windows Named Pipe 通信，不开放网络端口。
 
 Runtime Control 默认关闭。需要外部控制时，必须使用 `--runtime-control` 启动 VulkanLab。
