@@ -7,6 +7,40 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# KTX 4.4.2 requires KTX1 to configure its bundled `ktx` CLI, although the
+# renderer only consumes KTX2 through ktx_read.
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static dependencies" FORCE)
+set(KTX_FEATURE_TESTS OFF CACHE BOOL "Disable KTX tests" FORCE)
+set(KTX_FEATURE_DOC OFF CACHE BOOL "Disable KTX documentation" FORCE)
+set(KTX_FEATURE_JNI OFF CACHE BOOL "Disable KTX Java bindings" FORCE)
+set(KTX_FEATURE_PY OFF CACHE BOOL "Disable KTX Python bindings" FORCE)
+set(KTX_FEATURE_GL_UPLOAD OFF CACHE BOOL "Disable KTX OpenGL upload" FORCE)
+set(KTX_FEATURE_VK_UPLOAD OFF CACHE BOOL "Disable KTX Vulkan upload" FORCE)
+set(KTX_FEATURE_LOADTEST_APPS OFF CACHE STRING "Disable KTX load tests" FORCE)
+set(KTX_FEATURE_KTX1 ON CACHE BOOL "Required by KTX 4.4.2 tools" FORCE)
+set(KTX_FEATURE_KTX2 ON CACHE BOOL "Enable KTX2" FORCE)
+set(KTX_FEATURE_TOOLS ON CACHE BOOL "Build KTX command-line tools" FORCE)
+set(KTX_FEATURE_TOOLS_CTS OFF CACHE BOOL "Disable KTX tools CTS" FORCE)
+add_subdirectory(external/ktx EXCLUDE_FROM_ALL)
+
+# astc-encoder defaults to the static MSVC runtime even when embedded in a
+# /MD application. Align whichever ISA target KTX selected to avoid mixing
+# CRT heaps in VulkanLab and the asset tool.
+if(MSVC)
+    foreach(ASTC_TARGET
+            astcenc-avx2-static
+            astcenc-sse4.1-static
+            astcenc-sse2-static
+            astcenc-neon-static
+            astcenc-native-static
+            astcenc-none-static)
+        if(TARGET ${ASTC_TARGET})
+            set_property(TARGET ${ASTC_TARGET} PROPERTY MSVC_RUNTIME_LIBRARY
+                "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        endif()
+    endforeach()
+endif()
+
 # 1. 寻找 Vulkan 包
 # Vulkan SDK 安装后会自动配置环境变量，CMake 能直接找到它
 find_package(Vulkan REQUIRED)
@@ -61,12 +95,15 @@ include(CTest)
 if(BUILD_TESTING)
     add_executable(VulkanLabCpuTests
         "${CMAKE_SOURCE_DIR}/tests/PreparedSceneDataTests.cpp"
+        "${CMAKE_SOURCE_DIR}/tests/DerivedTextureManifestTests.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/DerivedTextureManifest.cpp"
         "${CMAKE_SOURCE_DIR}/src/render/TangentGenerator.cpp"
         "${CMAKE_SOURCE_DIR}/src/render/TextureData.cpp"
     )
     target_include_directories(VulkanLabCpuTests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
         ${GLM_INCLUDE_DIR}
+        ${GLTF_DIR}
     )
     target_link_libraries(VulkanLabCpuTests PRIVATE Vulkan::Vulkan)
     target_compile_options(VulkanLabCpuTests PRIVATE
@@ -86,6 +123,36 @@ if(WIN32)
     target_compile_options(VulkanLabCtl PRIVATE
         $<$<CXX_COMPILER_ID:MSVC>:/utf-8>
     )
+
+    add_executable(VulkanLabAssetTool
+        "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool/main.cpp"
+        "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool/TextureCacheBuilder.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/DerivedTextureManifest.cpp"
+        "${CMAKE_SOURCE_DIR}/src/tiny_gltf.cpp"
+        "${CMAKE_SOURCE_DIR}/src/stb_image.cpp"
+        "${CMAKE_SOURCE_DIR}/src/stb_image_write.cpp"
+    )
+    target_include_directories(VulkanLabAssetTool PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool
+        ${STB_DIR}
+        ${GLTF_DIR}
+    )
+    target_link_libraries(VulkanLabAssetTool PRIVATE
+        ktx_read
+        bcrypt
+    )
+    target_compile_options(VulkanLabAssetTool PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/utf-8>
+    )
+    if(TARGET ktxtools)
+        add_dependencies(VulkanLabAssetTool ktxtools)
+        add_custom_command(TARGET VulkanLabAssetTool POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:ktxtools>
+                $<TARGET_FILE_DIR:VulkanLabAssetTool>/ktx.exe
+        )
+    endif()
 endif()
 
 # 添加 src 目录及 GLM 头文件为搜索路径
@@ -111,6 +178,7 @@ target_compile_options(VulkanLab PRIVATE
 target_link_libraries(VulkanLab PRIVATE
     Vulkan::Vulkan
     glfw3
+    ktx_read
 )
 
 # 解决一些 GLFW 静态链接时的 Windows 依赖问题

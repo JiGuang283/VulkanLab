@@ -56,6 +56,7 @@ models/pkg_a_curtains/
 tem/
 run_*.log
 run_*.txt
+derived_assets/
 
 # ---------- OS files ----------
 .DS_Store

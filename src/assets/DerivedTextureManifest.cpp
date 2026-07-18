@@ -1,0 +1,235 @@
+#include "DerivedTextureManifest.h"
+
+#include <json.hpp>
+
+#include <fstream>
+#include <iomanip>
+#include <sstream>
+
+namespace vkr {
+
+namespace {
+
+using Json = nlohmann::json;
+
+std::string genericPath(const std::filesystem::path &path) {
+    return path.lexically_normal().generic_string();
+}
+
+Json stampToJson(const DerivedFileStamp &stamp) {
+    return {{"path", stamp.path},
+            {"size", stamp.size},
+            {"writeTime", stamp.writeTime},
+            {"sha256", stamp.sha256}};
+}
+
+DerivedFileStamp stampFromJson(const Json &json) {
+    DerivedFileStamp stamp;
+    stamp.path = json.value("path", std::string{});
+    stamp.size = json.value("size", uint64_t{0});
+    stamp.writeTime = json.value("writeTime", int64_t{0});
+    stamp.sha256 = json.value("sha256", std::string{});
+    return stamp;
+}
+
+} // namespace
+
+const char *textureSemanticName(TextureSemantic semantic) {
+    switch (semantic) {
+    case TextureSemantic::SrgbColor:
+        return "srgb-color";
+    case TextureSemantic::Normal:
+        return "normal";
+    case TextureSemantic::LinearData:
+    default:
+        return "linear-data";
+    }
+}
+
+const char *derivedMipmapWrapName(DerivedMipmapWrap wrap) {
+    switch (wrap) {
+    case DerivedMipmapWrap::Repeat:
+        return "repeat";
+    case DerivedMipmapWrap::Reflect:
+        return "reflect";
+    case DerivedMipmapWrap::Clamp:
+    default:
+        return "clamp";
+    }
+}
+
+std::optional<TextureSemantic>
+textureSemanticFromName(const std::string &name) {
+    if (name == "srgb-color")
+        return TextureSemantic::SrgbColor;
+    if (name == "linear-data")
+        return TextureSemantic::LinearData;
+    if (name == "normal")
+        return TextureSemantic::Normal;
+    return std::nullopt;
+}
+
+std::optional<DerivedMipmapWrap>
+derivedMipmapWrapFromName(const std::string &name) {
+    if (name == "clamp")
+        return DerivedMipmapWrap::Clamp;
+    if (name == "repeat")
+        return DerivedMipmapWrap::Repeat;
+    if (name == "reflect")
+        return DerivedMipmapWrap::Reflect;
+    return std::nullopt;
+}
+
+const DerivedTextureEntry *
+DerivedTextureManifest::find(int imageIndex, TextureSemantic semantic,
+                             DerivedMipmapWrap wrap) const {
+    for (const DerivedTextureEntry &entry : entries) {
+        if (entry.imageIndex == imageIndex && entry.semantic == semantic &&
+            entry.mipWrap == wrap) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+std::string normalizedSceneKey(const std::filesystem::path &scenePath) {
+    const std::string value = genericPath(scenePath);
+    uint64_t hash = 1469598103934665603ull;
+    for (unsigned char c : value) {
+        if (c >= 'A' && c <= 'Z')
+            c = static_cast<unsigned char>(c - 'A' + 'a');
+        hash ^= c;
+        hash *= 1099511628211ull;
+    }
+    std::ostringstream stream;
+    stream << std::hex << std::setw(16) << std::setfill('0') << hash;
+    return stream.str();
+}
+
+std::filesystem::path derivedManifestPath(
+    const std::filesystem::path &cacheRoot,
+    const std::filesystem::path &scenePath, uint32_t textureLimit) {
+    const std::string profile =
+        textureLimit == 0 ? "full" : std::to_string(textureLimit);
+    return cacheRoot / "manifests" / normalizedSceneKey(scenePath) /
+           (profile + ".json");
+}
+
+DerivedFileStamp fileStamp(const std::filesystem::path &path,
+                          const std::string &sha256) {
+    DerivedFileStamp stamp;
+    stamp.path = genericPath(path);
+    std::error_code error;
+    stamp.size = std::filesystem::file_size(path, error);
+    if (error)
+        stamp.size = 0;
+    error.clear();
+    const auto time = std::filesystem::last_write_time(path, error);
+    stamp.writeTime = error ? 0 : time.time_since_epoch().count();
+    stamp.sha256 = sha256;
+    return stamp;
+}
+
+bool fileStampMatches(const DerivedFileStamp &stamp,
+                      const std::filesystem::path &sceneDirectory) {
+    if (stamp.path.empty())
+        return false;
+    std::filesystem::path path(stamp.path);
+    if (!path.is_absolute())
+        path = sceneDirectory / path;
+    const DerivedFileStamp current = fileStamp(path);
+    return current.size == stamp.size && current.writeTime == stamp.writeTime;
+}
+
+bool loadDerivedTextureManifest(const std::filesystem::path &path,
+                                DerivedTextureManifest &manifest,
+                                std::string &error) {
+    try {
+        std::ifstream input(path, std::ios::binary);
+        if (!input) {
+            error = "manifest not found";
+            return false;
+        }
+        Json root;
+        input >> root;
+        manifest = {};
+        manifest.schemaVersion = root.value("schemaVersion", 0u);
+        manifest.scenePath = root.value("scenePath", std::string{});
+        manifest.textureLimit = root.value("textureLimit", 0u);
+        manifest.scene = stampFromJson(root.at("scene"));
+        if (manifest.schemaVersion != DerivedTextureManifest::kSchemaVersion) {
+            error = "unsupported manifest schema";
+            return false;
+        }
+        for (const Json &item : root.at("entries")) {
+            const auto semantic = textureSemanticFromName(
+                item.value("semantic", std::string{}));
+            const auto wrap = derivedMipmapWrapFromName(
+                item.value("mipWrap", std::string{}));
+            if (!semantic || !wrap) {
+                error = "manifest contains an unknown texture semantic";
+                return false;
+            }
+            DerivedTextureEntry entry;
+            entry.imageIndex = item.value("imageIndex", -1);
+            entry.semantic = *semantic;
+            entry.mipWrap = *wrap;
+            entry.width = item.value("width", 0u);
+            entry.height = item.value("height", 0u);
+            entry.cacheKey = item.value("cacheKey", std::string{});
+            entry.blob = item.value("blob", std::string{});
+            entry.source = stampFromJson(item.at("source"));
+            manifest.entries.push_back(std::move(entry));
+        }
+        return true;
+    } catch (const std::exception &exception) {
+        error = exception.what();
+        return false;
+    }
+}
+
+bool saveDerivedTextureManifest(const std::filesystem::path &path,
+                                const DerivedTextureManifest &manifest,
+                                std::string &error) {
+    try {
+        Json root{{"schemaVersion", manifest.schemaVersion},
+                  {"scenePath", manifest.scenePath},
+                  {"textureLimit", manifest.textureLimit},
+                  {"scene", stampToJson(manifest.scene)},
+                  {"encoder",
+                   {{"name", "ktx create"},
+                    {"version", "4.4.2"},
+                    {"codec", "uastc-ldr-4x4"},
+                    {"quality", 2},
+                    {"zstd", 9}}},
+                  {"entries", Json::array()}};
+        for (const DerivedTextureEntry &entry : manifest.entries) {
+            root["entries"].push_back(
+                {{"imageIndex", entry.imageIndex},
+                 {"semantic", textureSemanticName(entry.semantic)},
+                 {"mipWrap", derivedMipmapWrapName(entry.mipWrap)},
+                 {"width", entry.width},
+                 {"height", entry.height},
+                 {"cacheKey", entry.cacheKey},
+                 {"blob", entry.blob},
+                 {"source", stampToJson(entry.source)}});
+        }
+        std::filesystem::create_directories(path.parent_path());
+        const std::filesystem::path temporary = path.string() + ".tmp";
+        {
+            std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+            if (!output)
+                throw std::runtime_error("could not create manifest");
+            output << root.dump(2) << '\n';
+        }
+        std::error_code ignored;
+        std::filesystem::remove(path, ignored);
+        std::filesystem::rename(temporary, path);
+        return true;
+    } catch (const std::exception &exception) {
+        error = exception.what();
+        return false;
+    }
+}
+
+} // namespace vkr
