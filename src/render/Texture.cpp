@@ -59,8 +59,13 @@ Texture::Texture(Device &device, UploadRecorder &upload,
     try {
         createSamplerFrom(info.minFilter, info.magFilter, info.mipmapMode,
                           info.wrapU, info.wrapV);
-        createFromPixels(upload, info.pixels, info.width, info.height,
-                         info.format, info.generateMipmaps, info.maxExtent);
+        if (info.mipLevels && info.mipLevelCount > 0) {
+            createFromMipChain(upload, info);
+        } else {
+            createFromPixels(upload, info.pixels, info.width, info.height,
+                             info.format, info.generateMipmaps,
+                             info.maxExtent);
+        }
     } catch (...) {
         if (sampler_ != VK_NULL_HANDLE) {
             vkDestroySampler(device_->logicalDevice(), sampler_, nullptr);
@@ -157,6 +162,54 @@ void Texture::createFromPixels(UploadRecorder &upload, const void *pixels,
         loadStats->textureUploadBytes += static_cast<uint64_t>(imageSize);
         loadStats->textureGpuBytesEstimated +=
             rgba8MipChainBytes(uploadWidth, uploadHeight, mipLevels_);
+    }
+}
+
+void Texture::createFromMipChain(UploadRecorder &upload,
+                                 const TextureCreateInfo &info) {
+    if (info.dataSize == 0 || !info.mipLevels || info.mipLevelCount == 0)
+        throw std::runtime_error("TextureCreateInfo: invalid mip chain");
+    if (info.mipLevels[0].width != info.width ||
+        info.mipLevels[0].height != info.height) {
+        throw std::runtime_error("TextureCreateInfo: mip 0 size mismatch");
+    }
+    for (uint32_t level = 0; level < info.mipLevelCount; ++level) {
+        const TextureMipLevelInfo &mip = info.mipLevels[level];
+        if (mip.width == 0 || mip.height == 0 || mip.size == 0 ||
+            mip.offset > info.dataSize || mip.size > info.dataSize - mip.offset) {
+            throw std::runtime_error("TextureCreateInfo: invalid mip range");
+        }
+    }
+
+    ResourceLoadStats *loadStats = upload.stats();
+    ScopedLoadTimer uploadTimer(loadStats ? &loadStats->textureUploadMs
+                                          : nullptr);
+    const StagedSlice staged = upload.stageBytes(info.pixels, info.dataSize);
+    mipLevels_ = info.mipLevelCount;
+    image_ = std::make_unique<Image>(
+        *device_, static_cast<int>(info.width), static_cast<int>(info.height),
+        mipLevels_, VK_SAMPLE_COUNT_1_BIT, info.format,
+        VK_IMAGE_TILING_OPTIMAL,
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    image_->createView(info.format, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels_);
+
+    VkCommandBuffer commandBuffer = upload.commandBuffer();
+    transitionImageLayout(commandBuffer, image_->handle(), info.format,
+                          VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevels_);
+    copyMipChainToImage(commandBuffer, staged.buffer, staged.offset,
+                        image_->handle(), info.mipLevels, mipLevels_);
+    transitionImageLayout(commandBuffer, image_->handle(), info.format,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          mipLevels_);
+
+    if (loadStats) {
+        ++loadStats->gpuTextureCount;
+        ++loadStats->prebuiltMipTextureCount;
+        loadStats->textureUploadBytes += info.dataSize;
+        loadStats->textureGpuBytesEstimated += info.dataSize;
     }
 }
 
@@ -268,6 +321,30 @@ void Texture::copyBufferToImage(VkCommandBuffer cmd, VkBuffer buffer,
 
     vkCmdCopyBufferToImage(cmd, buffer, image,
                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+}
+
+void Texture::copyMipChainToImage(
+    VkCommandBuffer cmd, VkBuffer buffer, VkDeviceSize bufferOffset,
+    VkImage image, const TextureMipLevelInfo *levels, uint32_t levelCount) {
+    std::vector<VkBufferImageCopy> regions;
+    regions.reserve(levelCount);
+    for (uint32_t level = 0; level < levelCount; ++level) {
+        VkBufferImageCopy region{};
+        region.bufferOffset = bufferOffset + levels[level].offset;
+        region.bufferRowLength = 0;
+        region.bufferImageHeight = 0;
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.mipLevel = level;
+        region.imageSubresource.baseArrayLayer = 0;
+        region.imageSubresource.layerCount = 1;
+        region.imageOffset = {0, 0, 0};
+        region.imageExtent = {levels[level].width, levels[level].height, 1};
+        regions.push_back(region);
+    }
+    vkCmdCopyBufferToImage(cmd, buffer, image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           static_cast<uint32_t>(regions.size()),
+                           regions.data());
 }
 
 void Texture::generateMipmaps(VkCommandBuffer commandBuffer, VkImage image,

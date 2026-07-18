@@ -167,6 +167,23 @@ void SceneGpuBuilder::pump(const Budget &budget) {
             info.mipmapMode = source.mipmapMode;
             info.wrapU = source.wrapU;
             info.wrapV = source.wrapV;
+            std::vector<TextureMipLevelInfo> mipLevels;
+            if (source.image->kind ==
+                PreparedTextureDataKind::PrebuiltMipChain) {
+                if (source.image->mipLevels.empty())
+                    throw std::runtime_error(
+                        "Prepared texture has an empty mip chain");
+                mipLevels.reserve(source.image->mipLevels.size());
+                for (const PreparedMipLevel &mip : source.image->mipLevels) {
+                    mipLevels.push_back({mip.offset, mip.size, mip.width,
+                                         mip.height});
+                }
+                info.dataSize = source.image->pixels.size();
+                info.generateMipmaps = false;
+                info.mipLevels = mipLevels.data();
+                info.mipLevelCount =
+                    static_cast<uint32_t>(mipLevels.size());
+            }
             textures_.push_back(
                 std::make_shared<Texture>(*device_, *recorder, info));
             source.image.reset();

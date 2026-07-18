@@ -184,6 +184,8 @@ ControlJson sceneLoadStatsToJson(const SceneLoadStats &stats) {
           {"textureFileRead", stats.textureFileReadMs},
           {"textureDecode", stats.textureDecodeMs},
           {"textureResize", r.textureResizeMs},
+          {"derivedTextureRead", r.derivedTextureReadMs},
+          {"derivedTextureTranscode", r.derivedTextureTranscodeMs},
           {"textureUpload", r.textureUploadMs},
           {"materialSetup", stats.materialSetupMs},
           {"meshCpu", stats.meshCpuMs},
@@ -202,12 +204,20 @@ ControlJson sceneLoadStatsToJson(const SceneLoadStats &stats) {
           {"textureDecodes", r.textureDecodeCount},
           {"gpuTextures", r.gpuTextureCount},
           {"resizedTextures", r.resizedTextureCount},
+          {"derivedTextureLookups", r.derivedTextureLookups},
+          {"derivedTextureHits", r.derivedTextureHits},
+          {"derivedTextureMisses", r.derivedTextureMisses},
+          {"derivedTextureInvalid", r.derivedTextureInvalid},
+          {"bc7Textures", r.bc7TextureCount},
+          {"rgbaTranscodeFallbacks", r.rgbaTranscodeFallbackCount},
+          {"prebuiltMipTextures", r.prebuiltMipTextureCount},
           {"gpuMeshes", r.gpuMeshCount},
           {"vertices", r.vertexCount},
           {"indices", r.indexCount}}},
         {"bytes",
          {{"encodedSources", r.encodedSourceBytes},
           {"decodedRgba", r.decodedRgbaBytes},
+          {"derivedTextureRead", r.derivedTextureReadBytes},
           {"textureUpload", r.textureUploadBytes},
           {"textureGpuEstimated", r.textureGpuBytesEstimated},
           {"vertexUpload", r.vertexUploadBytes},
@@ -305,6 +315,8 @@ void validateSceneLoadStats(const SceneLoadStats &stats) {
         std::max({stats.deviceIdleMs, stats.teardownMs, stats.sceneFactoryMs,
                   stats.gltfParseMs, stats.textureFileReadMs,
                   stats.textureDecodeMs, stats.resources.textureResizeMs,
+                  stats.resources.derivedTextureReadMs,
+                  stats.resources.derivedTextureTranscodeMs,
                   stats.resources.textureUploadMs, stats.materialSetupMs,
                   stats.meshCpuMs, stats.resources.meshUploadMs,
                   stats.resources.batchSubmitWaitMs, stats.hierarchyMs});
@@ -356,7 +368,8 @@ void logSceneLoadStats(const SceneLoadStats &stats) {
     VKR_LOG_INFO(
         "LoadStats",
         "scene='{}' success={} limit={} total={:.2f}ms factory={:.2f}ms "
-        "textures={} meshes={} materials={} objects={} upload={:.2f}MiB "
+        "textures={} meshes={} materials={} objects={} cache={}/{} "
+        "upload={:.2f}MiB "
         "legacySubmits={} batchSubmits={} queueWaits={} fenceWaits={} "
         "fencePolls={} "
         "vmaAllocationDelta={:.2f}MiB vmaBlockDelta={:.2f}MiB",
@@ -366,6 +379,8 @@ void logSceneLoadStats(const SceneLoadStats &stats) {
         stats.totalMs, stats.sceneFactoryMs,
         stats.resources.gpuTextureCount, stats.resources.gpuMeshCount,
         stats.materialCount, stats.objectCount,
+        stats.resources.derivedTextureHits,
+        stats.resources.derivedTextureLookups,
         bytesToMiB(stats.resources.textureUploadBytes +
                    stats.resources.vertexUploadBytes +
                    stats.resources.indexUploadBytes),
@@ -490,6 +505,10 @@ void Application::init() {
     pipelineCache_ = std::make_unique<PipelineCache>(*device_);
     sceneLoadManager_ = std::make_unique<SceneLoadManager>();
     sceneLoadContext_.maxTextureSize = config_.gltfMaxTextureSize;
+    sceneLoadContext_.derivedTextureCachePath =
+        config_.derivedTextureCachePath;
+    sceneLoadContext_.textureTranscodeTarget =
+        device_->textureTranscodeTarget();
     loadScene(start);
 
     // ImGui on top of the main render pass.
@@ -1368,6 +1387,9 @@ void Application::drawGui() {
         ImGui::Text("Image Read: %.2f ms", stats.textureFileReadMs);
         ImGui::Text("Image Decode: %.2f ms", stats.textureDecodeMs);
         ImGui::Text("Texture Resize: %.2f ms", resources.textureResizeMs);
+        ImGui::Text("KTX Read: %.2f ms  Transcode: %.2f ms",
+                    resources.derivedTextureReadMs,
+                    resources.derivedTextureTranscodeMs);
         ImGui::Text("Texture Upload: %.2f ms", resources.textureUploadMs);
         ImGui::Text("Material Setup: %.2f ms", stats.materialSetupMs);
         ImGui::Text("Mesh CPU: %.2f ms", stats.meshCpuMs);
@@ -1387,6 +1409,21 @@ void Application::drawGui() {
                     static_cast<unsigned long long>(resources.gpuTextureCount),
                     static_cast<unsigned long long>(
                         resources.resizedTextureCount));
+        ImGui::Text("Derived cache: %llu/%llu hits, %llu miss, %llu invalid",
+                    static_cast<unsigned long long>(
+                        resources.derivedTextureHits),
+                    static_cast<unsigned long long>(
+                        resources.derivedTextureLookups),
+                    static_cast<unsigned long long>(
+                        resources.derivedTextureMisses),
+                    static_cast<unsigned long long>(
+                        resources.derivedTextureInvalid));
+        ImGui::Text("BC7: %llu  RGBA fallback: %llu  Prebuilt mip: %llu",
+                    static_cast<unsigned long long>(resources.bc7TextureCount),
+                    static_cast<unsigned long long>(
+                        resources.rgbaTranscodeFallbackCount),
+                    static_cast<unsigned long long>(
+                        resources.prebuiltMipTextureCount));
         ImGui::Text("Meshes: %llu  Vertices: %llu  Indices: %llu",
                     static_cast<unsigned long long>(resources.gpuMeshCount),
                     static_cast<unsigned long long>(resources.vertexCount),

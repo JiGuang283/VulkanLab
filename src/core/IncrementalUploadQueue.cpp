@@ -37,7 +37,7 @@ class IncrementalUploadQueue::Slot final : public UploadRecorder {
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(device.physicalDevice(), &properties);
         alignment_ = std::max<VkDeviceSize>(
-            4, properties.limits.optimalBufferCopyOffsetAlignment);
+            16, properties.limits.optimalBufferCopyOffsetAlignment);
 
         const QueueFamilyIndices families = device.queueFamilies();
         VkCommandPoolCreateInfo poolInfo{};
@@ -234,7 +234,7 @@ IncrementalUploadQueue::IncrementalUploadQueue(
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(device.physicalDevice(), &properties);
     copyAlignment_ = std::max<VkDeviceSize>(
-        4, properties.limits.optimalBufferCopyOffsetAlignment);
+        16, properties.limits.optimalBufferCopyOffsetAlignment);
     slots_.reserve(slotCount);
     for (uint32_t i = 0; i < slotCount; ++i) {
         slots_.push_back(

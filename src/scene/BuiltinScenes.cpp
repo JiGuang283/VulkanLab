@@ -98,6 +98,10 @@ ScenePrepareFactory gltfSceneFactory(std::string modelPath, std::string vp,
                SceneLoadProgress &progress) -> PreparedSceneData {
         GltfPreparer::Options options{};
         options.maxTextureSize = loadContext.maxTextureSize;
+        options.derivedTextureCachePath =
+            loadContext.derivedTextureCachePath;
+        options.textureTranscodeTarget =
+            loadContext.textureTranscodeTarget;
         options.loadStats = loadContext.loadStats;
         options.vertShaderPath = vp;
         options.fragShaderPath = fp;

@@ -21,7 +21,7 @@ UploadContext::UploadContext(Device &device, ResourceLoadStats *stats,
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(device.physicalDevice(), &properties);
     copyAlignment_ = std::max<VkDeviceSize>(
-        4, properties.limits.optimalBufferCopyOffsetAlignment);
+        16, properties.limits.optimalBufferCopyOffsetAlignment);
 
     const QueueFamilyIndices families = device.queueFamilies();
     VkCommandPoolCreateInfo poolInfo{};

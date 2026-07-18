@@ -1,0 +1,41 @@
+#pragma once
+
+#include "DerivedTextureManifest.h"
+#include "render/TextureTranscodeTarget.h"
+#include "scene/PreparedSceneData.h"
+
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+
+namespace vkr {
+
+struct ResourceLoadStats;
+
+class DerivedTextureCache {
+  public:
+    DerivedTextureCache(std::filesystem::path cacheRoot,
+                        std::filesystem::path scenePath,
+                        uint32_t textureLimit,
+                        TextureTranscodeTarget target,
+                        ResourceLoadStats *stats);
+
+    std::shared_ptr<const PreparedImage>
+    load(int imageIndex, TextureSemantic semantic, DerivedMipmapWrap wrap);
+    bool available() const { return manifest_.has_value(); }
+    const std::string &status() const { return status_; }
+
+  private:
+    bool sourceMatches(const DerivedTextureEntry &entry) const;
+
+    std::filesystem::path cacheRoot_;
+    std::filesystem::path scenePath_;
+    std::filesystem::path sceneDirectory_;
+    TextureTranscodeTarget target_ = TextureTranscodeTarget::Rgba8;
+    ResourceLoadStats *stats_ = nullptr;
+    std::optional<DerivedTextureManifest> manifest_;
+    std::string status_;
+};
+
+} // namespace vkr

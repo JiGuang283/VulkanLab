@@ -124,6 +124,26 @@ void Device::pickPhysicalDevice() {
             throw std::runtime_error("failed to find a suitable GPU!");
         }
     }
+
+    VkPhysicalDeviceFeatures features{};
+    vkGetPhysicalDeviceFeatures(physicalDevice_, &features);
+    VkFormatProperties bc7Unorm{};
+    VkFormatProperties bc7Srgb{};
+    vkGetPhysicalDeviceFormatProperties(
+        physicalDevice_, VK_FORMAT_BC7_UNORM_BLOCK, &bc7Unorm);
+    vkGetPhysicalDeviceFormatProperties(
+        physicalDevice_, VK_FORMAT_BC7_SRGB_BLOCK, &bc7Srgb);
+    const VkFormatFeatureFlags required =
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+        VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+    if (features.textureCompressionBC &&
+        (bc7Unorm.optimalTilingFeatures & required) == required &&
+        (bc7Srgb.optimalTilingFeatures & required) == required) {
+        textureTranscodeTarget_ = TextureTranscodeTarget::Bc7;
+        VKR_LOG_INFO("Device", "Derived texture target: BC7");
+    } else {
+        VKR_LOG_WARN("Device", "BC7 unavailable; derived textures use RGBA8");
+    }
 }
 void Device::createLogicalDevice() {
     QueueFamilyIndices indices = findQueueFamilies(physicalDevice_);
@@ -145,6 +165,8 @@ void Device::createLogicalDevice() {
     VkPhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.samplerAnisotropy = VK_TRUE;
     deviceFeatures.sampleRateShading = VK_TRUE;
+    deviceFeatures.textureCompressionBC =
+        textureTranscodeTarget_ == TextureTranscodeTarget::Bc7;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

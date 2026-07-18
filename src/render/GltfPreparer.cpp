@@ -3,6 +3,8 @@
 #include "MaterialTextureSlot.h"
 #include "TangentGenerator.h"
 #include "TextureData.h"
+#include "assets/DerivedTextureCache.h"
+#include "assets/DerivedTextureManifest.h"
 #include "core/Log.h"
 #include "diagnostics/SceneLoadStats.h"
 
@@ -285,10 +287,32 @@ VkFormat formatForSlot(MaterialTextureSlot slot) {
                : VK_FORMAT_R8G8B8A8_UNORM;
 }
 
-uint64_t textureKey(int textureIndex, VkFormat format) {
+TextureSemantic semanticForSlot(MaterialTextureSlot slot) {
+    if (slot == MaterialTextureSlot::BaseColor ||
+        slot == MaterialTextureSlot::Emissive) {
+        return TextureSemantic::SrgbColor;
+    }
+    if (slot == MaterialTextureSlot::Normal)
+        return TextureSemantic::Normal;
+    return TextureSemantic::LinearData;
+}
+
+DerivedMipmapWrap mipmapWrapFor(const PreparedTexture &texture) {
+    if (texture.wrapU == VK_SAMPLER_ADDRESS_MODE_REPEAT &&
+        texture.wrapV == VK_SAMPLER_ADDRESS_MODE_REPEAT) {
+        return DerivedMipmapWrap::Repeat;
+    }
+    if (texture.wrapU == VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT &&
+        texture.wrapV == VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT) {
+        return DerivedMipmapWrap::Reflect;
+    }
+    return DerivedMipmapWrap::Clamp;
+}
+
+uint64_t textureKey(int textureIndex, TextureSemantic semantic) {
     return (static_cast<uint64_t>(static_cast<uint32_t>(textureIndex))
             << 32) |
-           static_cast<uint32_t>(format);
+           static_cast<uint32_t>(semantic);
 }
 
 } // namespace
@@ -344,6 +368,11 @@ PreparedSceneData GltfPreparer::prepare(
     const std::filesystem::path modelDirectory =
         modelPath.has_parent_path() ? modelPath.parent_path()
                                    : std::filesystem::path(".");
+
+    DerivedTextureCache derivedCache(
+        options.derivedTextureCachePath, modelPath, options.maxTextureSize,
+        options.textureTranscodeTarget,
+        options.loadStats ? &options.loadStats->resources : nullptr);
 
     std::unordered_map<int, std::shared_ptr<const PreparedImage>> imageCache;
     std::unordered_map<uint64_t, int32_t> textureCache;
@@ -472,18 +501,24 @@ PreparedSceneData GltfPreparer::prepare(
             return -1;
         }
         const VkFormat format = formatForSlot(slot);
-        const uint64_t key = textureKey(gltfTextureIndex, format);
+        const TextureSemantic semantic = semanticForSlot(slot);
+        const uint64_t key = textureKey(gltfTextureIndex, semantic);
         const auto cached = textureCache.find(key);
         if (cached != textureCache.end())
             return cached->second;
 
-        const auto image = decodeImage(texture.source);
-        if (!image)
-            return -1;
         PreparedTexture preparedTexture;
-        preparedTexture.image = image;
         preparedTexture.format = format;
         applySampler(gltf, texture, preparedTexture);
+        auto image = derivedCache.load(texture.source, semantic,
+                                       mipmapWrapFor(preparedTexture));
+        if (!image)
+            image = decodeImage(texture.source);
+        if (!image)
+            return -1;
+        preparedTexture.image = image;
+        if (image->format != VK_FORMAT_UNDEFINED)
+            preparedTexture.format = image->format;
         const int32_t index = static_cast<int32_t>(prepared.textures.size());
         prepared.textures.push_back(std::move(preparedTexture));
         textureCache.emplace(key, index);

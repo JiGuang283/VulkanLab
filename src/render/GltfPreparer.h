@@ -2,6 +2,7 @@
 
 #include "scene/PreparedSceneData.h"
 #include "scene/SceneLoadTask.h"
+#include "TextureTranscodeTarget.h"
 
 #include <cstdint>
 #include <optional>
@@ -16,6 +17,9 @@ class GltfPreparer {
     struct Options {
         bool     generateMissingNormals = true;
         uint32_t maxTextureSize = 2048;
+        std::string derivedTextureCachePath = "derived_assets";
+        TextureTranscodeTarget textureTranscodeTarget =
+            TextureTranscodeTarget::Rgba8;
         std::string vertShaderPath;
         std::string fragShaderPath;
         std::optional<CameraPose> cameraOverride;

@@ -7,6 +7,7 @@
 #include "VulkanContext.h"
 #include "VulkanTypes.h"
 #include "diagnostics/SceneLoadStats.h"
+#include "render/TextureTranscodeTarget.h"
 #include "vk_mem_alloc.h"
 
 namespace vkr {
@@ -25,6 +26,9 @@ class Device {
     VkQueue               presentQueue() const { return presentQueue_; }
     QueueFamilyIndices    queueFamilies() const;
     VkSampleCountFlagBits msaaSamples() const { return msaaSamples_; }
+    TextureTranscodeTarget textureTranscodeTarget() const {
+        return textureTranscodeTarget_;
+    }
 
     SwapChainSupportDetails querySwapChainSupport() const;
 
@@ -49,6 +53,8 @@ class Device {
     VkQueue               graphicsQueue_ = VK_NULL_HANDLE;
     VkQueue               presentQueue_ = VK_NULL_HANDLE;
     VkSampleCountFlagBits msaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
+    TextureTranscodeTarget textureTranscodeTarget_ =
+        TextureTranscodeTarget::Rgba8;
     VmaAllocator          allocator_ = VK_NULL_HANDLE;
 };
 

@@ -5,6 +5,8 @@
 #include <memory>
 #include <string>
 
+#include "render/TextureTranscodeTarget.h"
+
 namespace vkr {
 
 class Device;
@@ -18,6 +20,9 @@ struct SceneLoadStats;
 
 struct SceneLoadContext {
     uint32_t maxTextureSize = 2048; // 0 = Full resolution
+    std::string derivedTextureCachePath = "derived_assets";
+    TextureTranscodeTarget textureTranscodeTarget =
+        TextureTranscodeTarget::Rgba8;
     SceneLoadStats *loadStats = nullptr;
 };
 
