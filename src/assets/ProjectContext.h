@@ -8,12 +8,19 @@ namespace vkr {
 
 struct ProjectContext {
     std::filesystem::path projectRoot;
+    std::filesystem::path runtimeRoot;
     std::filesystem::path catalogPath;
     std::filesystem::path cacheRoot;
+    std::filesystem::path captureRoot;
     bool catalogWritable = false;
     bool cookedPackage = false;
     std::string packageProfileId;
     std::string diagnostic;
+
+    [[nodiscard]] std::filesystem::path resolveProjectPath(
+        const std::filesystem::path &path) const;
+    [[nodiscard]] std::filesystem::path resolveRuntimePath(
+        const std::filesystem::path &path) const;
 };
 
 class ProjectContextResolver {

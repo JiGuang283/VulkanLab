@@ -644,6 +644,12 @@ void Application::init() {
 #endif
 
     shaderVariants_.assign(kShaderVariants.begin(), kShaderVariants.end());
+    for (ShaderVariant &variant : shaderVariants_) {
+        variant.vertSpvPath =
+            projectContext_.resolveRuntimePath(variant.vertSpvPath).string();
+        variant.fragSpvPath =
+            projectContext_.resolveRuntimePath(variant.fragSpvPath).string();
+    }
 
     window_ = std::make_unique<Window>(
         config_.windowWidth, config_.windowHeight, config_.windowTitle);
@@ -1384,9 +1390,12 @@ void Application::processRuntimeCommand() {
                                                   .id)
                                 : ControlJson(nullptr)},
                 {"projectId", catalog_.projectId},
+                {"projectRoot", projectContext_.projectRoot.string()},
+                {"runtimeRoot", projectContext_.runtimeRoot.string()},
                 {"assetMode", assetImportModeName(config_.assetImportMode)},
                 {"cookedPackage", projectContext_.cookedPackage},
                 {"cacheRoot", sceneLoadContext_.derivedTextureCachePath},
+                {"captureRoot", projectContext_.captureRoot.string()},
                 {"textureLimit", sceneLoadContext_.maxTextureSize},
                 {"shader", shaderVariants_.empty()
                                ? ControlJson(nullptr)

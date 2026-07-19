@@ -123,16 +123,26 @@ int main(int argc, char **argv) {
             config.derivedTextureCachePath =
                 projectContext.cacheRoot.string();
         } else {
-            projectContext.cacheRoot =
-                vkr::DerivedAssetPaths::defaultCacheRoot(catalog.projectId);
-            if (config.derivedTextureCachePath.empty()) {
-                config.derivedTextureCachePath =
-                    projectContext.cacheRoot.string();
+            projectContext.cacheRoot = config.derivedTextureCachePath.empty()
+                                           ? vkr::DerivedAssetPaths::defaultCacheRoot(
+                                                 catalog.projectId)
+                                           : std::filesystem::absolute(
+                                                 config.derivedTextureCachePath)
+                                                 .lexically_normal();
+            config.derivedTextureCachePath =
+                projectContext.cacheRoot.string();
+            if (config.assetToolPathExplicit) {
+                config.assetToolPath =
+                    std::filesystem::absolute(config.assetToolPath)
+                        .lexically_normal()
+                        .string();
             }
         }
         VKR_LOG_INFO("Assets", "Project '{}' from '{}' ({})", catalog.projectId,
                      projectContext.projectRoot.string(),
                      projectContext.diagnostic);
+        VKR_LOG_INFO("Assets", "Runtime root: '{}'",
+                     projectContext.runtimeRoot.string());
         VKR_LOG_INFO("Assets", "Derived asset cache: '{}'",
                      config.derivedTextureCachePath);
 

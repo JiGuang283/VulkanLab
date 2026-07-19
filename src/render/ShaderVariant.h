@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 
 namespace vkr {
 
@@ -22,11 +23,11 @@ enum class ShaderVariantId : uint32_t {
 struct ShaderVariant {
     ShaderVariantId id;
     const char     *displayName;
-    const char     *vertSpvPath;
-    const char     *fragSpvPath;
+    std::string     vertSpvPath;
+    std::string     fragSpvPath;
 };
 
-inline constexpr std::array<ShaderVariant, 11> kShaderVariants = {{
+inline const std::array<ShaderVariant, 11> kShaderVariants = {{
     {ShaderVariantId::LegacyForward, "Legacy Forward",
      "shader/legacy/forward.vert.spv", "shader/legacy/forward.frag.spv"},
     {ShaderVariantId::PbrLiteForward, "PBR-lite Forward",
@@ -61,7 +62,7 @@ inline constexpr std::array<ShaderVariant, 11> kShaderVariants = {{
      "shader/material_debug/transmission.frag.spv"},
 }};
 
-inline constexpr const ShaderVariant &defaultShaderVariant() {
+inline const ShaderVariant &defaultShaderVariant() {
     return kShaderVariants[0];
 }
 

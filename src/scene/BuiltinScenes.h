@@ -7,17 +7,12 @@
 
 namespace vkr {
 
-/// Factory that loads `models/viking_room.obj` with the given shared texture
-/// and shaders.  Applies a default rotation animation and an overhead camera
-/// pose.
-SceneFactory vikingRoomSceneFactory(std::string texturePath,
+/// Factory that loads the given Viking Room OBJ and shared texture. Applies a
+/// default rotation animation and an overhead camera pose.
+SceneFactory vikingRoomSceneFactory(std::string modelPath,
+                                    std::string texturePath,
                                     std::string vertShaderPath,
                                     std::string fragShaderPath);
-
-/// Factory for `models/SheenChair.glb` (glTF).  Static (no animation); all
-/// textures/materials come from the glb itself.
-ScenePrepareFactory sheenChairSceneFactory(std::string vertShaderPath,
-                                           std::string fragShaderPath);
 
 /// Generic glTF scene factory.  Loads any .glb/.gltf at `modelPath`.
 ScenePrepareFactory gltfSceneFactory(

@@ -27,15 +27,22 @@ buildSceneRegistry(const SceneCatalog &catalog,
             if (scene.builtinFactory != "viking_room")
                 throw std::runtime_error("Unknown builtin scene factory: " +
                                          scene.builtinFactory);
+            const std::filesystem::path model =
+                projectContext.resolveProjectPath("models/viking_room.obj");
+            entry.sourcePath = model.string();
             entry.factory = vikingRoomSceneFactory(
-                config.texturePath, config.vertShaderPath,
-                config.fragShaderPath);
+                model.string(),
+                projectContext.resolveProjectPath(config.texturePath).string(),
+                projectContext.resolveRuntimePath(config.vertShaderPath)
+                    .string(),
+                projectContext.resolveRuntimePath(config.fragShaderPath)
+                    .string());
             entries.push_back(std::move(entry));
             continue;
         }
 
         const std::filesystem::path source =
-            (projectContext.projectRoot / scene.source).lexically_normal();
+            projectContext.resolveProjectPath(scene.source);
         entry.sourcePath = source.string();
         entry.available = std::filesystem::is_regular_file(source);
         if (!entry.available) {
@@ -43,8 +50,12 @@ buildSceneRegistry(const SceneCatalog &catalog,
                                       source.string();
         } else {
             entry.prepareFactory = gltfSceneFactory(
-                source.string(), config.vertShaderPath,
-                config.fragShaderPath, scene.camera);
+                source.string(),
+                projectContext.resolveRuntimePath(config.vertShaderPath)
+                    .string(),
+                projectContext.resolveRuntimePath(config.fragShaderPath)
+                    .string(),
+                scene.camera);
         }
         entries.push_back(std::move(entry));
     }

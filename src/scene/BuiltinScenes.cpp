@@ -34,9 +34,10 @@ PipelineConfig makeStandardConfig(Device &device, const std::string &vp,
 
 } // namespace
 
-SceneFactory vikingRoomSceneFactory(std::string tex, std::string vp,
-                                    std::string fp) {
-    return [tex = std::move(tex), vp = std::move(vp), fp = std::move(fp)](
+SceneFactory vikingRoomSceneFactory(std::string model, std::string tex,
+                                    std::string vp, std::string fp) {
+    return [model = std::move(model), tex = std::move(tex),
+            vp = std::move(vp), fp = std::move(fp)](
                Device &device, UploadContext &upload,
                DescriptorAllocator &descriptorAllocator,
                const SceneLoadContext &loadContext)
@@ -62,8 +63,7 @@ SceneFactory vikingRoomSceneFactory(std::string tex, std::string vp,
                 params);
         }
         auto mesh = std::shared_ptr<Mesh>(
-            Mesh::fromOBJ(device, upload, "models/viking_room.obj")
-                .release());
+            Mesh::fromOBJ(device, upload, model).release());
 
         scene->addMaterialTemplate(materialTemplate);
         scene->addTexture(texture);
@@ -81,11 +81,6 @@ SceneFactory vikingRoomSceneFactory(std::string tex, std::string vp,
         scene->initialCamera = CameraPose{{2.0f, 2.0f, 2.0f}, -135.0f, -30.0f};
         return scene;
     };
-}
-
-ScenePrepareFactory sheenChairSceneFactory(std::string vp, std::string fp) {
-    return gltfSceneFactory("models/SheenChair.glb", std::move(vp),
-                            std::move(fp));
 }
 
 ScenePrepareFactory gltfSceneFactory(std::string modelPath, std::string vp,

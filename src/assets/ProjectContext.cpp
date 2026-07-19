@@ -70,10 +70,19 @@ findProjectFromAncestors(std::filesystem::path start) {
     return std::nullopt;
 }
 
+std::filesystem::path resolveFromRoot(const std::filesystem::path &root,
+                                      const std::filesystem::path &path) {
+    if (path.is_absolute())
+        return path.lexically_normal();
+    return (root / path).lexically_normal();
+}
+
 ProjectContext makeContext(const std::filesystem::path &root,
+                           const std::filesystem::path &runtimeRoot,
                            std::string diagnostic) {
     ProjectContext context;
     context.projectRoot = normalizeExistingDirectory(root);
+    context.runtimeRoot = normalizeExistingDirectory(runtimeRoot);
     context.catalogPath = context.projectRoot / kCatalogRelativePath;
     if (!std::filesystem::is_regular_file(context.catalogPath))
         throw std::runtime_error("Project catalog not found: " +
@@ -89,6 +98,8 @@ ProjectContext makeContext(const std::filesystem::path &root,
         (permissions & std::filesystem::perms::owner_write) !=
         std::filesystem::perms::none;
 #endif
+    context.captureRoot =
+        context.runtimeRoot / "artifacts" / "captures";
     context.diagnostic = std::move(diagnostic);
     return context;
 }
@@ -105,8 +116,11 @@ ProjectContext makePackageContext(const std::filesystem::path &root) {
         verifyRuntimePackage(root, manifest);
     ProjectContext context;
     context.projectRoot = normalizeExistingDirectory(root);
+    context.runtimeRoot = context.projectRoot;
     context.catalogPath = context.projectRoot / manifest.catalogPath;
     context.cacheRoot = context.projectRoot / manifest.cacheRoot;
+    context.captureRoot =
+        context.runtimeRoot / "artifacts" / "captures";
     context.catalogWritable = false;
     context.cookedPackage = true;
     context.packageProfileId = manifest.profileId;
@@ -130,8 +144,12 @@ ProjectContext ProjectContextResolver::resolve(
         }
         return makePackageContext(*packageRoot);
     }
+    if (executable.empty() || executable.parent_path().empty())
+        throw std::runtime_error("Could not determine the runtime directory");
+    const std::filesystem::path runtimeRoot = executable.parent_path();
     if (explicitProjectRoot)
-        return makeContext(*explicitProjectRoot, "explicit --project");
+        return makeContext(*explicitProjectRoot, runtimeRoot,
+                           "explicit --project");
 
     if (!executable.empty())
         locatorCandidates.push_back(executable.parent_path() / kLocatorName);
@@ -139,16 +157,28 @@ ProjectContext ProjectContextResolver::resolve(
 
     for (const auto &candidate : locatorCandidates) {
         if (const auto root = readLocator(candidate))
-            return makeContext(*root, "developer locator " + candidate.string());
+            return makeContext(*root, runtimeRoot,
+                               "developer locator " + candidate.string());
     }
 
     if (const auto root =
             findProjectFromAncestors(std::filesystem::current_path()))
-        return makeContext(*root, "catalog found in working-directory ancestor");
+        return makeContext(*root, runtimeRoot,
+                           "catalog found in working-directory ancestor");
 
     throw std::runtime_error(
         "Could not locate a VulkanLab project. Pass --project <path> or run "
         "beside a generated vulkanlab_project.json locator.");
+}
+
+std::filesystem::path ProjectContext::resolveProjectPath(
+    const std::filesystem::path &path) const {
+    return resolveFromRoot(projectRoot, path);
+}
+
+std::filesystem::path ProjectContext::resolveRuntimePath(
+    const std::filesystem::path &path) const {
+    return resolveFromRoot(runtimeRoot, path);
 }
 
 std::filesystem::path ProjectContextResolver::currentExecutablePath() {
