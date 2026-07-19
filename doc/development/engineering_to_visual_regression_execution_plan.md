@@ -1050,7 +1050,7 @@ Release `desktop_1024` Main Sponza package：
 | M1 | Complete | `8dc4a01`, `00c82b9`, `c85ef0e`, `fcd4016`, M1 closeout commit containing this row | Debug/Release clean + fresh build; CTest 4/4 each; unique source ownership; Runtime Sponza 1024; package verify; shader hashes unchanged | Existing GLFW Debug CRT warning and Legacy shader attribute warning remain baseline noise. |
 | M2 | Complete | `a484784`, `cac363e`, `75d282a`, M2 closeout commit containing this row | Clean Debug/Release shader generation; exact baseline hashes; no-op and one-file incremental checks; CTest 4/4 each; Runtime shader switching; package verify | Source tree contains GLSL only; runtime and Cook share per-config staged SPIR-V. |
 | M3 | Complete | `5d1f7b5`, `9464008`, `a51297c`, M3 closeout commit containing this row | Debug/Release build; CTest 5/5 each; no-copy runtime loads from arbitrary CWD; external cooked package load and verify | CWD is no longer a resource API; developer outputs contain no full model or texture copy. |
-| M4 | Not started | | | |
+| M4 | Complete | `2215023`, `7747968`, `dca6ddb`, `ce98b26`, M4 closeout commit containing this row | Preset Debug/Release clean builds; CTest 5/5 each; Runtime Control v2 snapshots; default/automation/CookedOnly runtime; package verify | Runtime pipe suffix and capture commands remain intentionally pending for M5/M6. One transient Windows staging-directory rename failure passed on isolated retry and full-suite retry. |
 | M5 | Not started | | | |
 | M6 | Not started | | | |
 | M7 | Not started | | | |
