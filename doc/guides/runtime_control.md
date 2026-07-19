@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `8fa838e`
+> Verified against: `fa30693`
 
 Runtime Control 允许在 VulkanLab 已经运行时，从另一个终端切换场景、纹理限制和 Shader，并读取加载统计或关闭程序。控制接口仅用于本机调试，通过 Windows Named Pipe 通信，不开放网络端口。
 
@@ -76,7 +76,7 @@ cd build\Release
 
 场景名称使用 Catalog 的完整 display name 匹配，不区分 ASCII 大小写。名称中包含空格时必须加引号。可选模型文件不存在时，`scene list --json` 的 `entries` 中仍保留条目并显示 `available=false`；加载该条目返回 `scene_unavailable`。
 
-`scene list --json` 兼容保留 `scenes` 字符串数组，并新增结构化 `entries`，包含稳定 `id`、`name`、`profileId`、`available` 和 `source`。`scene current --json` 同时返回 display name 与稳定 scene ID。`info --json` 还返回 `projectId`、当前 `sceneId` 和 Debug/Release 共用的 `cacheRoot`。
+`scene list --json` 兼容保留 `scenes` 字符串数组，并新增结构化 `entries`，包含稳定 `id`、`name`、`profileId`、`available` 和 `source`。`scene current --json` 同时返回 display name 与稳定 scene ID。`info --json` 还返回 `projectId`、当前 `sceneId`、`cacheRoot`、`assetMode` 和 `cookedPackage`。
 
 协议中的 `scene.load` 和 `scene.reload` 会立即返回 taskId。Ready 场景返回普通 SceneLoad task；OnDemand 缺失时返回最高位为 1 的复合 operation ID，该 ID 先报告 `phase=importing`，再连续报告 `preparing`、`uploading` 和最终状态。VulkanLabCtl 默认每 100 ms 轮询 `load.status`，因此命令行行为仍是等待整个 operation 完成后输出 LoadStats。使用 `--no-wait` 会立即返回；之后可按同一 taskId 查询或取消。
 
@@ -124,7 +124,7 @@ batch submits/fence waits: 13/0
 .\VulkanLabCtl.exe texture-limit set full
 ```
 
-修改纹理限制会为当前 glTF 场景创建新的异步加载任务；VulkanLabCtl 默认等待该任务完成。`full` 表示不限制 glTF 纹理尺寸，大场景可能因此耗尽显存。
+开发模式下修改纹理限制会为当前 glTF 场景创建新的异步加载任务；VulkanLabCtl 默认等待该任务完成。`full` 表示不限制 glTF 纹理尺寸，大场景可能因此耗尽显存。CookedOnly 的纹理限制由 package profile 固定，设置其他值返回 `texture_limit_locked`，不会改变当前 scene context。
 
 ### Shader Variant
 
@@ -212,11 +212,12 @@ if ($LASTEXITCODE -ne 0) {
 
 - v2 只支持 Windows，并使用固定管道 `\\.\pipe\VulkanLab`。
 - Runtime Control 默认关闭，只有 `VulkanLab.exe --runtime-control` 会创建管道和控制线程。
-- `system.info.capabilities` 会声明 asset catalog/import/cancel；`system.info.cacheRoot` 是本次进程实际使用的共享或 `--cache-root` override。
+- `system.info.capabilities` 按实例声明能力。OnDemand 包含 asset import/cancel；ReadOnly/CookedOnly 只保留 asset catalog/status。`system.info.cacheRoot` 是本次进程实际使用的共享、override 或 package-local cache。
 - Named Pipe 每个连接处理一条短请求；客户端等待通过重复的 `load.status` 请求实现。
 - KTX2 import 在独立工具进程执行，glTF CPU prepare 在 worker 执行，GPU build 在主线程按帧推进；各阶段期间仍可 ping、查询、切换 Shader 和取消任务。
 - 新的 scene 请求会取消旧 generation，只有最新任务可以发布。
 - Runtime Control 不支持截图、材质编辑、相机控制或远程访问。
+- cooked package 可直接使用 `--runtime-control`，但会强制 CookedOnly：`asset import` 返回 `asset_import_disabled`，纹理 profile 锁定，`asset status` 和 load/statistics 命令仍可用。
 - `models/main_sponza` 和 `models/pkg_a_curtains` 是本地可选资产，不提交到仓库。
 
 ## 常见问题

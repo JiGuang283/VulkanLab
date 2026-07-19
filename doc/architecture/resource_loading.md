@@ -2,11 +2,11 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `8fa838e`
+> Verified against: `fa30693`
 
 ## 项目、Catalog 与导入
 
-开发运行由 `ProjectContextResolver` 统一解析项目根目录。优先使用 `--project <path>`，否则读取可执行文件旁由 CMake 生成的 `vulkanlab_project.json`；Debug、Release 和资产工具因此指向同一个源码 `assets/catalog.json`。Catalog 使用稳定 `projectId`、scene `id` 和 import profile ID，具体 glTF 场景不再硬编码在 `main.cpp`。
+`ProjectContextResolver` 先检查可执行文件旁的 `package_manifest.json`。存在时完整校验 package 并返回只读 package root、Catalog、cache root 和 profile，禁止 `--project` 覆盖。否则按开发规则优先使用 `--project <path>`，再读取 CMake 生成的 `vulkanlab_project.json`；Debug、Release 和资产工具因此指向同一个源码 `assets/catalog.json`。Catalog 使用稳定 `projectId`、scene `id` 和 import profile ID，具体 glTF 场景不再硬编码在 `main.cpp`。
 
 Scenes 面板的 `Import Scene...` 通过 Win32 `IFileOpenDialog` 选择 `.gltf/.glb`。可测试的 `SceneImportService` 在 worker 中执行以下事务：
 
@@ -67,7 +67,7 @@ manifest schema v2 记录 project/scene/profile 稳定身份、scene、texture l
 
 `PreparedImage` 的 prebuilt mip payload 包含总字节数组、最终 `VkFormat` 和每级 mip 的 offset、size、width、height。`SceneGpuBuilder` 将所有 mip 写入 staging，并通过多个 `VkBufferImageCopy` region 上传到只需要 `TRANSFER_DST | SAMPLED` 的 image。原始 RGBA8 fallback 继续上传 base level，并由 GPU blit 生成 mip。
 
-运行时 glTF prepare 遇到单个派生条目缺失或 KTX2 读取/转码失败时仍可记录 miss 并走 RGBA fallback；但普通 scene load 之前会先执行 scene/profile 级 artifact admission，因此开发默认路径不会悄悄绕过整个缺失或损坏的 manifest。
+开发模式下，glTF prepare 遇到单个派生条目缺失或 KTX2 读取/转码失败时可记录 miss 并走 RGBA fallback；普通 scene load 之前仍会先执行 scene/profile 级 artifact admission。CookedOnly 设置 `SceneLoadContext::requireDerivedTextures`，manifest 身份、scene stamp、entry/source stamp、KTX2 读取、转码和 mip offset 任一失败都会终止加载，不会调用 stb 解码。
 
 ## Artifact Index 与依赖失效
 
@@ -92,7 +92,7 @@ Application 使用 ArtifactIndex 的 Fast 查询展示精确 scene/profile 的 `
 
 - `OnDemand`：非 Ready 时向 `AssetImportManager` 提交 import，然后继续渲染当前 Scene。
 - `ReadOnly`：不创建编码进程；非 Ready 加载返回错误，但允许用户显式 source fallback。
-- `CookedOnly`：不创建编码进程并禁止 source fallback；Stage E 会再增加包内严格 artifact contract。
+- `CookedOnly`：不创建编码进程、禁止 source fallback，并要求包内派生 artifact 完整有效。
 
 AssetImportManager 拥有一个 supervisor thread、任务队列和最多 64 条历史。相同 scene/profile 的未完成请求合并；不同 profile 保持独立。supervisor 通过精确继承的 stdout/stderr pipe 启动同目录 `VulkanLabAssetTool import scene`，stdout 只接受最大 64 KiB、protocol v1 的 NDJSON，stderr 写入每任务日志。工具进程与全部 `ktx.exe` 位于 `KILL_ON_JOB_CLOSE` Job Object；取消、非法协议、进程异常和 Application 退出都会终止完整进程树。AssetImportManager 不解析 glTF、不访问 Scene/Vulkan，工具内部并发继续由 Stage B worker 与内存预算控制。
 
@@ -144,6 +144,31 @@ DescriptorAllocator 创建支持单独释放 set 的 pool。MaterialInstance 析
 
 VMA 快照在 SceneGpuBuilder 和 staging 销毁后采集，不把临时 staging 计入场景常驻差值。VMA 数值不等同于 Windows 任务管理器显示的专用显存。
 
+## Cook 与 packaged runtime
+
+`VulkanLabAssetTool cook` 将开发项目和共享 cache 转换成只读运行目录。输入是 ProjectContext、一个精确 profile、选中的 scene ID、已构建 runtime 目录和输出目录。默认选择非 optional scenes；显式 scene ID 可以形成更小的产品包。缺失 artifact 默认直接失败，`--build-missing` 才会在 cook 前调用现有有界并行 importer。
+
+`CookPackageBuilder` 建立以下引用闭包：
+
+1. `VulkanLab.exe`、可选 `VulkanLabCtl.exe` 和 `kShaderVariants` 实际引用的唯一 SPIR-V。
+2. 只含选中场景和单一 profile 的 cooked Catalog。
+3. glTF/GLB 主文件；外部 `.gltf` 只复制 buffer URI，不复制源图片。
+4. 每个 glTF scene/profile 的 manifest 及其内容寻址 KTX2 blob 去重集合。
+5. 从 cooked Catalog、manifests 和 blobs 重建的 package-local ArtifactIndex。
+
+Cooked manifest 将 source stamp 改写为包内 scene stamp。源图片因此不属于运行闭包；blob 内容由 package manifest SHA-256 保护，运行时 KTX2 loader 再验证结构和转码。Main Sponza 包不会包含 PNG/JPEG、FBX、USD、MAX 或未登记 shader。
+
+所有文件先写入输出目录旁的唯一 staging。生成 sorted schema v1 `package_manifest.json` 后，工具验证每个文件的规范化相对路径、大小和 SHA-256，再通过目录 rename 发布。替换已有包时先保留 sibling backup；构建或验证失败时移除 staging，原包保持可验证。`package verify` 和运行时启动调用同一 verifier。
+
+packaged `main()` 在 Vulkan 初始化前强制以下契约：
+
+- Package project/profile 必须与 cooked Catalog 一致。
+- cache root 固定为包内 `runtime_assets`，asset mode 固定为 CookedOnly。
+- 不创建 AssetImportManager，不写 package ArtifactIndex，也不允许 source fallback、外部 cache/tool/project override 或纹理 profile 切换。
+- 关闭 validation layer，避免 Release 包依赖 Vulkan SDK 开发层。
+
+开发 CMake 的 `POST_BUILD` 仍复制完整 `models/`，用于 IDE 运行和源 fallback；它不再是交付策略。正式运行目录由 `cook` 决定。
+
 ## 当前限制
 
 - CPU prepare 只有一个 worker；不同场景不会并行解码。
@@ -151,7 +176,7 @@ VMA 快照在 SceneGpuBuilder 和 staging 销毁后采集，不把临时 staging
 - ArtifactIndex 当前使用 JSON 和命名 mutex；没有 directory watcher 或跨机器共享数据库。索引可从 manifest 重建。
 - 单个大 Texture/Mesh 仍是原子 pump，可能造成短帧尖峰。
 - 使用 graphics queue，没有专用 transfer queue 或 queue ownership transfer。
-- 未生成或未命中 KTX2 profile 的图片仍需运行时 decode/resize，并以 RGBA8 上传。
+- 开发模式中未生成或未命中 KTX2 profile 的图片仍可能运行时 decode/resize，并以 RGBA8 上传；CookedOnly 禁止该路径。
 - KTX2 v1 统一使用 BC7，不使用 BC5 normal 或 BC4 AO；无 BC7 设备使用 RGBA32，因此不会获得压缩显存收益。
 - 没有运行时自动编码、mip streaming、LRU residency、virtual texturing 或加载时保留旧大场景的显存预算策略。
-- Viking Room 仍使用同步工厂；CMake 仍复制整个 `models/` 目录。
+- Viking Room 仍使用同步 OBJ/PNG factory；开发 CMake 仍复制整个 `models/` 目录，正式包使用 Cook 闭包。

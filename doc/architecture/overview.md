@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `8fa838e`
+> Verified against: `fa30693`
 
 VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Application` 为组合根，场景、渲染提交、GPU 资源和调试控制之间保持显式所有权，不使用全局引擎服务定位器。
 
@@ -11,7 +11,7 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 | 目录 | 职责 |
 |---|---|
 | `src/app/` | 应用生命周期、场景注册与切换、相机、ImGui 面板、全局 UBO 和命令执行。 |
-| `src/assets/` | ProjectContext、Scene Catalog/编辑事务、ArtifactIndex/依赖校验、cache prune、资产工具进程监督、manifest 和 KTX2 cache 读取。 |
+| `src/assets/` | ProjectContext、Scene Catalog/编辑事务、RuntimePackage、ArtifactIndex/依赖校验、cache prune、资产工具进程监督、manifest 和 KTX2 cache 读取。 |
 | `src/control/` | Windows Named Pipe 服务、运行时命令队列和 JSON 协议。 |
 | `src/core/` | Vulkan instance/device、SwapChain、FrameSync、Buffer/Image、Descriptor、Pipeline、VMA、同步与增量上传。 |
 | `src/render/` | Mesh、Texture、材质、纯 CPU glTF prepare、RenderQueue、PipelineCache、Renderer 和 Shader variant。 |
@@ -23,7 +23,9 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 
 ## 启动与所有权
 
-`main()` 解析 `--help`、`--project`、`--runtime-control`、`--asset-mode` 与可选 cache/tool override，通过 `ProjectContextResolver` 找到源码项目和 `assets/catalog.json`。Catalog schema、稳定 ID、profile、路径和必需源文件会在创建 Window/Vulkan 前验证。随后 `SceneRegistryBuilder` 把 Catalog 条目适配为现有 `SceneEntry`，`main.cpp` 不再逐个登记 glTF 场景。
+`main()` 解析 `--help`、`--project`、`--runtime-control`、`--asset-mode` 与可选 cache/tool override。`ProjectContextResolver` 优先识别 executable 旁的 runtime package；否则定位源码项目和 `assets/catalog.json`。package file hash、Catalog schema、稳定 ID、profile、路径和必需源文件都会在创建 Window/Vulkan 前验证。随后 `SceneRegistryBuilder` 把 Catalog 条目适配为现有 `SceneEntry`，`main.cpp` 不再逐个登记 glTF 场景。
+
+Cooked package 使用包内只读 Catalog/cache，强制 CookedOnly 和固定 profile，并关闭开发 validation layer。外部 project/cache/asset tool override 会在初始化前被拒绝。开发运行默认 OnDemand，保留 CMake locator、writable Catalog 和共享用户 cache。
 
 初始化顺序为：
 
@@ -32,7 +34,7 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 3. VulkanContext、Device 和 DescriptorAllocator。
 4. SwapChain 和 FrameSync。
 5. Renderer、全局 UBO、RenderPipeline 和 MainForwardPass。
-6. PipelineCache、SceneLoadManager worker、AssetImportManager supervisor、ArtifactIndex 和初始 Scene/admission。
+6. PipelineCache、SceneLoadManager worker、ArtifactIndex 和初始 Scene/admission；只有 OnDemand 创建 AssetImportManager supervisor。
 7. GuiSystem。
 8. 可选的 Runtime Control 命令队列和 Named Pipe 线程。
 

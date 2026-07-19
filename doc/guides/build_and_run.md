@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `8fa838e`
+> Verified against: `fa30693`
 
 ## 环境要求
 
@@ -33,7 +33,7 @@ cmake --build build-debug --config Debug
 cmake --build build --config Release
 ```
 
-CMake 会在构建前编译 `shader/` 下登记的 Shader variant，并在构建后把 `shader/`、`textures/` 和 `models/` 复制到可执行文件目录。资源复制会保留源文件时间戳，并跳过没有变化的目标文件，避免普通重建使派生缓存失效。Windows 构建还会生成运行时控制工具。
+CMake 会在构建前编译 `shader/` 下登记的 Shader variant，并在开发输出中把 `shader/`、`textures/` 和 `models/` 复制到可执行文件目录。资源复制会保留源文件时间戳，并跳过没有变化的目标文件，避免普通重建使派生缓存失效。这只是 IDE/开发运行布局，Release 交付应使用后文的 `cook` 命令生成最小闭包。Windows 构建还会生成运行时控制工具。
 
 ```text
 build-debug/Debug/VulkanLab.exe
@@ -80,7 +80,7 @@ Runtime Control 默认关闭。需要从另一个终端控制运行中的渲染�
 
 - `ondemand`：缺失、过期或损坏的精确 scene/profile artifact 会在独立资产工具进程中自动重建。
 - `readonly`：不启动编码进程；可在 UI 中显式选择 `Load Source Fallback`。
-- `cooked-only`：不启动编码进程，也禁止 source fallback。Stage E 将进一步收紧 packaged artifact 契约。
+- `cooked-only`：不启动编码进程，也禁止 source fallback。手工开发运行可以显式选择该模式；正式 cooked package 会自动强制使用它。
 
 测试或 CI 可用 `--cache-root <path>` 隔离派生缓存；正常开发运行省略该参数，使用项目级共享缓存。`--asset-tool <path>` 只用于覆盖与渲染器同目录的 `VulkanLabAssetTool.exe`。
 
@@ -200,10 +200,63 @@ cache hit 时，worker 读取预生成 mip chain，并优先转码为 BC7；设�
 
 可在日志、`Stats -> Last Scene Load` 或 Runtime Control 的加载统计中检查 cache lookup/hit/miss/invalid、KTX2 读取与转码耗时、BC7/RGBA32 数量、prebuilt mip 数量和实际上传字节。首次验证建议先加载 1024 profile，再与无缓存加载结果比较。
 
+## Cook 与独立运行包
+
+先构建 Release，并确保目标 scene/profile 的派生纹理处于 Ready。下面的命令只发布 Main Sponza 1024：
+
+```powershell
+cmake --build build-release --config Release
+
+.\build-release\Release\VulkanLabAssetTool.exe cook `
+  --project . `
+  --runtime-dir .\build-release\Release `
+  --output .\dist\main-sponza `
+  --platform windows-x64 `
+  --profile desktop_1024 `
+  --scene-id main-sponza
+```
+
+可以重复传入 `--scene-id` 选择多个场景。完全省略时会选择 Catalog 中 `optional=false` 的场景。默认要求 artifact 已经 Ready；需要在 cook 前自动补建时显式增加 `--build-missing`，也可以用 `--workers` 和 `--memory-budget-mib` 控制编码器。省略 `--cache-root` 时使用项目共享缓存。
+
+交付前使用同一套 hash 校验：
+
+```powershell
+.\build-release\Release\VulkanLabAssetTool.exe package verify `
+  --path .\dist\main-sponza
+```
+
+典型输出布局为：
+
+```text
+dist/main-sponza/
+  VulkanLab.exe
+  VulkanLabCtl.exe
+  package_manifest.json
+  assets/catalog.json
+  shader/...                         # 仅 kShaderVariants 使用的 SPIR-V
+  models/...                         # glTF/GLB 与必要 buffer，不含源图片
+  runtime_assets/artifact_index.json
+  runtime_assets/manifests/...
+  runtime_assets/blobs/*.ktx2
+```
+
+Cook 先在输出目录旁构建 staging，验证 package manifest 后才原子替换旧包。输出目录不能与 runtime 或 cache 相互包含，也不能包含项目根目录。失败不会发布 staging，也不会破坏已经存在的包。
+
+包内运行不需要源码 locator 或用户级 derived cache：
+
+```powershell
+cd .\dist\main-sponza
+.\VulkanLab.exe --runtime-control
+```
+
+程序从可执行文件旁发现 `package_manifest.json`，在创建窗口/Vulkan 前校验所有列出文件的大小和 SHA-256，然后使用包内只读 Catalog 与 `runtime_assets`。此时自动强制 `CookedOnly`，纹理限制固定为 package profile，`--project`、`--cache-root`、`--asset-tool`、非 cooked asset mode 和运行时纹理档位修改都会被拒绝。KTX2 manifest、entry、blob、转码或 mip 数据出错会使加载失败，不会读取 PNG/JPEG fallback。Cooked package 也关闭开发 validation layer 依赖；目标机器仍需 Vulkan 显卡驱动和 MSVC Release Runtime。
+
+`package_manifest.json` 包含 `VulkanLab.exe` 本身的 hash。若发布流程还要进行代码签名，应先完成签名，再重新生成 package manifest；当前 `cook` 命令假定输入 executable 已经是最终字节。
+
 ## 运行注意事项
 
-- glTF 纹理尺寸默认限制为 `2048`，可在 Renderer 面板切换为 `Full`、`2048`、`1024` 或 `512`。切换会创建新的场景加载任务。
-- KTX2 编码由 `AssetImportManager` 监督的独立 `VulkanLabAssetTool` 进程执行；glTF prepare 在 SceneLoadManager worker 执行；GPU 创建和上传由主线程按帧推进。资产与场景加载分别显示在 `Assets` 和 `Loading` 面板。
+- 开发模式的 glTF 纹理尺寸默认限制为 `2048`，可在 Renderer 面板切换为 `Full`、`2048`、`1024` 或 `512`。切换会创建新的场景加载任务；CookedOnly 控件禁用。
+- 开发模式下，KTX2 编码由 `AssetImportManager` 监督的独立 `VulkanLabAssetTool` 进程执行；glTF prepare 在 SceneLoadManager worker 执行；GPU 创建和上传由主线程按帧推进。CookedOnly 不创建 AssetImportManager。资产与场景加载分别显示在 `Assets` 和 `Loading` 面板。
 - GPU build 前会释放旧 Scene 以控制大场景切换时的显存峰值，因此该阶段可能只显示 ImGui 和空场景。
-- `Full` 对 Main Sponza 仍是高风险选项。KTX2 缓存只覆盖已经显式生成且精确匹配的 profile；未命中时仍会回退 RGBA8。
+- `Full` 对 Main Sponza 仍是高风险选项。开发模式的 KTX2 缓存只覆盖已经显式生成且精确匹配的 profile；未命中时仍可能回退 RGBA8。
 - 日志写入运行目录下的 `logs/VulkanLab.log`。加载统计也显示在 ImGui 的 `Stats -> Last Scene Load`。

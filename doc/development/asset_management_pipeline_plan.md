@@ -2,7 +2,7 @@
 
 > Status: Active
 > Last verified: 2026-07-19
-> Verified against: `8fa838e`
+> Verified against: `fa30693`
 
 ## Summary
 
@@ -628,6 +628,16 @@ Windows directory watcher 是本阶段可选项。当前 Assets 状态不是逐�
 - 在没有源码仓库和用户 cache 的机器上仍能加载 cooked scenes。
 - 删除一个必需 blob 会得到确定性错误，不发生 PNG fallback。
 - package manifest hash 验证通过，重复 cook 的文件集合稳定。
+
+Stage E 已实现于 `fa30693`：
+
+- 新增 schema v1 `RuntimePackageManifest`、package discovery 和启动前 size/SHA-256 验证；packaged ProjectContext 使用只读 Catalog/cache，强制 CookedOnly、固定 profile、关闭 validation layer，并拒绝外部 project/cache/tool override。
+- `VulkanLabAssetTool cook` 按 scene/profile 生成 transaction staging，只复制 runtime executable、15 个实际 Shader variant SPIR-V、glTF/GLB 与必要 buffer、cooked manifest/blob 去重闭包和重建后的 ArtifactIndex。`package verify` 复用运行时 verifier。
+- CookedOnly 不创建 importer、不写 package ArtifactIndex，并将缺 manifest/entry、stamp 不匹配、KTX2 读取/转码/mip 错误升级为 load failure。纹理档位被 package profile 锁定，不会回退源图片。
+- CTest 覆盖 missing artifact、真实 KTX2 cook、输出路径重叠、最小文件集合、重复 cook 文件集合、失败替换保留旧包、移除 source/cache 后验证和 blob 篡改。Debug/Release 均为 4/4 tests 通过。
+- Main Sponza 1024 Release 包包含 1 scene、72 unique blobs、15 SPIR-V 和 94 个受保护文件，总计 `225,169,159` bytes；没有 PNG/JPEG 或未使用 source 文件。它从独立临时目录和空 `LOCALAPPDATA` 完成加载，72/72 KTX2 hit、0 miss/decode/resize，Release 总加载约 `1.39 s`，VMA allocation delta 约 `279.74 MiB`。删除必要 blob 后进程在 Vulkan 初始化前以 `runtime package file is missing` 确定性退出。
+
+最终画面和无开发工具的全新 Windows 机器安装体验仍需人工检查；包闭包、启动、严格加载、Runtime Control 和错误路径已自动验证。
 
 ### Stage F: Platform Artifacts And Residency, Conditional
 
