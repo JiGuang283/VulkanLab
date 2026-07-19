@@ -1,0 +1,5 @@
+if(WIN32)
+    add_subdirectory(vulkan_lab_ctl)
+    add_subdirectory(vulkan_lab_asset_tool)
+    add_dependencies(VulkanLab VulkanLabAssetTool)
+endif()
