@@ -2,13 +2,16 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `fa30693`
+> Verified against: `3bca8f3`
 
 本目录只存放正在讨论或执行的开发计划。不要根据历史归档推断下一阶段目标。
 
 ## Active Plans
 
 - [大型场景响应式加载路线图](async_scene_loading_plan.md)：从现有同步加载演进到后台准备、增量 GPU 上传、任务取消和压缩纹理资产管线。
+- [工程基础到自动视觉回归执行计划](engineering_to_visual_regression_execution_plan.md)：当前执行切片，覆盖工程基线、CMake/Shader/资源路径重构和完整工具链 Stage 1。
+- [工程结构与构建系统重构计划](engineering_refactor_plan.md)：用 target-based CMake、build-tree Shader、ProjectContext 资源路径和 Application 职责拆分支撑后续工具开发。
+- [开发诊断与自动化工具链计划](development_toolchain_plan.md)：建立确定性截图回归、RenderDoc/Validation 诊断、glTF 校验、Tracy、Shader 契约和 Windows CI。
 
 ## 新计划规则
 
