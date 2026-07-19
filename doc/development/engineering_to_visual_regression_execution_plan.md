@@ -2,7 +2,7 @@
 
 > Status: Active
 > Last verified: 2026-07-19
-> Verified against: `3bca8f3`
+> Verified against: `9dc1dab`
 
 ## Summary
 
@@ -928,11 +928,92 @@ ctest --preset windows-msvc-test -L visual
 
 完成后归档本文。下一阶段按[开发诊断与自动化工具链计划](development_toolchain_plan.md)进入 RenderDoc labels/Validation profiles，而不是立即扩大 screenshot 架构。
 
+## M0 Baseline Record
+
+> Captured: 2026-07-19
+> Functional source baseline: `3bca8f3`
+> Plan baseline: `9dc1dab`
+
+原始日志保存在 ignored `artifacts/engineering-baseline/`，不提交本机绝对路径、build tree、模型副本或运行日志。以下结果来自同一台 Windows 11 / NVIDIA GeForce RTX 4060 Laptop GPU 开发机。
+
+### Toolchain And Build
+
+- CMake `4.1.0-rc1`，Visual Studio 2022 generator，MSVC `19.44.35226.0`。
+- Vulkan SDK `1.4.335.0`，`glslc` shaderc `v2023.8 v2025.5`。
+- clean build 目录为 `build-m0-debug/` 和 `build-m0-release/`；两者都从不存在的目录开始配置。
+- 两个配置都生成 `VulkanLab.exe`、`VulkanLabAssetTool.exe`、`VulkanLabCtl.exe`、`VulkanLabCpuTests.exe` 和 `ktx.exe`。
+
+| Config | Configure command | Configure | Build command | Clean build | No-op rebuild | CTest |
+|---|---|---:|---|---:|---:|---:|
+| Debug | `cmake -S . -B build-m0-debug` | 4.18 s | `cmake --build build-m0-debug --config Debug` | 244.98 s | 3.21 s | 4/4, 3.50 s |
+| Release | `cmake -S . -B build-m0-release` | 4.28 s | `cmake --build build-m0-release --config Release` | 282.86 s | 3.21 s | 4/4, 2.45 s |
+
+当前 `PRE_BUILD` 在两次 no-op rebuild 中都输出 `Compiling shader variants...`。当前 `POST_BUILD` copy script 对已经 staged 的 Debug 目录再次执行时，Shader、textures 和 models 分别耗时 `217.17 ms`、`47.33 ms` 和 `82.18 ms`；首次完整复制包含在 clean build 时间中，没有单独插桩。
+
+### Tracked Shader Baseline
+
+| SPIR-V | Bytes | SHA-256 |
+|---|---:|---|
+| `shader/legacy/forward.frag.spv` | 3,228 | `a771aa7be4bd8635b4d203ae9a18ac992e238b51e84dda34592486acab20ee88` |
+| `shader/legacy/forward.vert.spv` | 2,672 | `86f30b917af869c8a37c45a43fa04651e730ec894ab29e8859afb78c21ad387b` |
+| `shader/material_debug/alpha.frag.spv` | 1,616 | `6a06fc124764e588f3fc1af07b7efa379d4a048db1c2f6010e5fe9659ab47418` |
+| `shader/material_debug/base_color.frag.spv` | 2,256 | `c80935c71248c5de8afce78167550a4918ca23eef5c4d586f0a6f34a506e986a` |
+| `shader/material_debug/emissive.frag.spv` | 2,572 | `e1e3d81e4b9c846ee8ae16a70a0bf7f70ff2cb56f0f7f66f064585af35ca4655` |
+| `shader/material_debug/material.vert.spv` | 4,412 | `4873b170d6b237aa874d500b7994f1ea77e26d3522f395713406d5915f2761d3` |
+| `shader/material_debug/metallic.frag.spv` | 2,600 | `62516876c4d0aa7e5eaaa92ac36fa423ca142d4d8fba604e6cd9148923565b0d` |
+| `shader/material_debug/normal.frag.spv` | 4,188 | `09c96cdca37167dae9e638a24647bddb4c85bae30b27f436271a5f3eb9da02ec` |
+| `shader/material_debug/occlusion.frag.spv` | 3,144 | `3e2612ef5302aa5965cea0f5814db635f7d73a4d37d193a0e4fa5be4749f9957` |
+| `shader/material_debug/roughness.frag.spv` | 2,568 | `acdd346a376f1c82bad8129f10c73e776e0e3df22312a8457701169a0f13f555` |
+| `shader/material_debug/transmission.frag.spv` | 1,156 | `a6af6eaf5a6e8fee1360ae17c55f86677cde9c9c5d130636b74a257787ecddd5` |
+| `shader/pbr_lite/forward.frag.spv` | 20,188 | `ccb89d635acd1f9ace01f3e26a8e5dae2787d989fca22007b2d993c5a1d3da74` |
+| `shader/pbr_lite/forward.vert.spv` | 3,552 | `e9c5a5cd1ef8ed1e586ff66532d3426bd755a5e78824982ba1e9ecfb419543a7` |
+| `shader/pbr_lite/forward_normal_mapped.frag.spv` | 21,756 | `c33d497c76a9702ff6d11eecf6e411c45045af0717cf405ed8d8b30adcf19581` |
+| `shader/pbr_lite/forward_normal_mapped.vert.spv` | 4,532 | `896d58d52a7d8e3c965b92e3dbe137dd012b300626fb216ed29e5873e79d5964` |
+
+Debug 和 Release clean build 后这些 tracked 文件无 Git diff。
+
+### Runtime Output Baseline
+
+Debug 与 Release runtime 资源集合相同：
+
+| Directory | Files | Bytes | Notes |
+|---|---:|---:|---|
+| `shader/` | 31 | 111,559 | 包含 15 个源文件、15 个 SPIR-V 和现有辅助文件。 |
+| `textures/` | 2 | 1,039,172 | 当前完整 textures copy。 |
+| `models/` | 190 | 8,379,658,827 | 约 7.80 GiB；当前完整 models copy。 |
+
+### Runtime Load Baseline
+
+Release runtime 使用 Runtime Control、BC7 target 和 texture limit `1024` 记录 glTF 场景。Viking Room 先以默认 `2048` 记录。
+
+| Scene | Total | Cache hit | Textures | Meshes | Materials | Objects | Upload | VMA allocation delta |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Viking Room 2048 | 26.88 ms | 0/0 | 4 | 1 | 1 | 1 | 4.37 MiB | 5.70 MiB |
+| Sheen Chair 1024 | 110.55 ms | 7/7 | 10 | 4 | 7 | 4 | 5.67 MiB | 5.68 MiB |
+| Main Sponza 1024 | 1,556.92 ms | 72/72 | 75 | 405 | 29 | 405 | 279.59 MiB | 279.74 MiB |
+
+Main Sponza 额外基线：CPU prepare `1,220.04 ms`，KTX2 read `221.45 ms`，BC7 transcode `761.01 ms`，texture GPU estimate `96.00 MiB`，3 个 batch submit、0 legacy submit、0 queue wait、0 fence wait，VMA block delta `384.00 MiB`。
+
+Runtime 日志没有 error/critical 或 Validation Error。保留的已知 warning 是 Legacy Forward 不消费 vertex attribute location 3；这不是本轮引入的回归。
+
+### Cooked Package Baseline
+
+Release `desktop_1024` Main Sponza package：
+
+- `cook`：1.11 s，1 scene、1 texture manifest、72 unique blobs。
+- `package verify`：通过，0.39 s。
+- protected files：94，protected bytes：225,169,159（214.74 MiB）。
+- package 根目录实际还有 `package_manifest.json`，因此物理文件数为 95。
+
+### Pending Manual Gate
+
+自动基线已完成。M0 仍等待用户确认 Viking Room、Sheen Chair 和 Main Sponza 当前画面没有已知回归；确认前不得进入 M1。
+
 ## Implementation Record
 
 | Milestone | Status | Commit(s) | Verification | Notes |
 |---|---|---|---|---|
-| M0 | Not started | | | |
+| M0 | Awaiting manual visual confirmation | `9dc1dab`; baseline record in the commit containing this row | Debug/Release clean build; CTest 4/4 each; Runtime loads; package verify | Automated baseline complete; representative-scene visual gate pending. |
 | M1 | Not started | | | |
 | M2 | Not started | | | |
 | M3 | Not started | | | |

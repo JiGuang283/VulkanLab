@@ -57,6 +57,7 @@ tem/
 run_*.log
 run_*.txt
 derived_assets/
+artifacts/
 
 # ---------- OS files ----------
 .DS_Store
