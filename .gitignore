@@ -39,6 +39,9 @@ _deps/
 *.exp
 *.a
 
+# Shader binaries are generated per configuration in the build tree.
+/shader/**/*.spv
+
 # ---------- Runtime model assets ----------
 # Keep required small sample assets trackable, but do not commit large local
 # glTF samples by default. Add new assets here intentionally if a scene depends
