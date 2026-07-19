@@ -1,0 +1,10 @@
+if(NOT DEFINED SOURCE_DIR OR NOT DEFINED DESTINATION_DIR)
+    message(FATAL_ERROR "SOURCE_DIR and DESTINATION_DIR are required")
+endif()
+
+if(NOT IS_DIRECTORY "${SOURCE_DIR}")
+    message(FATAL_ERROR "Source directory does not exist: ${SOURCE_DIR}")
+endif()
+
+file(MAKE_DIRECTORY "${DESTINATION_DIR}")
+file(COPY "${SOURCE_DIR}/" DESTINATION "${DESTINATION_DIR}")

@@ -33,7 +33,7 @@ cmake --build build-debug --config Debug
 cmake --build build --config Release
 ```
 
-CMake 会在构建前编译 `shader/` 下登记的 Shader variant，并在构建后把 `shader/`、`textures/` 和 `models/` 复制到可执行文件目录。Windows 构建还会生成运行时控制工具。
+CMake 会在构建前编译 `shader/` 下登记的 Shader variant，并在构建后把 `shader/`、`textures/` 和 `models/` 复制到可执行文件目录。资源复制会保留源文件时间戳，并跳过没有变化的目标文件，避免普通重建使派生缓存失效。Windows 构建还会生成运行时控制工具。
 
 ```text
 build-debug/Debug/VulkanLab.exe
@@ -104,7 +104,7 @@ cd build-debug\Debug
   --texture-limit 2048
 ```
 
-工具应读取渲染器实际加载的那份场景资产。当前 CMake 会把 `models/` 复制到运行目录，并可能改变复制文件的修改时间；如果从仓库根目录读取源资产生成 manifest，运行时的 size + mtime 快速校验可能判定缓存失效。需要把缓存放到其他位置时，可以继续使用 `--cache-root`，但 `--scene` 仍应指向运行时加载的资产副本。
+工具默认从当前工作目录解析场景和缓存路径，因此从运行目录执行最不容易混淆 Debug、Release 和 texture profile。构建系统会保留复制资产的时间戳，普通重复构建不会让 size + mtime 快速校验失效。源资产实际发生变化后，需要重新构建并重新运行资产工具。需要把缓存放到其他位置时，可以使用 `--cache-root`。
 
 缓存按 scene 和 texture limit 精确匹配。设置为 `1024` 时不会复用 `2048` profile；`Full` 对应 `--texture-limit 0`。重新执行命令会复用有效 blob，`--force` 用于强制重新编码。工具必须完整成功后才发布新 manifest，失败不会修改源资产。
 

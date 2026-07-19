@@ -222,23 +222,20 @@ add_custom_command(TARGET VulkanLab PRE_BUILD
     COMMENT "Compiling shader variants..."
 )
 
-# Copy shaders to build directory
+# Copy runtime assets while preserving source timestamps. KTX2 manifests use
+# size + mtime for fast validation, so rewriting unchanged assets invalidates
+# otherwise valid derived caches.
 add_custom_command(TARGET VulkanLab POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/shader
-        $<TARGET_FILE_DIR:VulkanLab>/shader
-)
-
-# Copy textures to build directory
-add_custom_command(TARGET VulkanLab POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/textures
-        $<TARGET_FILE_DIR:VulkanLab>/textures
-)
-
-# Copy models to build directory
-add_custom_command(TARGET VulkanLab POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/models
-        $<TARGET_FILE_DIR:VulkanLab>/models
+    COMMAND ${CMAKE_COMMAND}
+        "-DSOURCE_DIR=${CMAKE_SOURCE_DIR}/shader"
+        "-DDESTINATION_DIR=$<TARGET_FILE_DIR:VulkanLab>/shader"
+        -P ${CMAKE_SOURCE_DIR}/cmake/CopyDirectoryPreserveTimestamps.cmake
+    COMMAND ${CMAKE_COMMAND}
+        "-DSOURCE_DIR=${CMAKE_SOURCE_DIR}/textures"
+        "-DDESTINATION_DIR=$<TARGET_FILE_DIR:VulkanLab>/textures"
+        -P ${CMAKE_SOURCE_DIR}/cmake/CopyDirectoryPreserveTimestamps.cmake
+    COMMAND ${CMAKE_COMMAND}
+        "-DSOURCE_DIR=${CMAKE_SOURCE_DIR}/models"
+        "-DDESTINATION_DIR=$<TARGET_FILE_DIR:VulkanLab>/models"
+        -P ${CMAKE_SOURCE_DIR}/cmake/CopyDirectoryPreserveTimestamps.cmake
 )
