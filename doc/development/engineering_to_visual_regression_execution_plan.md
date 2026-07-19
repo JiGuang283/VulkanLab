@@ -1005,15 +1005,15 @@ Release `desktop_1024` Main Sponza package：
 - protected files：94，protected bytes：225,169,159（214.74 MiB）。
 - package 根目录实际还有 `package_manifest.json`，因此物理文件数为 95。
 
-### Pending Manual Gate
+### Manual Gate
 
-自动基线已完成。M0 仍等待用户确认 Viking Room、Sheen Chair 和 Main Sponza 当前画面没有已知回归；确认前不得进入 M1。
+用户于 2026-07-19 确认 Viking Room、Sheen Chair 和 Main Sponza 当前画面没有问题。M0 的自动与人工基线门槛均已通过。
 
 ## Implementation Record
 
 | Milestone | Status | Commit(s) | Verification | Notes |
 |---|---|---|---|---|
-| M0 | Awaiting manual visual confirmation | `9dc1dab`; baseline record in the commit containing this row | Debug/Release clean build; CTest 4/4 each; Runtime loads; package verify | Automated baseline complete; representative-scene visual gate pending. |
+| M0 | Complete | `9dc1dab`, `82594e0`, M0 closeout commit containing this row | Debug/Release clean build; CTest 4/4 each; Runtime loads; package verify; representative scenes visually confirmed | No residual VulkanLab, AssetTool, or ktx process. |
 | M1 | Not started | | | |
 | M2 | Not started | | | |
 | M3 | Not started | | | |
