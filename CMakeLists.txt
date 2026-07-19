@@ -14,131 +14,205 @@ configure_file(
 
 include(CTest)
 
-# Source ownership is made explicit in the following M1 step. Keep the current
-# discovery behavior here while excluding implementation-only dependency units.
-file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS
-    "${PROJECT_SOURCE_DIR}/src/*.cpp"
-    "${PROJECT_SOURCE_DIR}/src/*.h"
+add_library(vkl_foundation STATIC
+    src/core/Log.cpp
 )
-list(REMOVE_ITEM SOURCES
-    "${PROJECT_SOURCE_DIR}/src/stb_image.cpp"
-    "${PROJECT_SOURCE_DIR}/src/stb_image_write.cpp"
-    "${PROJECT_SOURCE_DIR}/src/tiny_gltf.cpp"
-    "${PROJECT_SOURCE_DIR}/src/tiny_obj_loader.cpp"
-    "${PROJECT_SOURCE_DIR}/src/vk_mem_alloc.cpp"
-)
-
-add_executable(VulkanLab ${SOURCES})
-target_include_directories(VulkanLab PRIVATE "${PROJECT_SOURCE_DIR}/src")
-target_link_libraries(VulkanLab PRIVATE
+add_library(VulkanLab::Foundation ALIAS vkl_foundation)
+target_include_directories(vkl_foundation PUBLIC "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(vkl_foundation PUBLIC
     vkl_build_options
-    vkl_glm
-    vkl_json
     vkl_spdlog
-    vkl_image_codecs
-    vkl_gltf_parser
-    vkl_obj_parser
-    vkl_vma_impl
-    vkl_imgui
-    vkl_glfw
-    Vulkan::Vulkan
-    ktx_read
-    bcrypt
-    ole32
-    uuid
 )
 
-if(BUILD_TESTING)
-    add_executable(VulkanLabCpuTests
-        "${PROJECT_SOURCE_DIR}/tests/PreparedSceneDataTests.cpp"
-        "${PROJECT_SOURCE_DIR}/tests/DerivedTextureManifestTests.cpp"
-        "${PROJECT_SOURCE_DIR}/tests/SceneCatalogTests.cpp"
-        "${PROJECT_SOURCE_DIR}/tests/SceneImportServiceTests.cpp"
-        "${PROJECT_SOURCE_DIR}/tests/TextureCachePipelineTests.cpp"
-        "${PROJECT_SOURCE_DIR}/tests/ArtifactStatusTests.cpp"
-        "${PROJECT_SOURCE_DIR}/tests/ArtifactIndexTests.cpp"
-        "${PROJECT_SOURCE_DIR}/tests/ArtifactCachePrunerTests.cpp"
-        "${PROJECT_SOURCE_DIR}/tests/RuntimePackageTests.cpp"
-        "${PROJECT_SOURCE_DIR}/tests/AssetImportManagerTests.cpp"
-        "${PROJECT_SOURCE_DIR}/tests/AssetLoadCoordinatorTests.cpp"
-        "${PROJECT_SOURCE_DIR}/tests/SceneCatalogEditorTests.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/DerivedAssetPaths.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/ContentHash.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/CacheMutationLock.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/ArtifactStatus.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/ArtifactIndex.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/ArtifactCachePruner.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/RuntimePackage.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/AssetImportManager.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/AssetLoadCoordinator.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/DerivedTextureManifest.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/ProjectContext.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/SceneCatalog.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/SceneCatalogEditor.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/SceneImportService.cpp"
-        "${PROJECT_SOURCE_DIR}/src/render/TangentGenerator.cpp"
-        "${PROJECT_SOURCE_DIR}/src/render/TextureData.cpp"
-        "${PROJECT_SOURCE_DIR}/tools/vulkan_lab_asset_tool/TextureCachePipeline.cpp"
-        "${PROJECT_SOURCE_DIR}/tools/vulkan_lab_asset_tool/ProcessRunner.cpp"
-        "${PROJECT_SOURCE_DIR}/tools/vulkan_lab_asset_tool/CookPackageBuilder.cpp"
-    )
-    target_include_directories(VulkanLabCpuTests PRIVATE
-        "${PROJECT_SOURCE_DIR}/src"
-        "${PROJECT_SOURCE_DIR}/tools/vulkan_lab_asset_tool"
-    )
-    target_link_libraries(VulkanLabCpuTests PRIVATE
+add_library(vkl_shader_catalog INTERFACE)
+add_library(VulkanLab::ShaderCatalog ALIAS vkl_shader_catalog)
+target_include_directories(vkl_shader_catalog INTERFACE
+    "${PROJECT_SOURCE_DIR}/src"
+)
+target_link_libraries(vkl_shader_catalog INTERFACE vkl_build_options)
+
+add_library(vkl_asset_core STATIC
+    src/assets/ArtifactCachePruner.cpp
+    src/assets/ArtifactIndex.cpp
+    src/assets/ArtifactStatus.cpp
+    src/assets/CacheMutationLock.cpp
+    src/assets/ContentHash.cpp
+    src/assets/DerivedAssetPaths.cpp
+    src/assets/DerivedTextureManifest.cpp
+    src/assets/ProjectContext.cpp
+    src/assets/RuntimePackage.cpp
+    src/assets/SceneCatalog.cpp
+    src/assets/SceneCatalogEditor.cpp
+    src/assets/SceneImportService.cpp
+)
+add_library(VulkanLab::AssetCore ALIAS vkl_asset_core)
+target_include_directories(vkl_asset_core PUBLIC "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(vkl_asset_core
+    PUBLIC
         vkl_build_options
+        vkl_glm
+    PRIVATE
+        vkl_json
+        bcrypt
+)
+
+add_library(vkl_asset_runtime STATIC
+    src/assets/AssetImportManager.cpp
+    src/assets/AssetLoadCoordinator.cpp
+    src/assets/DerivedTextureCache.cpp
+)
+add_library(VulkanLab::AssetRuntime ALIAS vkl_asset_runtime)
+target_include_directories(vkl_asset_runtime PUBLIC "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(vkl_asset_runtime
+    PUBLIC
+        vkl_build_options
+        vkl_asset_core
         vkl_glm
         vkl_json
         vkl_vma_headers
         Vulkan::Vulkan
-        bcrypt
-    )
-    add_test(NAME VulkanLabCpuTests COMMAND VulkanLabCpuTests)
-endif()
+    PRIVATE
+        vkl_foundation
+        ktx_read
+)
 
-if(WIN32)
-    add_executable(VulkanLabCtl
-        "${PROJECT_SOURCE_DIR}/tools/vulkan_lab_ctl/main.cpp"
-    )
-    target_include_directories(VulkanLabCtl PRIVATE
-        "${PROJECT_SOURCE_DIR}/src"
-    )
-    target_link_libraries(VulkanLabCtl PRIVATE
+add_library(vkl_control STATIC
+    src/control/NamedPipeServerWin32.cpp
+    src/control/RuntimeCommand.cpp
+)
+add_library(VulkanLab::Control ALIAS vkl_control)
+target_include_directories(vkl_control PUBLIC "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(vkl_control
+    PUBLIC
         vkl_build_options
         vkl_json
-    )
+    PRIVATE
+        vkl_foundation
+)
 
-    add_executable(VulkanLabAssetTool
-        "${PROJECT_SOURCE_DIR}/tools/vulkan_lab_asset_tool/main.cpp"
-        "${PROJECT_SOURCE_DIR}/tools/vulkan_lab_asset_tool/CookPackageBuilder.cpp"
-        "${PROJECT_SOURCE_DIR}/tools/vulkan_lab_asset_tool/TextureCacheBuilder.cpp"
-        "${PROJECT_SOURCE_DIR}/tools/vulkan_lab_asset_tool/TextureCachePipeline.cpp"
-        "${PROJECT_SOURCE_DIR}/tools/vulkan_lab_asset_tool/ProcessRunner.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/DerivedAssetPaths.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/ArtifactIndex.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/ArtifactCachePruner.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/ArtifactStatus.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/ContentHash.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/CacheMutationLock.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/RuntimePackage.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/DerivedTextureManifest.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/ProjectContext.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/SceneCatalog.cpp"
-        "${PROJECT_SOURCE_DIR}/src/assets/SceneImportService.cpp"
-    )
-    target_include_directories(VulkanLabAssetTool PRIVATE
-        "${PROJECT_SOURCE_DIR}/src"
-        "${PROJECT_SOURCE_DIR}/tools/vulkan_lab_asset_tool"
-    )
-    target_link_libraries(VulkanLabAssetTool PRIVATE
+add_library(vkl_engine STATIC
+    src/core/Buffer.cpp
+    src/core/DescriptorAllocator.cpp
+    src/core/Device.cpp
+    src/core/FrameSync.cpp
+    src/core/Image.cpp
+    src/core/IncrementalUploadQueue.cpp
+    src/core/Pipeline.cpp
+    src/core/PipelineConfigBuilder.cpp
+    src/core/ResourcePoolSelfTest.cpp
+    src/core/SwapChain.cpp
+    src/core/UploadContext.cpp
+    src/core/VulkanContext.cpp
+    src/core/VulkanException.cpp
+    src/platform/FileDialogWin32.cpp
+    src/render/FallbackTextures.cpp
+    src/render/GltfPreparer.cpp
+    src/render/GuiSystem.cpp
+    src/render/MaterialInstance.cpp
+    src/render/MaterialTemplate.cpp
+    src/render/Mesh.cpp
+    src/render/PipelineCache.cpp
+    src/render/Renderer.cpp
+    src/render/RenderPipeline.cpp
+    src/render/RenderQueue.cpp
+    src/render/TangentGenerator.cpp
+    src/render/Texture.cpp
+    src/render/TextureData.cpp
+    src/render/pass/MainForwardPass.cpp
+    src/scene/BuiltinScenes.cpp
+    src/scene/Camera.cpp
+    src/scene/Scene.cpp
+    src/scene/SceneGpuBuilder.cpp
+    src/scene/SceneLoadManager.cpp
+    src/scene/SceneLoadTask.cpp
+    src/scene/SceneRegistryBuilder.cpp
+    src/window/InputManager.cpp
+    src/window/Window.cpp
+)
+add_library(VulkanLab::Engine ALIAS vkl_engine)
+target_include_directories(vkl_engine PUBLIC "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(vkl_engine
+    PUBLIC
         vkl_build_options
+        vkl_asset_core
+        vkl_asset_runtime
+        vkl_foundation
+        vkl_shader_catalog
+        vkl_glm
+        vkl_vma_headers
+        Vulkan::Vulkan
+    PRIVATE
+        vkl_image_codecs
+        vkl_gltf_parser
+        vkl_obj_parser
+        vkl_vma_impl
+        vkl_imgui
+        vkl_glfw
+        ktx_read
+        ole32
+        uuid
+)
+
+add_library(vkl_asset_tool_core STATIC
+    tools/vulkan_lab_asset_tool/CookPackageBuilder.cpp
+    tools/vulkan_lab_asset_tool/ProcessRunner.cpp
+    tools/vulkan_lab_asset_tool/TextureCacheBuilder.cpp
+    tools/vulkan_lab_asset_tool/TextureCachePipeline.cpp
+)
+add_library(VulkanLab::AssetToolCore ALIAS vkl_asset_tool_core)
+target_include_directories(vkl_asset_tool_core PUBLIC
+    "${PROJECT_SOURCE_DIR}/tools/vulkan_lab_asset_tool"
+)
+target_link_libraries(vkl_asset_tool_core
+    PUBLIC
+        vkl_build_options
+        vkl_asset_core
+    PRIVATE
+        vkl_shader_catalog
         vkl_glm
         vkl_json
         vkl_image_codecs
         vkl_gltf_parser
         ktx_read
         bcrypt
+)
+
+add_executable(VulkanLab
+    src/main.cpp
+    src/app/Application.cpp
+)
+target_include_directories(VulkanLab PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(VulkanLab PRIVATE
+    vkl_build_options
+    vkl_engine
+    vkl_asset_core
+    vkl_asset_runtime
+    vkl_control
+    vkl_foundation
+    vkl_shader_catalog
+    vkl_imgui
+    vkl_glfw
+    vkl_json
+    Vulkan::Vulkan
+)
+
+if(WIN32)
+    add_executable(VulkanLabCtl
+        tools/vulkan_lab_ctl/main.cpp
+    )
+    target_include_directories(VulkanLabCtl PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_link_libraries(VulkanLabCtl PRIVATE
+        vkl_build_options
+        vkl_control
+    )
+
+    add_executable(VulkanLabAssetTool
+        tools/vulkan_lab_asset_tool/main.cpp
+    )
+    target_link_libraries(VulkanLabAssetTool PRIVATE
+        vkl_build_options
+        vkl_asset_core
+        vkl_asset_tool_core
     )
     if(TARGET ktxtools)
         add_dependencies(VulkanLabAssetTool ktxtools)
@@ -149,8 +223,33 @@ if(WIN32)
         )
     endif()
     add_dependencies(VulkanLab VulkanLabAssetTool)
+endif()
 
-    if(BUILD_TESTING)
+if(BUILD_TESTING)
+    add_executable(VulkanLabCpuTests
+        tests/PreparedSceneDataTests.cpp
+        tests/DerivedTextureManifestTests.cpp
+        tests/SceneCatalogTests.cpp
+        tests/SceneImportServiceTests.cpp
+        tests/TextureCachePipelineTests.cpp
+        tests/ArtifactStatusTests.cpp
+        tests/ArtifactIndexTests.cpp
+        tests/ArtifactCachePrunerTests.cpp
+        tests/RuntimePackageTests.cpp
+        tests/AssetImportManagerTests.cpp
+        tests/AssetLoadCoordinatorTests.cpp
+        tests/SceneCatalogEditorTests.cpp
+    )
+    target_link_libraries(VulkanLabCpuTests PRIVATE
+        vkl_build_options
+        vkl_asset_core
+        vkl_asset_runtime
+        vkl_asset_tool_core
+        vkl_engine
+    )
+    add_test(NAME VulkanLabCpuTests COMMAND VulkanLabCpuTests)
+
+    if(WIN32)
         add_test(
             NAME VulkanLabAssetToolCatalogImport
             COMMAND ${CMAKE_COMMAND}
