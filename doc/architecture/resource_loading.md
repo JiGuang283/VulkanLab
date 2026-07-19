@@ -2,11 +2,13 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `fa30693`
+> Verified against: `a51297c`
 
 ## 项目、Catalog 与导入
 
-`ProjectContextResolver` 先检查可执行文件旁的 `package_manifest.json`。存在时完整校验 package 并返回只读 package root、Catalog、cache root 和 profile，禁止 `--project` 覆盖。否则按开发规则优先使用 `--project <path>`，再读取 CMake 生成的 `vulkanlab_project.json`；Debug、Release 和资产工具因此指向同一个源码 `assets/catalog.json`。Catalog 使用稳定 `projectId`、scene `id` 和 import profile ID，具体 glTF 场景不再硬编码在 `main.cpp`。
+`ProjectContextResolver` 先检查可执行文件旁的 `package_manifest.json`。存在时完整校验 package 并返回只读 package root、Catalog、cache root 和 profile，禁止 `--project` 覆盖。否则按开发规则优先使用 `--project <path>`，再读取可执行文件旁由 CMake 生成的 `vulkanlab_project.json`，最后才从当前目录祖先查找 Catalog。解析结果明确区分 `projectRoot`、`runtimeRoot`、`cacheRoot` 和 `captureRoot`；后续 subsystem 只消费已经解析的路径，不再按当前工作目录拼接资源。Debug、Release 和资产工具因此指向同一个源码 `assets/catalog.json`。Catalog 使用稳定 `projectId`、scene `id` 和 import profile ID，具体 glTF 场景不再硬编码在 `main.cpp`。
+
+开发模式下 Catalog scene、glTF/GLB、外部 buffer/image 以及 Viking Room 的 OBJ/PNG 从 `projectRoot` 读取，SPIR-V 和 sibling 工具从 executable 所在的 `runtimeRoot` 读取。Cooked package 中 `projectRoot` 与 `runtimeRoot` 都是 package root，`cacheRoot` 固定为包内 `runtime_assets`。
 
 Scenes 面板的 `Import Scene...` 通过 Win32 `IFileOpenDialog` 选择 `.gltf/.glb`。可测试的 `SceneImportService` 在 worker 中执行以下事务：
 
@@ -152,9 +154,10 @@ VMA 快照在 SceneGpuBuilder 和 staging 销毁后采集，不把临时 staging
 
 1. `VulkanLab.exe`、可选 `VulkanLabCtl.exe` 和 `kShaderVariants` 实际引用的唯一 SPIR-V。
 2. 只含选中场景和单一 profile 的 cooked Catalog。
-3. glTF/GLB 主文件；外部 `.gltf` 只复制 buffer URI，不复制源图片。
-4. 每个 glTF scene/profile 的 manifest 及其内容寻址 KTX2 blob 去重集合。
-5. 从 cooked Catalog、manifests 和 blobs 重建的 package-local ArtifactIndex。
+3. 选中的 builtin scene 明确需要的 OBJ/PNG；当前为 Viking Room。
+4. glTF/GLB 主文件；外部 `.gltf` 只复制 buffer URI，不复制源图片。
+5. 每个 glTF scene/profile 的 manifest 及其内容寻址 KTX2 blob 去重集合。
+6. 从 cooked Catalog、manifests 和 blobs 重建的 package-local ArtifactIndex。
 
 Cooked manifest 将 source stamp 改写为包内 scene stamp。源图片因此不属于运行闭包；blob 内容由 package manifest SHA-256 保护，运行时 KTX2 loader 再验证结构和转码。Main Sponza 包不会包含 PNG/JPEG、FBX、USD、MAX 或未登记 shader。
 
@@ -167,7 +170,7 @@ packaged `main()` 在 Vulkan 初始化前强制以下契约：
 - 不创建 AssetImportManager，不写 package ArtifactIndex，也不允许 source fallback、外部 cache/tool/project override 或纹理 profile 切换。
 - 关闭 validation layer，避免 Release 包依赖 Vulkan SDK 开发层。
 
-开发 CMake 的 `POST_BUILD` 仍复制完整 `models/`，用于 IDE 运行和源 fallback；它不再是交付策略。正式运行目录由 `cook` 决定。
+开发 CMake 的 `POST_BUILD` 只 stage project locator，不复制完整 `models/` 或 `textures/`。开发运行直接读取 `projectRoot`，正式运行目录由 `cook` 的闭包决定。
 
 ## Platform artifact 与 residency 决策
 
@@ -185,4 +188,4 @@ Stage F 当前推迟。Release cooked Main Sponza 1024 的 72 张 KTX2 全部转
 - 开发模式中未生成或未命中 KTX2 profile 的图片仍可能运行时 decode/resize，并以 RGBA8 上传；CookedOnly 禁止该路径。
 - KTX2 v1 统一使用 BC7，不使用 BC5 normal 或 BC4 AO；无 BC7 设备使用 RGBA32，因此不会获得压缩显存收益。
 - 没有运行时自动编码、mip streaming、LRU residency、virtual texturing 或加载时保留旧大场景的显存预算策略。
-- Viking Room 仍使用同步 OBJ/PNG factory；开发 CMake 仍复制整个 `models/` 目录，正式包使用 Cook 闭包。
+- Viking Room 仍使用同步 OBJ/PNG factory；开发模式从 `projectRoot` 读取，正式包使用 Cook 闭包。

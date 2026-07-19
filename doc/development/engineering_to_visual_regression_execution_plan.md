@@ -1032,6 +1032,16 @@ Release `desktop_1024` Main Sponza package：
 - Release Main Sponza 1024 cook/package verify 通过：94 个 protected files、72 个唯一 blob、15 个 SPIR-V、0 个 GLSL source，package bytes 保持 `225,170,695`。
 - `ShaderVariant` runtime 相对路径、display name 和 Cook 的 shader closure 未改变；Runtime 与 Cook 都只消费 per-config runtime staging。验证结束后无残留 VulkanLab、AssetTool 或 ktx 进程，工作树没有生成文件。
 
+## M3 Verification Record
+
+> Completed: 2026-07-19
+
+- `ProjectContext` 现在明确保存 `projectRoot`、`runtimeRoot`、`cacheRoot` 和 `captureRoot`。Catalog/glTF/builtin 源资产从 project root 解析，所有 shader variant 从 runtime root 解析；Runtime Control `system.info` 可直接检查这些根目录。
+- Debug/Release 输出目录均只保留 locator、15 个 SPIR-V 和 runtime/tool binaries，`models/`、`textures/` 均不存在。Debug no-op build 为 `1.62 s`，输出中没有模型复制或目录扫描。
+- Debug/Release CTest 均为 5/5。新增测试覆盖显式 project、developer locator、working-directory ancestor、package root、builtin Cook closure，以及开发输出不含完整资产目录。
+- 从无资源的任意 CWD 使用 executable locator 启动 Debug 后，Viking Room、Sheen Chair 和 Main Sponza 1024 均加载成功。Main Sponza 保持 75 textures、405 meshes、72/72 derived hits、3 batch submits，日志无 error、critical 或 Validation Error。
+- Main Sponza 1024 Release package 为 94 个 protected files、72 个唯一 blob、`225,181,447` bytes。复制到仓库外临时目录后，`projectRoot == runtimeRoot == package root`、cache 为包内 `runtime_assets`；Main Sponza 完成加载且日志没有源码项目路径。
+
 ## Implementation Record
 
 | Milestone | Status | Commit(s) | Verification | Notes |
@@ -1039,7 +1049,7 @@ Release `desktop_1024` Main Sponza package：
 | M0 | Complete | `9dc1dab`, `82594e0`, `11e9d90` | Debug/Release clean build; CTest 4/4 each; Runtime loads; package verify; representative scenes visually confirmed | No residual VulkanLab, AssetTool, or ktx process. |
 | M1 | Complete | `8dc4a01`, `00c82b9`, `c85ef0e`, `fcd4016`, M1 closeout commit containing this row | Debug/Release clean + fresh build; CTest 4/4 each; unique source ownership; Runtime Sponza 1024; package verify; shader hashes unchanged | Existing GLFW Debug CRT warning and Legacy shader attribute warning remain baseline noise. |
 | M2 | Complete | `a484784`, `cac363e`, `75d282a`, M2 closeout commit containing this row | Clean Debug/Release shader generation; exact baseline hashes; no-op and one-file incremental checks; CTest 4/4 each; Runtime shader switching; package verify | Source tree contains GLSL only; runtime and Cook share per-config staged SPIR-V. |
-| M3 | Not started | | | |
+| M3 | Complete | `5d1f7b5`, `9464008`, `a51297c`, M3 closeout commit containing this row | Debug/Release build; CTest 5/5 each; no-copy runtime loads from arbitrary CWD; external cooked package load and verify | CWD is no longer a resource API; developer outputs contain no full model or texture copy. |
 | M4 | Not started | | | |
 | M5 | Not started | | | |
 | M6 | Not started | | | |

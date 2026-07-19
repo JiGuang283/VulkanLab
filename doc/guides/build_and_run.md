@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `cac363e`
+> Verified against: `a51297c`
 
 ## 环境要求
 
@@ -39,7 +39,7 @@ CMake 将 `shader/` 下显式登记的 15 个 GLSL 源增量编译到 `build-*/g
 cmake --build build-debug --config Debug --target VulkanLabShaders
 ```
 
-开发构建目前仍把 `textures/` 和 `models/` 复制到可执行文件目录。资源复制会保留源文件时间戳，并跳过没有变化的目标文件，避免普通重建使派生缓存失效。这只是 IDE/开发运行布局，Release 交付应使用后文的 `cook` 命令生成最小闭包。Windows 构建还会生成运行时控制工具。
+开发构建只把 executable、运行时工具、`vulkanlab_project.json` locator 和生成的 SPIR-V 放入输出目录，不复制完整 `models/` 或 `textures/`。开发场景直接通过 ProjectContext 从源码项目读取源资产；Release 交付使用后文的 `cook` 命令生成经过校验的最小闭包。Windows 构建还会生成运行时控制工具。
 
 ```text
 build-debug/Debug/VulkanLab.exe
@@ -57,14 +57,14 @@ build/Release/VulkanLabAssetTool.exe
 
 ## 启动
 
-程序使用相对路径加载资源，应把对应输出目录设为工作目录：
+程序不依赖当前工作目录。下面是从输出目录启动的常用方式：
 
 ```powershell
 cd build-debug\Debug
 .\VulkanLab.exe
 ```
 
-CMake 会把 `vulkanlab_project.json` 写到 Debug/Release 可执行文件旁，IDE 或输出目录启动时会自动定位源码项目。也可以显式指定项目；Catalog 错误会在创建窗口和 Vulkan 前返回：
+CMake 会把 `vulkanlab_project.json` 写到 Debug/Release 可执行文件旁，因此从仓库根、输出目录或任意其他工作目录启动同一个 executable，都会定位到同一源码项目。也可以显式指定项目；Catalog 错误会在创建窗口和 Vulkan 前返回：
 
 ```powershell
 .\VulkanLab.exe --project C:\Project\vulkan_learn
@@ -127,7 +127,7 @@ Catalog 当前包含以下初始 glTF 条目：
 - `Pot of Coals`
 - `Main Sponza`
 
-`Main Sponza` 的入口是 `models/main_sponza/NewSponza_Main_glTF_003.gltf`。CMake 当前仍复制整个 `models/` 目录，大型本地资产会明显增加构建后的复制时间。
+`Main Sponza` 的入口是 `models/main_sponza/NewSponza_Main_glTF_003.gltf`。该路径从 `projectRoot` 解析；大型本地资产不会在普通构建后被复制到 Debug/Release 输出目录。
 
 ## KTX2 派生纹理缓存
 
