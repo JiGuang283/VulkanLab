@@ -22,6 +22,7 @@ void runAssetLoadCoordinatorTests();
 void runSceneCatalogEditorTests();
 void runRuntimeCommandDispatcherTests();
 void runBuildInfoTests();
+void runDiagnosticsConfigTests();
 
 namespace {
 
@@ -142,6 +143,7 @@ int main() {
         runSceneCatalogEditorTests();
         runRuntimeCommandDispatcherTests();
         runBuildInfoTests();
+        runDiagnosticsConfigTests();
         std::cout << "VulkanLab CPU tests passed\n";
         return 0;
     } catch (const std::exception &error) {

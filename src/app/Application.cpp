@@ -631,7 +631,8 @@ void Application::init() {
     }
 
     window_ = std::make_unique<Window>(
-        config_.windowWidth, config_.windowHeight, config_.windowTitle);
+        config_.windowWidth, config_.windowHeight, config_.windowTitle,
+        config_.diagnostics.windowResizable());
     input_ = std::make_unique<InputManager>(*window_);
 
     auto extensions = Window::getRequiredVulkanExtensions();
@@ -686,10 +687,12 @@ void Application::init() {
     else
         requestSceneOperation(start);
 
-    // ImGui on top of the main render pass.
-    gui_ = std::make_unique<GuiSystem>(
-        context_->instance(), *device_, renderer_->renderPass(),
-        window_->handle(), swapChain_->imageCount(), swapChain_->imageCount());
+    if (config_.diagnostics.guiVisible) {
+        gui_ = std::make_unique<GuiSystem>(
+            context_->instance(), *device_, renderer_->renderPass(),
+            window_->handle(), swapChain_->imageCount(),
+            swapChain_->imageCount());
+    }
 }
 
 void Application::loadScene(int index, bool replaceCurrent) {
@@ -1325,6 +1328,9 @@ void Application::processRuntimeCommand() {
 
 ControlJson Application::runtimeSystemInfo() {
     const BuildInfo &build = currentBuildInfo();
+    ControlJson fixedDelta = nullptr;
+    if (config_.diagnostics.fixedDeltaSeconds)
+        fixedDelta = *config_.diagnostics.fixedDeltaSeconds;
     ControlJson capabilities = {"async_scene_load", "load_status",
                                 "load_cancel", "asset_catalog"};
     if (assetImportManager_) {
@@ -1350,6 +1356,14 @@ ControlJson Application::runtimeSystemInfo() {
           {"compiler", build.compiler},
           {"vulkanSdk", build.vulkanSdk},
           {"glslc", build.glslc}}},
+        {"diagnostics",
+         {{"automation", config_.diagnostics.automationMode},
+          {"fixedDelta", fixedDelta},
+          {"windowSize", {config_.windowWidth, config_.windowHeight}},
+          {"windowResizable", config_.diagnostics.windowResizable()},
+          {"guiVisible", config_.diagnostics.guiVisible},
+          {"runtimePipeSuffix", config_.diagnostics.runtimePipeSuffix},
+          {"captureRoot", projectContext_.captureRoot.string()}}},
         {"projectRoot", projectContext_.projectRoot.string()},
         {"runtimeRoot", projectContext_.runtimeRoot.string()},
         {"assetMode", assetImportModeName(config_.assetImportMode)},
@@ -1704,22 +1718,25 @@ void Application::applySceneCameraDefaults() {
 }
 
 void Application::updateInputMode() {
-    auto &io = ImGui::GetIO();
+    ImGuiIO *io = gui_ ? &ImGui::GetIO() : nullptr;
 
     if (mode_ == InputMode::UI) {
         const bool pressed = input_->isMousePressed(MouseButton::Right);
-        const bool overUI = io.WantCaptureMouse || ImGui::IsAnyItemActive();
+        const bool overUI =
+            io && (io->WantCaptureMouse || ImGui::IsAnyItemActive());
         if (pressed && !overUI) {
             savedCursor_ = input_->cursorPos();
             input_->setCursorCaptured(true);
-            io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+            if (io)
+                io->ConfigFlags |= ImGuiConfigFlags_NoMouse;
             mode_ = InputMode::CameraDrag;
         }
     } else { // CameraDrag
         if (input_->isMouseReleased(MouseButton::Right)) {
             input_->setCursorCaptured(false);
             input_->setCursorPos(savedCursor_);
-            io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+            if (io)
+                io->ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
             mode_ = InputMode::UI;
         }
     }
@@ -2686,7 +2703,8 @@ void Application::handleSwapChainRecreate() {
     renderer_->recreateSwapChain();
     pipelineCache_->clear();
     frameSync_->onSwapChainRecreated();
-    gui_->onSwapChainRecreated(swapChain_->imageCount());
+    if (gui_)
+        gui_->onSwapChainRecreated(swapChain_->imageCount());
     camera_.setAspect(static_cast<float>(swapChain_->extent().width) /
                       static_cast<float>(swapChain_->extent().height));
 }
@@ -2702,6 +2720,7 @@ const ShaderVariant &Application::currentShaderVariant() const {
 void Application::mainLoop() {
     auto startTime = std::chrono::high_resolution_clock::now();
     auto lastTime = startTime;
+    float simulationTime = 0.0f;
 
     while (!window_->shouldClose()) {
         window_->pollEvents();
@@ -2724,34 +2743,45 @@ void Application::mainLoop() {
         updateSceneLoading();
 
         // 2. 时间
-        auto  now = std::chrono::high_resolution_clock::now();
-        float dt = std::chrono::duration<float>(now - lastTime).count();
+        const auto now = std::chrono::high_resolution_clock::now();
+        const float dt = config_.diagnostics.fixedDeltaSeconds
+                             ? *config_.diagnostics.fixedDeltaSeconds
+                             : std::chrono::duration<float>(now - lastTime)
+                                   .count();
         lastTime = now;
 
         // 3. ImGui 新帧
-        gui_->beginFrame();
+        if (gui_)
+            gui_->beginFrame();
 
         // 4. 模式切换 + 输入
-        updateInputMode();
-        if (mode_ == InputMode::CameraDrag)
-            processCameraInput(dt);
+        if (!config_.diagnostics.automationMode) {
+            updateInputMode();
+            if (mode_ == InputMode::CameraDrag)
+                processCameraInput(dt);
+        }
         if (input_->isKeyDown(Key::Escape))
             window_->setShouldClose(true);
 
         // 5. 场景 tick
-        float t = std::chrono::duration<float>(now - startTime).count();
+        simulationTime = config_.diagnostics.fixedDeltaSeconds
+                             ? simulationTime + dt
+                             : std::chrono::duration<float>(now - startTime)
+                                   .count();
         if (currentScene_)
-            currentScene_->update(dt, t);
+            currentScene_->update(dt, simulationTime);
 
         // 6. UI
-        drawGui();
+        if (gui_)
+            drawGui();
 
         // 7. 渲染
         auto ctx = frameSync_->beginFrame();
         if (!ctx) {
             if (frameSync_->swapChainNeedsRecreation())
                 handleSwapChainRecreate();
-            ImGui::EndFrame();
+            if (gui_)
+                ImGui::EndFrame();
             input_->endFrame();
             continue;
         }
@@ -2763,7 +2793,7 @@ void Application::mainLoop() {
         renderQueue_.sortOpaque();
         renderQueue_.sortTransparent(camera_.position());
 
-        renderer_->renderFrame(*ctx, renderQueue_, *pipelineCache_, *gui_,
+        renderer_->renderFrame(*ctx, renderQueue_, *pipelineCache_, gui_.get(),
                                currentShaderVariant());
         frameSync_->endFrame(*ctx);
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "diagnostics/DiagnosticsConfig.h"
+
 #include <cstdint>
 #include <string>
 
@@ -31,6 +33,7 @@ struct Config {
     bool assetImportModeExplicit = false;
     uint32_t assetImportWorkers = 0;
     uint64_t assetImportMemoryBudgetMiB = 2048;
+    DiagnosticsConfig diagnostics;
 
     // ---- 输入参数 ----
     float moveSpeed = 2.0f;

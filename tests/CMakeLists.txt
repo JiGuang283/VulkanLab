@@ -13,6 +13,7 @@ add_executable(VulkanLabCpuTests
     SceneCatalogEditorTests.cpp
     RuntimeCommandDispatcherTests.cpp
     BuildInfoTests.cpp
+    DiagnosticsConfigTests.cpp
 )
 target_link_libraries(VulkanLabCpuTests PRIVATE
     vkl_build_options

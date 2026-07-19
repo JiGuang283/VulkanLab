@@ -31,7 +31,7 @@ class Renderer {
 
     void renderFrame(const FrameSync::FrameContext &frame,
                      const RenderQueue &queue, PipelineCache &pipelineCache,
-                     GuiSystem &gui, const ShaderVariant &shaderVariant);
+                     GuiSystem *gui, const ShaderVariant &shaderVariant);
 
     // ---- 交换链重建 ----
     void recreateSwapChain();

@@ -16,7 +16,8 @@ namespace {
 
 void printUsage(std::ostream &out) {
     out << "Usage: VulkanLab.exe [--project <path>] [--runtime-control] "
-           "[--asset-mode <mode>] [--cache-root <path>] [--help]\n"
+           "[--asset-mode <mode>] [--cache-root <path>] [diagnostics] "
+           "[--help]\n"
         << "\n"
         << "Options:\n"
         << "  --runtime-control  Enable the local VulkanLabCtl named-pipe "
@@ -26,6 +27,12 @@ void printUsage(std::ostream &out) {
         << "  --asset-mode <mode>  ondemand, readonly, or cooked-only.\n"
         << "  --asset-tool <path>  Override VulkanLabAssetTool.exe path.\n"
         << "  --cache-root <path>  Override the derived asset cache root.\n"
+        << "  --automation      Enable deterministic automation behavior.\n"
+        << "  --window-size <WxH>  Use a fixed, non-resizable window size.\n"
+        << "  --fixed-delta <seconds>  Advance scene simulation by a fixed "
+           "delta in (0, 1].\n"
+        << "  --no-gui          Disable ImGui initialization and rendering.\n"
+        << "  --capture-root <path>  Override the diagnostics output root.\n"
         << "  --help             Show this help and exit.\n";
 }
 
@@ -34,6 +41,30 @@ bool parseArguments(int argc, char **argv, vkr::Config &config) {
         const std::string argument = argv[i];
         if (argument == "--runtime-control") {
             config.enableRuntimeControl = true;
+        } else if (argument == "--automation") {
+            config.diagnostics.automationMode = true;
+        } else if (argument == "--window-size") {
+            if (++i >= argc)
+                throw std::invalid_argument(
+                    "--window-size requires WIDTHxHEIGHT");
+            const vkr::DiagnosticWindowSize size =
+                vkr::parseDiagnosticWindowSize(argv[i]);
+            config.windowWidth = size.width;
+            config.windowHeight = size.height;
+            config.diagnostics.fixedWindowSize = true;
+        } else if (argument == "--fixed-delta") {
+            if (++i >= argc)
+                throw std::invalid_argument(
+                    "--fixed-delta requires a value in seconds");
+            config.diagnostics.fixedDeltaSeconds =
+                vkr::parseDiagnosticFixedDelta(argv[i]);
+        } else if (argument == "--no-gui") {
+            config.diagnostics.guiVisible = false;
+        } else if (argument == "--capture-root") {
+            if (++i >= argc)
+                throw std::invalid_argument(
+                    "--capture-root requires a directory path");
+            config.diagnostics.captureRoot = argv[i];
         } else if (argument == "--project") {
             if (++i >= argc)
                 throw std::invalid_argument(
@@ -102,10 +133,15 @@ int main(int argc, char **argv) {
             vkr::ProjectContextResolver::resolve(explicitProject);
         vkr::SceneCatalog catalog = vkr::SceneCatalog::load(
             projectContext.catalogPath, projectContext.projectRoot);
+        const bool captureRootExplicit =
+            !config.diagnostics.captureRoot.empty();
         if (projectContext.cookedPackage) {
             if (config.cachePathExplicit || config.assetToolPathExplicit)
                 throw std::runtime_error(
                     "A cooked package cannot use external cache or asset tool paths");
+            if (captureRootExplicit)
+                throw std::runtime_error(
+                    "A cooked package cannot override the diagnostics capture root");
             if (config.assetImportModeExplicit &&
                 config.assetImportMode != vkr::AssetImportMode::CookedOnly) {
                 throw std::runtime_error(
@@ -138,6 +174,12 @@ int main(int argc, char **argv) {
                         .string();
             }
         }
+        if (captureRootExplicit) {
+            projectContext.captureRoot =
+                std::filesystem::absolute(config.diagnostics.captureRoot)
+                    .lexically_normal();
+        }
+        config.diagnostics.captureRoot = projectContext.captureRoot;
         VKR_LOG_INFO("Assets", "Project '{}' from '{}' ({})", catalog.projectId,
                      projectContext.projectRoot.string(),
                      projectContext.diagnostic);

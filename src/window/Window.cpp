@@ -11,10 +11,12 @@
 
 namespace vkr {
 
-Window::Window(uint32_t width, uint32_t height, const std::string &title)
+Window::Window(uint32_t width, uint32_t height, const std::string &title,
+               bool resizable)
     : width_(width), height_(height) {
     glfwInit();
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_RESIZABLE, resizable ? GLFW_TRUE : GLFW_FALSE);
 
     window_ =
         glfwCreateWindow(static_cast<int>(width_), static_cast<int>(height_),

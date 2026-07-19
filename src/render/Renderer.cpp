@@ -40,7 +40,7 @@ Renderer::~Renderer() {
 void Renderer::renderFrame(const FrameSync::FrameContext &frame,
                            const RenderQueue &queue,
                            PipelineCache &pipelineCache,
-                           GuiSystem &gui,
+                           GuiSystem *gui,
                            const ShaderVariant &shaderVariant) {
     RenderFrameContext renderFrame{};
     renderFrame.cmd = frame.cmd;
@@ -50,7 +50,7 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.globalDescriptorSet = globalDescriptorSet(frame.frameIndex);
     renderFrame.globalDescriptorSetLayout = globalDescriptorSetLayout_;
     renderFrame.pipelineCache = &pipelineCache;
-    renderFrame.gui = &gui;
+    renderFrame.gui = gui;
     renderFrame.shaderVariant = &shaderVariant;
 
     pipeline_.execute(renderFrame, queue);
