@@ -2,7 +2,7 @@
 
 > Status: Active
 > Last verified: 2026-07-19
-> Verified against: `c3aa7eb`
+> Verified against: `fa30693`
 
 ## Summary
 
@@ -297,6 +297,12 @@ VulkanLabAssetTool texture-cache build --scene models/main_sponza/NewSponza_Main
 - 需要大量动态纹理时再评估 descriptor indexing/bindless。
 
 进入条件必须由真实统计驱动，不能仅因为实现看起来更完整。若压缩纹理和 2048/1024 档位已经满足目标，则不应提前承担 streaming 的同步、descriptor 和回收复杂度。
+
+### Current Gate Decision
+
+2026-07-19 的 Stage E Release cooked Main Sponza 1024 数据为：总加载 `1.36 s`，KTX2 read `167 ms`、BC7 transcode `787 ms`、纹理 GPU estimate `96 MiB`、场景 VMA allocation delta `279.74 MiB`。当前加载会在新 GPU build 前释放旧 Scene，没有多场景 residency 累积。因此 Stage 4 已评估并暂缓，不实施 memory admission、streaming 或 LRU。
+
+只有代表场景 Release p95 超过 2 秒且 transcode 占 CPU prepare 超过 40%、目标设备 allocation failure 或单 Scene 超过 device-local budget 的 50%、需要同时驻留多个大场景或 resident set 超过 budget 的 70% 时，才重新打开本阶段。budget 比例必须来自 `VK_EXT_memory_budget`，不能用 VMA block bytes 代替。完整决策记录见[已归档资产管线计划](../archive/plans/optimization/asset_management_pipeline_plan.md#decision-deferred)。
 
 ## Diagnostics Changes
 
