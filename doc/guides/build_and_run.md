@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `fa30693`
+> Verified against: `cac363e`
 
 ## 环境要求
 
@@ -33,7 +33,13 @@ cmake --build build-debug --config Debug
 cmake --build build --config Release
 ```
 
-CMake 会在构建前编译 `shader/` 下登记的 Shader variant，并在开发输出中把 `shader/`、`textures/` 和 `models/` 复制到可执行文件目录。资源复制会保留源文件时间戳，并跳过没有变化的目标文件，避免普通重建使派生缓存失效。这只是 IDE/开发运行布局，Release 交付应使用后文的 `cook` 命令生成最小闭包。Windows 构建还会生成运行时控制工具。
+CMake 将 `shader/` 下显式登记的 15 个 GLSL 源增量编译到 `build-*/generated/<Config>/shader/`，再把对应 SPIR-V stage 到可执行文件旁的 `shader/`。源码树不保存 SPIR-V，也没有独立的 `compile.bat`；普通 C++ rebuild 不会重新调用 `glslc`，修改一个 Shader 只更新对应产物。需要单独构建 Shader 时使用：
+
+```powershell
+cmake --build build-debug --config Debug --target VulkanLabShaders
+```
+
+开发构建目前仍把 `textures/` 和 `models/` 复制到可执行文件目录。资源复制会保留源文件时间戳，并跳过没有变化的目标文件，避免普通重建使派生缓存失效。这只是 IDE/开发运行布局，Release 交付应使用后文的 `cook` 命令生成最小闭包。Windows 构建还会生成运行时控制工具。
 
 ```text
 build-debug/Debug/VulkanLab.exe

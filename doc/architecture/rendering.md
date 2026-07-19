@@ -1,8 +1,8 @@
 # 渲染流程
 
 > Status: Current
-> Last verified: 2026-07-18
-> Verified against: `0516951`
+> Last verified: 2026-07-19
+> Verified against: `cac363e`
 
 ## RenderQueue
 
@@ -42,6 +42,8 @@ Descriptor 约定为：
 - 128 字节 push constant：model matrix、base color、emissive/metallic、roughness/alpha/AO 和 alpha/transmission/normal scale 参数。
 
 ## Shader Variant
+
+`shader/CMakeLists.txt` 是 Shader source list 的唯一所有者。每个 GLSL 文件通过独立的 `add_custom_command(OUTPUT ...)` 生成到 `generated/<Config>/shader/`，再由同一依赖图 stage 到 runtime `shader/`；`VulkanLab` 和 `VulkanLabAssetTool` 都依赖 `VulkanLabShaders`。`ShaderVariant` 继续只保存 runtime 相对路径，因此 UI、Runtime Control 和 Cook 使用同一套 SPIR-V，不读取源码树生成物。
 
 当前可运行时切换：
 
