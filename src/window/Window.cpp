@@ -1,5 +1,9 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+#ifdef _WIN32
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+#endif
 
 #include "Window.h"
 
@@ -38,6 +42,14 @@ void Window::setShouldClose(bool value) {
 
 void Window::pollEvents() {
     glfwPollEvents();
+}
+
+void *Window::nativeHandle() const {
+#ifdef _WIN32
+    return glfwGetWin32Window(window_);
+#else
+    return nullptr;
+#endif
 }
 
 void Window::setResizeCallback(ResizeCallback cb) {

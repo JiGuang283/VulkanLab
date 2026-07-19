@@ -121,10 +121,12 @@ if(BUILD_TESTING)
         "${CMAKE_SOURCE_DIR}/tests/PreparedSceneDataTests.cpp"
         "${CMAKE_SOURCE_DIR}/tests/DerivedTextureManifestTests.cpp"
         "${CMAKE_SOURCE_DIR}/tests/SceneCatalogTests.cpp"
+        "${CMAKE_SOURCE_DIR}/tests/SceneImportServiceTests.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/DerivedAssetPaths.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/DerivedTextureManifest.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/ProjectContext.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/SceneCatalog.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/SceneImportService.cpp"
         "${CMAKE_SOURCE_DIR}/src/render/TangentGenerator.cpp"
         "${CMAKE_SOURCE_DIR}/src/render/TextureData.cpp"
     )
@@ -159,6 +161,7 @@ if(WIN32)
         "${CMAKE_SOURCE_DIR}/src/assets/DerivedTextureManifest.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/ProjectContext.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/SceneCatalog.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/SceneImportService.cpp"
         "${CMAKE_SOURCE_DIR}/src/tiny_gltf.cpp"
         "${CMAKE_SOURCE_DIR}/src/stb_image.cpp"
         "${CMAKE_SOURCE_DIR}/src/stb_image_write.cpp"
@@ -183,6 +186,16 @@ if(WIN32)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_FILE:ktxtools>
                 $<TARGET_FILE_DIR:VulkanLabAssetTool>/ktx.exe
+        )
+    endif()
+
+    if(BUILD_TESTING)
+        add_test(
+            NAME VulkanLabAssetToolCatalogImport
+            COMMAND ${CMAKE_COMMAND}
+                "-DTOOL=$<TARGET_FILE:VulkanLabAssetTool>"
+                "-DTEST_ROOT=${CMAKE_BINARY_DIR}/asset_tool_catalog_test"
+                -P "${CMAKE_SOURCE_DIR}/tests/AssetToolCatalogImportTest.cmake"
         )
     endif()
 endif()
@@ -215,7 +228,7 @@ target_link_libraries(VulkanLab PRIVATE
 
 # 解决一些 GLFW 静态链接时的 Windows 依赖问题
 if(WIN32)
-    target_link_libraries(VulkanLab PRIVATE user32 shell32 gdi32)
+    target_link_libraries(VulkanLab PRIVATE user32 shell32 gdi32 ole32 uuid)
 endif()
 
 # Find glslc to compile shaders

@@ -77,7 +77,17 @@ ProjectContext makeContext(const std::filesystem::path &root,
     if (!std::filesystem::is_regular_file(context.catalogPath))
         throw std::runtime_error("Project catalog not found: " +
                                  context.catalogPath.string());
-    context.catalogWritable = true;
+#ifdef _WIN32
+    const DWORD attributes = GetFileAttributesW(context.catalogPath.c_str());
+    context.catalogWritable =
+        attributes != INVALID_FILE_ATTRIBUTES &&
+        (attributes & FILE_ATTRIBUTE_READONLY) == 0;
+#else
+    const auto permissions = std::filesystem::status(context.catalogPath).permissions();
+    context.catalogWritable =
+        (permissions & std::filesystem::perms::owner_write) !=
+        std::filesystem::perms::none;
+#endif
     context.diagnostic = std::move(diagnostic);
     return context;
 }

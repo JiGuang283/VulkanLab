@@ -2,6 +2,7 @@
 #include "UniformData.h"
 
 #include "assets/DerivedAssetPaths.h"
+#include "assets/SceneImportService.h"
 #include "control/NamedPipeServerWin32.h"
 #include "control/RuntimeCommand.h"
 #include "control/RuntimeControlProtocol.h"
@@ -27,14 +28,19 @@
 #include "scene/SceneRegistryBuilder.h"
 #include "window/InputManager.h"
 #include "window/Window.h"
+#include "platform/FileDialogWin32.h"
 
 #include <imgui.h>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <future>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
@@ -425,6 +431,31 @@ void logSceneLoadStats(const SceneLoadStats &stats) {
 
 } // namespace
 
+struct SceneImportWorkerState {
+    std::atomic<bool> cancel{false};
+    std::atomic<uint64_t> completedBytes{0};
+    std::atomic<uint64_t> totalBytes{0};
+    std::mutex mutex;
+    std::string currentFile;
+};
+
+struct SceneImportUiState {
+    std::future<SceneImportPreflight> preflightFuture;
+    std::future<SceneImportResult> importFuture;
+    std::optional<SceneImportPreflight> preflight;
+    std::shared_ptr<SceneImportWorkerState> worker;
+    std::array<char, 192> displayName{};
+    std::array<char, 128> sceneId{};
+    std::vector<std::string> profileIds;
+    int profileIndex = 0;
+    bool requestOpenModal = false;
+    bool referenceExisting = false;
+    bool loadAfterImport = true;
+    bool loadAfterActiveImport = true;
+    std::string status;
+    std::string error;
+};
+
 Application::Application(const Config &config, ProjectContext projectContext,
                          SceneCatalog catalog)
     : config_(config), projectContext_(std::move(projectContext)),
@@ -432,9 +463,18 @@ Application::Application(const Config &config, ProjectContext projectContext,
     if (config_.derivedTextureCachePath.empty())
         config_.derivedTextureCachePath = projectContext_.cacheRoot.string();
     sceneRegistry_ = buildSceneRegistry(catalog_, projectContext_, config_);
+    sceneImportUi_ = std::make_unique<SceneImportUiState>();
 }
 
 Application::~Application() {
+    if (sceneImportUi_) {
+        if (sceneImportUi_->worker)
+            sceneImportUi_->worker->cancel = true;
+        if (sceneImportUi_->preflightFuture.valid())
+            sceneImportUi_->preflightFuture.wait();
+        if (sceneImportUi_->importFuture.valid())
+            sceneImportUi_->importFuture.wait();
+    }
     if (runtimeControlServer_)
         runtimeControlServer_->stop();
     if (sceneGpuBuilder_)
@@ -1098,6 +1138,13 @@ void Application::applySceneCameraDefaults() {
     }
 
     const Bounds &bounds = currentScene_->bounds();
+    if (!currentScene_->initialCamera) {
+        const float distance = std::max(bounds.radius * 2.2f, 1.0f);
+        const glm::vec3 direction =
+            glm::normalize(glm::vec3(1.0f, 1.0f, 0.65f));
+        camera_.setPosition(bounds.center + direction * distance);
+        camera_.lookAt(bounds.center);
+    }
     const float distanceToCenter =
         glm::length(camera_.position() - bounds.center);
     const float farPlane =
@@ -1211,6 +1258,263 @@ void Application::updateUniforms(uint32_t frameIndex) {
     std::memcpy(renderer_->mappedUniformBuffer(frameIndex), &ubo, sizeof(ubo));
 }
 
+void Application::refreshSceneRegistry(const std::string &selectSceneId) {
+    std::string currentId;
+    if (currentSceneIndex_ >= 0 &&
+        currentSceneIndex_ < static_cast<int>(sceneRegistry_.size()))
+        currentId = sceneRegistry_[currentSceneIndex_].id;
+
+    catalog_ = SceneCatalog::load(projectContext_.catalogPath,
+                                  projectContext_.projectRoot);
+    sceneRegistry_ = buildSceneRegistry(catalog_, projectContext_, config_);
+    currentSceneIndex_ = -1;
+    for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
+        if (sceneRegistry_[i].id == currentId)
+            currentSceneIndex_ = i;
+    }
+    if (!selectSceneId.empty()) {
+        for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
+            if (sceneRegistry_[i].id == selectSceneId) {
+                pendingSceneIndex_ = i;
+                break;
+            }
+        }
+    }
+}
+
+void Application::updateSceneImport() {
+    SceneImportUiState &ui = *sceneImportUi_;
+    if (ui.preflightFuture.valid() &&
+        ui.preflightFuture.wait_for(std::chrono::seconds(0)) ==
+            std::future_status::ready) {
+        try {
+            ui.preflight = ui.preflightFuture.get();
+            std::snprintf(ui.displayName.data(), ui.displayName.size(), "%s",
+                          ui.preflight->suggestedDisplayName.c_str());
+            std::snprintf(ui.sceneId.data(), ui.sceneId.size(), "%s",
+                          ui.preflight->suggestedSceneId.c_str());
+            ui.profileIds.clear();
+            for (const auto &profile : catalog_.importProfiles)
+                ui.profileIds.push_back(profile.first);
+            std::sort(ui.profileIds.begin(), ui.profileIds.end());
+            const auto selected = std::find(
+                ui.profileIds.begin(), ui.profileIds.end(),
+                catalog_.defaultImportProfile);
+            ui.profileIndex =
+                selected == ui.profileIds.end()
+                    ? 0
+                    : static_cast<int>(selected - ui.profileIds.begin());
+            ui.referenceExisting =
+                pathIsWithin(projectContext_.projectRoot,
+                             ui.preflight->sourcePath);
+            ui.requestOpenModal = true;
+            ui.status.clear();
+            ui.error.clear();
+        } catch (const std::exception &error) {
+            ui.error = error.what();
+            ui.status.clear();
+        }
+    }
+
+    if (ui.importFuture.valid() &&
+        ui.importFuture.wait_for(std::chrono::seconds(0)) ==
+            std::future_status::ready) {
+        try {
+            const SceneImportResult result = ui.importFuture.get();
+            const bool loadAfter = ui.loadAfterActiveImport;
+            ui.worker.reset();
+            ui.preflight.reset();
+            ui.status = "Imported " + result.scene.displayName;
+            ui.error.clear();
+            refreshSceneRegistry();
+            if (loadAfter) {
+                const ImportProfile &profile =
+                    catalog_.profile(result.scene.importProfile);
+                sceneLoadContext_.maxTextureSize = profile.textureLimit;
+                for (int i = 0; i < static_cast<int>(sceneRegistry_.size());
+                     ++i) {
+                    if (sceneRegistry_[i].id == result.scene.id) {
+                        pendingSceneIndex_ = i;
+                        break;
+                    }
+                }
+            }
+        } catch (const std::exception &error) {
+            ui.worker.reset();
+            ui.error = error.what();
+            ui.status.clear();
+        }
+    }
+}
+
+void Application::drawScenePanel() {
+    SceneImportUiState &ui = *sceneImportUi_;
+    updateSceneImport();
+
+    ImGui::Begin("Scenes");
+    const bool busy = ui.preflightFuture.valid() || ui.importFuture.valid();
+    ImGui::BeginDisabled(busy || !projectContext_.catalogWritable);
+    if (ImGui::Button("Import Scene...")) {
+        try {
+            const auto selected = openGltfFileDialog(window_->nativeHandle());
+            if (selected) {
+                ui.error.clear();
+                ui.status = "Inspecting scene dependencies...";
+                ui.preflightFuture = std::async(
+                    std::launch::async, [path = *selected] {
+                        return SceneImportService::preflight(path);
+                    });
+            }
+        } catch (const std::exception &error) {
+            ui.error = error.what();
+        }
+    }
+    ImGui::EndDisabled();
+    if (!projectContext_.catalogWritable &&
+        ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("The source project Catalog is read-only.");
+
+    ImGui::SameLine();
+    ImGui::BeginDisabled(busy);
+    if (ImGui::Button("Refresh")) {
+        try {
+            refreshSceneRegistry();
+            ui.status = "Catalog refreshed";
+            ui.error.clear();
+        } catch (const std::exception &error) {
+            ui.error = error.what();
+        }
+    }
+    ImGui::EndDisabled();
+
+    if (!ui.status.empty())
+        ImGui::TextWrapped("%s", ui.status.c_str());
+    if (!ui.error.empty())
+        ImGui::TextWrapped("Error: %s", ui.error.c_str());
+
+    if (ui.worker) {
+        const uint64_t total = ui.worker->totalBytes.load();
+        const uint64_t completed = ui.worker->completedBytes.load();
+        const float fraction =
+            total == 0 ? 0.0f
+                       : static_cast<float>(completed) /
+                             static_cast<float>(total);
+        ImGui::ProgressBar(std::clamp(fraction, 0.0f, 1.0f));
+        std::string current;
+        {
+            std::lock_guard<std::mutex> lock(ui.worker->mutex);
+            current = ui.worker->currentFile;
+        }
+        if (!current.empty())
+            ImGui::Text("Copying: %s", current.c_str());
+        if (ImGui::Button("Cancel Import"))
+            ui.worker->cancel = true;
+    }
+
+    ImGui::Separator();
+    for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
+        const SceneEntry &entry = sceneRegistry_[i];
+        const bool selected = (i == currentSceneIndex_);
+        const std::string label =
+            entry.available ? entry.name : entry.name + " (Unavailable)";
+        ImGui::BeginDisabled(!entry.available);
+        if (ImGui::Selectable(label.c_str(), selected))
+            pendingSceneIndex_ = i;
+        ImGui::EndDisabled();
+        if (!entry.available &&
+            ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%s", entry.unavailableReason.c_str());
+    }
+
+    if (ui.requestOpenModal) {
+        ImGui::OpenPopup("Import Scene");
+        ui.requestOpenModal = false;
+    }
+    if (ImGui::BeginPopupModal("Import Scene", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (ui.preflight) {
+            ImGui::TextWrapped("Source: %s",
+                               ui.preflight->sourcePath.string().c_str());
+            ImGui::Text("Dependencies: %llu",
+                        static_cast<unsigned long long>(
+                            ui.preflight->dependencies.size()));
+            ImGui::InputText("Name", ui.displayName.data(),
+                             ui.displayName.size());
+            ImGui::InputText("Scene ID", ui.sceneId.data(),
+                             ui.sceneId.size());
+            if (!ui.profileIds.empty()) {
+                const char *current = ui.profileIds[ui.profileIndex].c_str();
+                if (ImGui::BeginCombo("Import Profile", current)) {
+                    for (int i = 0;
+                         i < static_cast<int>(ui.profileIds.size()); ++i) {
+                        const bool selected = i == ui.profileIndex;
+                        if (ImGui::Selectable(ui.profileIds[i].c_str(),
+                                              selected))
+                            ui.profileIndex = i;
+                        if (selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+            }
+            const bool projectLocal = pathIsWithin(
+                projectContext_.projectRoot, ui.preflight->sourcePath);
+            ImGui::BeginDisabled(!projectLocal);
+            ImGui::Checkbox("Reference existing project file",
+                            &ui.referenceExisting);
+            ImGui::EndDisabled();
+            if (!projectLocal)
+                ui.referenceExisting = false;
+            ImGui::Checkbox("Load scene after import", &ui.loadAfterImport);
+
+            const bool valid = ui.displayName[0] != '\0' &&
+                               isStableAssetId(ui.sceneId.data()) &&
+                               !ui.profileIds.empty();
+            ImGui::BeginDisabled(!valid);
+            if (ImGui::Button("Import")) {
+                SceneImportRequest request;
+                request.sourcePath = ui.preflight->sourcePath;
+                request.displayName = ui.displayName.data();
+                request.sceneId = ui.sceneId.data();
+                request.profileId = ui.profileIds[ui.profileIndex];
+                request.placement =
+                    ui.referenceExisting
+                        ? SceneImportPlacement::ReferenceExisting
+                        : SceneImportPlacement::CopyIntoProject;
+                ui.loadAfterActiveImport = ui.loadAfterImport;
+                ui.worker = std::make_shared<SceneImportWorkerState>();
+                ui.worker->totalBytes = ui.preflight->totalBytes;
+                const auto worker = ui.worker;
+                const ProjectContext project = projectContext_;
+                ui.importFuture = std::async(
+                    std::launch::async,
+                    [project, request, worker] {
+                        return SceneImportService::importScene(
+                            project, request,
+                            [worker] { return worker->cancel.load(); },
+                            [worker](const SceneImportProgress &progress) {
+                                worker->completedBytes = progress.completedBytes;
+                                worker->totalBytes = progress.totalBytes;
+                                std::lock_guard<std::mutex> lock(worker->mutex);
+                                worker->currentFile = progress.currentFile;
+                            });
+                    });
+                ui.status = "Importing source files...";
+                ui.error.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) {
+                ui.preflight.reset();
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::End();
+}
+
 void Application::drawGui() {
     ImGui::Begin("Renderer");
     if (!shaderVariants_.empty()) {
@@ -1245,13 +1549,7 @@ void Application::drawGui() {
     }
     ImGui::End();
 
-    ImGui::Begin("Scene");
-    for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
-        const bool selected = (i == currentSceneIndex_);
-        if (ImGui::Selectable(sceneRegistry_[i].name.c_str(), selected))
-            pendingSceneIndex_ = i;
-    }
-    ImGui::End();
+    drawScenePanel();
 
     ImGui::Begin("Loading");
     if (!latestSceneLoadTask_) {

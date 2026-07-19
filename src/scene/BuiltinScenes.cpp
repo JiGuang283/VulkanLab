@@ -108,8 +108,7 @@ ScenePrepareFactory gltfSceneFactory(std::string modelPath, std::string vp,
         options.loadStats = loadContext.loadStats;
         options.vertShaderPath = vp;
         options.fragShaderPath = fp;
-        options.cameraOverride = cameraOverride.value_or(
-            CameraPose{{1.5f, 1.5f, 1.0f}, -135.0f, -20.0f});
+        options.cameraOverride = cameraOverride;
         return GltfPreparer::prepare(modelPath, options, cancellation,
                                      &progress);
     };

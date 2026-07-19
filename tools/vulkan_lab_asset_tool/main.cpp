@@ -3,6 +3,7 @@
 #include "assets/DerivedAssetPaths.h"
 #include "assets/ProjectContext.h"
 #include "assets/SceneCatalog.h"
+#include "assets/SceneImportService.h"
 
 #include <cstdlib>
 #include <exception>
@@ -22,6 +23,7 @@ void printUsage(std::ostream &output) {
            "[--profile <id>] [options]\n"
         << "  VulkanLabAssetTool texture-cache migrate "
            "--legacy-cache-root <path> [options]\n\n"
+        << "  VulkanLabAssetTool catalog add --source <path> [options]\n\n"
         << "Options:\n"
         << "  --project <path>     Source project root (otherwise use locator)\n"
         << "  --scene <path>       Legacy alias; match a Catalog source path\n"
@@ -63,7 +65,66 @@ int main(int argc, char **argv) {
             printUsage(std::cout);
             return EXIT_SUCCESS;
         }
-        if (argc < 3 || std::string(argv[1]) != "texture-cache") {
+        if (argc < 3) {
+            printUsage(std::cerr);
+            return 2;
+        }
+
+        if (std::string(argv[1]) == "catalog" &&
+            std::string(argv[2]) == "add") {
+            std::optional<std::filesystem::path> explicitProject;
+            vkr::SceneImportRequest request;
+            bool hasSource = false;
+            for (int i = 3; i < argc; ++i) {
+                const std::string argument = argv[i];
+                if (argument == "--project") {
+                    explicitProject = requireValue(i, argc, argv, argument);
+                } else if (argument == "--source") {
+                    request.sourcePath = requireValue(i, argc, argv, argument);
+                    hasSource = true;
+                } else if (argument == "--display-name") {
+                    request.displayName = requireValue(i, argc, argv, argument);
+                } else if (argument == "--scene-id") {
+                    request.sceneId = requireValue(i, argc, argv, argument);
+                } else if (argument == "--profile") {
+                    request.profileId = requireValue(i, argc, argv, argument);
+                } else if (argument == "--reference") {
+                    request.placement =
+                        vkr::SceneImportPlacement::ReferenceExisting;
+                } else {
+                    throw std::invalid_argument("unknown option: " + argument);
+                }
+            }
+            if (!hasSource)
+                throw std::invalid_argument("--source is required");
+            vkr::ProjectContext project =
+                vkr::ProjectContextResolver::resolve(explicitProject);
+            const vkr::SceneCatalog catalog = vkr::SceneCatalog::load(
+                project.catalogPath, project.projectRoot);
+            const vkr::SceneImportPreflight preflight =
+                vkr::SceneImportService::preflight(request.sourcePath);
+            if (request.displayName.empty())
+                request.displayName = preflight.suggestedDisplayName;
+            if (request.sceneId.empty())
+                request.sceneId = preflight.suggestedSceneId;
+            if (request.profileId.empty())
+                request.profileId = catalog.defaultImportProfile;
+            const vkr::SceneImportResult result =
+                vkr::SceneImportService::importScene(project, request, {},
+                    [](const vkr::SceneImportProgress &progress) {
+                        std::cout << "Copied " << progress.completedBytes << '/'
+                                  << progress.totalBytes << " bytes: "
+                                  << progress.currentFile << '\n';
+                    });
+            std::cout << "Scene imported\n"
+                      << "  id: " << result.scene.id << "\n"
+                      << "  name: " << result.scene.displayName << "\n"
+                      << "  source: " << result.scene.source.generic_string()
+                      << '\n';
+            return EXIT_SUCCESS;
+        }
+
+        if (std::string(argv[1]) != "texture-cache") {
             printUsage(std::cerr);
             return 2;
         }
@@ -151,9 +212,28 @@ int main(int argc, char **argv) {
                 "--scene-id must name a glTF scene in assets/catalog.json");
         if (scene->type != "gltf")
             throw std::invalid_argument("builtin scenes have no texture cache");
+        if (profileId.empty()) {
+            const vkr::ImportProfile &sceneProfile =
+                catalog.profile(scene->importProfile);
+            if (!hasTextureLimit ||
+                sceneProfile.textureLimit == options.textureLimit) {
+                profileId = sceneProfile.id;
+            } else {
+                for (const auto &candidate : catalog.importProfiles) {
+                    if (candidate.second.textureLimit == options.textureLimit) {
+                        profileId = candidate.first;
+                        break;
+                    }
+                }
+            }
+        }
         if (profileId.empty())
-            profileId = scene->importProfile;
+            throw std::invalid_argument(
+                "no Catalog profile matches --texture-limit");
         const vkr::ImportProfile &profile = catalog.profile(profileId);
+        if (hasTextureLimit && profile.textureLimit != options.textureLimit)
+            throw std::invalid_argument(
+                "--texture-limit does not match the selected profile");
 
         options.scene = project.projectRoot / scene->source;
         options.sceneProjectPath = scene->source;

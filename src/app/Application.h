@@ -36,6 +36,7 @@ class NamedPipeServerWin32;
 class SceneLoadManager;
 class SceneGpuBuilder;
 struct SceneLoadTask;
+struct SceneImportUiState;
 
 enum class InputMode {
     UI,         // 光标可见，ImGui 接管
@@ -69,6 +70,9 @@ class Application {
     void applySceneCameraDefaults();
     void processRuntimeCommand();
     void updateSceneLoading();
+    void drawScenePanel();
+    void updateSceneImport();
+    void refreshSceneRegistry(const std::string &selectSceneId = {});
 
     void loadScene(int index, bool replaceCurrent = false);
     void reloadCurrentScene();
@@ -117,6 +121,7 @@ class Application {
     std::unique_ptr<RuntimeCommandQueue> runtimeCommandQueue_;
     std::unique_ptr<NamedPipeServerWin32> runtimeControlServer_;
     std::shared_ptr<RuntimeCommand> pendingQuitCommand_;
+    std::unique_ptr<SceneImportUiState> sceneImportUi_;
 
     // 输入模式
     InputMode  mode_ = InputMode::UI;

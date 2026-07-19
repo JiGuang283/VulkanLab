@@ -31,6 +31,7 @@ class Window {
     void pollEvents();
 
     GLFWwindow *handle() const { return window_; }
+    void *nativeHandle() const;
     uint32_t    width() const { return width_; }
     uint32_t    height() const { return height_; }
 
