@@ -1,8 +1,9 @@
 # 场景与资源资产管线完整计划
 
-> Status: Active
+> Status: Completed
 > Last verified: 2026-07-19
 > Verified against: `fa30693`
+> Completed: 2026-07-19
 
 ## Summary
 
@@ -18,7 +19,7 @@
 6. 面向 Release 的 Cook/Package。
 7. 平台最终纹理和资源驻留管理的后续衔接。
 
-当前已经实现的响应式 CPU prepare、增量 GPU upload 和 KTX2 读取链路继续保留，详见[资源加载](../architecture/resource_loading.md)和[大型场景响应式加载路线图](async_scene_loading_plan.md)。本计划不重新实现这些模块，而是在它们之前增加资产管理层。
+当前已经实现的响应式 CPU prepare、增量 GPU upload 和 KTX2 读取链路继续保留，详见[资源加载](../../../architecture/resource_loading.md)和[大型场景响应式加载路线图](../../../development/async_scene_loading_plan.md)。本计划不重新实现这些模块，而是在它们之前增加资产管理层。
 
 ## Current Baseline And Gaps
 
@@ -459,7 +460,7 @@ CookedOnly 运行时禁止调用资产工具和 source fallback。artifact 缺�
 
 ## Relationship To Residency And Streaming
 
-资产管线完成后，资源才具备稳定 ID、尺寸、mip metadata 和引用关系，适合进入[大型场景响应式加载路线图](async_scene_loading_plan.md)的条件性 Stage 4：
+资产管线完成后，资源才具备稳定 ID、尺寸、mip metadata 和引用关系，适合进入[大型场景响应式加载路线图](../../../development/async_scene_loading_plan.md)的条件性 Stage 4：
 
 - `VK_EXT_memory_budget` admission。
 - mip residency 和按需上传。
@@ -647,6 +648,27 @@ Stage E 已实现于 `fa30693`：
 - normal map 评估 BC5，AO 评估 BC4，更新 shader/format 契约。
 - 引入 memory budget admission、mip streaming 和 LRU。
 - ArtifactIndex 提供每级 mip offset/bytes，streamer 按稳定 resource ID 请求数据。
+
+#### Decision: Deferred
+
+Stage F 按条件门控正式推迟，不实施 platform-final payload、memory budget admission、streaming 或 LRU。2026-07-19 的当前 Release cooked Main Sponza 1024 基线为：
+
+- 总加载 `1,357 ms`，CPU prepare `1,194 ms`，time to first upload `1,194 ms`，GPU build `159 ms`。
+- 72/72 KTX2 hit，0 miss/decode/resize；KTX2 读取 `167 ms`，UASTC 到 BC7 转码 `787 ms`。
+- 纹理 payload/GPU estimate `96 MiB`，prepared CPU bytes `183.58 MiB`，场景 VMA allocation delta `279.74 MiB`。
+- 405 meshes、75 textures 分 26 次 upload pump 完成；最大单次 pump `46.28 ms`。
+- Release package 为 94 个受保护文件、`225,169,159` bytes，包含 72 个唯一 KTX2 blob。
+
+platform-final BC7 可以主要消除当前约 `0.79 s` 转码，但可能把纹理磁盘 payload 从压缩的 `77.25 MiB` 提高到接近 BC7 mip payload 的 `96 MiB`，并引入 platform/format-specific artifact schema。当前总加载低于 2 秒、纹理常驻量可控，场景切换又会在新 GPU build 前释放旧 Scene，因此没有证据支持立即承担该复杂度。BC5/BC4、streaming 和 LRU 的收益证据更弱。
+
+满足以下任一条件时重新打开 Stage F，并先单独制定实现计划：
+
+1. 支持硬件上的 Release cooked 代表场景 p95 总加载超过 `2 s`，且 texture transcode 占 CPU prepare 超过 40%；此时优先评估 platform-final BC payload。
+2. 目标 GPU 出现 allocation failure，或接入 `VK_EXT_memory_budget` 后单 Scene 常驻超过可用 device-local budget 的 50%；此时先实现 memory budget admission。
+3. 产品要求旧 Scene 与新 Scene 同时驻留、单场景超过 `1 GiB`，或常驻集合超过 budget 的 70%；此时才评估 mip streaming 和 LRU。
+4. 发布体积成为明确约束；先比较 UASTC+Zstd、BC7、BC5 normal 和 BC4 AO 的画质、包体与加载数据，不能只根据理论压缩率更换格式。
+
+这满足条件 Stage F 的完成定义：以 Stage E 实测数据作出正式推迟决定，并保留可验证的重新启动条件。
 
 ## Testing Strategy
 

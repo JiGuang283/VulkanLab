@@ -253,6 +253,8 @@ cd .\dist\main-sponza
 
 `package_manifest.json` 包含 `VulkanLab.exe` 本身的 hash。若发布流程还要进行代码签名，应先完成签名，再重新生成 package manifest；当前 `cook` 命令假定输入 executable 已经是最终字节。
 
+Stage F gate 的当前 Release/Main Sponza 1024 基线是总加载约 `1.36 s`、KTX2 read `167 ms`、BC7 transcode `787 ms`、纹理 GPU estimate `96 MiB` 和场景 VMA allocation delta `279.74 MiB`。这些结果暂不支持引入 platform-final BC payload 或 streaming；量化重开条件见 [资源加载](../architecture/resource_loading.md#platform-artifact-与-residency-决策)。
+
 ## 运行注意事项
 
 - 开发模式的 glTF 纹理尺寸默认限制为 `2048`，可在 Renderer 面板切换为 `Full`、`2048`、`1024` 或 `512`。切换会创建新的场景加载任务；CookedOnly 控件禁用。

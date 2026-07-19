@@ -13,4 +13,8 @@
 - `analyses/`：特定阶段的问题分析、架构评审和调查记录。
 - `change_logs/`：历史架构或功能变更记录。
 
+近期完成的路线图：
+
+- [场景与资源资产管线完整计划](plans/optimization/asset_management_pipeline_plan.md)：Scene Catalog、共享缓存、并行/自动导入、Artifact Index、Cooked runtime，以及 Stage F 条件决策。
+
 除修复因归档移动而失效的相对链接外，归档文件保持原始内容。新计划应先放入 `doc/development/`，完成或废弃后再移入本目录。

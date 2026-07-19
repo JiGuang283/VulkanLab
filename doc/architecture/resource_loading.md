@@ -169,6 +169,12 @@ packaged `main()` 在 Vulkan 初始化前强制以下契约：
 
 开发 CMake 的 `POST_BUILD` 仍复制完整 `models/`，用于 IDE 运行和源 fallback；它不再是交付策略。正式运行目录由 `cook` 决定。
 
+## Platform artifact 与 residency 决策
+
+Stage F 当前推迟。Release cooked Main Sponza 1024 的 72 张 KTX2 全部转为 BC7，总加载约 `1.36 s`，转码约 `0.79 s`，纹理 GPU estimate `96 MiB`，场景 VMA allocation delta `279.74 MiB`。现有场景替换会在新 GPU build 前释放旧 Scene，没有多场景 residency 累积，当前数据不足以支持 platform-final BC payload、streaming 或 LRU 的复杂度。
+
+重新评估条件为：代表场景 Release p95 超过 2 秒且转码占 CPU prepare 超过 40%；目标设备 allocation failure 或单 Scene 超过 device-local budget 的 50%；需要同时驻留多个大场景或 resident set 超过 budget 的 70%；或发布体积成为明确产品约束。memory gate 需要先接入 `VK_EXT_memory_budget`，不能把 VMA block bytes 当作可用预算。
+
 ## 当前限制
 
 - CPU prepare 只有一个 worker；不同场景不会并行解码。
