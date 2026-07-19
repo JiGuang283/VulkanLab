@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `b4536f4`
+> Verified against: `8fa838e`
 
 ## 项目、Catalog 与导入
 
@@ -58,6 +58,7 @@ Windows 下所有 `ktx.exe` 都由独立 Job Object 管理，并使用 `KILL_ON_
 DerivedAssets/<projectId>/
   manifests/<scene-id>/<profile-id>.json
   blobs/<content-cache-key>.ktx2
+  artifact_index.json
 ```
 
 manifest schema v2 记录 project/scene/profile 稳定身份、scene、texture limit、源文件 size/write time/SHA-256，以及每个 image 的语义、mipmap wrap、输出尺寸、cache key 和 blob。schema v1 仍可读取用于显式 migration，但运行时只查询 v2 稳定路径。`TextureSemantic` 固定为 `SrgbColor`、`LinearData` 和 `Normal`；BaseColor/Emissive 使用 `SrgbColor`，MetallicRoughness/Occlusion 使用 `LinearData`，normal map 使用 `Normal`。同一图片以不同语义或 wrap 参与材质时必须生成独立条目。
@@ -68,9 +69,24 @@ manifest schema v2 记录 project/scene/profile 稳定身份、scene、texture l
 
 运行时 glTF prepare 遇到单个派生条目缺失或 KTX2 读取/转码失败时仍可记录 miss 并走 RGBA fallback；但普通 scene load 之前会先执行 scene/profile 级 artifact admission，因此开发默认路径不会悄悄绕过整个缺失或损坏的 manifest。
 
+## Artifact Index 与依赖失效
+
+`ArtifactIndex` 是 `%LOCALAPPDATA%` 共享 cache 中的可丢弃 JSON 加速层，不是 artifact 的事实来源。每条 scene/profile 记录保存 manifest identity、source dependency 的 size/mtime/SHA-256、blob 闭包、schema/encoder settings、最后成功 import task、访问时间和最近失败诊断。索引缺失、JSON 损坏、schema 或 project ID 不匹配时，会从 Catalog 和已发布 manifest 自动重建并原子替换。
+
+状态查询分两级：
+
+1. `Fast` 用于启动、Scenes/Assets 列表和普通 Runtime Control 查询。size 与 mtime 未变化时不读取文件内容；stamp 可疑时才计算共享 BCrypt SHA-256。内容 hash 相同会更新 stamp 并继续 Ready，内容变化只使引用该 dependency 的 scene/profile 返回 Stale。
+2. `Admission` 在真正 scene load 前额外验证每个 blob 的文件大小和 KTX2 identifier。损坏或缺失 blob 返回 Invalid，不能进入正常 cache load。
+
+资产工具只有在 manifest 成功发布后，才在同一个 cache mutation transaction 中刷新索引。Application 重新载入工具发布的记录，并单独合并访问时间、成功 task 和失败日志。索引写入使用短时命名 mutex、临时文件和 `MoveFileEx(REPLACE_EXISTING | WRITE_THROUGH)`；不同进程只合并脏记录，旧 UI 遥测不会覆盖 importer 的新 manifest 记录。
+
+所有会修改 manifest/blob 的 import、migration、index rebuild 和 prune execute 共享按 cache root 命名的 Windows mutex。`cache prune` 先从全部可读 manifest 建立保护闭包；默认只 dry-run，`--execute` 获得 mutation lock 后重新计算候选，只删除超过保留期且没有任何 manifest 引用的 `.ktx2`。损坏 manifest 或非法 blob 引用会拒绝清理，不会猜测引用关系。
+
+当前没有接入 directory watcher。现有 UI 不逐帧查询索引或扫描目录，加载 admission 又会确定性复核依赖；在当前数十个 scene/profile 规模下 watcher 没有可测收益。后续需要检测渲染器外部的即时文件变化时，可以只将受影响记录标为 PossiblyStale，不能在回调中直接编码。
+
 ## 自动按需导入
 
-Application 在提交 glTF `SceneLoadManager` 前调用 `inspectTextureArtifacts()`，验证精确 scene/profile manifest 的身份、texture limit、scene/图片 size + mtime、blob 路径约束和 KTX2 identifier，并得到 `Ready`、`Missing`、`Stale` 或 `Invalid`。正在执行的同一 scene/profile task 在 UI 中投影为 `Importing`。
+Application 使用 ArtifactIndex 的 Fast 查询展示精确 scene/profile 的 `Ready`、`Missing`、`Stale` 或 `Invalid`，在提交 glTF `SceneLoadManager` 前执行 Admission 查询。索引不可用时保留 `inspectTextureArtifacts()` 完整扫描作为兼容回退。正在执行的同一 scene/profile task 在 UI 中投影为 `Importing`。
 
 运行模式是显式 Config/启动参数，不依赖构建类型：
 
@@ -132,6 +148,7 @@ VMA 快照在 SceneGpuBuilder 和 staging 销毁后采集，不把临时 staging
 
 - CPU prepare 只有一个 worker；不同场景不会并行解码。
 - AssetImportManager 当前一次只监督一个资产工具；单个工具内部可以并行编码。没有跨工具并发、持久任务数据库或断点任务队列。
+- ArtifactIndex 当前使用 JSON 和命名 mutex；没有 directory watcher 或跨机器共享数据库。索引可从 manifest 重建。
 - 单个大 Texture/Mesh 仍是原子 pump，可能造成短帧尖峰。
 - 使用 graphics queue，没有专用 transfer queue 或 queue ownership transfer。
 - 未生成或未命中 KTX2 profile 的图片仍需运行时 decode/resize，并以 RGBA8 上传。

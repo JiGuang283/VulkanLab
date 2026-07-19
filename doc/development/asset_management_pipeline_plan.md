@@ -2,7 +2,7 @@
 
 > Status: Active
 > Last verified: 2026-07-19
-> Verified against: `b4536f4`
+> Verified against: `8fa838e`
 
 ## Summary
 
@@ -596,6 +596,21 @@ Windows 文件选择器、Import modal/Assets 面板布局、导入期间拖动/
 - 修改一张源图片只使引用它的 scene/profile 失效。
 - index 删除或损坏后可以从 manifest 重建。
 - prune 默认 dry-run，不能删除 catalog 当前引用或正在导入的 blob。
+
+#### Implementation Status (2026-07-19)
+
+Stage D 已实现于 `8fa838e`：
+
+- 新增 schema v1 `ArtifactIndex`，记录 scene/profile identity、manifest、依赖 size/mtime/SHA-256、blob 闭包、encoder/schema、成功/访问时间和失败日志。索引使用临时文件、atomic replace 和按 cache root 命名的短时 mutex；缺失、损坏或 schema/project 不匹配时从 Catalog + manifests 重建。
+- Fast 查询只在 stamp 可疑时使用共享 BCrypt SHA-256，mtime 假阳性不会触发重建；真实内容变化只使引用该文件的记录 Stale。Scene admission 额外验证 blob size 和 KTX2 header。旧进程遥测与 importer 新记录按当前 manifest stamp 合并，避免 lost update。
+- 资产工具在 manifest 成功后刷新索引；import、migration、index rebuild 和 prune execute 使用同一个跨进程 cache mutation mutex。Assets UI 和 Runtime Control 显示索引、cache usage、未引用 blob、成功 task/访问时间及失败诊断，不再逐帧递归扫描 cache。
+- `VulkanLabAssetTool cache index rebuild` 提供显式恢复；`cache prune` 默认 dry-run，`--execute` 在 mutation lock 内重新扫描全部 manifest。保留期默认 7 天，已引用/正在导入/近期孤立 blob 不删除，损坏 manifest 时 fail closed。
+
+CPU tests 覆盖损坏索引恢复、SHA-256 已知向量、mtime 假阳性、单依赖定向失效、admission 损坏 blob、同 key 并发写合并、prune dry-run/execute/保留期和损坏 manifest fail-closed。Debug/Release 构建与 3/3 CTest 均通过；真实共享 cache index rebuild 得到 3 条 Ready 记录、81 个受引用 blob，prune dry-run 候选为 0。
+
+Runtime Control 下 Main Sponza 1024 再验证为 72/72 KTX2 hit、0 decode/resize、75 textures、405 meshes，Debug 总加载约 `6.75 s`，VMA allocation delta 约 `279.74 MiB`。`asset.cache-info` 与索引一致，成功 load 后 `lastAccessUnixMs` 更新；程序通过 `quit` 正常退出。
+
+Windows directory watcher 是本阶段可选项。当前 Assets 状态不是逐帧刷新，Fast 查询会在明确刷新和 admission 时确定性校验，Catalog 规模也没有显示 watcher 瓶颈，因此暂缓实现；后续只有在需要即时外部文件通知且轮询实测不足时再加入 PossiblyStale/debounce。最终画面、Assets 面板布局和外部编辑文件后的即时 UX 仍需人工检查，未作为自动验证通过项。
 
 ### Stage E: Cook And Packaged Runtime
 

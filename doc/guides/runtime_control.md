@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `b4536f4`
+> Verified against: `8fa838e`
 
 Runtime Control 允许在 VulkanLab 已经运行时，从另一个终端切换场景、纹理限制和 Shader，并读取加载统计或关闭程序。控制接口仅用于本机调试，通过 Windows Named Pipe 通信，不开放网络端口。
 
@@ -96,10 +96,10 @@ cd build\Release
 ```
 
 - `asset catalog`：列出各场景当前 profile 的 `Ready/Missing/Stale/Invalid/Importing`、manifest 和 blob 统计。
-- `asset status [scene]`：查询 display name 或稳定 scene ID；省略时使用 UI 当前选中项。
+- `asset status [scene]`：查询 display name 或稳定 scene ID；省略时使用 UI 当前选中项。JSON 同时包含最后成功 import task/time、最后访问时间和可选最近失败。
 - `asset import <scene>`：确保派生资产 Ready；已有有效缓存时立即完成，缺失时启动独立资产工具。`--force` 强制重编码，`--load-after` 在成功后继续加载 Scene。
 - `asset cancel [task-id]`：取消当前或指定资产任务及其完整 `ktx.exe` 子进程树。
-- `asset cache-info`：返回实际 cache root、文件数和总字节数。
+- `asset cache-info`：返回实际 cache root、ArtifactIndex 路径/schema、record/Ready 数、受引用 blob 和未引用 blob 的文件数与字节数。兼容字段 `files/bytes` 等于 blob 文件统计。
 
 这些写操作只在 `--asset-mode ondemand` 下可用。`readonly` 和 `cooked-only` 会返回 `asset_import_disabled`；非 Ready 的 `scene.load` 返回 `artifact_not_ready`，不会静默启动编码器。Runtime Control 不接受任意本地导入路径；新源文件注册仍通过 ImGui 文件选择器或 `VulkanLabAssetTool catalog add`。
 

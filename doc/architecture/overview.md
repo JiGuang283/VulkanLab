@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `b4536f4`
+> Verified against: `8fa838e`
 
 VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Application` 为组合根，场景、渲染提交、GPU 资源和调试控制之间保持显式所有权，不使用全局引擎服务定位器。
 
@@ -11,7 +11,7 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 | 目录 | 职责 |
 |---|---|
 | `src/app/` | 应用生命周期、场景注册与切换、相机、ImGui 面板、全局 UBO 和命令执行。 |
-| `src/assets/` | ProjectContext、Scene Catalog/编辑事务、artifact admission、资产工具进程监督、派生资产身份、manifest 和 KTX2 cache 读取。 |
+| `src/assets/` | ProjectContext、Scene Catalog/编辑事务、ArtifactIndex/依赖校验、cache prune、资产工具进程监督、manifest 和 KTX2 cache 读取。 |
 | `src/control/` | Windows Named Pipe 服务、运行时命令队列和 JSON 协议。 |
 | `src/core/` | Vulkan instance/device、SwapChain、FrameSync、Buffer/Image、Descriptor、Pipeline、VMA、同步与增量上传。 |
 | `src/render/` | Mesh、Texture、材质、纯 CPU glTF prepare、RenderQueue、PipelineCache、Renderer 和 Shader variant。 |
@@ -32,7 +32,7 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 3. VulkanContext、Device 和 DescriptorAllocator。
 4. SwapChain 和 FrameSync。
 5. Renderer、全局 UBO、RenderPipeline 和 MainForwardPass。
-6. PipelineCache、SceneLoadManager worker、AssetImportManager supervisor 和初始 Scene/admission。
+6. PipelineCache、SceneLoadManager worker、AssetImportManager supervisor、ArtifactIndex 和初始 Scene/admission。
 7. GuiSystem。
 8. 可选的 Runtime Control 命令队列和 Named Pipe 线程。
 
@@ -47,6 +47,8 @@ SceneLoadManager 持有一个长期 worker。worker 只执行 glTF 文件读取�
 Scenes 面板的文件对话框在主线程打开；选定文件后的依赖 preflight 和 `SceneImportService` 事务由独立 `std::async` worker 执行。该 worker 可以读取/复制源文件并原子更新源码项目 Catalog，但不能访问 GLFW、ImGui 或 Vulkan。Application 只轮询 future 和进度；退出时先请求取消并等待导入 worker 收束。
 
 AssetImportManager 持有一个 supervisor thread，串行监督资产工具进程；每个工具内部再按 worker/内存预算并行启动 `ktx.exe`。supervisor 只读取 NDJSON、日志和进程状态，不解析 glTF、不访问 Application Scene，也不创建 Vulkan 对象。Windows Job Object 拥有完整子进程树，取消和退出会终止工具及其编码子进程。主线程轮询任务状态，并由 `AssetLoadCoordinator` 保证只有最新 operation generation 可以从 import 接续到 scene load。
+
+ArtifactIndex 由 Application 主线程持有；Fast/Admission 查询和 UI 快照不跨线程访问。独立资产工具负责 manifest/blob 和索引核心记录的发布，Application 只合并访问/失败遥测。不同进程通过短时 index mutex 原子更新 JSON；改变 cache 内容的工具命令还持有覆盖完整事务的 cache mutation mutex。
 
 Named Pipe 线程只读取带长度前缀的 JSON 请求，把 `RuntimeCommand` 放入队列并等待主线程填写响应。它不能读取 Scene、Shader、统计数据，也不能调用 Vulkan 或 GLFW。`scene.load` 快速返回 taskId，等待行为由 VulkanLabCtl 客户端轮询 `load.status` 实现。
 

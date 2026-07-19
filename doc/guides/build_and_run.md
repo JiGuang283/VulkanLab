@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `b4536f4`
+> Verified against: `8fa838e`
 
 ## 环境要求
 
@@ -98,7 +98,7 @@ Runtime Control 默认关闭。需要从另一个终端控制运行中的渲染�
 
 Scenes 面板提供搜索、单击选择、双击/`Load`、`Reimport`、显式 source fallback、保存当前相机和从 Catalog 移除条目。`Import Scene...` 选择 `.glb/.gltf` 后确认名称、稳定 scene ID、profile、Copy/Reference 和是否自动加载。`.gltf` 的本地 `.bin` 与图片依赖会一起复制到 `models/imported/<scene-id>/`；远程、缺失或逃逸依赖不会写入 Catalog。Catalog 注册成功后会自动提交 KTX2 import，勾选自动加载时再连续执行 CPU prepare 和 GPU upload。
 
-`Assets` 面板显示当前项目、Catalog、cache root、运行模式、选中 scene/profile 的 `Ready/Missing/Stale/Invalid/Importing` 状态，以及资产任务的真实纹理进度、encoded/reused/failed、worker、耗时、日志和最近历史。长任务不会停留在 modal 中。
+`Assets` 面板显示当前项目、Catalog、cache root、运行模式、索引 Ready 记录数、cache/unreferenced blob 用量、选中 scene/profile 的 `Ready/Missing/Stale/Invalid/Importing` 状态、最近失败，以及资产任务的真实纹理进度、encoded/reused/failed、worker、耗时、日志和最近历史。长任务不会停留在 modal 中，面板不会逐帧扫描全部 manifest。
 
 同一导入事务也可通过 CLI 自动执行：
 
@@ -175,6 +175,19 @@ Stage B 的 Release/Main Sponza 1024 基准（2026-07-19，同一机器、clean 
   --project C:\Project\vulkan_learn `
   --legacy-cache-root C:\Project\vulkan_learn\build-debug\Debug\derived_assets
 ```
+
+索引可以删除后自动重建，也可以显式维护：
+
+```powershell
+.\VulkanLabAssetTool.exe cache index rebuild `
+  --project C:\Project\vulkan_learn
+
+.\VulkanLabAssetTool.exe cache prune `
+  --project C:\Project\vulkan_learn `
+  --older-than-days 7
+```
+
+`cache prune` 默认是 dry-run，只列出候选。确认列表后才使用 `--execute`；执行时会与 import/migration 互斥，并在锁内重新计算保护闭包。任何已发布 manifest 引用的 blob、正在导入的 blob 和保留期内的孤立 blob 都不会删除。若任一 manifest 损坏或包含非法 blob 路径，命令会 fail closed 并保持 cache 不变。测试隔离 cache 可以用 `--older-than-days 0 --execute` 立即删除全部无引用 blob，正常共享 cache 不建议这样使用。
 
 使用输出目录启动渲染器时，locator 仍会选择相同的用户级共享缓存：
 
