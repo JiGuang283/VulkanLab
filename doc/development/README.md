@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `67bb5c1`
+> Verified against: `b4536f4`
 
 本目录只存放正在讨论或执行的开发计划。不要根据历史归档推断下一阶段目标。
 

@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `67bb5c1`
+> Verified against: `b4536f4`
 
 ## 项目、Catalog 与导入
 
@@ -66,7 +66,23 @@ manifest schema v2 记录 project/scene/profile 稳定身份、scene、texture l
 
 `PreparedImage` 的 prebuilt mip payload 包含总字节数组、最终 `VkFormat` 和每级 mip 的 offset、size、width、height。`SceneGpuBuilder` 将所有 mip 写入 staging，并通过多个 `VkBufferImageCopy` region 上传到只需要 `TRANSFER_DST | SAMPLED` 的 image。原始 RGBA8 fallback 继续上传 base level，并由 GPU blit 生成 mip。
 
-以下情况必须记录 cache miss/invalid 原因并回退 stb，而不是使场景加载失败：manifest 不存在、profile 不匹配、源文件戳变化、schema 不支持、条目缺失、blob 缺失或损坏、KTX2 读取/转码失败。缓存生成当前仍只由显式资产工具执行；Stage C 才会由 VulkanLab 监督独立资产工具进程进行按需导入。
+运行时 glTF prepare 遇到单个派生条目缺失或 KTX2 读取/转码失败时仍可记录 miss 并走 RGBA fallback；但普通 scene load 之前会先执行 scene/profile 级 artifact admission，因此开发默认路径不会悄悄绕过整个缺失或损坏的 manifest。
+
+## 自动按需导入
+
+Application 在提交 glTF `SceneLoadManager` 前调用 `inspectTextureArtifacts()`，验证精确 scene/profile manifest 的身份、texture limit、scene/图片 size + mtime、blob 路径约束和 KTX2 identifier，并得到 `Ready`、`Missing`、`Stale` 或 `Invalid`。正在执行的同一 scene/profile task 在 UI 中投影为 `Importing`。
+
+运行模式是显式 Config/启动参数，不依赖构建类型：
+
+- `OnDemand`：非 Ready 时向 `AssetImportManager` 提交 import，然后继续渲染当前 Scene。
+- `ReadOnly`：不创建编码进程；非 Ready 加载返回错误，但允许用户显式 source fallback。
+- `CookedOnly`：不创建编码进程并禁止 source fallback；Stage E 会再增加包内严格 artifact contract。
+
+AssetImportManager 拥有一个 supervisor thread、任务队列和最多 64 条历史。相同 scene/profile 的未完成请求合并；不同 profile 保持独立。supervisor 通过精确继承的 stdout/stderr pipe 启动同目录 `VulkanLabAssetTool import scene`，stdout 只接受最大 64 KiB、protocol v1 的 NDJSON，stderr 写入每任务日志。工具进程与全部 `ktx.exe` 位于 `KILL_ON_JOB_CLOSE` Job Object；取消、非法协议、进程异常和 Application 退出都会终止完整进程树。AssetImportManager 不解析 glTF、不访问 Scene/Vulkan，工具内部并发继续由 Stage B worker 与内存预算控制。
+
+资产 task 使用最高位为 1 的 operation ID，与 SceneLoadManager 的低位 task ID 隔离。`AssetLoadCoordinator` 为每次 scene 请求分配 generation：import 完成后可以保留有效缓存，但只有全局最新 generation 的 consumer 能继续提交 CPU prepare。import 失败或取消保留当前 Scene，不自动回退；显式 `Load Source Fallback` 使用不会命中 manifest 的专用 profile ID。
+
+Stage A 的文件导入事务完成 Catalog 注册后会立即提交派生资产 import。勾选 `Load scene after import` 时，同一个 operation 连续覆盖 Catalog registration 后的 KTX2 import、CPU prepare、GPU upload 和 Scene publish。Scenes 面板只承担选择/命令，Assets 面板显示 artifact 状态、真实编码进度、worker、日志、错误和历史。
 
 ## 增量 GPU Build
 
@@ -97,7 +113,7 @@ DescriptorAllocator 创建支持单独释放 set 的 pool。MaterialInstance 析
 - 只有最新 generation 且所有 upload fence 完成的任务可以发布。
 - CPU prepare 失败时保留当前 Scene；旧 Scene 已释放后的 GPU build 失败会保留可操作的空场景。
 - 同步 Viking Room 切换会先取消后台任务，旧 generation 不能在稍后覆盖同步场景。
-- Application 关闭前停止控制服务、取消 builder、join worker，再销毁 Vulkan 对象。
+- Application 关闭前先停止控制服务和 source import future，再取消并 join AssetImportManager/完整工具进程树，然后取消 builder、join SceneLoadManager，最后销毁 Vulkan 对象。
 
 ## LoadStats
 
@@ -115,6 +131,7 @@ VMA 快照在 SceneGpuBuilder 和 staging 销毁后采集，不把临时 staging
 ## 当前限制
 
 - CPU prepare 只有一个 worker；不同场景不会并行解码。
+- AssetImportManager 当前一次只监督一个资产工具；单个工具内部可以并行编码。没有跨工具并发、持久任务数据库或断点任务队列。
 - 单个大 Texture/Mesh 仍是原子 pump，可能造成短帧尖峰。
 - 使用 graphics queue，没有专用 transfer queue 或 queue ownership transfer。
 - 未生成或未命中 KTX2 profile 的图片仍需运行时 decode/resize，并以 RGBA8 上传。

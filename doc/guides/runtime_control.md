@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `df02615`
+> Verified against: `b4536f4`
 
 Runtime Control 允许在 VulkanLab 已经运行时，从另一个终端切换场景、纹理限制和 Shader，并读取加载统计或关闭程序。控制接口仅用于本机调试，通过 Windows Named Pipe 通信，不开放网络端口。
 
@@ -78,9 +78,30 @@ cd build\Release
 
 `scene list --json` 兼容保留 `scenes` 字符串数组，并新增结构化 `entries`，包含稳定 `id`、`name`、`profileId`、`available` 和 `source`。`scene current --json` 同时返回 display name 与稳定 scene ID。`info --json` 还返回 `projectId`、当前 `sceneId` 和 Debug/Release 共用的 `cacheRoot`。
 
-协议中的 `scene.load` 和 `scene.reload` 会立即返回 taskId。VulkanLabCtl 默认每 100 ms 轮询 `load.status`，因此命令行行为仍是等待完成后输出 LoadStats。使用 `--no-wait` 会立即返回；之后可按 taskId 查询或取消。
+协议中的 `scene.load` 和 `scene.reload` 会立即返回 taskId。Ready 场景返回普通 SceneLoad task；OnDemand 缺失时返回最高位为 1 的复合 operation ID，该 ID 先报告 `phase=importing`，再连续报告 `preparing`、`uploading` 和最终状态。VulkanLabCtl 默认每 100 ms 轮询 `load.status`，因此命令行行为仍是等待整个 operation 完成后输出 LoadStats。使用 `--no-wait` 会立即返回；之后可按同一 taskId 查询或取消。
 
 任务状态包括 `Queued`、`PreparingCpu`、`ReadyForUpload`、`Uploading`、`WaitingForGpu`、`Completed`、`Cancelling`、`Cancelled` 和 `Failed`。加载失败或取消时，默认等待的控制命令返回退出码 `1`。
+
+### 派生资产
+
+```powershell
+.\VulkanLabCtl.exe asset catalog
+.\VulkanLabCtl.exe asset status "Main Sponza"
+.\VulkanLabCtl.exe asset import "Main Sponza"
+.\VulkanLabCtl.exe --force asset import "Main Sponza"
+.\VulkanLabCtl.exe --load-after asset import "Main Sponza"
+.\VulkanLabCtl.exe --no-wait asset import "Main Sponza"
+.\VulkanLabCtl.exe asset cancel 9223372036854775808
+.\VulkanLabCtl.exe asset cache-info
+```
+
+- `asset catalog`：列出各场景当前 profile 的 `Ready/Missing/Stale/Invalid/Importing`、manifest 和 blob 统计。
+- `asset status [scene]`：查询 display name 或稳定 scene ID；省略时使用 UI 当前选中项。
+- `asset import <scene>`：确保派生资产 Ready；已有有效缓存时立即完成，缺失时启动独立资产工具。`--force` 强制重编码，`--load-after` 在成功后继续加载 Scene。
+- `asset cancel [task-id]`：取消当前或指定资产任务及其完整 `ktx.exe` 子进程树。
+- `asset cache-info`：返回实际 cache root、文件数和总字节数。
+
+这些写操作只在 `--asset-mode ondemand` 下可用。`readonly` 和 `cooked-only` 会返回 `asset_import_disabled`；非 Ready 的 `scene.load` 返回 `artifact_not_ready`，不会静默启动编码器。Runtime Control 不接受任意本地导入路径；新源文件注册仍通过 ImGui 文件选择器或 `VulkanLabAssetTool catalog add`。
 
 完成摘要例如：
 
@@ -191,8 +212,9 @@ if ($LASTEXITCODE -ne 0) {
 
 - v2 只支持 Windows，并使用固定管道 `\\.\pipe\VulkanLab`。
 - Runtime Control 默认关闭，只有 `VulkanLab.exe --runtime-control` 会创建管道和控制线程。
+- `system.info.capabilities` 会声明 asset catalog/import/cancel；`system.info.cacheRoot` 是本次进程实际使用的共享或 `--cache-root` override。
 - Named Pipe 每个连接处理一条短请求；客户端等待通过重复的 `load.status` 请求实现。
-- glTF CPU prepare 在 worker 执行，GPU build 在主线程按帧推进；加载期间仍可 ping、查询、切换 Shader 和取消任务。
+- KTX2 import 在独立工具进程执行，glTF CPU prepare 在 worker 执行，GPU build 在主线程按帧推进；各阶段期间仍可 ping、查询、切换 Shader 和取消任务。
 - 新的 scene 请求会取消旧 generation，只有最新任务可以发布。
 - Runtime Control 不支持截图、材质编辑、相机控制或远程访问。
 - `models/main_sponza` 和 `models/pkg_a_curtains` 是本地可选资产，不提交到仓库。
@@ -252,7 +274,7 @@ VulkanLabCtl 默认等待任务完成。另开终端执行 `load status`，或�
 }
 ```
 
-Runtime Control v2 新增 `load.status` 与 `load.cancel`。`system.info.protocolVersion` 可用于脚本确认协议版本。
+Runtime Control v2 支持 `load.status`、`load.cancel` 和 Stage C 的 `asset.*` 方法。`system.info.protocolVersion` 可用于脚本确认协议版本。
 
 失败响应：
 

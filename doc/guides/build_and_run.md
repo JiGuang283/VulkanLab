@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `67bb5c1`
+> Verified against: `b4536f4`
 
 ## 环境要求
 
@@ -70,6 +70,20 @@ Runtime Control 默认关闭。需要从另一个终端控制运行中的渲染�
 .\VulkanLab.exe --runtime-control
 ```
 
+派生资产运行模式通过启动参数显式选择，Debug/Release 默认都使用 `OnDemand`：
+
+```powershell
+.\VulkanLab.exe --asset-mode ondemand
+.\VulkanLab.exe --asset-mode readonly
+.\VulkanLab.exe --asset-mode cooked-only
+```
+
+- `ondemand`：缺失、过期或损坏的精确 scene/profile artifact 会在独立资产工具进程中自动重建。
+- `readonly`：不启动编码进程；可在 UI 中显式选择 `Load Source Fallback`。
+- `cooked-only`：不启动编码进程，也禁止 source fallback。Stage E 将进一步收紧 packaged artifact 契约。
+
+测试或 CI 可用 `--cache-root <path>` 隔离派生缓存；正常开发运行省略该参数，使用项目级共享缓存。`--asset-tool <path>` 只用于覆盖与渲染器同目录的 `VulkanLabAssetTool.exe`。
+
 查看启动参数不会初始化窗口或 Vulkan：
 
 ```powershell
@@ -82,7 +96,9 @@ Runtime Control 默认关闭。需要从另一个终端控制运行中的渲染�
 
 场景由源码项目的 `assets/catalog.json` 注册，新增可选 glTF 不需要修改或重新编译 `main.cpp`。`Viking Room` 使用内建 factory；其余条目由项目相对 `source` 创建 glTF prepare factory。可选源文件缺失时仍显示为 `Unavailable`，但不阻止启动。
 
-Scenes 面板提供 `Import Scene...`：选择 `.glb/.gltf` 后确认名称、稳定 scene ID、profile、Copy/Reference 和是否自动加载。`.gltf` 的本地 `.bin` 与图片依赖会一起复制到 `models/imported/<scene-id>/`；远程、缺失或逃逸依赖不会写入 Catalog。
+Scenes 面板提供搜索、单击选择、双击/`Load`、`Reimport`、显式 source fallback、保存当前相机和从 Catalog 移除条目。`Import Scene...` 选择 `.glb/.gltf` 后确认名称、稳定 scene ID、profile、Copy/Reference 和是否自动加载。`.gltf` 的本地 `.bin` 与图片依赖会一起复制到 `models/imported/<scene-id>/`；远程、缺失或逃逸依赖不会写入 Catalog。Catalog 注册成功后会自动提交 KTX2 import，勾选自动加载时再连续执行 CPU prepare 和 GPU upload。
+
+`Assets` 面板显示当前项目、Catalog、cache root、运行模式、选中 scene/profile 的 `Ready/Missing/Stale/Invalid/Importing` 状态，以及资产任务的真实纹理进度、encoded/reused/failed、worker、耗时、日志和最近历史。长任务不会停留在 modal 中。
 
 同一导入事务也可通过 CLI 自动执行：
 
@@ -109,7 +125,7 @@ Catalog 当前包含以下初始 glTF 条目：
 
 ## KTX2 派生纹理缓存
 
-原始 glTF、GLB、PNG 和 JPEG 不会被修改。`VulkanLabAssetTool` 显式生成独立的 KTX2 缓存。默认共享根目录为 `%LOCALAPPDATA%/VulkanLab/DerivedAssets/<projectId>`，由 ProjectContext 和 Catalog 统一解析，因此 Debug、Release 和资产工具不再各自生成工作目录缓存。
+原始 glTF、GLB、PNG 和 JPEG 不会被修改。`VulkanLabAssetTool` 生成独立的 KTX2 缓存；既可显式调用，也可由 OnDemand admission 监督调用。默认共享根目录为 `%LOCALAPPDATA%/VulkanLab/DerivedAssets/<projectId>`，由 ProjectContext 和 Catalog 统一解析，因此 Debug、Release 和资产工具不再各自生成工作目录缓存。
 
 构建完成后，从 Debug 运行目录为 Main Sponza 生成 1024 和 2048 两个 profile：
 
@@ -125,6 +141,16 @@ Catalog 当前包含以下初始 glTF 条目：
   --project C:\Project\vulkan_learn `
   --scene-id main-sponza `
   --profile desktop_2048
+```
+
+与运行时自动导入等价的稳定入口是：
+
+```powershell
+.\VulkanLabAssetTool.exe import scene `
+  --project C:\Project\vulkan_learn `
+  --scene-id main-sponza `
+  --profile desktop_1024 `
+  --progress ndjson
 ```
 
 `--project` 可省略，此时资产工具与渲染器一样查找 executable locator 或当前目录祖先中的 Catalog。需要把缓存放到其他位置时可显式使用 `--cache-root`。`--scene models/... --texture-limit 1024` 旧参数仍可按 Catalog source/profile 匹配，但新脚本应使用稳定 ID。
@@ -157,14 +183,14 @@ cd build-debug\Debug
 .\VulkanLab.exe --runtime-control
 ```
 
-cache hit 时，worker 读取预生成 mip chain，并优先转码为 BC7；设备不支持 BC7 时转为 RGBA32。cache miss、manifest 过期、KTX2 损坏或 profile 不匹配时回退到现有 stb decode、CPU resize 和 GPU mip blit 路径，场景仍应可以加载。
+cache hit 时，worker 读取预生成 mip chain，并优先转码为 BC7；设备不支持 BC7 时转为 RGBA32。场景加载前的 admission 会检查 manifest 身份、source stamp、blob 存在性和 KTX2 header。OnDemand 下的 Missing/Stale/Invalid 会先异步重建，失败时保留当前 Scene；只有用户显式选择 source fallback 才走 stb decode、CPU resize 和 GPU mip blit。ReadOnly/CookedOnly 不会静默启动编码器。
 
 可在日志、`Stats -> Last Scene Load` 或 Runtime Control 的加载统计中检查 cache lookup/hit/miss/invalid、KTX2 读取与转码耗时、BC7/RGBA32 数量、prebuilt mip 数量和实际上传字节。首次验证建议先加载 1024 profile，再与无缓存加载结果比较。
 
 ## 运行注意事项
 
 - glTF 纹理尺寸默认限制为 `2048`，可在 Renderer 面板切换为 `Full`、`2048`、`1024` 或 `512`。切换会创建新的场景加载任务。
-- glTF 解析、图片解码和 CPU 缩放在 worker 执行；GPU 创建和上传由主线程按帧推进。加载进度和取消操作位于 ImGui `Loading` 面板。
+- KTX2 编码由 `AssetImportManager` 监督的独立 `VulkanLabAssetTool` 进程执行；glTF prepare 在 SceneLoadManager worker 执行；GPU 创建和上传由主线程按帧推进。资产与场景加载分别显示在 `Assets` 和 `Loading` 面板。
 - GPU build 前会释放旧 Scene 以控制大场景切换时的显存峰值，因此该阶段可能只显示 ImGui 和空场景。
 - `Full` 对 Main Sponza 仍是高风险选项。KTX2 缓存只覆盖已经显式生成且精确匹配的 profile；未命中时仍会回退 RGBA8。
 - 日志写入运行目录下的 `logs/VulkanLab.log`。加载统计也显示在 ImGui 的 `Stats -> Last Scene Load`。

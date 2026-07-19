@@ -2,7 +2,7 @@
 
 > Status: Active
 > Last verified: 2026-07-19
-> Verified against: `eed148b`
+> Verified against: `b4536f4`
 
 ## Summary
 
@@ -563,6 +563,23 @@ Release/Main Sponza 1024 clean 实测：串行 1 worker 为 `261.19 s`，并行 
 - 取消、快速切换 scene、退出和 importer crash 不会崩溃或发布旧 generation。
 - cache hit 场景不启动资产工具，加载性能不低于当前实现。
 - ReadOnly/CookedOnly 模式绝不启动编码进程。
+
+#### Implementation Status (2026-07-19)
+
+Stage C 已实现于 `b4536f4`：
+
+- `ArtifactStatus` 在 scene load 前验证稳定 manifest identity、profile/texture limit、source stamp、blob 路径和 KTX2 header；状态统一为 Ready/Missing/Stale/Invalid/Importing。
+- `AssetImportManager` 使用独立 supervisor thread 和高位 task ID，启动同目录 `VulkanLabAssetTool import scene`，校验 protocol v1 NDJSON、保存日志/历史，并用 Job Object 终止完整工具/ktx 子进程树。编码并发仍由 Stage B worker 与内存预算控制。
+- `AssetLoadCoordinator` 把 import consumer 纳入全局 operation generation；旧 import 可以留下 cache，但不能触发旧 Scene。import 成功后自动接入现有 SceneLoadManager/SceneGpuBuilder，失败或取消保留当前 Scene。
+- OnDemand、ReadOnly、CookedOnly 已作为显式 Config/启动参数接入；只有 OnDemand 可以编码，ReadOnly 仅允许显式 source fallback，CookedOnly 禁止 fallback。
+- Stage A 的 Catalog 注册成功后会自动提交 KTX2 import，并可继续自动加载。Scenes 面板增加搜索、选择/双击、Load、Reimport、source fallback、camera 保存和 Catalog 移除；Assets 面板显示 artifact 状态、真实编码进度、worker、日志、失败和历史。
+- Runtime Control/VulkanLabCtl 已增加 `asset.catalog/status/import/cancel/cache_info`；`scene.load` 可返回覆盖 import + prepare + upload 的复合 operation ID，`load.status/cancel` 在各阶段保持同一外部 ID。
+
+自动验证覆盖 Debug/Release 构建与 3/3 CTest、协议/崩溃任务失败、generation、Catalog 原子编辑、OnDemand/cache hit、真实取消/重试和模式隔离。真实取消返回 Cancelled，残留 `VulkanLabAssetTool/ktx` 进程为 0；ReadOnly/CookedOnly 的 import 均被拒绝，缺失 artifact 的 scene load 返回确定性错误。
+
+Main Sponza 1024 使用隔离 cache、保留 72 个内容寻址 blob 但不提供 manifest：自动 operation 重建结果为 `encoded=0/reused=72`，随后加载 75 textures、405 meshes，runtime 72/72 cache hit、0 decode、0 resize；manifest 重建后的 Debug scene-load 阶段约 `7.22 s`，VMA allocation delta `279.74 MiB`。Release 共享 cache hit 的 scene-load 阶段约 `1.82 s`。这验证了缺失 manifest admission 与复合 operation，不重复 Stage B 的 117 秒 clean encoding 基准。
+
+Windows 文件选择器、Import modal/Assets 面板布局、导入期间拖动/resize 和最终画面仍需人工 UX/视觉检查；自动测试未把这些未执行项目描述为通过。
 
 ### Stage D: Artifact Index And Change Detection
 
