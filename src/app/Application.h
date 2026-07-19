@@ -3,6 +3,7 @@
 #include "Config.h"
 
 #include "assets/AssetImportManager.h"
+#include "assets/ArtifactIndex.h"
 #include "assets/ProjectContext.h"
 #include "assets/SceneCatalog.h"
 #include "diagnostics/SceneLoadStats.h"
@@ -77,6 +78,8 @@ class Application {
     void drawAssetsPanel();
     void updateSceneImport();
     void refreshSceneRegistry(const std::string &selectSceneId = {});
+    void reloadArtifactIndex();
+    void persistArtifactIndex();
 
     void loadScene(int index, bool replaceCurrent = false);
     uint64_t reloadCurrentScene();
@@ -95,7 +98,7 @@ class Application {
     int findSceneIndexByName(const std::string &name) const;
     int findShaderVariantIndexByName(const std::string &name) const;
     std::string profileIdForTextureLimit(const SceneEntry &entry) const;
-    void refreshArtifactStatus(int sceneIndex);
+    void refreshArtifactStatus(int sceneIndex, bool admission = false);
     void refreshAllArtifactStatuses();
 
     Config config_;
@@ -129,6 +132,8 @@ class Application {
     std::shared_ptr<SceneLoadTask> latestSceneLoadTask_;
     uint64_t lastFinalizedTaskId_ = 0;
     std::unique_ptr<AssetImportManager> assetImportManager_;
+    std::unique_ptr<ArtifactIndex> artifactIndex_;
+    std::optional<ArtifactIndexUsage> artifactUsage_;
     std::unique_ptr<SceneAssetOperationState> sceneAssetOperations_;
 
     std::unique_ptr<RuntimeCommandQueue> runtimeCommandQueue_;

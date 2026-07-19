@@ -2,6 +2,7 @@
 #include "UniformData.h"
 
 #include "assets/DerivedAssetPaths.h"
+#include "assets/ArtifactIndex.h"
 #include "assets/ArtifactStatus.h"
 #include "assets/AssetLoadCoordinator.h"
 #include "assets/AssetImportManager.h"
@@ -688,6 +689,7 @@ void Application::init() {
     sceneLoadContext_.projectId = catalog_.projectId;
     sceneLoadContext_.textureTranscodeTarget =
         device_->textureTranscodeTarget();
+    reloadArtifactIndex();
     refreshAllArtifactStatuses();
     sceneAssetOperations_->selectedSceneIndex = start;
     if (sceneRegistry_[start].builtin)
@@ -792,6 +794,10 @@ void Application::loadScene(int index, bool replaceCurrent) {
         }
         applySceneCameraDefaults();
         stats.success = true;
+        if (artifactIndex_ && !entry.builtin) {
+            artifactIndex_->touch(entry.id, sceneLoadContext_.profileId);
+            persistArtifactIndex();
+        }
     } catch (...) {
         sceneLoadContext_.loadStats = nullptr;
         stats.allocatorAfter = device_->allocatorMemorySnapshot();
@@ -1010,6 +1016,29 @@ void Application::finalizeSceneLoad(
     lastFinalizedTaskId_ = task->id;
     validateSceneLoadStats(task->stats);
     logSceneLoadStats(task->stats);
+    if (success && artifactIndex_ && task->sceneIndex >= 0 &&
+        task->sceneIndex < static_cast<int>(sceneRegistry_.size())) {
+        const SceneEntry &entry = sceneRegistry_[task->sceneIndex];
+        if (!entry.builtin) {
+            std::string profileId;
+            const auto preferred = catalog_.importProfiles.find(entry.profileId);
+            if (preferred != catalog_.importProfiles.end() &&
+                preferred->second.textureLimit == task->textureLimit) {
+                profileId = preferred->first;
+            } else {
+                for (const auto &candidate : catalog_.importProfiles) {
+                    if (candidate.second.textureLimit == task->textureLimit) {
+                        profileId = candidate.first;
+                        break;
+                    }
+                }
+            }
+            if (!profileId.empty()) {
+                artifactIndex_->touch(entry.id, profileId);
+                persistArtifactIndex();
+            }
+        }
+    }
     task->finalized = true;
 }
 
@@ -1055,7 +1084,45 @@ Application::profileIdForTextureLimit(const SceneEntry &entry) const {
                      std::to_string(sceneLoadContext_.maxTextureSize);
 }
 
-void Application::refreshArtifactStatus(int sceneIndex) {
+void Application::reloadArtifactIndex() {
+    try {
+        bool rebuilt = false;
+        std::string diagnostic;
+        artifactIndex_ = std::make_unique<ArtifactIndex>(
+            ArtifactIndex::loadOrRebuild(
+                sceneLoadContext_.derivedTextureCachePath,
+                projectContext_.projectRoot, catalog_, &rebuilt,
+                &diagnostic));
+        artifactUsage_ = artifactIndex_->usage();
+        VKR_LOG_INFO("Assets", "Artifact index {} at {} ({} records)",
+                     rebuilt ? "rebuilt" : "loaded",
+                     artifactIndex_->path().string(),
+                     artifactIndex_->records().size());
+        if (rebuilt && diagnostic != "index not found")
+            VKR_LOG_WARN("Assets", "Artifact index rebuild reason: {}",
+                         diagnostic);
+    } catch (const std::exception &error) {
+        artifactIndex_.reset();
+        artifactUsage_.reset();
+        VKR_LOG_WARN("Assets",
+                     "Artifact index is unavailable; using manifest scans: {}",
+                     error.what());
+    }
+}
+
+void Application::persistArtifactIndex() {
+    if (!artifactIndex_)
+        return;
+    try {
+        artifactIndex_->save();
+        artifactUsage_ = artifactIndex_->usage();
+    } catch (const std::exception &error) {
+        VKR_LOG_WARN("Assets", "Could not persist ArtifactIndex telemetry: {}",
+                     error.what());
+    }
+}
+
+void Application::refreshArtifactStatus(int sceneIndex, bool admission) {
     if (sceneIndex < 0 ||
         sceneIndex >= static_cast<int>(sceneRegistry_.size()))
         return;
@@ -1075,10 +1142,15 @@ void Application::refreshArtifactStatus(int sceneIndex) {
         status.state = ArtifactState::Missing;
         status.reason = entry.unavailableReason;
     } else {
-        status = inspectTextureArtifacts(
-            {sceneLoadContext_.derivedTextureCachePath, entry.sourcePath,
-             catalog_.projectId, entry.id, profileId,
-             sceneLoadContext_.maxTextureSize});
+        const ArtifactStatusRequest request{
+            sceneLoadContext_.derivedTextureCachePath, entry.sourcePath,
+            catalog_.projectId, entry.id, profileId,
+            sceneLoadContext_.maxTextureSize};
+        status = artifactIndex_
+                     ? artifactIndex_->query(
+                           request, admission ? ArtifactValidationMode::Admission
+                                              : ArtifactValidationMode::Fast)
+                     : inspectTextureArtifacts(request);
     }
     if (assetImportManager_) {
         for (const auto &task : assetImportManager_->history()) {
@@ -1100,6 +1172,8 @@ void Application::refreshAllArtifactStatuses() {
     sceneAssetOperations_->statuses.clear();
     for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i)
         refreshArtifactStatus(i);
+    if (artifactIndex_)
+        artifactUsage_ = artifactIndex_->usage();
 }
 
 uint64_t Application::requestSceneOperation(int index, bool sourceFallback,
@@ -1130,7 +1204,7 @@ uint64_t Application::requestSceneOperation(int index, bool sourceFallback,
         return loadAfter ? requestSceneLoad(index, true) : 0;
     }
 
-    refreshArtifactStatus(index);
+    refreshArtifactStatus(index, true);
     const std::string profileId = profileIdForTextureLimit(entry);
     const auto found = sceneAssetOperations_->statuses.find(
         artifactStatusKey(entry.id, profileId));
@@ -1180,10 +1254,25 @@ void Application::updateAssetImports() {
                 break;
             }
         }
+        const AssetImportState state = task->state.load();
+        if (state == AssetImportState::Completed) {
+            reloadArtifactIndex();
+            if (artifactIndex_) {
+                artifactIndex_->recordImportSuccess(
+                    task->sceneId, task->profileId, task->id);
+                persistArtifactIndex();
+            }
+        } else if (state == AssetImportState::Failed && artifactIndex_) {
+            std::lock_guard<std::mutex> lock(task->mutex);
+            artifactIndex_->recordFailure(
+                task->sceneId, task->profileId, "import_failed",
+                task->error.empty() ? "Asset import failed" : task->error,
+                task->logPath);
+            persistArtifactIndex();
+        }
         if (sceneIndex >= 0)
             refreshArtifactStatus(sceneIndex);
 
-        const AssetImportState state = task->state.load();
         if (state == AssetImportState::Completed && sceneIndex >= 0) {
             const auto status = sceneAssetOperations_->statuses.find(
                 artifactStatusKey(task->sceneId, task->profileId));
@@ -1234,6 +1323,32 @@ void Application::processRuntimeCommand() {
 
     ControlJson result = ControlJson::object();
     bool requestQuit = false;
+    const auto indexedArtifactStatus = [this](
+                                           const SceneEntry &entry,
+                                           const std::string &profileId,
+                                           const ArtifactStatus &status) {
+        ControlJson json = artifactStatusToJson(entry, profileId, status);
+        if (!artifactIndex_)
+            return json;
+        const auto found = artifactIndex_->records().find(
+            artifactIndexKey(entry.id, profileId));
+        if (found == artifactIndex_->records().end())
+            return json;
+        const ArtifactIndexRecord &record = found->second;
+        json["lastSuccessfulImportUnixMs"] =
+            record.lastSuccessfulImportUnixMs;
+        json["lastSuccessfulImportTaskId"] =
+            record.lastSuccessfulImportTaskId;
+        json["lastAccessUnixMs"] = record.lastAccessUnixMs;
+        if (!record.failureCode.empty()) {
+            json["lastFailure"] = {
+                {"code", record.failureCode},
+                {"message", record.failureMessage},
+                {"log", record.failureLogPath},
+                {"unixMs", record.lastFailureUnixMs}};
+        }
+        return json;
+    };
     try {
         if (command->method == "system.ping") {
             result = {{"message", "pong"}};
@@ -1423,8 +1538,8 @@ void Application::processRuntimeCommand() {
                 const auto found = sceneAssetOperations_->statuses.find(
                     artifactStatusKey(entry.id, profileId));
                 if (found != sceneAssetOperations_->statuses.end())
-                    entries.push_back(
-                        artifactStatusToJson(entry, profileId, found->second));
+                    entries.push_back(indexedArtifactStatus(
+                        entry, profileId, found->second));
             }
             result = {{"projectId", catalog_.projectId},
                       {"catalog", projectContext_.catalogPath.string()},
@@ -1451,7 +1566,7 @@ void Application::processRuntimeCommand() {
             refreshArtifactStatus(index);
             const auto &entry = sceneRegistry_[index];
             const std::string profileId = profileIdForTextureLimit(entry);
-            result = artifactStatusToJson(
+            result = indexedArtifactStatus(
                 entry, profileId,
                 sceneAssetOperations_->statuses.at(
                     artifactStatusKey(entry.id, profileId)));
@@ -1482,7 +1597,7 @@ void Application::processRuntimeCommand() {
                 refreshArtifactStatus(index);
                 const auto &entry = sceneRegistry_[index];
                 const std::string profileId = profileIdForTextureLimit(entry);
-                result = artifactStatusToJson(
+                result = indexedArtifactStatus(
                     entry, profileId,
                     sceneAssetOperations_->statuses.at(
                         artifactStatusKey(entry.id, profileId)));
@@ -1506,31 +1621,28 @@ void Application::processRuntimeCommand() {
             }
             result = {{"taskId", taskId}, {"cancelRequested", true}};
         } else if (command->method == "asset.cache_info") {
-            uint64_t files = 0;
-            uint64_t bytes = 0;
-            std::error_code iteratorError;
             const std::filesystem::path root =
                 sceneLoadContext_.derivedTextureCachePath;
-            if (std::filesystem::is_directory(root)) {
-                for (std::filesystem::recursive_directory_iterator it(
-                         root, std::filesystem::directory_options::skip_permission_denied,
-                         iteratorError),
-                     end;
-                     it != end; it.increment(iteratorError)) {
-                    if (iteratorError) {
-                        iteratorError.clear();
-                        continue;
-                    }
-                    if (!it->is_regular_file())
-                        continue;
-                    ++files;
-                    std::error_code sizeError;
-                    bytes += it->file_size(sizeError);
-                }
-            }
+            if (artifactIndex_)
+                artifactUsage_ = artifactIndex_->usage();
+            const ArtifactIndexUsage usage = artifactUsage_.value_or(
+                ArtifactIndexUsage{});
             result = {{"root", root.string()},
-                      {"files", files},
-                      {"bytes", bytes},
+                      {"index",
+                       artifactIndex_ ? artifactIndex_->path().string() : ""},
+                      {"indexSchema", ArtifactIndex::kSchemaVersion},
+                      {"records", usage.records},
+                      {"readyRecords", usage.readyRecords},
+                      {"referencedBlobs", usage.referencedBlobs},
+                      {"referencedBlobBytes", usage.referencedBlobBytes},
+                      {"blobFiles", usage.cacheBlobFiles},
+                      {"blobBytes", usage.cacheBlobBytes},
+                      {"files", usage.cacheBlobFiles},
+                      {"bytes", usage.cacheBlobBytes},
+                      {"unreferencedBlobFiles",
+                       usage.unreferencedBlobFiles},
+                      {"unreferencedBlobBytes",
+                       usage.unreferencedBlobBytes},
                       {"mode", assetImportModeName(config_.assetImportMode)}};
         } else if (command->method == "shader.list") {
             ControlJson shaders = ControlJson::array();
@@ -1738,6 +1850,7 @@ void Application::refreshSceneRegistry(const std::string &selectSceneId) {
     catalog_ = SceneCatalog::load(projectContext_.catalogPath,
                                   projectContext_.projectRoot);
     sceneRegistry_ = buildSceneRegistry(catalog_, projectContext_, config_);
+    reloadArtifactIndex();
     currentSceneIndex_ = -1;
     for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
         if (sceneRegistry_[i].id == currentId)
@@ -2141,6 +2254,20 @@ void Application::drawAssetsPanel() {
     ImGui::TextWrapped("Cache: %s",
                        sceneLoadContext_.derivedTextureCachePath.c_str());
     ImGui::Text("Mode: %s", assetImportModeName(config_.assetImportMode));
+    if (artifactUsage_) {
+        ImGui::Text("Index: %llu records (%llu ready)",
+                    static_cast<unsigned long long>(artifactUsage_->records),
+                    static_cast<unsigned long long>(
+                        artifactUsage_->readyRecords));
+        ImGui::Text("Cache Blobs: %llu (%.2f MiB)",
+                    static_cast<unsigned long long>(
+                        artifactUsage_->cacheBlobFiles),
+                    bytesToMiB(artifactUsage_->cacheBlobBytes));
+        ImGui::Text("Unreferenced: %llu (%.2f MiB)",
+                    static_cast<unsigned long long>(
+                        artifactUsage_->unreferencedBlobFiles),
+                    bytesToMiB(artifactUsage_->unreferencedBlobBytes));
+    }
 
     const int selected = sceneAssetOperations_->selectedSceneIndex;
     if (selected >= 0 && selected < static_cast<int>(sceneRegistry_.size())) {
@@ -2159,6 +2286,17 @@ void Application::drawAssetsPanel() {
                 ImGui::Text("Blobs: %llu (%.2f MiB)",
                             static_cast<unsigned long long>(status.entryCount),
                             bytesToMiB(status.blobBytes));
+            }
+        }
+        if (artifactIndex_) {
+            const auto record = artifactIndex_->records().find(
+                artifactIndexKey(entry.id, profileId));
+            if (record != artifactIndex_->records().end() &&
+                !record->second.failureCode.empty()) {
+                ImGui::Text("Last Failure: %s",
+                            record->second.failureCode.c_str());
+                ImGui::TextWrapped("%s",
+                                   record->second.failureMessage.c_str());
             }
         }
     }

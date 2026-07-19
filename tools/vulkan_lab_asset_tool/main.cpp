@@ -1,6 +1,9 @@
 #include "TextureCacheBuilder.h"
 
 #include "assets/DerivedAssetPaths.h"
+#include "assets/CacheMutationLock.h"
+#include "assets/ArtifactCachePruner.h"
+#include "assets/ArtifactIndex.h"
 #include "assets/ProjectContext.h"
 #include "assets/SceneCatalog.h"
 #include "assets/SceneImportService.h"
@@ -61,6 +64,9 @@ void printUsage(std::ostream &output) {
         << "  VulkanLabAssetTool texture-cache migrate "
            "--legacy-cache-root <path> [options]\n\n"
         << "  VulkanLabAssetTool catalog add --source <path> [options]\n\n"
+        << "  VulkanLabAssetTool cache index rebuild [options]\n"
+        << "  VulkanLabAssetTool cache prune [--older-than-days <n>] "
+           "[--execute] [options]\n\n"
         << "Options:\n"
         << "  --project <path>     Source project root (otherwise use "
            "locator)\n"
@@ -69,6 +75,8 @@ void printUsage(std::ostream &output) {
         << "  --profile <id>       Import profile (default: scene profile)\n"
         << "  --texture-limit <n>  Override profile limit: 0/512/1024/2048\n"
         << "  --cache-root <path>  Override the shared derived cache root\n"
+        << "  --older-than-days <n>  Retain recent orphan blobs (default: 7)\n"
+        << "  --execute            Apply cache prune (default is dry-run)\n"
         << "  --legacy-cache-root  Legacy working-directory cache to migrate\n"
         << "  --force              Re-encode blobs even when they are valid\n"
         << "  --workers <n>        Parallel encoder processes (default: CPU/2, "
@@ -105,6 +113,16 @@ uint32_t parsePositiveUint32(const std::string &value,
     size_t consumed = 0;
     const unsigned long parsed = std::stoul(value, &consumed);
     if (consumed != value.size() || parsed == 0 || parsed > UINT32_MAX)
+        throw std::invalid_argument("invalid value for " + option + ": " +
+                                    value);
+    return static_cast<uint32_t>(parsed);
+}
+
+uint32_t parseNonnegativeUint32(const std::string &value,
+                                const std::string &option) {
+    size_t consumed = 0;
+    const unsigned long parsed = std::stoul(value, &consumed);
+    if (consumed != value.size() || parsed > UINT32_MAX)
         throw std::invalid_argument("invalid value for " + option + ": " +
                                     value);
     return static_cast<uint32_t>(parsed);
@@ -175,6 +193,84 @@ int main(int argc, char **argv) {
                       << "  name: " << result.scene.displayName << "\n"
                       << "  source: " << result.scene.source.generic_string()
                       << '\n';
+            return EXIT_SUCCESS;
+        }
+
+        const bool cacheIndexRebuild =
+            argc >= 4 && std::string(argv[1]) == "cache" &&
+            std::string(argv[2]) == "index" &&
+            std::string(argv[3]) == "rebuild";
+        const bool cachePrune = std::string(argv[1]) == "cache" &&
+                                std::string(argv[2]) == "prune";
+        if (cacheIndexRebuild || cachePrune) {
+            std::optional<std::filesystem::path> explicitProject;
+            std::filesystem::path cacheRoot;
+            uint32_t olderThanDays = 7;
+            bool execute = false;
+            const int firstOption = cacheIndexRebuild ? 4 : 3;
+            for (int i = firstOption; i < argc; ++i) {
+                const std::string argument = argv[i];
+                if (argument == "--project") {
+                    explicitProject = requireValue(i, argc, argv, argument);
+                } else if (argument == "--cache-root") {
+                    cacheRoot = requireValue(i, argc, argv, argument);
+                } else if (cachePrune && argument == "--older-than-days") {
+                    olderThanDays = parseNonnegativeUint32(
+                        requireValue(i, argc, argv, argument), argument);
+                } else if (cachePrune && argument == "--execute") {
+                    execute = true;
+                } else if (argument == "--help") {
+                    printUsage(std::cout);
+                    return EXIT_SUCCESS;
+                } else {
+                    throw std::invalid_argument("unknown option: " + argument);
+                }
+            }
+            vkr::ProjectContext project =
+                vkr::ProjectContextResolver::resolve(explicitProject);
+            const vkr::SceneCatalog catalog = vkr::SceneCatalog::load(
+                project.catalogPath, project.projectRoot);
+            if (cacheRoot.empty())
+                cacheRoot =
+                    vkr::DerivedAssetPaths::defaultCacheRoot(catalog.projectId);
+
+            std::atomic_bool cancelRequested{false};
+            ConsoleCancellationHandler cancellationHandler(cancelRequested);
+            if (cacheIndexRebuild) {
+                vkr::CacheMutationLock mutationLock(cacheRoot,
+                                                    &cancelRequested);
+                vkr::ArtifactIndex index = vkr::ArtifactIndex::rebuild(
+                    cacheRoot, project.projectRoot, catalog);
+                index.save();
+                const vkr::ArtifactIndexUsage usage = index.usage();
+                std::cout << "Artifact index rebuilt\n"
+                          << "  path: " << index.path().string() << "\n"
+                          << "  records: " << usage.records << "\n"
+                          << "  ready: " << usage.readyRecords << "\n"
+                          << "  referenced blobs: " << usage.referencedBlobs
+                          << '\n';
+                return EXIT_SUCCESS;
+            }
+
+            const vkr::ArtifactPruneReport report = vkr::pruneArtifactCache(
+                {cacheRoot, olderThanDays, execute, &cancelRequested});
+            std::cout << (execute ? "Cache prune complete" :
+                                      "Cache prune dry-run")
+                      << "\n  manifests: " << report.manifestFiles
+                      << "\n  protected blobs: " << report.protectedBlobs
+                      << "\n  scanned blobs: " << report.scannedBlobFiles
+                      << "\n  candidates: " << report.candidates.size()
+                      << "\n  deferred recent blobs: "
+                      << report.deferredBlobFiles
+                      << "\n  deleted blobs: " << report.deletedBlobFiles
+                      << "\n  deleted bytes: " << report.deletedBlobBytes
+                      << '\n';
+            for (const auto &candidate : report.candidates)
+                std::cout << "  candidate: " << candidate.path.string()
+                          << " (" << candidate.bytes << " bytes, age "
+                          << candidate.ageSeconds << " s)\n";
+            if (!execute && !report.candidates.empty())
+                std::cout << "Re-run with --execute to remove candidates.\n";
             return EXIT_SUCCESS;
         }
 
@@ -274,7 +370,17 @@ int main(int argc, char **argv) {
             migration.projectRoot = project.projectRoot;
             if (migration.cacheRoot.empty())
                 migration.cacheRoot = project.cacheRoot;
-            return vkr::assettool::migrateTextureCache(migration);
+            std::atomic_bool cancelRequested{false};
+            ConsoleCancellationHandler cancellationHandler(cancelRequested);
+            vkr::CacheMutationLock mutationLock(migration.cacheRoot,
+                                                &cancelRequested);
+            const int result = vkr::assettool::migrateTextureCache(migration);
+            if (result == 0) {
+                vkr::ArtifactIndex index = vkr::ArtifactIndex::rebuild(
+                    migration.cacheRoot, project.projectRoot, catalog);
+                index.save();
+            }
+            return result;
         }
 
         const vkr::CatalogScene *scene = nullptr;
@@ -333,7 +439,17 @@ int main(int argc, char **argv) {
         std::atomic_bool cancelRequested{false};
         ConsoleCancellationHandler cancellationHandler(cancelRequested);
         options.cancelRequested = &cancelRequested;
-        return vkr::assettool::buildTextureCache(options);
+        vkr::CacheMutationLock mutationLock(options.cacheRoot,
+                                            &cancelRequested);
+        const int result = vkr::assettool::buildTextureCache(options);
+        if (result == 0) {
+            bool rebuilt = false;
+            vkr::ArtifactIndex index = vkr::ArtifactIndex::loadOrRebuild(
+                options.cacheRoot, project.projectRoot, catalog, &rebuilt);
+            index.refresh(catalog, scene->id, profile.id);
+            index.save();
+        }
+        return result;
     } catch (const std::invalid_argument &exception) {
         std::cerr << "Argument error: " << exception.what() << "\n\n";
         printUsage(std::cerr);

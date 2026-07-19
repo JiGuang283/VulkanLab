@@ -124,11 +124,17 @@ if(BUILD_TESTING)
         "${CMAKE_SOURCE_DIR}/tests/SceneImportServiceTests.cpp"
         "${CMAKE_SOURCE_DIR}/tests/TextureCachePipelineTests.cpp"
         "${CMAKE_SOURCE_DIR}/tests/ArtifactStatusTests.cpp"
+        "${CMAKE_SOURCE_DIR}/tests/ArtifactIndexTests.cpp"
+        "${CMAKE_SOURCE_DIR}/tests/ArtifactCachePrunerTests.cpp"
         "${CMAKE_SOURCE_DIR}/tests/AssetImportManagerTests.cpp"
         "${CMAKE_SOURCE_DIR}/tests/AssetLoadCoordinatorTests.cpp"
         "${CMAKE_SOURCE_DIR}/tests/SceneCatalogEditorTests.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/DerivedAssetPaths.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/ContentHash.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/CacheMutationLock.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/ArtifactStatus.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/ArtifactIndex.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/ArtifactCachePruner.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/AssetImportManager.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/AssetLoadCoordinator.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/DerivedTextureManifest.cpp"
@@ -147,7 +153,7 @@ if(BUILD_TESTING)
         ${GLM_INCLUDE_DIR}
         ${GLTF_DIR}
     )
-    target_link_libraries(VulkanLabCpuTests PRIVATE Vulkan::Vulkan)
+    target_link_libraries(VulkanLabCpuTests PRIVATE Vulkan::Vulkan bcrypt)
     target_compile_options(VulkanLabCpuTests PRIVATE
         $<$<CXX_COMPILER_ID:MSVC>:/utf-8>
     )
@@ -172,6 +178,11 @@ if(WIN32)
         "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool/TextureCachePipeline.cpp"
         "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool/ProcessRunner.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/DerivedAssetPaths.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/ArtifactIndex.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/ArtifactCachePruner.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/ArtifactStatus.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/ContentHash.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/CacheMutationLock.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/DerivedTextureManifest.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/ProjectContext.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/SceneCatalog.cpp"
@@ -246,6 +257,7 @@ target_link_libraries(VulkanLab PRIVATE
     Vulkan::Vulkan
     glfw3
     ktx_read
+    bcrypt
 )
 
 # 解决一些 GLFW 静态链接时的 Windows 依赖问题

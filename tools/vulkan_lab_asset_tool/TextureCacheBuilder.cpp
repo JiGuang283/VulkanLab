@@ -3,6 +3,7 @@
 #include "TextureCachePipeline.h"
 
 #include "assets/DerivedAssetPaths.h"
+#include "assets/ContentHash.h"
 #include "assets/SceneCatalog.h"
 
 #include "assets/DerivedTextureManifest.h"
@@ -15,7 +16,6 @@
 
 #define NOMINMAX
 #include <Windows.h>
-#include <bcrypt.h>
 
 #include <algorithm>
 #include <array>
@@ -30,7 +30,6 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -131,83 +130,6 @@ std::vector<uint8_t> readFile(const std::filesystem::path &path) {
         throw std::runtime_error("could not read file: " + path.string());
     }
     return bytes;
-}
-
-std::string hexString(const uint8_t *bytes, size_t size) {
-    std::ostringstream output;
-    output << std::hex << std::setfill('0');
-    for (size_t i = 0; i < size; ++i)
-        output << std::setw(2) << static_cast<unsigned>(bytes[i]);
-    return output.str();
-}
-
-std::string sha256(const uint8_t *data, size_t size) {
-    BCRYPT_ALG_HANDLE algorithm = nullptr;
-    BCRYPT_HASH_HANDLE hash = nullptr;
-    std::vector<uint8_t> object;
-    std::vector<uint8_t> digest;
-
-    const auto cleanup = [&] {
-        if (hash)
-            BCryptDestroyHash(hash);
-        if (algorithm)
-            BCryptCloseAlgorithmProvider(algorithm, 0);
-    };
-
-    NTSTATUS status = BCryptOpenAlgorithmProvider(
-        &algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
-    if (!BCRYPT_SUCCESS(status)) {
-        cleanup();
-        throw std::runtime_error("BCryptOpenAlgorithmProvider(SHA-256) failed");
-    }
-
-    DWORD objectLength = 0;
-    DWORD digestLength = 0;
-    DWORD resultLength = 0;
-    status = BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH,
-                               reinterpret_cast<PUCHAR>(&objectLength),
-                               sizeof(objectLength), &resultLength, 0);
-    if (BCRYPT_SUCCESS(status)) {
-        status = BCryptGetProperty(algorithm, BCRYPT_HASH_LENGTH,
-                                   reinterpret_cast<PUCHAR>(&digestLength),
-                                   sizeof(digestLength), &resultLength, 0);
-    }
-    if (!BCRYPT_SUCCESS(status)) {
-        cleanup();
-        throw std::runtime_error("BCryptGetProperty(SHA-256) failed");
-    }
-
-    object.resize(objectLength);
-    digest.resize(digestLength);
-    status = BCryptCreateHash(algorithm, &hash, object.data(), objectLength,
-                              nullptr, 0, 0);
-    if (BCRYPT_SUCCESS(status) && size != 0) {
-        size_t offset = 0;
-        while (offset < size && BCRYPT_SUCCESS(status)) {
-            const ULONG chunk =
-                static_cast<ULONG>(std::min<size_t>(size - offset, ULONG_MAX));
-            status = BCryptHashData(hash, const_cast<PUCHAR>(data + offset),
-                                    chunk, 0);
-            offset += chunk;
-        }
-    }
-    if (BCRYPT_SUCCESS(status)) {
-        status = BCryptFinishHash(hash, digest.data(), digestLength, 0);
-    }
-    if (!BCRYPT_SUCCESS(status)) {
-        cleanup();
-        throw std::runtime_error("BCrypt SHA-256 calculation failed");
-    }
-    cleanup();
-    return hexString(digest.data(), digest.size());
-}
-
-std::string sha256(const std::vector<uint8_t> &bytes) {
-    return sha256(bytes.data(), bytes.size());
-}
-
-std::string sha256(const std::string &text) {
-    return sha256(reinterpret_cast<const uint8_t *>(text.data()), text.size());
 }
 
 bool hasPngSignature(const std::vector<uint8_t> &bytes) {
@@ -434,7 +356,7 @@ ImageSource loadImageSource(const tg3_model *model, int32_t imageIndex,
     result.height = static_cast<uint32_t>(height);
     result.png = hasPngSignature(result.bytes);
 
-    const std::string sourceHash = sha256(result.bytes);
+    const std::string sourceHash = sha256Bytes(result.bytes);
     if (!result.externalPath.empty()) {
         result.stamp = fileStamp(result.externalPath, sourceHash);
         std::error_code relativeError;
@@ -715,7 +637,7 @@ scanTextureBuildPlan(const tg3_model *model,
         scanned.outputHeight = outputHeight;
         scanned.estimatedMemoryBytes =
             estimateTaskMemory(source, outputWidth, outputHeight);
-        scanned.cacheKey = sha256(keyMaterial);
+        scanned.cacheKey = sha256String(keyMaterial);
         scanned.blob = blobDirectory / (scanned.cacheKey + ".ktx2");
         if (!force && std::filesystem::is_regular_file(scanned.blob)) {
             try {
@@ -827,7 +749,7 @@ int buildTextureCache(const TextureCacheBuildOptions &options,
     manifest.encoderSettings = preset.settings;
     manifest.textureLimit = options.textureLimit;
     const std::vector<uint8_t> sceneBytes = readFile(scene);
-    manifest.scene = fileStamp(scene, sha256(sceneBytes));
+    manifest.scene = fileStamp(scene, sha256Bytes(sceneBytes));
     manifest.scene.path = scene.filename().generic_string();
     size_t reusedCount = 0;
     std::vector<TextureBuildWorkItem> workItems;

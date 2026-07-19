@@ -14,6 +14,8 @@ void runSceneCatalogTests();
 void runSceneImportServiceTests();
 void runTextureCachePipelineTests();
 void runArtifactStatusTests();
+void runArtifactIndexTests();
+void runArtifactCachePrunerTests();
 void runAssetImportManagerTests();
 void runAssetLoadCoordinatorTests();
 void runSceneCatalogEditorTests();
@@ -114,6 +116,8 @@ int main() {
         runSceneImportServiceTests();
         runTextureCachePipelineTests();
         runArtifactStatusTests();
+        runArtifactIndexTests();
+        runArtifactCachePrunerTests();
         runAssetImportManagerTests();
         runAssetLoadCoordinatorTests();
         runSceneCatalogEditorTests();

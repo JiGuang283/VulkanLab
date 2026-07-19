@@ -94,6 +94,63 @@ if(NOT hit_output MATCHES "\"encoded\":0" OR
    NOT hit_output MATCHES "\"reused\":3")
     message(FATAL_ERROR "second build did not reuse all three artifacts")
 endif()
+if(NOT EXISTS "${parallel_cache}/artifact_index.json")
+    message(FATAL_ERROR "successful build did not publish ArtifactIndex")
+endif()
+
+execute_process(
+    COMMAND "${TOOL}" cache index rebuild
+        --project "${TEST_ROOT}"
+        --cache-root "${parallel_cache}"
+    RESULT_VARIABLE index_result
+    OUTPUT_VARIABLE index_output
+    ERROR_VARIABLE index_errors
+)
+if(NOT index_result EQUAL 0 OR NOT index_output MATCHES "records: 1")
+    message(FATAL_ERROR
+        "cache index rebuild failed (${index_result})\n${index_output}\n${index_errors}")
+endif()
+
+file(WRITE "${parallel_cache}/blobs/orphan.ktx2" "orphan")
+execute_process(
+    COMMAND "${TOOL}" cache prune
+        --project "${TEST_ROOT}"
+        --cache-root "${parallel_cache}"
+        --older-than-days 0
+    RESULT_VARIABLE prune_dry_result
+    OUTPUT_VARIABLE prune_dry_output
+    ERROR_VARIABLE prune_dry_errors
+)
+if(NOT prune_dry_result EQUAL 0 OR
+   NOT prune_dry_output MATCHES "candidates: 1" OR
+   NOT EXISTS "${parallel_cache}/blobs/orphan.ktx2")
+    message(FATAL_ERROR
+        "cache prune dry-run was unsafe or incorrect (${prune_dry_result})\n${prune_dry_output}\n${prune_dry_errors}")
+endif()
+execute_process(
+    COMMAND "${TOOL}" cache prune
+        --project "${TEST_ROOT}"
+        --cache-root "${parallel_cache}"
+        --older-than-days 0
+        --execute
+    RESULT_VARIABLE prune_result
+    OUTPUT_VARIABLE prune_output
+    ERROR_VARIABLE prune_errors
+)
+if(NOT prune_result EQUAL 0 OR
+   NOT prune_output MATCHES "deleted blobs: 1" OR
+   EXISTS "${parallel_cache}/blobs/orphan.ktx2")
+    message(FATAL_ERROR
+        "cache prune execute failed (${prune_result})\n${prune_output}\n${prune_errors}")
+endif()
+string(JSON entry_count LENGTH "${parallel_manifest}" entries)
+math(EXPR last_entry "${entry_count} - 1")
+foreach(index RANGE 0 ${last_entry})
+    string(JSON protected_blob GET "${parallel_manifest}" entries ${index} blob)
+    if(NOT EXISTS "${parallel_cache}/${protected_blob}")
+        message(FATAL_ERROR "prune removed a manifest-referenced blob: ${protected_blob}")
+    endif()
+endforeach()
 
 run_build("${production_cache}" 2 production production_output)
 file(READ "${production_cache}/${manifest_relative}" production_manifest)
