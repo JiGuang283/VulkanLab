@@ -358,28 +358,6 @@ ControlJson sceneLoadTaskToJson(
     return result;
 }
 
-class RuntimeCommandError : public std::runtime_error {
-  public:
-    RuntimeCommandError(std::string code, std::string message)
-        : std::runtime_error(std::move(message)), code_(std::move(code)) {}
-
-    const std::string &code() const { return code_; }
-
-  private:
-    std::string code_;
-};
-
-std::string requiredStringParam(const RuntimeCommand &command,
-                                const char *name) {
-    if (!command.params.contains(name) ||
-        !command.params[name].is_string()) {
-        throw RuntimeCommandError(
-            "invalid_params",
-            std::string("Parameter '") + name + "' must be a string.");
-    }
-    return command.params[name].get<std::string>();
-}
-
 void validateSceneLoadStats(const SceneLoadStats &stats) {
     const double detailedMax =
         std::max({stats.deviceIdleMs, stats.teardownMs, stats.sceneFactoryMs,
@@ -1337,404 +1315,352 @@ void Application::processRuntimeCommand() {
     if (!command)
         return;
 
-    ControlJson result = ControlJson::object();
-    bool requestQuit = false;
-    const auto indexedArtifactStatus = [this](
-                                           const SceneEntry &entry,
-                                           const std::string &profileId,
-                                           const ArtifactStatus &status) {
-        ControlJson json = artifactStatusToJson(entry, profileId, status);
-        if (!artifactIndex_)
-            return json;
-        const auto found = artifactIndex_->records().find(
-            artifactIndexKey(entry.id, profileId));
-        if (found == artifactIndex_->records().end())
-            return json;
-        const ArtifactIndexRecord &record = found->second;
-        json["lastSuccessfulImportUnixMs"] =
-            record.lastSuccessfulImportUnixMs;
-        json["lastSuccessfulImportTaskId"] =
-            record.lastSuccessfulImportTaskId;
-        json["lastAccessUnixMs"] = record.lastAccessUnixMs;
-        if (!record.failureCode.empty()) {
-            json["lastFailure"] = {
-                {"code", record.failureCode},
-                {"message", record.failureMessage},
-                {"log", record.failureLogPath},
-                {"unixMs", record.lastFailureUnixMs}};
-        }
-        return json;
-    };
-    try {
-        if (command->method == "system.ping") {
-            result = {{"message", "pong"}};
-        } else if (command->method == "system.info") {
-            ControlJson capabilities = {
-                "async_scene_load", "load_status", "load_cancel",
-                "asset_catalog"};
-            if (assetImportManager_) {
-                capabilities.push_back("asset_import");
-                capabilities.push_back("asset_cancel");
-            }
-            result = {
-                {"application", "VulkanLab"},
-                {"protocolVersion", control::kProtocolVersion},
-                {"capabilities", std::move(capabilities)},
-                {"pipe", control::kPipeNameUtf8},
-                {"scene", currentScene_ && currentSceneIndex_ >= 0
-                              ? ControlJson(sceneRegistry_[currentSceneIndex_]
-                                                .name)
-                              : ControlJson(nullptr)},
-                {"sceneId", currentScene_ && currentSceneIndex_ >= 0
-                                ? ControlJson(sceneRegistry_[currentSceneIndex_]
-                                                  .id)
-                                : ControlJson(nullptr)},
-                {"projectId", catalog_.projectId},
-                {"projectRoot", projectContext_.projectRoot.string()},
-                {"runtimeRoot", projectContext_.runtimeRoot.string()},
-                {"assetMode", assetImportModeName(config_.assetImportMode)},
-                {"cookedPackage", projectContext_.cookedPackage},
-                {"cacheRoot", sceneLoadContext_.derivedTextureCachePath},
-                {"captureRoot", projectContext_.captureRoot.string()},
-                {"textureLimit", sceneLoadContext_.maxTextureSize},
-                {"shader", shaderVariants_.empty()
-                               ? ControlJson(nullptr)
-                               : ControlJson(currentShaderVariant().displayName)},
-                {"loadTask", sceneLoadTaskToJson(latestSceneLoadTask_)}};
-        } else if (command->method == "scene.list") {
-            ControlJson scenes = ControlJson::array();
-            ControlJson entries = ControlJson::array();
-            for (const auto &entry : sceneRegistry_)
-                scenes.push_back(entry.name);
-            for (const auto &entry : sceneRegistry_) {
-                entries.push_back({{"id", entry.id},
-                                   {"name", entry.name},
-                                   {"profileId", entry.profileId},
-                                   {"available", entry.available},
-                                   {"source", entry.sourcePath}});
-            }
-            result = {{"scenes", std::move(scenes)},
-                      {"entries", std::move(entries)}};
-        } else if (command->method == "scene.current") {
-            result = {{"name", currentScene_ && currentSceneIndex_ >= 0
-                                   ? ControlJson(sceneRegistry_[currentSceneIndex_]
-                                                     .name)
-                                   : ControlJson(nullptr)},
-                      {"id", currentScene_ && currentSceneIndex_ >= 0
-                                 ? ControlJson(sceneRegistry_[currentSceneIndex_]
-                                                   .id)
-                                 : ControlJson(nullptr)}};
-        } else if (command->method == "scene.load") {
-            const std::string name = requiredStringParam(*command, "name");
-            const int index = findSceneIndexByName(name);
-            if (index < 0) {
-                ControlJson candidates = ControlJson::array();
-                for (const auto &entry : sceneRegistry_)
-                    candidates.push_back(entry.name);
-                throw RuntimeCommandError(
-                    "scene_not_found",
-                    "Unknown scene '" + name + "'. Available scenes: " +
-                        candidates.dump());
-            }
-            pendingSceneIndex_ = -1;
-            const uint64_t taskId = requestSceneOperation(index);
-            if ((taskId & AssetImportManager::kTaskIdMask) != 0) {
-                result = loadOperationToJson(
-                    assetImportManager_->task(taskId), nullptr);
-            } else if (taskId != 0) {
-                result = sceneLoadTaskToJson(latestSceneLoadTask_);
-            } else {
-                result = {{"scene", sceneRegistry_[index].name},
-                          {"completed", true}};
-            }
-            if (taskId == 0 && lastSceneLoadStats_)
-                result["loadStats"] =
-                    sceneLoadStatsToJson(*lastSceneLoadStats_);
-        } else if (command->method == "scene.reload") {
-            if (currentSceneIndex_ < 0)
-                throw RuntimeCommandError("no_current_scene",
-                                          "No scene is currently loaded.");
-            const int index = currentSceneIndex_;
-            const uint64_t taskId = requestSceneOperation(index);
-            if ((taskId & AssetImportManager::kTaskIdMask) != 0) {
-                result = loadOperationToJson(
-                    assetImportManager_->task(taskId), nullptr);
-            } else if (taskId != 0) {
-                result = sceneLoadTaskToJson(latestSceneLoadTask_);
-            } else {
-                result = {{"scene", sceneRegistry_[index].name},
-                          {"completed", true}};
-            }
-            if (taskId == 0 && lastSceneLoadStats_)
-                result["loadStats"] =
-                    sceneLoadStatsToJson(*lastSceneLoadStats_);
-        } else if (command->method == "load.status") {
-            uint64_t requestedTaskId = 0;
-            if (command->params.contains("taskId")) {
-                if (!command->params["taskId"].is_number_unsigned()) {
-                    throw RuntimeCommandError(
-                        "invalid_params",
-                        "Parameter 'taskId' must be an unsigned integer.");
-                }
-                requestedTaskId = command->params["taskId"].get<uint64_t>();
-            }
-            if (requestedTaskId == 0) {
-                const auto activeImport =
-                    assetImportManager_
-                        ? assetImportManager_->activeTask()
-                        : std::shared_ptr<AssetImportTask>{};
-                requestedTaskId = activeImport
-                                      ? activeImport->id
-                                      : (latestSceneLoadTask_
-                                             ? latestSceneLoadTask_->id
-                                             : 0);
-            }
-            if ((requestedTaskId & AssetImportManager::kTaskIdMask) != 0) {
-                if (!assetImportManager_)
-                    throw RuntimeCommandError(
-                        "load_not_found", "Load task was not found.");
-                const auto importTask =
-                    assetImportManager_->task(requestedTaskId);
-                if (!importTask)
-                    throw RuntimeCommandError("load_not_found",
-                                              "Load task was not found.");
-                std::shared_ptr<SceneLoadTask> loadTask;
-                const auto linked =
-                    sceneAssetOperations_->importToLoadTask.find(
-                        requestedTaskId);
-                if (linked != sceneAssetOperations_->importToLoadTask.end() &&
-                    linked->second != 0)
-                    loadTask = sceneLoadManager_->task(linked->second);
-                result = loadOperationToJson(importTask, loadTask);
-            } else {
-                std::shared_ptr<SceneLoadTask> task =
-                    sceneLoadManager_->task(requestedTaskId);
-                if (!task)
-                    throw RuntimeCommandError("load_not_found",
-                                              "Load task was not found.");
-                const bool superseded =
-                    !latestSceneLoadTask_ ||
-                    latestSceneLoadTask_->id != task->id;
-                result = sceneLoadTaskToJson(task, superseded);
-            }
-        } else if (command->method == "load.cancel") {
-            const auto activeImport =
-                assetImportManager_
-                    ? assetImportManager_->activeTask()
-                    : std::shared_ptr<AssetImportTask>{};
-            uint64_t taskId = activeImport
-                                  ? activeImport->id
-                                  : (latestSceneLoadTask_
-                                         ? latestSceneLoadTask_->id
-                                         : 0);
-            if (command->params.contains("taskId")) {
-                if (!command->params["taskId"].is_number_unsigned()) {
-                    throw RuntimeCommandError(
-                        "invalid_params",
-                        "Parameter 'taskId' must be an unsigned integer.");
-                }
-                taskId = command->params["taskId"].get<uint64_t>();
-            }
-            if (taskId == 0 || !cancelLoadOperation(taskId)) {
-                throw RuntimeCommandError("load_not_cancellable",
-                                          "Load task cannot be cancelled.");
-            }
-            result = {{"taskId", taskId}, {"cancelRequested", true}};
-        } else if (command->method == "texture_limit.get") {
-            result = {{"value", sceneLoadContext_.maxTextureSize}};
-        } else if (command->method == "texture_limit.set") {
-            if (!command->params.contains("value") ||
-                !command->params["value"].is_number_unsigned()) {
-                throw RuntimeCommandError(
-                    "invalid_params",
-                    "Parameter 'value' must be an unsigned integer.");
-            }
-            const uint64_t taskId =
-                setTextureLimit(command->params["value"].get<uint32_t>());
-            result = {{"value", sceneLoadContext_.maxTextureSize}};
-            if ((taskId & AssetImportManager::kTaskIdMask) != 0) {
-                result["loadTask"] = loadOperationToJson(
-                    assetImportManager_->task(taskId), nullptr);
-                result["taskId"] = taskId;
-            } else if (latestSceneLoadTask_ &&
-                !isTerminalSceneLoadState(
-                    latestSceneLoadTask_->state.load())) {
-                result["loadTask"] =
-                    sceneLoadTaskToJson(latestSceneLoadTask_);
-            } else if (lastSceneLoadStats_) {
-                result["loadStats"] =
-                    sceneLoadStatsToJson(*lastSceneLoadStats_);
-            }
-        } else if (command->method == "asset.catalog") {
-            refreshAllArtifactStatuses();
-            ControlJson entries = ControlJson::array();
-            for (const auto &entry : sceneRegistry_) {
-                const std::string profileId = profileIdForTextureLimit(entry);
-                const auto found = sceneAssetOperations_->statuses.find(
-                    artifactStatusKey(entry.id, profileId));
-                if (found != sceneAssetOperations_->statuses.end())
-                    entries.push_back(indexedArtifactStatus(
-                        entry, profileId, found->second));
-            }
-            result = {{"projectId", catalog_.projectId},
-                      {"catalog", projectContext_.catalogPath.string()},
-                      {"mode", assetImportModeName(config_.assetImportMode)},
-                      {"entries", std::move(entries)}};
-        } else if (command->method == "asset.status") {
-            int index = sceneAssetOperations_->selectedSceneIndex;
-            if (command->params.contains("name")) {
-                const std::string name = requiredStringParam(*command, "name");
-                index = findSceneIndexByName(name);
-                if (index < 0) {
-                    for (int i = 0; i < static_cast<int>(sceneRegistry_.size());
-                         ++i) {
-                        if (asciiEqualsIgnoreCase(sceneRegistry_[i].id, name)) {
-                            index = i;
-                            break;
-                        }
-                    }
-                }
-            }
-            if (index < 0 || index >= static_cast<int>(sceneRegistry_.size()))
-                throw RuntimeCommandError("scene_not_found",
-                                          "Asset scene was not found.");
-            refreshArtifactStatus(index);
-            const auto &entry = sceneRegistry_[index];
-            const std::string profileId = profileIdForTextureLimit(entry);
-            result = indexedArtifactStatus(
-                entry, profileId,
-                sceneAssetOperations_->statuses.at(
-                    artifactStatusKey(entry.id, profileId)));
-        } else if (command->method == "asset.import") {
-            if (config_.assetImportMode != AssetImportMode::OnDemand)
-                throw RuntimeCommandError(
-                    "asset_import_disabled",
-                    "Asset import is only available in OnDemand mode.");
-            const std::string name = requiredStringParam(*command, "name");
-            int index = findSceneIndexByName(name);
-            if (index < 0) {
-                for (int i = 0; i < static_cast<int>(sceneRegistry_.size());
-                     ++i) {
-                    if (asciiEqualsIgnoreCase(sceneRegistry_[i].id, name)) {
-                        index = i;
-                        break;
-                    }
-                }
-            }
-            if (index < 0)
-                throw RuntimeCommandError("scene_not_found",
-                                          "Asset scene was not found.");
-            const bool force = command->params.value("force", false);
-            const bool loadAfter = command->params.value("loadAfter", false);
-            const uint64_t taskId = requestSceneOperation(
-                index, false, loadAfter, ImportReason::ManualReimport, force);
-            if (taskId == 0) {
-                refreshArtifactStatus(index);
-                const auto &entry = sceneRegistry_[index];
-                const std::string profileId = profileIdForTextureLimit(entry);
-                result = indexedArtifactStatus(
-                    entry, profileId,
-                    sceneAssetOperations_->statuses.at(
-                        artifactStatusKey(entry.id, profileId)));
-                result["terminal"] = true;
-            } else {
-                result = loadOperationToJson(
-                    assetImportManager_->task(taskId), nullptr);
-            }
-        } else if (command->method == "asset.cancel") {
-            uint64_t taskId = 0;
-            if (command->params.contains("taskId") &&
-                command->params["taskId"].is_number_unsigned())
-                taskId = command->params["taskId"].get<uint64_t>();
-            else if (assetImportManager_) {
-                if (const auto active = assetImportManager_->activeTask())
-                    taskId = active->id;
-            }
-            if (taskId == 0 ||
-                (taskId & AssetImportManager::kTaskIdMask) == 0 ||
-                !assetImportManager_ ||
-                !assetImportManager_->cancel(taskId)) {
-                throw RuntimeCommandError("asset_not_cancellable",
-                                          "Asset import cannot be cancelled.");
-            }
-            result = {{"taskId", taskId}, {"cancelRequested", true}};
-        } else if (command->method == "asset.cache_info") {
-            const std::filesystem::path root =
-                sceneLoadContext_.derivedTextureCachePath;
-            if (artifactIndex_)
-                artifactUsage_ = artifactIndex_->usage();
-            const ArtifactIndexUsage usage = artifactUsage_.value_or(
-                ArtifactIndexUsage{});
-            result = {{"root", root.string()},
-                      {"index",
-                       artifactIndex_ ? artifactIndex_->path().string() : ""},
-                      {"indexSchema", ArtifactIndex::kSchemaVersion},
-                      {"records", usage.records},
-                      {"readyRecords", usage.readyRecords},
-                      {"referencedBlobs", usage.referencedBlobs},
-                      {"referencedBlobBytes", usage.referencedBlobBytes},
-                      {"blobFiles", usage.cacheBlobFiles},
-                      {"blobBytes", usage.cacheBlobBytes},
-                      {"files", usage.cacheBlobFiles},
-                      {"bytes", usage.cacheBlobBytes},
-                      {"unreferencedBlobFiles",
-                       usage.unreferencedBlobFiles},
-                      {"unreferencedBlobBytes",
-                       usage.unreferencedBlobBytes},
-                      {"mode", assetImportModeName(config_.assetImportMode)}};
-        } else if (command->method == "shader.list") {
-            ControlJson shaders = ControlJson::array();
-            for (const auto &variant : shaderVariants_)
-                shaders.push_back(variant.displayName);
-            result = {{"shaders", std::move(shaders)}};
-        } else if (command->method == "shader.current") {
-            result = {{"name", shaderVariants_.empty()
-                                   ? ControlJson(nullptr)
-                                   : ControlJson(currentShaderVariant()
-                                                     .displayName)}};
-        } else if (command->method == "shader.set") {
-            const std::string name = requiredStringParam(*command, "name");
-            const int index = findShaderVariantIndexByName(name);
-            if (index < 0) {
-                ControlJson candidates = ControlJson::array();
-                for (const auto &variant : shaderVariants_)
-                    candidates.push_back(variant.displayName);
-                throw RuntimeCommandError(
-                    "shader_not_found",
-                    "Unknown shader '" + name + "'. Available shaders: " +
-                        candidates.dump());
-            }
-            setShaderVariant(index);
-            result = {{"shader", shaderVariants_[index].displayName}};
-        } else if (command->method == "stats.last_load") {
-            if (!lastSceneLoadStats_)
-                throw RuntimeCommandError("no_load_stats",
-                                          "No scene load statistics exist.");
-            result = sceneLoadStatsToJson(*lastSceneLoadStats_);
-        } else if (command->method == "app.quit") {
-            result = {{"quitting", true}};
-            requestQuit = true;
-        } else {
-            throw RuntimeCommandError("method_not_found",
-                                      "Unknown method '" + command->method +
-                                          "'.");
-        }
+    RuntimeDispatchResult dispatched =
+        runtimeCommandDispatcher_.dispatch(*command, *this);
+    command->response.set_value(std::move(dispatched.response));
+    if (dispatched.requestQuit)
+        pendingQuitCommand_ = std::move(command);
+}
 
-        command->response.set_value(
-            makeRuntimeSuccess(command->id, std::move(result)));
-        if (requestQuit)
-            pendingQuitCommand_ = command;
-    } catch (const RuntimeCommandError &e) {
-        VKR_LOG_WARN("Control", "Command {} failed: {}", command->method,
-                     e.what());
-        command->response.set_value(
-            makeRuntimeError(command->id, e.code(), e.what()));
-    } catch (const std::exception &e) {
-        VKR_LOG_ERROR("Control", "Command {} failed: {}", command->method,
-                      e.what());
-        command->response.set_value(
-            makeRuntimeError(command->id, "command_failed", e.what()));
+ControlJson Application::runtimeSystemInfo() {
+    ControlJson capabilities = {"async_scene_load", "load_status",
+                                "load_cancel", "asset_catalog"};
+    if (assetImportManager_) {
+        capabilities.push_back("asset_import");
+        capabilities.push_back("asset_cancel");
     }
+    return {
+        {"application", "VulkanLab"},
+        {"protocolVersion", control::kProtocolVersion},
+        {"capabilities", std::move(capabilities)},
+        {"pipe", control::kPipeNameUtf8},
+        {"scene", currentScene_ && currentSceneIndex_ >= 0
+                      ? ControlJson(sceneRegistry_[currentSceneIndex_].name)
+                      : ControlJson(nullptr)},
+        {"sceneId", currentScene_ && currentSceneIndex_ >= 0
+                        ? ControlJson(sceneRegistry_[currentSceneIndex_].id)
+                        : ControlJson(nullptr)},
+        {"projectId", catalog_.projectId},
+        {"projectRoot", projectContext_.projectRoot.string()},
+        {"runtimeRoot", projectContext_.runtimeRoot.string()},
+        {"assetMode", assetImportModeName(config_.assetImportMode)},
+        {"cookedPackage", projectContext_.cookedPackage},
+        {"cacheRoot", sceneLoadContext_.derivedTextureCachePath},
+        {"captureRoot", projectContext_.captureRoot.string()},
+        {"textureLimit", sceneLoadContext_.maxTextureSize},
+        {"shader", shaderVariants_.empty()
+                       ? ControlJson(nullptr)
+                       : ControlJson(currentShaderVariant().displayName)},
+        {"loadTask", sceneLoadTaskToJson(latestSceneLoadTask_)}};
+}
+
+ControlJson Application::runtimeSceneList() {
+    ControlJson scenes = ControlJson::array();
+    ControlJson entries = ControlJson::array();
+    for (const auto &entry : sceneRegistry_)
+        scenes.push_back(entry.name);
+    for (const auto &entry : sceneRegistry_) {
+        entries.push_back({{"id", entry.id},
+                           {"name", entry.name},
+                           {"profileId", entry.profileId},
+                           {"available", entry.available},
+                           {"source", entry.sourcePath}});
+    }
+    return {{"scenes", std::move(scenes)},
+            {"entries", std::move(entries)}};
+}
+
+ControlJson Application::runtimeSceneCurrent() {
+    return {{"name", currentScene_ && currentSceneIndex_ >= 0
+                         ? ControlJson(sceneRegistry_[currentSceneIndex_].name)
+                         : ControlJson(nullptr)},
+            {"id", currentScene_ && currentSceneIndex_ >= 0
+                       ? ControlJson(sceneRegistry_[currentSceneIndex_].id)
+                       : ControlJson(nullptr)}};
+}
+
+ControlJson Application::runtimeSceneOperationResult(int index,
+                                                     uint64_t taskId) {
+    ControlJson result;
+    if ((taskId & AssetImportManager::kTaskIdMask) != 0) {
+        result =
+            loadOperationToJson(assetImportManager_->task(taskId), nullptr);
+    } else if (taskId != 0) {
+        result = sceneLoadTaskToJson(latestSceneLoadTask_);
+    } else {
+        result = {{"scene", sceneRegistry_[index].name}, {"completed", true}};
+    }
+    if (taskId == 0 && lastSceneLoadStats_)
+        result["loadStats"] = sceneLoadStatsToJson(*lastSceneLoadStats_);
+    return result;
+}
+
+ControlJson Application::runtimeSceneLoad(const std::string &name) {
+    const int index = findSceneIndexByName(name);
+    if (index < 0) {
+        ControlJson candidates = ControlJson::array();
+        for (const auto &entry : sceneRegistry_)
+            candidates.push_back(entry.name);
+        throw RuntimeCommandError(
+            "scene_not_found",
+            "Unknown scene '" + name + "'. Available scenes: " +
+                candidates.dump());
+    }
+    pendingSceneIndex_ = -1;
+    return runtimeSceneOperationResult(index, requestSceneOperation(index));
+}
+
+ControlJson Application::runtimeSceneReload() {
+    if (currentSceneIndex_ < 0)
+        throw RuntimeCommandError("no_current_scene",
+                                  "No scene is currently loaded.");
+    const int index = currentSceneIndex_;
+    return runtimeSceneOperationResult(index, requestSceneOperation(index));
+}
+
+ControlJson
+Application::runtimeLoadStatus(std::optional<uint64_t> requestedTaskId) {
+    uint64_t taskId = requestedTaskId.value_or(0);
+    if (taskId == 0) {
+        const auto activeImport =
+            assetImportManager_ ? assetImportManager_->activeTask()
+                                : std::shared_ptr<AssetImportTask>{};
+        taskId = activeImport ? activeImport->id
+                              : (latestSceneLoadTask_ ? latestSceneLoadTask_->id
+                                                      : 0);
+    }
+    if ((taskId & AssetImportManager::kTaskIdMask) != 0) {
+        if (!assetImportManager_)
+            throw RuntimeCommandError("load_not_found",
+                                      "Load task was not found.");
+        const auto importTask = assetImportManager_->task(taskId);
+        if (!importTask)
+            throw RuntimeCommandError("load_not_found",
+                                      "Load task was not found.");
+        std::shared_ptr<SceneLoadTask> loadTask;
+        const auto linked =
+            sceneAssetOperations_->importToLoadTask.find(taskId);
+        if (linked != sceneAssetOperations_->importToLoadTask.end() &&
+            linked->second != 0)
+            loadTask = sceneLoadManager_->task(linked->second);
+        return loadOperationToJson(importTask, loadTask);
+    }
+
+    std::shared_ptr<SceneLoadTask> task = sceneLoadManager_->task(taskId);
+    if (!task)
+        throw RuntimeCommandError("load_not_found",
+                                  "Load task was not found.");
+    const bool superseded =
+        !latestSceneLoadTask_ || latestSceneLoadTask_->id != task->id;
+    return sceneLoadTaskToJson(task, superseded);
+}
+
+ControlJson
+Application::runtimeLoadCancel(std::optional<uint64_t> requestedTaskId) {
+    const auto activeImport =
+        assetImportManager_ ? assetImportManager_->activeTask()
+                            : std::shared_ptr<AssetImportTask>{};
+    const uint64_t taskId = requestedTaskId.value_or(
+        activeImport ? activeImport->id
+                     : (latestSceneLoadTask_ ? latestSceneLoadTask_->id : 0));
+    if (taskId == 0 || !cancelLoadOperation(taskId))
+        throw RuntimeCommandError("load_not_cancellable",
+                                  "Load task cannot be cancelled.");
+    return {{"taskId", taskId}, {"cancelRequested", true}};
+}
+
+ControlJson Application::runtimeTextureLimitGet() {
+    return {{"value", sceneLoadContext_.maxTextureSize}};
+}
+
+ControlJson Application::runtimeTextureLimitSet(uint32_t value) {
+    const uint64_t taskId = setTextureLimit(value);
+    ControlJson result = {{"value", sceneLoadContext_.maxTextureSize}};
+    if ((taskId & AssetImportManager::kTaskIdMask) != 0) {
+        result["loadTask"] =
+            loadOperationToJson(assetImportManager_->task(taskId), nullptr);
+        result["taskId"] = taskId;
+    } else if (latestSceneLoadTask_ &&
+               !isTerminalSceneLoadState(latestSceneLoadTask_->state.load())) {
+        result["loadTask"] = sceneLoadTaskToJson(latestSceneLoadTask_);
+    } else if (lastSceneLoadStats_) {
+        result["loadStats"] = sceneLoadStatsToJson(*lastSceneLoadStats_);
+    }
+    return result;
+}
+
+ControlJson Application::runtimeIndexedArtifactStatus(
+    int index, const std::string &profileId,
+    const ArtifactStatus &status) const {
+    const SceneEntry &entry = sceneRegistry_[index];
+    ControlJson json = artifactStatusToJson(entry, profileId, status);
+    if (!artifactIndex_)
+        return json;
+    const auto found = artifactIndex_->records().find(
+        artifactIndexKey(entry.id, profileId));
+    if (found == artifactIndex_->records().end())
+        return json;
+    const ArtifactIndexRecord &record = found->second;
+    json["lastSuccessfulImportUnixMs"] = record.lastSuccessfulImportUnixMs;
+    json["lastSuccessfulImportTaskId"] = record.lastSuccessfulImportTaskId;
+    json["lastAccessUnixMs"] = record.lastAccessUnixMs;
+    if (!record.failureCode.empty()) {
+        json["lastFailure"] = {{"code", record.failureCode},
+                               {"message", record.failureMessage},
+                               {"log", record.failureLogPath},
+                               {"unixMs", record.lastFailureUnixMs}};
+    }
+    return json;
+}
+
+int Application::runtimeAssetSceneIndex(const std::string &name) const {
+    int index = findSceneIndexByName(name);
+    if (index >= 0)
+        return index;
+    for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
+        if (asciiEqualsIgnoreCase(sceneRegistry_[i].id, name))
+            return i;
+    }
+    return -1;
+}
+
+ControlJson Application::runtimeAssetCatalog() {
+    refreshAllArtifactStatuses();
+    ControlJson entries = ControlJson::array();
+    for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
+        const SceneEntry &entry = sceneRegistry_[i];
+        const std::string profileId = profileIdForTextureLimit(entry);
+        const auto found = sceneAssetOperations_->statuses.find(
+            artifactStatusKey(entry.id, profileId));
+        if (found != sceneAssetOperations_->statuses.end()) {
+            entries.push_back(
+                runtimeIndexedArtifactStatus(i, profileId, found->second));
+        }
+    }
+    return {{"projectId", catalog_.projectId},
+            {"catalog", projectContext_.catalogPath.string()},
+            {"mode", assetImportModeName(config_.assetImportMode)},
+            {"entries", std::move(entries)}};
+}
+
+ControlJson Application::runtimeAssetStatus(
+    const std::optional<std::string> &name) {
+    const int index = name ? runtimeAssetSceneIndex(*name)
+                           : sceneAssetOperations_->selectedSceneIndex;
+    if (index < 0 || index >= static_cast<int>(sceneRegistry_.size()))
+        throw RuntimeCommandError("scene_not_found",
+                                  "Asset scene was not found.");
+    refreshArtifactStatus(index);
+    const SceneEntry &entry = sceneRegistry_[index];
+    const std::string profileId = profileIdForTextureLimit(entry);
+    return runtimeIndexedArtifactStatus(
+        index, profileId,
+        sceneAssetOperations_->statuses.at(
+            artifactStatusKey(entry.id, profileId)));
+}
+
+ControlJson Application::runtimeAssetImport(const std::string &name,
+                                            bool force, bool loadAfter) {
+    if (config_.assetImportMode != AssetImportMode::OnDemand)
+        throw RuntimeCommandError(
+            "asset_import_disabled",
+            "Asset import is only available in OnDemand mode.");
+    const int index = runtimeAssetSceneIndex(name);
+    if (index < 0)
+        throw RuntimeCommandError("scene_not_found",
+                                  "Asset scene was not found.");
+    const uint64_t taskId = requestSceneOperation(
+        index, false, loadAfter, ImportReason::ManualReimport, force);
+    if (taskId != 0)
+        return loadOperationToJson(assetImportManager_->task(taskId), nullptr);
+
+    refreshArtifactStatus(index);
+    const SceneEntry &entry = sceneRegistry_[index];
+    const std::string profileId = profileIdForTextureLimit(entry);
+    ControlJson result = runtimeIndexedArtifactStatus(
+        index, profileId,
+        sceneAssetOperations_->statuses.at(
+            artifactStatusKey(entry.id, profileId)));
+    result["terminal"] = true;
+    return result;
+}
+
+ControlJson
+Application::runtimeAssetCancel(std::optional<uint64_t> requestedTaskId) {
+    uint64_t taskId = requestedTaskId.value_or(0);
+    if (taskId == 0 && assetImportManager_) {
+        if (const auto active = assetImportManager_->activeTask())
+            taskId = active->id;
+    }
+    if (taskId == 0 ||
+        (taskId & AssetImportManager::kTaskIdMask) == 0 ||
+        !assetImportManager_ || !assetImportManager_->cancel(taskId)) {
+        throw RuntimeCommandError("asset_not_cancellable",
+                                  "Asset import cannot be cancelled.");
+    }
+    return {{"taskId", taskId}, {"cancelRequested", true}};
+}
+
+ControlJson Application::runtimeAssetCacheInfo() {
+    const std::filesystem::path root =
+        sceneLoadContext_.derivedTextureCachePath;
+    if (artifactIndex_)
+        artifactUsage_ = artifactIndex_->usage();
+    const ArtifactIndexUsage usage =
+        artifactUsage_.value_or(ArtifactIndexUsage{});
+    return {{"root", root.string()},
+            {"index", artifactIndex_ ? artifactIndex_->path().string() : ""},
+            {"indexSchema", ArtifactIndex::kSchemaVersion},
+            {"records", usage.records},
+            {"readyRecords", usage.readyRecords},
+            {"referencedBlobs", usage.referencedBlobs},
+            {"referencedBlobBytes", usage.referencedBlobBytes},
+            {"blobFiles", usage.cacheBlobFiles},
+            {"blobBytes", usage.cacheBlobBytes},
+            {"files", usage.cacheBlobFiles},
+            {"bytes", usage.cacheBlobBytes},
+            {"unreferencedBlobFiles", usage.unreferencedBlobFiles},
+            {"unreferencedBlobBytes", usage.unreferencedBlobBytes},
+            {"mode", assetImportModeName(config_.assetImportMode)}};
+}
+
+ControlJson Application::runtimeShaderList() {
+    ControlJson shaders = ControlJson::array();
+    for (const auto &variant : shaderVariants_)
+        shaders.push_back(variant.displayName);
+    return {{"shaders", std::move(shaders)}};
+}
+
+ControlJson Application::runtimeShaderCurrent() {
+    return {{"name", shaderVariants_.empty()
+                         ? ControlJson(nullptr)
+                         : ControlJson(currentShaderVariant().displayName)}};
+}
+
+ControlJson Application::runtimeShaderSet(const std::string &name) {
+    const int index = findShaderVariantIndexByName(name);
+    if (index < 0) {
+        ControlJson candidates = ControlJson::array();
+        for (const auto &variant : shaderVariants_)
+            candidates.push_back(variant.displayName);
+        throw RuntimeCommandError(
+            "shader_not_found",
+            "Unknown shader '" + name + "'. Available shaders: " +
+                candidates.dump());
+    }
+    setShaderVariant(index);
+    return {{"shader", shaderVariants_[index].displayName}};
+}
+
+ControlJson Application::runtimeLastLoadStats() {
+    if (!lastSceneLoadStats_)
+        throw RuntimeCommandError("no_load_stats",
+                                  "No scene load statistics exist.");
+    return sceneLoadStatsToJson(*lastSceneLoadStats_);
+}
+
+ControlJson Application::runtimeQuit() {
+    return {{"quitting", true}};
 }
 
 void Application::applySceneCameraDefaults() {

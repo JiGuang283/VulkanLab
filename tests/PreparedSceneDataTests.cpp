@@ -20,6 +20,7 @@ void runRuntimePackageTests();
 void runAssetImportManagerTests();
 void runAssetLoadCoordinatorTests();
 void runSceneCatalogEditorTests();
+void runRuntimeCommandDispatcherTests();
 
 namespace {
 
@@ -138,6 +139,7 @@ int main() {
         runAssetImportManagerTests();
         runAssetLoadCoordinatorTests();
         runSceneCatalogEditorTests();
+        runRuntimeCommandDispatcherTests();
         std::cout << "VulkanLab CPU tests passed\n";
         return 0;
     } catch (const std::exception &error) {

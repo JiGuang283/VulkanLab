@@ -6,6 +6,7 @@
 #include "assets/ArtifactIndex.h"
 #include "assets/ProjectContext.h"
 #include "assets/SceneCatalog.h"
+#include "control/RuntimeCommandDispatcher.h"
 #include "diagnostics/SceneLoadStats.h"
 #include "render/RenderQueue.h"
 #include "render/ShaderVariant.h"
@@ -46,7 +47,7 @@ enum class InputMode {
     CameraDrag, // 按住右键，相机接管鼠标
 };
 
-class Application {
+class Application final : public RuntimeControlHost {
   public:
     Application(const Config &config, ProjectContext projectContext,
                 SceneCatalog catalog);
@@ -101,6 +102,34 @@ class Application {
     void refreshArtifactStatus(int sceneIndex, bool admission = false);
     void refreshAllArtifactStatuses();
 
+    ControlJson runtimeSystemInfo() override;
+    ControlJson runtimeSceneList() override;
+    ControlJson runtimeSceneCurrent() override;
+    ControlJson runtimeSceneLoad(const std::string &name) override;
+    ControlJson runtimeSceneReload() override;
+    ControlJson runtimeLoadStatus(std::optional<uint64_t> taskId) override;
+    ControlJson runtimeLoadCancel(std::optional<uint64_t> taskId) override;
+    ControlJson runtimeTextureLimitGet() override;
+    ControlJson runtimeTextureLimitSet(uint32_t value) override;
+    ControlJson runtimeAssetCatalog() override;
+    ControlJson
+    runtimeAssetStatus(const std::optional<std::string> &name) override;
+    ControlJson runtimeAssetImport(const std::string &name, bool force,
+                                   bool loadAfter) override;
+    ControlJson runtimeAssetCancel(std::optional<uint64_t> taskId) override;
+    ControlJson runtimeAssetCacheInfo() override;
+    ControlJson runtimeShaderList() override;
+    ControlJson runtimeShaderCurrent() override;
+    ControlJson runtimeShaderSet(const std::string &name) override;
+    ControlJson runtimeLastLoadStats() override;
+    ControlJson runtimeQuit() override;
+
+    ControlJson runtimeSceneOperationResult(int index, uint64_t taskId);
+    int runtimeAssetSceneIndex(const std::string &name) const;
+    ControlJson runtimeIndexedArtifactStatus(int index,
+                                             const std::string &profileId,
+                                             const ArtifactStatus &status) const;
+
     Config config_;
     ProjectContext projectContext_;
     SceneCatalog catalog_;
@@ -138,6 +167,7 @@ class Application {
 
     std::unique_ptr<RuntimeCommandQueue> runtimeCommandQueue_;
     std::unique_ptr<NamedPipeServerWin32> runtimeControlServer_;
+    RuntimeCommandDispatcher runtimeCommandDispatcher_;
     std::shared_ptr<RuntimeCommand> pendingQuitCommand_;
     std::unique_ptr<SceneImportUiState> sceneImportUi_;
 

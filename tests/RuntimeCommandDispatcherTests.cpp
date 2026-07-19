@@ -1,0 +1,228 @@
+#include "control/RuntimeCommandDispatcher.h"
+
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace {
+
+void requireDispatcher(bool condition, const char *message) {
+    if (!condition)
+        throw std::runtime_error(message);
+}
+
+class FakeRuntimeHost final : public vkr::RuntimeControlHost {
+  public:
+    vkr::ControlJson reply(std::string action,
+                           vkr::ControlJson arguments =
+                               vkr::ControlJson::object()) {
+        lastAction = action;
+        return {{"action", std::move(action)},
+                {"arguments", std::move(arguments)}};
+    }
+
+    vkr::ControlJson runtimeSystemInfo() override {
+        if (failSystemInfo)
+            throw std::runtime_error("host failure");
+        return reply("system.info");
+    }
+    vkr::ControlJson runtimeSceneList() override {
+        return reply("scene.list");
+    }
+    vkr::ControlJson runtimeSceneCurrent() override {
+        return reply("scene.current");
+    }
+    vkr::ControlJson runtimeSceneLoad(const std::string &name) override {
+        return reply("scene.load", {{"name", name}});
+    }
+    vkr::ControlJson runtimeSceneReload() override {
+        return reply("scene.reload");
+    }
+    vkr::ControlJson
+    runtimeLoadStatus(std::optional<uint64_t> taskId) override {
+        return reply("load.status", {{"taskId", taskId
+                                                   ? vkr::ControlJson(*taskId)
+                                                   : vkr::ControlJson(nullptr)}});
+    }
+    vkr::ControlJson
+    runtimeLoadCancel(std::optional<uint64_t> taskId) override {
+        return reply("load.cancel", {{"taskId", taskId
+                                                   ? vkr::ControlJson(*taskId)
+                                                   : vkr::ControlJson(nullptr)}});
+    }
+    vkr::ControlJson runtimeTextureLimitGet() override {
+        return reply("texture_limit.get");
+    }
+    vkr::ControlJson runtimeTextureLimitSet(uint32_t value) override {
+        return reply("texture_limit.set", {{"value", value}});
+    }
+    vkr::ControlJson runtimeAssetCatalog() override {
+        return reply("asset.catalog");
+    }
+    vkr::ControlJson runtimeAssetStatus(
+        const std::optional<std::string> &name) override {
+        return reply("asset.status", {{"name", name
+                                                   ? vkr::ControlJson(*name)
+                                                   : vkr::ControlJson(nullptr)}});
+    }
+    vkr::ControlJson runtimeAssetImport(const std::string &name, bool force,
+                                        bool loadAfter) override {
+        return reply("asset.import", {{"name", name},
+                                      {"force", force},
+                                      {"loadAfter", loadAfter}});
+    }
+    vkr::ControlJson
+    runtimeAssetCancel(std::optional<uint64_t> taskId) override {
+        return reply("asset.cancel", {{"taskId", taskId
+                                                    ? vkr::ControlJson(*taskId)
+                                                    : vkr::ControlJson(nullptr)}});
+    }
+    vkr::ControlJson runtimeAssetCacheInfo() override {
+        return reply("asset.cache_info");
+    }
+    vkr::ControlJson runtimeShaderList() override {
+        return reply("shader.list");
+    }
+    vkr::ControlJson runtimeShaderCurrent() override {
+        return reply("shader.current");
+    }
+    vkr::ControlJson runtimeShaderSet(const std::string &name) override {
+        if (name == "host-error")
+            throw vkr::RuntimeCommandError("shader_not_found",
+                                           "host rejected shader");
+        return reply("shader.set", {{"name", name}});
+    }
+    vkr::ControlJson runtimeLastLoadStats() override {
+        return reply("stats.last_load");
+    }
+    vkr::ControlJson runtimeQuit() override { return reply("app.quit"); }
+
+    std::string lastAction;
+    bool failSystemInfo = false;
+};
+
+struct DispatchCase {
+    std::string method;
+    vkr::ControlJson params;
+    vkr::ControlJson expectedResult;
+    bool requestQuit = false;
+};
+
+void testAllV2Methods() {
+    const auto result = [](const char *action,
+                           vkr::ControlJson arguments =
+                               vkr::ControlJson::object()) {
+        return vkr::ControlJson{{"action", action},
+                                {"arguments", std::move(arguments)}};
+    };
+    const std::vector<DispatchCase> cases = {
+        {"system.ping", {}, {{"message", "pong"}}},
+        {"system.info", {}, result("system.info")},
+        {"scene.list", {}, result("scene.list")},
+        {"scene.current", {}, result("scene.current")},
+        {"scene.load", {{"name", "Scene"}},
+         result("scene.load", {{"name", "Scene"}})},
+        {"scene.reload", {}, result("scene.reload")},
+        {"load.status", {},
+         result("load.status", {{"taskId", nullptr}})},
+        {"load.status", {{"taskId", uint64_t{42}}},
+         result("load.status", {{"taskId", uint64_t{42}}})},
+        {"load.cancel", {},
+         result("load.cancel", {{"taskId", nullptr}})},
+        {"texture_limit.get", {}, result("texture_limit.get")},
+        {"texture_limit.set", {{"value", uint64_t{1024}}},
+         result("texture_limit.set", {{"value", 1024}})},
+        {"asset.catalog", {}, result("asset.catalog")},
+        {"asset.status", {},
+         result("asset.status", {{"name", nullptr}})},
+        {"asset.status", {{"name", "scene-id"}},
+         result("asset.status", {{"name", "scene-id"}})},
+        {"asset.import",
+         {{"name", "scene-id"}, {"force", true}, {"loadAfter", true}},
+         result("asset.import", {{"name", "scene-id"},
+                                 {"force", true},
+                                 {"loadAfter", true}})},
+        {"asset.cancel", {{"taskId", uint64_t{99}}},
+         result("asset.cancel", {{"taskId", uint64_t{99}}})},
+        {"asset.cache_info", {}, result("asset.cache_info")},
+        {"shader.list", {}, result("shader.list")},
+        {"shader.current", {}, result("shader.current")},
+        {"shader.set", {{"name", "PBR"}},
+         result("shader.set", {{"name", "PBR"}})},
+        {"stats.last_load", {}, result("stats.last_load")},
+        {"app.quit", {}, result("app.quit"), true},
+    };
+
+    vkr::RuntimeCommandDispatcher dispatcher;
+    FakeRuntimeHost host;
+    uint64_t id = 10;
+    for (const DispatchCase &item : cases) {
+        vkr::RuntimeCommand command;
+        command.id = id++;
+        command.method = item.method;
+        command.params = item.params;
+        const vkr::RuntimeDispatchResult dispatched =
+            dispatcher.dispatch(command, host);
+        requireDispatcher(
+            dispatched.response ==
+                vkr::makeRuntimeSuccess(command.id, item.expectedResult),
+            "runtime command success snapshot changed");
+        requireDispatcher(dispatched.requestQuit == item.requestQuit,
+                          "runtime quit routing changed");
+    }
+}
+
+void requireError(const std::string &method, vkr::ControlJson params,
+                  const std::string &code, const std::string &message) {
+    vkr::RuntimeCommand command;
+    command.id = 77;
+    command.method = method;
+    command.params = std::move(params);
+    FakeRuntimeHost host;
+    const vkr::RuntimeDispatchResult dispatched =
+        vkr::RuntimeCommandDispatcher{}.dispatch(command, host);
+    requireDispatcher(
+        dispatched.response ==
+            vkr::makeRuntimeError(command.id, code, message),
+        "runtime command error snapshot changed");
+    requireDispatcher(!dispatched.requestQuit,
+                      "failed command requested application quit");
+}
+
+void testValidationAndErrorMapping() {
+    requireError("scene.load", {}, "invalid_params",
+                 "Parameter 'name' must be a string.");
+    requireError("load.status", {{"taskId", -1}}, "invalid_params",
+                 "Parameter 'taskId' must be an unsigned integer.");
+    requireError("asset.import",
+                 {{"name", "scene"}, {"force", "yes"}},
+                 "invalid_params", "Parameter 'force' must be a boolean.");
+    requireError("texture_limit.set", {{"value", 4294967296ULL}},
+                 "invalid_params",
+                 "Parameter 'value' must be an unsigned 32-bit integer.");
+    requireError("missing.method", {}, "method_not_found",
+                 "Unknown method 'missing.method'.");
+    requireError("shader.set", {{"name", "host-error"}},
+                 "shader_not_found", "host rejected shader");
+
+    vkr::RuntimeCommand command;
+    command.id = 88;
+    command.method = "system.info";
+    FakeRuntimeHost host;
+    host.failSystemInfo = true;
+    const auto dispatched =
+        vkr::RuntimeCommandDispatcher{}.dispatch(command, host);
+    requireDispatcher(
+        dispatched.response == vkr::makeRuntimeError(
+                                   command.id, "command_failed",
+                                   "host failure"),
+        "unexpected host exception mapping changed");
+}
+
+} // namespace
+
+void runRuntimeCommandDispatcherTests() {
+    testAllV2Methods();
+    testValidationAndErrorMapping();
+}

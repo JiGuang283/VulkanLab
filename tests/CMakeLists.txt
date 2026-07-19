@@ -11,12 +11,14 @@ add_executable(VulkanLabCpuTests
     AssetImportManagerTests.cpp
     AssetLoadCoordinatorTests.cpp
     SceneCatalogEditorTests.cpp
+    RuntimeCommandDispatcherTests.cpp
 )
 target_link_libraries(VulkanLabCpuTests PRIVATE
     vkl_build_options
     vkl_asset_core
     vkl_asset_runtime
     vkl_asset_tool_core
+    vkl_control
     vkl_engine
 )
 add_test(NAME VulkanLabCpuTests COMMAND VulkanLabCpuTests)
