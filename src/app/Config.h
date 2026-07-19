@@ -5,6 +5,8 @@
 
 namespace vkr {
 
+enum class AssetImportMode { OnDemand, ReadOnly, CookedOnly };
+
 struct Config {
     // ---- 窗口 ----
     uint32_t    windowWidth = 800;
@@ -17,11 +19,15 @@ struct Config {
     std::string fragShaderPath = "shader/legacy/forward.frag.spv";
     std::string derivedTextureCachePath;
     std::string projectPath;
+    std::string assetToolPath;
 
     // ---- 渲染设置 ----
     bool enableValidation = true;
     bool enableRuntimeControl = false;
     uint32_t gltfMaxTextureSize = 2048; // 0 = Full resolution
+    AssetImportMode assetImportMode = AssetImportMode::OnDemand;
+    uint32_t assetImportWorkers = 0;
+    uint64_t assetImportMemoryBudgetMiB = 2048;
 
     // ---- 输入参数 ----
     float moveSpeed = 2.0f;

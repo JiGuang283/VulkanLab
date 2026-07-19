@@ -650,6 +650,15 @@ class ProgressReporter {
         }
     }
 
+    void publishing(const std::filesystem::path &manifest) {
+        std::lock_guard lock(mutex_);
+        if (ndjson_) {
+            emitJson({{"event", "publishing"},
+                      {"taskId", taskId_},
+                      {"manifest", manifest.generic_string()}});
+        }
+    }
+
     size_t encoded() const { return encoded_; }
     size_t reused() const { return reused_; }
     double elapsedMs() const {
@@ -949,6 +958,7 @@ int buildTextureCache(const TextureCacheBuildOptions &options,
 
     const std::filesystem::path manifestPath =
         derivedManifestPath(cacheRoot, options.sceneId, options.profileId);
+    reporter.publishing(manifestPath);
     std::string saveError;
     if (!saveDerivedTextureManifest(manifestPath, manifest, saveError))
         throw std::runtime_error("could not publish manifest: " + saveError);

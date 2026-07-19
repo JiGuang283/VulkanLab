@@ -16,13 +16,16 @@ namespace {
 
 void printUsage(std::ostream &out) {
     out << "Usage: VulkanLab.exe [--project <path>] [--runtime-control] "
-           "[--help]\n"
+           "[--asset-mode <mode>] [--cache-root <path>] [--help]\n"
         << "\n"
         << "Options:\n"
         << "  --runtime-control  Enable the local VulkanLabCtl named-pipe "
            "interface.\n"
         << "  --project <path>   Use the source project and writable scene "
            "catalog at <path>.\n"
+        << "  --asset-mode <mode>  ondemand, readonly, or cooked-only.\n"
+        << "  --asset-tool <path>  Override VulkanLabAssetTool.exe path.\n"
+        << "  --cache-root <path>  Override the derived asset cache root.\n"
         << "  --help             Show this help and exit.\n";
 }
 
@@ -36,6 +39,28 @@ bool parseArguments(int argc, char **argv, vkr::Config &config) {
                 throw std::invalid_argument(
                     "--project requires a directory path");
             config.projectPath = argv[i];
+        } else if (argument == "--asset-mode") {
+            if (++i >= argc)
+                throw std::invalid_argument("--asset-mode requires a value");
+            const std::string mode = argv[i];
+            if (mode == "ondemand")
+                config.assetImportMode = vkr::AssetImportMode::OnDemand;
+            else if (mode == "readonly")
+                config.assetImportMode = vkr::AssetImportMode::ReadOnly;
+            else if (mode == "cooked-only")
+                config.assetImportMode = vkr::AssetImportMode::CookedOnly;
+            else
+                throw std::invalid_argument(
+                    "--asset-mode must be ondemand, readonly, or "
+                    "cooked-only");
+        } else if (argument == "--asset-tool") {
+            if (++i >= argc)
+                throw std::invalid_argument("--asset-tool requires a path");
+            config.assetToolPath = argv[i];
+        } else if (argument == "--cache-root") {
+            if (++i >= argc)
+                throw std::invalid_argument("--cache-root requires a path");
+            config.derivedTextureCachePath = argv[i];
         } else if (argument == "--help") {
             return false;
         } else {
@@ -82,7 +107,7 @@ int main(int argc, char **argv) {
                      projectContext.projectRoot.string(),
                      projectContext.diagnostic);
         VKR_LOG_INFO("Assets", "Derived asset cache: '{}'",
-                     projectContext.cacheRoot.string());
+                     config.derivedTextureCachePath);
 
         vkr::Application app(config, std::move(projectContext),
                              std::move(catalog));

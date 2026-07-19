@@ -123,10 +123,18 @@ if(BUILD_TESTING)
         "${CMAKE_SOURCE_DIR}/tests/SceneCatalogTests.cpp"
         "${CMAKE_SOURCE_DIR}/tests/SceneImportServiceTests.cpp"
         "${CMAKE_SOURCE_DIR}/tests/TextureCachePipelineTests.cpp"
+        "${CMAKE_SOURCE_DIR}/tests/ArtifactStatusTests.cpp"
+        "${CMAKE_SOURCE_DIR}/tests/AssetImportManagerTests.cpp"
+        "${CMAKE_SOURCE_DIR}/tests/AssetLoadCoordinatorTests.cpp"
+        "${CMAKE_SOURCE_DIR}/tests/SceneCatalogEditorTests.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/DerivedAssetPaths.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/ArtifactStatus.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/AssetImportManager.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/AssetLoadCoordinator.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/DerivedTextureManifest.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/ProjectContext.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/SceneCatalog.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/SceneCatalogEditor.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/SceneImportService.cpp"
         "${CMAKE_SOURCE_DIR}/src/render/TangentGenerator.cpp"
         "${CMAKE_SOURCE_DIR}/src/render/TextureData.cpp"
@@ -194,6 +202,7 @@ if(WIN32)
                 $<TARGET_FILE_DIR:VulkanLabAssetTool>/ktx.exe
         )
     endif()
+    add_dependencies(VulkanLab VulkanLabAssetTool)
 
     if(BUILD_TESTING)
         add_test(

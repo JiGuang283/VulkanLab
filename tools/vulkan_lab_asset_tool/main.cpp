@@ -54,6 +54,8 @@ class ConsoleCancellationHandler {
 void printUsage(std::ostream &output) {
     output
         << "Usage:\n"
+        << "  VulkanLabAssetTool import scene --scene-id <id> "
+           "[--profile <id>] [options]\n"
         << "  VulkanLabAssetTool texture-cache build --scene-id <id> "
            "[--profile <id>] [options]\n"
         << "  VulkanLabAssetTool texture-cache migrate "
@@ -176,12 +178,18 @@ int main(int argc, char **argv) {
             return EXIT_SUCCESS;
         }
 
-        if (std::string(argv[1]) != "texture-cache") {
+        const bool importSceneCommand =
+            std::string(argv[1]) == "import" &&
+            std::string(argv[2]) == "scene";
+        const bool textureCacheCommand =
+            std::string(argv[1]) == "texture-cache";
+        if (!importSceneCommand && !textureCacheCommand) {
             printUsage(std::cerr);
             return 2;
         }
 
-        const std::string operation = argv[2];
+        const std::string operation =
+            importSceneCommand ? std::string("build") : std::string(argv[2]);
         if (operation != "build" && operation != "migrate") {
             printUsage(std::cerr);
             return 2;

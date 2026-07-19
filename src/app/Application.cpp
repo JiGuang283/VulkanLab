@@ -2,7 +2,11 @@
 #include "UniformData.h"
 
 #include "assets/DerivedAssetPaths.h"
+#include "assets/ArtifactStatus.h"
+#include "assets/AssetLoadCoordinator.h"
+#include "assets/AssetImportManager.h"
 #include "assets/SceneImportService.h"
+#include "assets/SceneCatalogEditor.h"
 #include "control/NamedPipeServerWin32.h"
 #include "control/RuntimeCommand.h"
 #include "control/RuntimeControlProtocol.h"
@@ -32,6 +36,11 @@
 
 #include <imgui.h>
 
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <Windows.h>
+#include <shellapi.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -46,6 +55,8 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #include <glm/glm.hpp>
@@ -166,6 +177,56 @@ bool asciiEqualsIgnoreCase(const std::string &a, const std::string &b) {
             return false;
     }
     return true;
+}
+
+const char *assetImportModeName(AssetImportMode mode) {
+    switch (mode) {
+    case AssetImportMode::OnDemand:
+        return "OnDemand";
+    case AssetImportMode::ReadOnly:
+        return "ReadOnly";
+    case AssetImportMode::CookedOnly:
+        return "CookedOnly";
+    }
+    return "Unknown";
+}
+
+std::string artifactStatusKey(const std::string &sceneId,
+                              const std::string &profileId) {
+    return sceneId + '\n' + profileId;
+}
+
+ControlJson assetImportTaskToJson(
+    const std::shared_ptr<AssetImportTask> &task) {
+    if (!task)
+        return nullptr;
+    const AssetImportState state = task->state.load();
+    ControlJson result = {
+        {"taskId", task->id},
+        {"sceneId", task->sceneId},
+        {"profileId", task->profileId},
+        {"state", assetImportStateName(state)},
+        {"phase", isTerminalAssetImportState(state) ? "complete" : "importing"},
+        {"terminal", isTerminalAssetImportState(state)},
+        {"progress",
+         {{"completed", task->completedArtifacts.load()},
+          {"total", task->totalArtifacts.load()},
+          {"encoded", task->encodedArtifacts.load()},
+          {"reused", task->reusedArtifacts.load()},
+          {"failed", task->failedArtifacts.load()},
+          {"workers", task->workers.load()},
+          {"activeImage", task->activeImage.load()},
+          {"estimatedMemoryBytes", task->estimatedMemoryBytes.load()}}},
+        {"logPath", task->logPath.string()},
+        {"exitCode", task->processExitCode}};
+    {
+        std::lock_guard<std::mutex> lock(task->mutex);
+        if (!task->error.empty())
+            result["error"] = task->error;
+        if (!task->manifestPath.empty())
+            result["manifest"] = task->manifestPath;
+    }
+    return result;
 }
 
 ControlJson allocatorSnapshotToJson(const AllocatorMemorySnapshot &snapshot) {
@@ -456,6 +517,66 @@ struct SceneImportUiState {
     std::string error;
 };
 
+struct SceneAssetOperationState {
+    AssetLoadCoordinator coordinator;
+    std::unordered_map<uint64_t, uint64_t> importToLoadTask;
+    std::unordered_set<uint64_t> processedImports;
+    std::unordered_map<std::string, ArtifactStatus> statuses;
+    int selectedSceneIndex = -1;
+    std::array<char, 128> search{};
+    std::string status;
+    std::string error;
+};
+
+namespace {
+
+ControlJson loadOperationToJson(
+    const std::shared_ptr<AssetImportTask> &importTask,
+    const std::shared_ptr<SceneLoadTask> &loadTask) {
+    ControlJson result = assetImportTaskToJson(importTask);
+    if (!importTask || !loadTask)
+        return result;
+
+    const uint64_t operationId = importTask->id;
+    ControlJson load = sceneLoadTaskToJson(loadTask, true);
+    ControlJson import = result;
+    result["importTask"] = std::move(import);
+    result["loadTask"] = load;
+    result["taskId"] = operationId;
+    result["state"] = load.value("state", std::string("Queued"));
+    result["terminal"] = load.value("terminal", false);
+    const SceneLoadState state = loadTask->state.load();
+    result["phase"] =
+        state == SceneLoadState::Uploading ||
+                state == SceneLoadState::WaitingForGpu ||
+                state == SceneLoadState::ReadyToPublish ||
+                state == SceneLoadState::ReleasingPreviousScene
+            ? "uploading"
+            : (isTerminalSceneLoadState(state) ? "complete" : "preparing");
+    if (load.contains("error"))
+        result["error"] = load["error"];
+    if (load.contains("loadStats"))
+        result["loadStats"] = load["loadStats"];
+    return result;
+}
+
+ControlJson artifactStatusToJson(const SceneEntry &entry,
+                                 const std::string &profileId,
+                                 const ArtifactStatus &status) {
+    return {{"sceneId", entry.id},
+            {"scene", entry.name},
+            {"source", entry.sourcePath},
+            {"profileId", profileId},
+            {"state", artifactStateName(status.state)},
+            {"ready", status.ready()},
+            {"reason", status.reason},
+            {"manifest", status.manifestPath.string()},
+            {"artifactCount", status.entryCount},
+            {"blobBytes", status.blobBytes}};
+}
+
+} // namespace
+
 Application::Application(const Config &config, ProjectContext projectContext,
                          SceneCatalog catalog)
     : config_(config), projectContext_(std::move(projectContext)),
@@ -464,9 +585,12 @@ Application::Application(const Config &config, ProjectContext projectContext,
         config_.derivedTextureCachePath = projectContext_.cacheRoot.string();
     sceneRegistry_ = buildSceneRegistry(catalog_, projectContext_, config_);
     sceneImportUi_ = std::make_unique<SceneImportUiState>();
+    sceneAssetOperations_ = std::make_unique<SceneAssetOperationState>();
 }
 
 Application::~Application() {
+    if (runtimeControlServer_)
+        runtimeControlServer_->stop();
     if (sceneImportUi_) {
         if (sceneImportUi_->worker)
             sceneImportUi_->worker->cancel = true;
@@ -475,8 +599,8 @@ Application::~Application() {
         if (sceneImportUi_->importFuture.valid())
             sceneImportUi_->importFuture.wait();
     }
-    if (runtimeControlServer_)
-        runtimeControlServer_->stop();
+    if (assetImportManager_)
+        assetImportManager_->shutdown();
     if (sceneGpuBuilder_)
         sceneGpuBuilder_->cancel();
     sceneGpuBuilder_.reset();
@@ -553,13 +677,23 @@ void Application::init() {
                                  static_cast<int>(sceneRegistry_.size()) - 1);
     pipelineCache_ = std::make_unique<PipelineCache>(*device_);
     sceneLoadManager_ = std::make_unique<SceneLoadManager>();
+    assetImportManager_ = std::make_unique<AssetImportManager>(
+        AssetImportManagerOptions{
+            projectContext_.projectRoot, config_.derivedTextureCachePath,
+            config_.assetToolPath, config_.assetImportWorkers,
+            config_.assetImportMemoryBudgetMiB});
     sceneLoadContext_.maxTextureSize = config_.gltfMaxTextureSize;
     sceneLoadContext_.derivedTextureCachePath =
         config_.derivedTextureCachePath;
     sceneLoadContext_.projectId = catalog_.projectId;
     sceneLoadContext_.textureTranscodeTarget =
         device_->textureTranscodeTarget();
-    loadScene(start);
+    refreshAllArtifactStatuses();
+    sceneAssetOperations_->selectedSceneIndex = start;
+    if (sceneRegistry_[start].builtin)
+        loadScene(start);
+    else
+        requestSceneOperation(start);
 
     // ImGui on top of the main render pass.
     gui_ = std::make_unique<GuiSystem>(
@@ -683,20 +817,20 @@ void Application::loadScene(int index, bool replaceCurrent) {
     logSceneLoadStats(stats);
 }
 
-void Application::reloadCurrentScene() {
+uint64_t Application::reloadCurrentScene() {
     if (currentSceneIndex_ < 0 ||
         currentSceneIndex_ >= static_cast<int>(sceneRegistry_.size()))
-        return;
+        return 0;
 
     const int index = currentSceneIndex_;
-    const uint64_t taskId = requestSceneLoad(index);
+    const uint64_t taskId = requestSceneOperation(index);
     if (taskId != 0) {
         VKR_LOG_INFO("Scene", "Requested reload of {} with glTF texture limit {}",
                      sceneRegistry_[index].name,
                      sceneLoadContext_.maxTextureSize == 0
                          ? std::string("Full")
                          : std::to_string(sceneLoadContext_.maxTextureSize));
-        return;
+        return taskId;
     }
 
     VKR_LOG_INFO("Scene", "Reloaded {} with glTF texture limit {}",
@@ -704,6 +838,7 @@ void Application::reloadCurrentScene() {
                  sceneLoadContext_.maxTextureSize == 0
                      ? std::string("Full")
                      : std::to_string(sceneLoadContext_.maxTextureSize));
+    return taskId;
 }
 
 void Application::switchScene(int index) {
@@ -714,7 +849,7 @@ void Application::switchScene(int index) {
          isTerminalSceneLoadState(latestSceneLoadTask_->state.load())))
         return;
 
-    const uint64_t taskId = requestSceneLoad(index);
+    const uint64_t taskId = requestSceneOperation(index);
     if (taskId != 0) {
         VKR_LOG_INFO("Scene", "Requested switch to {}",
                      sceneRegistry_[index].name);
@@ -724,26 +859,27 @@ void Application::switchScene(int index) {
     VKR_LOG_INFO("Scene", "Switched to {}", sceneRegistry_[index].name);
 }
 
-void Application::setTextureLimit(uint32_t limit) {
+uint64_t Application::setTextureLimit(uint32_t limit) {
     if (limit != 0 && limit != 512 && limit != 1024 && limit != 2048)
         throw RuntimeCommandError("invalid_texture_limit",
                                   "Texture limit must be 0, 512, 1024, or "
                                   "2048.");
     if (sceneLoadContext_.maxTextureSize == limit)
-        return;
+        return 0;
 
     sceneLoadContext_.maxTextureSize = limit;
+    refreshAllArtifactStatuses();
     VKR_LOG_INFO("Renderer", "glTF texture limit set to {}",
                  textureLimitLabel(limit));
     if (latestSceneLoadTask_ &&
         !isTerminalSceneLoadState(latestSceneLoadTask_->state.load())) {
-        requestSceneLoad(latestSceneLoadTask_->sceneIndex);
+        return requestSceneOperation(latestSceneLoadTask_->sceneIndex);
     } else {
-        reloadCurrentScene();
+        return reloadCurrentScene();
     }
 }
 
-uint64_t Application::requestSceneLoad(int index) {
+uint64_t Application::requestSceneLoad(int index, bool sourceFallback) {
     if (index < 0 || index >= static_cast<int>(sceneRegistry_.size()))
         throw RuntimeCommandError("invalid_scene", "Invalid scene index.");
     const SceneEntry &entry = sceneRegistry_[index];
@@ -751,7 +887,9 @@ uint64_t Application::requestSceneLoad(int index) {
         throw RuntimeCommandError("scene_unavailable",
                                   entry.unavailableReason);
     sceneLoadContext_.sceneId = entry.id;
-    sceneLoadContext_.profileId = profileIdForTextureLimit(entry);
+    sceneLoadContext_.profileId =
+        sourceFallback ? std::string("explicit_source_fallback")
+                       : profileIdForTextureLimit(entry);
     if (!entry.prepareFactory) {
         if (sceneLoadManager_) {
             if (latestSceneLoadTask_)
@@ -917,6 +1055,176 @@ Application::profileIdForTextureLimit(const SceneEntry &entry) const {
                      std::to_string(sceneLoadContext_.maxTextureSize);
 }
 
+void Application::refreshArtifactStatus(int sceneIndex) {
+    if (sceneIndex < 0 ||
+        sceneIndex >= static_cast<int>(sceneRegistry_.size()))
+        return;
+    const SceneEntry &entry = sceneRegistry_[sceneIndex];
+    const std::string profileId = profileIdForTextureLimit(entry);
+    const std::string key = artifactStatusKey(entry.id, profileId);
+    if (entry.builtin) {
+        ArtifactStatus status;
+        status.state = ArtifactState::Ready;
+        status.reason = "builtin scene";
+        sceneAssetOperations_->statuses[key] = std::move(status);
+        return;
+    }
+
+    ArtifactStatus status;
+    if (!entry.available) {
+        status.state = ArtifactState::Missing;
+        status.reason = entry.unavailableReason;
+    } else {
+        status = inspectTextureArtifacts(
+            {sceneLoadContext_.derivedTextureCachePath, entry.sourcePath,
+             catalog_.projectId, entry.id, profileId,
+             sceneLoadContext_.maxTextureSize});
+    }
+    if (assetImportManager_) {
+        for (const auto &task : assetImportManager_->history()) {
+            if (task->sceneId == entry.id && task->profileId == profileId &&
+                !isTerminalAssetImportState(task->state.load())) {
+                status.state = ArtifactState::Importing;
+                status.reason = std::string("asset import ") +
+                                assetImportStateName(task->state.load());
+                break;
+            }
+        }
+    }
+    sceneAssetOperations_->statuses[key] = std::move(status);
+}
+
+void Application::refreshAllArtifactStatuses() {
+    if (!sceneAssetOperations_)
+        return;
+    sceneAssetOperations_->statuses.clear();
+    for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i)
+        refreshArtifactStatus(i);
+}
+
+uint64_t Application::requestSceneOperation(int index, bool sourceFallback,
+                                            bool loadAfter,
+                                            ImportReason reason,
+                                            bool forceReimport) {
+    if (index < 0 || index >= static_cast<int>(sceneRegistry_.size()))
+        throw RuntimeCommandError("invalid_scene", "Invalid scene index.");
+    const SceneEntry &entry = sceneRegistry_[index];
+    if (!entry.available)
+        throw RuntimeCommandError("scene_unavailable",
+                                  entry.unavailableReason);
+
+    const uint64_t generation =
+        sceneAssetOperations_->coordinator.beginOperation();
+    sceneAssetOperations_->selectedSceneIndex = index;
+    sceneAssetOperations_->error.clear();
+
+    if (entry.builtin) {
+        return loadAfter ? requestSceneLoad(index) : 0;
+    }
+    if (sourceFallback) {
+        if (config_.assetImportMode == AssetImportMode::CookedOnly) {
+            throw RuntimeCommandError(
+                "source_fallback_disabled",
+                "Source fallback is disabled in CookedOnly mode.");
+        }
+        return loadAfter ? requestSceneLoad(index, true) : 0;
+    }
+
+    refreshArtifactStatus(index);
+    const std::string profileId = profileIdForTextureLimit(entry);
+    const auto found = sceneAssetOperations_->statuses.find(
+        artifactStatusKey(entry.id, profileId));
+    const bool ready = found != sceneAssetOperations_->statuses.end() &&
+                       found->second.ready();
+    if (ready && !forceReimport)
+        return loadAfter ? requestSceneLoad(index) : 0;
+
+    if (config_.assetImportMode != AssetImportMode::OnDemand) {
+        const std::string mode = assetImportModeName(config_.assetImportMode);
+        throw RuntimeCommandError(
+            "artifact_not_ready",
+            "Derived artifacts are not ready for scene '" + entry.name +
+                "' (mode=" + mode + "). " +
+                (found == sceneAssetOperations_->statuses.end()
+                     ? std::string("No artifact status is available.")
+                     : found->second.reason));
+    }
+
+    auto task = assetImportManager_->request(
+        {entry.id, profileId, reason, forceReimport});
+    if (loadAfter) {
+        sceneAssetOperations_->coordinator.attach(task->id, generation, index);
+    }
+    refreshArtifactStatus(index);
+    sceneAssetOperations_->status =
+        "Importing " + entry.name + " (" + profileId + ")";
+    VKR_LOG_INFO("Assets", "Queued import task {} for scene '{}' profile '{}'",
+                 task->id, entry.id, profileId);
+    return task->id;
+}
+
+void Application::updateAssetImports() {
+    if (!assetImportManager_)
+        return;
+    const auto tasks = assetImportManager_->history();
+    for (const auto &task : tasks) {
+        if (!isTerminalAssetImportState(task->state.load()))
+            continue;
+        if (!sceneAssetOperations_->processedImports.insert(task->id).second)
+            continue;
+
+        int sceneIndex = -1;
+        for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
+            if (sceneRegistry_[i].id == task->sceneId) {
+                sceneIndex = i;
+                break;
+            }
+        }
+        if (sceneIndex >= 0)
+            refreshArtifactStatus(sceneIndex);
+
+        const AssetImportState state = task->state.load();
+        if (state == AssetImportState::Completed && sceneIndex >= 0) {
+            const auto status = sceneAssetOperations_->statuses.find(
+                artifactStatusKey(task->sceneId, task->profileId));
+            const bool ready =
+                status != sceneAssetOperations_->statuses.end() &&
+                status->second.ready();
+            if (!ready) {
+                sceneAssetOperations_->error =
+                    "Import completed but artifacts failed validation: " +
+                    (status == sceneAssetOperations_->statuses.end()
+                         ? std::string("status unavailable")
+                         : status->second.reason);
+            } else if (const auto selected =
+                           sceneAssetOperations_->coordinator.takeLatestScene(
+                               task->id)) {
+                const uint64_t loadTask = requestSceneLoad(*selected);
+                sceneAssetOperations_->importToLoadTask[task->id] = loadTask;
+                sceneAssetOperations_->status =
+                    "Loading " + sceneRegistry_[*selected].name;
+            }
+        } else if (state == AssetImportState::Failed) {
+            std::lock_guard<std::mutex> lock(task->mutex);
+            sceneAssetOperations_->error =
+                task->error.empty() ? "Asset import failed" : task->error;
+        } else if (state == AssetImportState::Cancelled) {
+            sceneAssetOperations_->status = "Asset import cancelled";
+        }
+        sceneAssetOperations_->coordinator.discard(task->id);
+    }
+}
+
+bool Application::cancelLoadOperation(uint64_t taskId) {
+    if ((taskId & AssetImportManager::kTaskIdMask) == 0)
+        return cancelSceneLoad(taskId);
+    const auto linked = sceneAssetOperations_->importToLoadTask.find(taskId);
+    if (linked != sceneAssetOperations_->importToLoadTask.end() &&
+        linked->second != 0)
+        return cancelSceneLoad(linked->second);
+    return assetImportManager_ && assetImportManager_->cancel(taskId);
+}
+
 void Application::processRuntimeCommand() {
     if (!runtimeCommandQueue_)
         return;
@@ -934,7 +1242,8 @@ void Application::processRuntimeCommand() {
                 {"application", "VulkanLab"},
                 {"protocolVersion", control::kProtocolVersion},
                 {"capabilities",
-                 {"async_scene_load", "load_status", "load_cancel"}},
+                 {"async_scene_load", "load_status", "load_cancel",
+                  "asset_catalog", "asset_import", "asset_cancel"}},
                 {"pipe", control::kPipeNameUtf8},
                 {"scene", currentScene_ && currentSceneIndex_ >= 0
                               ? ControlJson(sceneRegistry_[currentSceneIndex_]
@@ -945,7 +1254,7 @@ void Application::processRuntimeCommand() {
                                                   .id)
                                 : ControlJson(nullptr)},
                 {"projectId", catalog_.projectId},
-                {"cacheRoot", projectContext_.cacheRoot.string()},
+                {"cacheRoot", sceneLoadContext_.derivedTextureCachePath},
                 {"textureLimit", sceneLoadContext_.maxTextureSize},
                 {"shader", shaderVariants_.empty()
                                ? ControlJson(nullptr)
@@ -987,8 +1296,11 @@ void Application::processRuntimeCommand() {
                         candidates.dump());
             }
             pendingSceneIndex_ = -1;
-            const uint64_t taskId = requestSceneLoad(index);
-            if (taskId != 0) {
+            const uint64_t taskId = requestSceneOperation(index);
+            if ((taskId & AssetImportManager::kTaskIdMask) != 0) {
+                result = loadOperationToJson(
+                    assetImportManager_->task(taskId), nullptr);
+            } else if (taskId != 0) {
                 result = sceneLoadTaskToJson(latestSceneLoadTask_);
             } else {
                 result = {{"scene", sceneRegistry_[index].name},
@@ -1002,8 +1314,11 @@ void Application::processRuntimeCommand() {
                 throw RuntimeCommandError("no_current_scene",
                                           "No scene is currently loaded.");
             const int index = currentSceneIndex_;
-            const uint64_t taskId = requestSceneLoad(index);
-            if (taskId != 0) {
+            const uint64_t taskId = requestSceneOperation(index);
+            if ((taskId & AssetImportManager::kTaskIdMask) != 0) {
+                result = loadOperationToJson(
+                    assetImportManager_->task(taskId), nullptr);
+            } else if (taskId != 0) {
                 result = sceneLoadTaskToJson(latestSceneLoadTask_);
             } else {
                 result = {{"scene", sceneRegistry_[index].name},
@@ -1013,29 +1328,55 @@ void Application::processRuntimeCommand() {
                 result["loadStats"] =
                     sceneLoadStatsToJson(*lastSceneLoadStats_);
         } else if (command->method == "load.status") {
-            std::shared_ptr<SceneLoadTask> task;
+            uint64_t requestedTaskId = 0;
             if (command->params.contains("taskId")) {
                 if (!command->params["taskId"].is_number_unsigned()) {
                     throw RuntimeCommandError(
                         "invalid_params",
                         "Parameter 'taskId' must be an unsigned integer.");
                 }
-                task = sceneLoadManager_->task(
-                    command->params["taskId"].get<uint64_t>());
-            } else {
-                task = latestSceneLoadTask_;
+                requestedTaskId = command->params["taskId"].get<uint64_t>();
             }
-            if (!task)
-                throw RuntimeCommandError("load_not_found",
-                                          "Load task was not found.");
-            const bool superseded =
-                !latestSceneLoadTask_ ||
-                latestSceneLoadTask_->id != task->id;
-            result = sceneLoadTaskToJson(task, superseded);
+            if (requestedTaskId == 0) {
+                const auto activeImport = assetImportManager_->activeTask();
+                requestedTaskId = activeImport
+                                      ? activeImport->id
+                                      : (latestSceneLoadTask_
+                                             ? latestSceneLoadTask_->id
+                                             : 0);
+            }
+            if ((requestedTaskId & AssetImportManager::kTaskIdMask) != 0) {
+                const auto importTask =
+                    assetImportManager_->task(requestedTaskId);
+                if (!importTask)
+                    throw RuntimeCommandError("load_not_found",
+                                              "Load task was not found.");
+                std::shared_ptr<SceneLoadTask> loadTask;
+                const auto linked =
+                    sceneAssetOperations_->importToLoadTask.find(
+                        requestedTaskId);
+                if (linked != sceneAssetOperations_->importToLoadTask.end() &&
+                    linked->second != 0)
+                    loadTask = sceneLoadManager_->task(linked->second);
+                result = loadOperationToJson(importTask, loadTask);
+            } else {
+                std::shared_ptr<SceneLoadTask> task =
+                    sceneLoadManager_->task(requestedTaskId);
+                if (!task)
+                    throw RuntimeCommandError("load_not_found",
+                                              "Load task was not found.");
+                const bool superseded =
+                    !latestSceneLoadTask_ ||
+                    latestSceneLoadTask_->id != task->id;
+                result = sceneLoadTaskToJson(task, superseded);
+            }
         } else if (command->method == "load.cancel") {
-            uint64_t taskId = latestSceneLoadTask_
-                                  ? latestSceneLoadTask_->id
-                                  : 0;
+            const auto activeImport = assetImportManager_->activeTask();
+            uint64_t taskId = activeImport
+                                  ? activeImport->id
+                                  : (latestSceneLoadTask_
+                                         ? latestSceneLoadTask_->id
+                                         : 0);
             if (command->params.contains("taskId")) {
                 if (!command->params["taskId"].is_number_unsigned()) {
                     throw RuntimeCommandError(
@@ -1044,7 +1385,7 @@ void Application::processRuntimeCommand() {
                 }
                 taskId = command->params["taskId"].get<uint64_t>();
             }
-            if (taskId == 0 || !cancelSceneLoad(taskId)) {
+            if (taskId == 0 || !cancelLoadOperation(taskId)) {
                 throw RuntimeCommandError("load_not_cancellable",
                                           "Load task cannot be cancelled.");
             }
@@ -1058,9 +1399,14 @@ void Application::processRuntimeCommand() {
                     "invalid_params",
                     "Parameter 'value' must be an unsigned integer.");
             }
-            setTextureLimit(command->params["value"].get<uint32_t>());
+            const uint64_t taskId =
+                setTextureLimit(command->params["value"].get<uint32_t>());
             result = {{"value", sceneLoadContext_.maxTextureSize}};
-            if (latestSceneLoadTask_ &&
+            if ((taskId & AssetImportManager::kTaskIdMask) != 0) {
+                result["loadTask"] = loadOperationToJson(
+                    assetImportManager_->task(taskId), nullptr);
+                result["taskId"] = taskId;
+            } else if (latestSceneLoadTask_ &&
                 !isTerminalSceneLoadState(
                     latestSceneLoadTask_->state.load())) {
                 result["loadTask"] =
@@ -1069,6 +1415,123 @@ void Application::processRuntimeCommand() {
                 result["loadStats"] =
                     sceneLoadStatsToJson(*lastSceneLoadStats_);
             }
+        } else if (command->method == "asset.catalog") {
+            refreshAllArtifactStatuses();
+            ControlJson entries = ControlJson::array();
+            for (const auto &entry : sceneRegistry_) {
+                const std::string profileId = profileIdForTextureLimit(entry);
+                const auto found = sceneAssetOperations_->statuses.find(
+                    artifactStatusKey(entry.id, profileId));
+                if (found != sceneAssetOperations_->statuses.end())
+                    entries.push_back(
+                        artifactStatusToJson(entry, profileId, found->second));
+            }
+            result = {{"projectId", catalog_.projectId},
+                      {"catalog", projectContext_.catalogPath.string()},
+                      {"mode", assetImportModeName(config_.assetImportMode)},
+                      {"entries", std::move(entries)}};
+        } else if (command->method == "asset.status") {
+            int index = sceneAssetOperations_->selectedSceneIndex;
+            if (command->params.contains("name")) {
+                const std::string name = requiredStringParam(*command, "name");
+                index = findSceneIndexByName(name);
+                if (index < 0) {
+                    for (int i = 0; i < static_cast<int>(sceneRegistry_.size());
+                         ++i) {
+                        if (asciiEqualsIgnoreCase(sceneRegistry_[i].id, name)) {
+                            index = i;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (index < 0 || index >= static_cast<int>(sceneRegistry_.size()))
+                throw RuntimeCommandError("scene_not_found",
+                                          "Asset scene was not found.");
+            refreshArtifactStatus(index);
+            const auto &entry = sceneRegistry_[index];
+            const std::string profileId = profileIdForTextureLimit(entry);
+            result = artifactStatusToJson(
+                entry, profileId,
+                sceneAssetOperations_->statuses.at(
+                    artifactStatusKey(entry.id, profileId)));
+        } else if (command->method == "asset.import") {
+            if (config_.assetImportMode != AssetImportMode::OnDemand)
+                throw RuntimeCommandError(
+                    "asset_import_disabled",
+                    "Asset import is only available in OnDemand mode.");
+            const std::string name = requiredStringParam(*command, "name");
+            int index = findSceneIndexByName(name);
+            if (index < 0) {
+                for (int i = 0; i < static_cast<int>(sceneRegistry_.size());
+                     ++i) {
+                    if (asciiEqualsIgnoreCase(sceneRegistry_[i].id, name)) {
+                        index = i;
+                        break;
+                    }
+                }
+            }
+            if (index < 0)
+                throw RuntimeCommandError("scene_not_found",
+                                          "Asset scene was not found.");
+            const bool force = command->params.value("force", false);
+            const bool loadAfter = command->params.value("loadAfter", false);
+            const uint64_t taskId = requestSceneOperation(
+                index, false, loadAfter, ImportReason::ManualReimport, force);
+            if (taskId == 0) {
+                refreshArtifactStatus(index);
+                const auto &entry = sceneRegistry_[index];
+                const std::string profileId = profileIdForTextureLimit(entry);
+                result = artifactStatusToJson(
+                    entry, profileId,
+                    sceneAssetOperations_->statuses.at(
+                        artifactStatusKey(entry.id, profileId)));
+                result["terminal"] = true;
+            } else {
+                result = loadOperationToJson(
+                    assetImportManager_->task(taskId), nullptr);
+            }
+        } else if (command->method == "asset.cancel") {
+            uint64_t taskId = 0;
+            if (command->params.contains("taskId") &&
+                command->params["taskId"].is_number_unsigned())
+                taskId = command->params["taskId"].get<uint64_t>();
+            else if (const auto active = assetImportManager_->activeTask())
+                taskId = active->id;
+            if (taskId == 0 ||
+                (taskId & AssetImportManager::kTaskIdMask) == 0 ||
+                !assetImportManager_->cancel(taskId)) {
+                throw RuntimeCommandError("asset_not_cancellable",
+                                          "Asset import cannot be cancelled.");
+            }
+            result = {{"taskId", taskId}, {"cancelRequested", true}};
+        } else if (command->method == "asset.cache_info") {
+            uint64_t files = 0;
+            uint64_t bytes = 0;
+            std::error_code iteratorError;
+            const std::filesystem::path root =
+                sceneLoadContext_.derivedTextureCachePath;
+            if (std::filesystem::is_directory(root)) {
+                for (std::filesystem::recursive_directory_iterator it(
+                         root, std::filesystem::directory_options::skip_permission_denied,
+                         iteratorError),
+                     end;
+                     it != end; it.increment(iteratorError)) {
+                    if (iteratorError) {
+                        iteratorError.clear();
+                        continue;
+                    }
+                    if (!it->is_regular_file())
+                        continue;
+                    ++files;
+                    std::error_code sizeError;
+                    bytes += it->file_size(sizeError);
+                }
+            }
+            result = {{"root", root.string()},
+                      {"files", files},
+                      {"bytes", bytes},
+                      {"mode", assetImportModeName(config_.assetImportMode)}};
         } else if (command->method == "shader.list") {
             ControlJson shaders = ControlJson::array();
             for (const auto &variant : shaderVariants_)
@@ -1260,9 +1723,17 @@ void Application::updateUniforms(uint32_t frameIndex) {
 
 void Application::refreshSceneRegistry(const std::string &selectSceneId) {
     std::string currentId;
+    std::string selectedId = selectSceneId;
     if (currentSceneIndex_ >= 0 &&
         currentSceneIndex_ < static_cast<int>(sceneRegistry_.size()))
         currentId = sceneRegistry_[currentSceneIndex_].id;
+    if (selectedId.empty() && sceneAssetOperations_ &&
+        sceneAssetOperations_->selectedSceneIndex >= 0 &&
+        sceneAssetOperations_->selectedSceneIndex <
+            static_cast<int>(sceneRegistry_.size())) {
+        selectedId =
+            sceneRegistry_[sceneAssetOperations_->selectedSceneIndex].id;
+    }
 
     catalog_ = SceneCatalog::load(projectContext_.catalogPath,
                                   projectContext_.projectRoot);
@@ -1272,14 +1743,16 @@ void Application::refreshSceneRegistry(const std::string &selectSceneId) {
         if (sceneRegistry_[i].id == currentId)
             currentSceneIndex_ = i;
     }
-    if (!selectSceneId.empty()) {
+    sceneAssetOperations_->selectedSceneIndex = -1;
+    if (!selectedId.empty()) {
         for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
-            if (sceneRegistry_[i].id == selectSceneId) {
-                pendingSceneIndex_ = i;
+            if (sceneRegistry_[i].id == selectedId) {
+                sceneAssetOperations_->selectedSceneIndex = i;
                 break;
             }
         }
     }
+    refreshAllArtifactStatuses();
 }
 
 void Application::updateSceneImport() {
@@ -1326,17 +1799,18 @@ void Application::updateSceneImport() {
             ui.preflight.reset();
             ui.status = "Imported " + result.scene.displayName;
             ui.error.clear();
-            refreshSceneRegistry();
-            if (loadAfter) {
-                const ImportProfile &profile =
-                    catalog_.profile(result.scene.importProfile);
-                sceneLoadContext_.maxTextureSize = profile.textureLimit;
-                for (int i = 0; i < static_cast<int>(sceneRegistry_.size());
-                     ++i) {
-                    if (sceneRegistry_[i].id == result.scene.id) {
-                        pendingSceneIndex_ = i;
-                        break;
-                    }
+            refreshSceneRegistry(result.scene.id);
+            const ImportProfile &profile =
+                catalog_.profile(result.scene.importProfile);
+            sceneLoadContext_.maxTextureSize = profile.textureLimit;
+            for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
+                if (sceneRegistry_[i].id == result.scene.id) {
+                    requestSceneOperation(
+                        i, false, loadAfter,
+                        ImportReason::SceneRegistration, false);
+                    ui.status = "Registered " + result.scene.displayName +
+                                "; derived texture import queued";
+                    break;
                 }
             }
         } catch (const std::exception &error) {
@@ -1353,28 +1827,38 @@ void Application::drawScenePanel() {
 
     ImGui::Begin("Scenes");
     const bool busy = ui.preflightFuture.valid() || ui.importFuture.valid();
-    ImGui::BeginDisabled(busy || !projectContext_.catalogWritable);
-    if (ImGui::Button("Import Scene...")) {
-        try {
-            const auto selected = openGltfFileDialog(window_->nativeHandle());
-            if (selected) {
-                ui.error.clear();
-                ui.status = "Inspecting scene dependencies...";
-                ui.preflightFuture = std::async(
-                    std::launch::async, [path = *selected] {
-                        return SceneImportService::preflight(path);
-                    });
+    const bool canImportSource =
+        config_.assetImportMode == AssetImportMode::OnDemand &&
+        projectContext_.catalogWritable;
+    if (config_.assetImportMode != AssetImportMode::CookedOnly) {
+        ImGui::BeginDisabled(busy || !canImportSource);
+        if (ImGui::Button("Import Scene...")) {
+            try {
+                const auto selected =
+                    openGltfFileDialog(window_->nativeHandle());
+                if (selected) {
+                    ui.error.clear();
+                    ui.status = "Inspecting scene dependencies...";
+                    ui.preflightFuture = std::async(
+                        std::launch::async, [path = *selected] {
+                            return SceneImportService::preflight(path);
+                        });
+                }
+            } catch (const std::exception &error) {
+                ui.error = error.what();
             }
-        } catch (const std::exception &error) {
-            ui.error = error.what();
         }
+        ImGui::EndDisabled();
+        if (!canImportSource &&
+            ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip(
+                config_.assetImportMode != AssetImportMode::OnDemand
+                    ? "Scene registration is disabled outside OnDemand mode."
+                    : "The source project Catalog is read-only.");
+        }
+        ImGui::SameLine();
     }
-    ImGui::EndDisabled();
-    if (!projectContext_.catalogWritable &&
-        ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("The source project Catalog is read-only.");
 
-    ImGui::SameLine();
     ImGui::BeginDisabled(busy);
     if (ImGui::Button("Refresh")) {
         try {
@@ -1412,19 +1896,153 @@ void Application::drawScenePanel() {
     }
 
     ImGui::Separator();
+    ImGui::InputTextWithHint("##SceneSearch", "Search scenes...",
+                             sceneAssetOperations_->search.data(),
+                             sceneAssetOperations_->search.size());
+    const std::string search = sceneAssetOperations_->search.data();
+    auto containsIgnoreCase = [](const std::string &text,
+                                 const std::string &query) {
+        if (query.empty())
+            return true;
+        std::string foldedText = text;
+        std::string foldedQuery = query;
+        std::transform(foldedText.begin(), foldedText.end(),
+                       foldedText.begin(), [](unsigned char c) {
+                           return static_cast<char>(std::tolower(c));
+                       });
+        std::transform(foldedQuery.begin(), foldedQuery.end(),
+                       foldedQuery.begin(), [](unsigned char c) {
+                           return static_cast<char>(std::tolower(c));
+                       });
+        return foldedText.find(foldedQuery) != std::string::npos;
+    };
     for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
         const SceneEntry &entry = sceneRegistry_[i];
-        const bool selected = (i == currentSceneIndex_);
-        const std::string label =
-            entry.available ? entry.name : entry.name + " (Unavailable)";
+        if (!containsIgnoreCase(entry.name, search) &&
+            !containsIgnoreCase(entry.id, search))
+            continue;
+        const bool selected =
+            (i == sceneAssetOperations_->selectedSceneIndex);
+        const std::string profileId = profileIdForTextureLimit(entry);
+        const auto status = sceneAssetOperations_->statuses.find(
+            artifactStatusKey(entry.id, profileId));
+        const char *state = status == sceneAssetOperations_->statuses.end()
+                                ? "Unknown"
+                                : artifactStateName(status->second.state);
+        const std::string label = entry.name + "  [" + state + "]" +
+                                  (entry.available ? std::string{}
+                                                   : " (Unavailable)");
         ImGui::BeginDisabled(!entry.available);
-        if (ImGui::Selectable(label.c_str(), selected))
-            pendingSceneIndex_ = i;
+        if (ImGui::Selectable(label.c_str(), selected)) {
+            sceneAssetOperations_->selectedSceneIndex = i;
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                try {
+                    requestSceneOperation(i);
+                } catch (const std::exception &error) {
+                    sceneAssetOperations_->error = error.what();
+                }
+            }
+        }
         ImGui::EndDisabled();
         if (!entry.available &&
             ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("%s", entry.unavailableReason.c_str());
     }
+
+    const int selectedIndex = sceneAssetOperations_->selectedSceneIndex;
+    if (selectedIndex >= 0 &&
+        selectedIndex < static_cast<int>(sceneRegistry_.size())) {
+        const SceneEntry &entry = sceneRegistry_[selectedIndex];
+        const std::string profileId = profileIdForTextureLimit(entry);
+        ImGui::Separator();
+        ImGui::Text("Selected: %s", entry.name.c_str());
+        ImGui::Text("ID: %s", entry.id.c_str());
+        ImGui::Text("Profile: %s", profileId.c_str());
+        if (!entry.sourcePath.empty())
+            ImGui::TextWrapped("Source: %s", entry.sourcePath.c_str());
+        ImGui::BeginDisabled(!entry.available);
+        if (ImGui::Button("Load")) {
+            try {
+                requestSceneOperation(selectedIndex);
+            } catch (const std::exception &error) {
+                sceneAssetOperations_->error = error.what();
+            }
+        }
+        ImGui::EndDisabled();
+        if (!entry.builtin &&
+            config_.assetImportMode == AssetImportMode::OnDemand) {
+            ImGui::SameLine();
+            if (ImGui::Button("Reimport")) {
+                try {
+                    requestSceneOperation(selectedIndex, false, false,
+                                          ImportReason::ManualReimport, true);
+                } catch (const std::exception &error) {
+                    sceneAssetOperations_->error = error.what();
+                }
+            }
+        }
+        if (!entry.builtin &&
+            config_.assetImportMode != AssetImportMode::CookedOnly) {
+            ImGui::SameLine();
+            if (ImGui::Button("Load Source Fallback")) {
+                try {
+                    requestSceneOperation(selectedIndex, true);
+                } catch (const std::exception &error) {
+                    sceneAssetOperations_->error = error.what();
+                }
+            }
+        }
+        if (projectContext_.catalogWritable &&
+            config_.assetImportMode == AssetImportMode::OnDemand) {
+            if (ImGui::Button("Save Current Camera")) {
+                try {
+                    SceneCatalogEditor::saveCamera(
+                        projectContext_, entry.id,
+                        CameraPose{camera_.position(), camera_.yaw(),
+                                   camera_.pitch()});
+                    sceneAssetOperations_->status =
+                        "Saved camera for " + entry.name;
+                    refreshSceneRegistry(entry.id);
+                } catch (const std::exception &error) {
+                    sceneAssetOperations_->error = error.what();
+                }
+            }
+            ImGui::SameLine();
+            ImGui::BeginDisabled(entry.builtin ||
+                                 selectedIndex == currentSceneIndex_);
+            if (ImGui::Button("Remove From Catalog"))
+                ImGui::OpenPopup("Remove Scene");
+            ImGui::EndDisabled();
+            if (ImGui::BeginPopupModal("Remove Scene", nullptr,
+                                       ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::TextWrapped(
+                    "Remove '%s' from the Catalog? Source files and derived "
+                    "artifacts will not be deleted.",
+                    entry.name.c_str());
+                if (ImGui::Button("Remove")) {
+                    try {
+                        SceneCatalogEditor::removeScene(projectContext_,
+                                                        entry.id);
+                        sceneAssetOperations_->status =
+                            "Removed " + entry.name + " from Catalog";
+                        refreshSceneRegistry();
+                    } catch (const std::exception &error) {
+                        sceneAssetOperations_->error = error.what();
+                    }
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel"))
+                    ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+        }
+    }
+    if (!sceneAssetOperations_->status.empty())
+        ImGui::TextWrapped("%s", sceneAssetOperations_->status.c_str());
+    if (!sceneAssetOperations_->error.empty())
+        ImGui::TextWrapped("Error: %s",
+                           sceneAssetOperations_->error.c_str());
 
     if (ui.requestOpenModal) {
         ImGui::OpenPopup("Import Scene");
@@ -1515,6 +2133,122 @@ void Application::drawScenePanel() {
     ImGui::End();
 }
 
+void Application::drawAssetsPanel() {
+    ImGui::Begin("Assets");
+    ImGui::Text("Project: %s", catalog_.projectId.c_str());
+    ImGui::TextWrapped("Catalog: %s",
+                       projectContext_.catalogPath.string().c_str());
+    ImGui::TextWrapped("Cache: %s",
+                       sceneLoadContext_.derivedTextureCachePath.c_str());
+    ImGui::Text("Mode: %s", assetImportModeName(config_.assetImportMode));
+
+    const int selected = sceneAssetOperations_->selectedSceneIndex;
+    if (selected >= 0 && selected < static_cast<int>(sceneRegistry_.size())) {
+        const SceneEntry &entry = sceneRegistry_[selected];
+        const std::string profileId = profileIdForTextureLimit(entry);
+        const auto found = sceneAssetOperations_->statuses.find(
+            artifactStatusKey(entry.id, profileId));
+        ImGui::Separator();
+        ImGui::Text("Scene: %s", entry.name.c_str());
+        ImGui::Text("Profile: %s", profileId.c_str());
+        if (found != sceneAssetOperations_->statuses.end()) {
+            const ArtifactStatus &status = found->second;
+            ImGui::Text("Artifacts: %s", artifactStateName(status.state));
+            ImGui::TextWrapped("%s", status.reason.c_str());
+            if (status.entryCount > 0) {
+                ImGui::Text("Blobs: %llu (%.2f MiB)",
+                            static_cast<unsigned long long>(status.entryCount),
+                            bytesToMiB(status.blobBytes));
+            }
+        }
+    }
+
+    const auto active = assetImportManager_
+                            ? assetImportManager_->activeTask()
+                            : std::shared_ptr<AssetImportTask>{};
+    ImGui::Separator();
+    ImGui::TextUnformatted("Current Import");
+    if (active) {
+        const uint64_t total = active->totalArtifacts.load();
+        const uint64_t completed = active->completedArtifacts.load();
+        const float fraction =
+            total == 0
+                ? 0.0f
+                : static_cast<float>(completed) / static_cast<float>(total);
+        const double elapsedMs = std::chrono::duration<double, std::milli>(
+                                     std::chrono::steady_clock::now() -
+                                     active->requestedAt)
+                                     .count();
+        ImGui::Text("Task: %llu  %s",
+                    static_cast<unsigned long long>(active->id),
+                    assetImportStateName(active->state.load()));
+        ImGui::Text("Scene/Profile: %s / %s", active->sceneId.c_str(),
+                    active->profileId.c_str());
+        ImGui::ProgressBar(std::clamp(fraction, 0.0f, 1.0f));
+        ImGui::Text("Artifacts: %llu/%llu  encoded %llu  reused %llu  failed %llu",
+                    static_cast<unsigned long long>(completed),
+                    static_cast<unsigned long long>(total),
+                    static_cast<unsigned long long>(
+                        active->encodedArtifacts.load()),
+                    static_cast<unsigned long long>(
+                        active->reusedArtifacts.load()),
+                    static_cast<unsigned long long>(
+                        active->failedArtifacts.load()));
+        ImGui::Text("Workers: %u  elapsed: %.1f s", active->workers.load(),
+                    elapsedMs / 1000.0);
+        ImGui::BeginDisabled(
+            isTerminalAssetImportState(active->state.load()));
+        if (ImGui::Button("Cancel Asset Import"))
+            assetImportManager_->cancel(active->id);
+        ImGui::EndDisabled();
+        if (std::filesystem::is_regular_file(active->logPath)) {
+            ImGui::SameLine();
+            if (ImGui::Button("Open Log")) {
+                ShellExecuteW(nullptr, L"open", active->logPath.c_str(),
+                              nullptr, nullptr, SW_SHOWNORMAL);
+            }
+        }
+    } else {
+        ImGui::TextUnformatted("Idle");
+    }
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Recent Imports");
+    const auto history = assetImportManager_
+                             ? assetImportManager_->history()
+                             : std::vector<std::shared_ptr<AssetImportTask>>{};
+    const size_t visible = std::min<size_t>(history.size(), 8);
+    for (size_t i = 0; i < visible; ++i) {
+        const auto &task = history[i];
+        ImGui::PushID(static_cast<int>(i));
+        if (ImGui::TreeNode("Import", "%s / %s  [%s]##%llu",
+                            task->sceneId.c_str(), task->profileId.c_str(),
+                            assetImportStateName(task->state.load()),
+                            static_cast<unsigned long long>(task->id))) {
+            ImGui::Text("Encoded: %llu  Reused: %llu  Failed: %llu",
+                        static_cast<unsigned long long>(
+                            task->encodedArtifacts.load()),
+                        static_cast<unsigned long long>(
+                            task->reusedArtifacts.load()),
+                        static_cast<unsigned long long>(
+                            task->failedArtifacts.load()));
+            {
+                std::lock_guard<std::mutex> lock(task->mutex);
+                if (!task->error.empty())
+                    ImGui::TextWrapped("Error: %s", task->error.c_str());
+            }
+            if (std::filesystem::is_regular_file(task->logPath) &&
+                ImGui::Button("Open Log")) {
+                ShellExecuteW(nullptr, L"open", task->logPath.c_str(),
+                              nullptr, nullptr, SW_SHOWNORMAL);
+            }
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
+    }
+    ImGui::End();
+}
+
 void Application::drawGui() {
     ImGui::Begin("Renderer");
     if (!shaderVariants_.empty()) {
@@ -1550,6 +2284,7 @@ void Application::drawGui() {
     ImGui::End();
 
     drawScenePanel();
+    drawAssetsPanel();
 
     ImGui::Begin("Loading");
     if (!latestSceneLoadTask_) {
@@ -1858,6 +2593,7 @@ void Application::mainLoop() {
         window_->pollEvents();
         input_->update();
 
+        updateAssetImports();
         processRuntimeCommand();
         if (pendingQuitCommand_ &&
             pendingQuitCommand_->responseDelivered.load()) {

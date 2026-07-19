@@ -32,6 +32,8 @@ class Camera {
     glm::vec3 front() const { return front_; }
     glm::vec3 right() const { return right_; }
     glm::vec3 up() const { return up_; }
+    float yaw() const { return yaw_; }
+    float pitch() const { return pitch_; }
     float nearPlane() const { return nearPlane_; }
     float farPlane() const { return farPlane_; }
 

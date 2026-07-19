@@ -41,6 +41,8 @@ struct ParsedCommand {
     Json params = Json::object();
     bool jsonOutput = false;
     bool waitForLoad = true;
+    bool force = false;
+    bool loadAfter = false;
 };
 
 void printUsage() {
@@ -51,6 +53,12 @@ void printUsage() {
         << "  VulkanLabCtl [--json] [--no-wait] scene load <name>\n"
         << "  VulkanLabCtl [--json] load status [task-id]\n"
         << "  VulkanLabCtl [--json] load cancel [task-id]\n"
+        << "  VulkanLabCtl [--json] asset catalog\n"
+        << "  VulkanLabCtl [--json] asset status [scene]\n"
+        << "  VulkanLabCtl [--json] [--no-wait] [--force] "
+           "[--load-after] asset import <scene>\n"
+        << "  VulkanLabCtl [--json] asset cancel [task-id]\n"
+        << "  VulkanLabCtl [--json] asset cache-info\n"
         << "  VulkanLabCtl [--json] texture-limit get\n"
         << "  VulkanLabCtl [--json] texture-limit set <full|512|1024|2048>\n"
         << "  VulkanLabCtl [--json] shader list|current\n"
@@ -75,11 +83,17 @@ ParsedCommand parseCommand(int argc, char **argv) {
     std::vector<std::string> args;
     bool jsonOutput = false;
     bool waitForLoad = true;
+    bool force = false;
+    bool loadAfter = false;
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--json")
             jsonOutput = true;
         else if (std::string(argv[i]) == "--no-wait")
             waitForLoad = false;
+        else if (std::string(argv[i]) == "--force")
+            force = true;
+        else if (std::string(argv[i]) == "--load-after")
+            loadAfter = true;
         else
             args.emplace_back(argv[i]);
     }
@@ -89,6 +103,8 @@ ParsedCommand parseCommand(int argc, char **argv) {
     ParsedCommand parsed;
     parsed.jsonOutput = jsonOutput;
     parsed.waitForLoad = waitForLoad;
+    parsed.force = force;
+    parsed.loadAfter = loadAfter;
     if (args == std::vector<std::string>{"ping"}) {
         parsed.method = "system.ping";
     } else if (args == std::vector<std::string>{"info"}) {
@@ -120,6 +136,26 @@ ParsedCommand parseCommand(int argc, char **argv) {
         parsed.method = "load.cancel";
         if (args.size() == 3)
             parsed.params = {{"taskId", std::stoull(args[2])}};
+    } else if (args == std::vector<std::string>{"asset", "catalog"}) {
+        parsed.method = "asset.catalog";
+    } else if ((args.size() == 2 || args.size() == 3) &&
+               args[0] == "asset" && args[1] == "status") {
+        parsed.method = "asset.status";
+        if (args.size() == 3)
+            parsed.params = {{"name", args[2]}};
+    } else if (args.size() == 3 && args[0] == "asset" &&
+               args[1] == "import") {
+        parsed.method = "asset.import";
+        parsed.params = {{"name", args[2]},
+                         {"force", force},
+                         {"loadAfter", loadAfter}};
+    } else if ((args.size() == 2 || args.size() == 3) &&
+               args[0] == "asset" && args[1] == "cancel") {
+        parsed.method = "asset.cancel";
+        if (args.size() == 3)
+            parsed.params = {{"taskId", std::stoull(args[2])}};
+    } else if (args == std::vector<std::string>{"asset", "cache-info"}) {
+        parsed.method = "asset.cache_info";
     } else if (args.size() == 2 && args[0] == "texture-limit" &&
                args[1] == "get") {
         parsed.method = "texture_limit.get";
@@ -299,6 +335,35 @@ void printHuman(const std::string &method, const Json &result) {
     } else if (method == "load.cancel") {
         std::cout << "cancel requested for task "
                   << result.at("taskId").get<uint64_t>() << '\n';
+    } else if (method == "asset.catalog") {
+        for (const auto &entry : result.at("entries")) {
+            std::cout << entry.at("scene").get<std::string>() << " ["
+                      << entry.at("state").get<std::string>() << "] "
+                      << entry.at("profileId").get<std::string>() << '\n';
+        }
+    } else if (method == "asset.status") {
+        std::cout << result.at("scene").get<std::string>() << ": "
+                  << result.at("state").get<std::string>() << " ("
+                  << result.at("profileId").get<std::string>() << ")\n";
+        if (!result.value("reason", std::string{}).empty())
+            std::cout << result.at("reason").get<std::string>() << '\n';
+    } else if (method == "asset.import") {
+        if (result.contains("taskId"))
+            std::cout << "asset task "
+                      << result.at("taskId").get<uint64_t>() << ": "
+                      << result.value("state", "Queued") << '\n';
+        else
+            std::cout << result.dump(2) << '\n';
+    } else if (method == "asset.cancel") {
+        std::cout << "cancel requested for asset task "
+                  << result.at("taskId").get<uint64_t>() << '\n';
+    } else if (method == "asset.cache_info") {
+        std::cout << result.at("root").get<std::string>() << '\n'
+                  << result.at("files").get<uint64_t>() << " files, "
+                  << std::fixed << std::setprecision(2)
+                  << static_cast<double>(result.at("bytes").get<uint64_t>()) /
+                         (1024.0 * 1024.0)
+                  << " MiB\n";
     } else if (method == "shader.set") {
         std::cout << result.at("shader").get<std::string>() << '\n';
     } else if (method == "stats.last_load") {
@@ -322,7 +387,8 @@ int main(int argc, char **argv) {
 
         const bool startsLoad = command.method == "scene.load" ||
                                 command.method == "scene.reload" ||
-                                command.method == "texture_limit.set";
+                                command.method == "texture_limit.set" ||
+                                command.method == "asset.import";
         if (response.value("ok", false) && command.waitForLoad &&
             startsLoad) {
             const auto taskId = loadTaskId(response.at("result"));

@@ -2,6 +2,7 @@
 
 #include "Config.h"
 
+#include "assets/AssetImportManager.h"
 #include "assets/ProjectContext.h"
 #include "assets/SceneCatalog.h"
 #include "diagnostics/SceneLoadStats.h"
@@ -37,6 +38,7 @@ class SceneLoadManager;
 class SceneGpuBuilder;
 struct SceneLoadTask;
 struct SceneImportUiState;
+struct SceneAssetOperationState;
 
 enum class InputMode {
     UI,         // 光标可见，ImGui 接管
@@ -70,22 +72,31 @@ class Application {
     void applySceneCameraDefaults();
     void processRuntimeCommand();
     void updateSceneLoading();
+    void updateAssetImports();
     void drawScenePanel();
+    void drawAssetsPanel();
     void updateSceneImport();
     void refreshSceneRegistry(const std::string &selectSceneId = {});
 
     void loadScene(int index, bool replaceCurrent = false);
-    void reloadCurrentScene();
+    uint64_t reloadCurrentScene();
     void switchScene(int index);
-    uint64_t requestSceneLoad(int index);
+    uint64_t requestSceneLoad(int index, bool sourceFallback = false);
+    uint64_t requestSceneOperation(int index, bool sourceFallback = false,
+                                   bool loadAfter = true,
+                                   ImportReason reason = ImportReason::SceneLoad,
+                                   bool forceReimport = false);
     bool cancelSceneLoad(uint64_t taskId);
+    bool cancelLoadOperation(uint64_t taskId);
     void finalizeSceneLoad(const std::shared_ptr<SceneLoadTask> &task,
                            bool success);
-    void setTextureLimit(uint32_t limit);
+    uint64_t setTextureLimit(uint32_t limit);
     void setShaderVariant(int index);
     int findSceneIndexByName(const std::string &name) const;
     int findShaderVariantIndexByName(const std::string &name) const;
     std::string profileIdForTextureLimit(const SceneEntry &entry) const;
+    void refreshArtifactStatus(int sceneIndex);
+    void refreshAllArtifactStatuses();
 
     Config config_;
     ProjectContext projectContext_;
@@ -117,6 +128,8 @@ class Application {
     std::unique_ptr<SceneGpuBuilder> sceneGpuBuilder_;
     std::shared_ptr<SceneLoadTask> latestSceneLoadTask_;
     uint64_t lastFinalizedTaskId_ = 0;
+    std::unique_ptr<AssetImportManager> assetImportManager_;
+    std::unique_ptr<SceneAssetOperationState> sceneAssetOperations_;
 
     std::unique_ptr<RuntimeCommandQueue> runtimeCommandQueue_;
     std::unique_ptr<NamedPipeServerWin32> runtimeControlServer_;
