@@ -1,14 +1,15 @@
 # 开发文档工作区
 
 > Status: Current
-> Last verified: 2026-07-18
-> Verified against: `d4539b7`
+> Last verified: 2026-07-19
+> Verified against: `eed148b`
 
 本目录只存放正在讨论或执行的开发计划。不要根据历史归档推断下一阶段目标。
 
 ## Active Plans
 
 - [大型场景响应式加载路线图](async_scene_loading_plan.md)：从现有同步加载演进到后台准备、增量 GPU 上传、任务取消和压缩纹理资产管线。
+- [场景与资源资产管线完整计划](asset_management_pipeline_plan.md)：建立数据驱动 Scene Catalog、共享派生缓存、并行和自动导入、Artifact Index、Cook，以及与后续资源驻留管理的衔接。
 
 ## 新计划规则
 
