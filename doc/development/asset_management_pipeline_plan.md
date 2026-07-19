@@ -529,6 +529,21 @@ Stage A 已实现于 `412ca02` 和 `df02615`：
 - 一个纹理失败时错误包含 image/semantic/command exit code。
 - 相同输入在串行和并行模式下生成相同 cache key 和等价 manifest。
 
+#### Implementation Status (2026-07-19)
+
+Stage B 已实现于 `67bb5c1`：
+
+- `TextureCacheBuilder` 已拆为 scan/work/publish 流程，`TextureCachePipeline` 提供确定性调度和 worker result，`IProcessRunner` 允许测试替换真实编码进程。
+- scheduler 同时执行 worker 上限和估算内存 reservation；默认最多 4 worker、2048 MiB，超预算单任务可独占执行。
+- Windows `Win32JobProcessRunner` 使用 Job Object 管理完整 `ktx.exe` 子进程树，精确限制继承句柄；Ctrl+C、失败和退出都会终止在途编码并清理临时文件。
+- CLI 已支持 `--workers`、`--memory-budget-mib`、`--preset development|production`、`--progress ndjson`/`--progress-json`。stdout 的 NDJSON 与 stderr 子进程诊断分离。
+- manifest 记录 preset/encoder settings，并以临时文件加 `MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH)` 发布；development 保留原 cache key，production 使用独立参数/key。
+- CPU tests 覆盖 worker/预算上限、超大任务、乱序完成、fail-fast、fake runner 和真实 Job Object 取消；CLI CTest 覆盖真实 KTX、串并行等价、cache hit、preset 隔离、结构化失败及无 manifest/temp 泄漏。
+
+Release/Main Sponza 1024 clean 实测：串行 1 worker 为 `261.19 s`，并行 4 worker 为 `117.15 s`，加速约 `2.23x`；两份 72-entry manifest 的 SHA-256 相同。第二次并行执行为 `encoded=0, reused=72`。真实 Ctrl+C 测试在 8 个 blob 完成后中断，确认 scene manifest 不存在、临时文件为 0、资产工具/ktx 子进程为 0；重试复用 8 个 blob、编码剩余 64 个，并生成与 clean 基准相同的 manifest。
+
+自动化能够证明调度 reservation 有界，运行时进程采样未观察到持续增长；Windows 任务管理器中的系统级峰值仍属于人工性能观察项，不作为 Stage B 接口完成的阻塞条件。
+
 ### Stage C: Automatic On-Demand Import
 
 #### Scope

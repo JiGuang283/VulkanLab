@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `df02615`
+> Verified against: `67bb5c1`
 
 ## 环境要求
 
@@ -117,7 +117,9 @@ Catalog 当前包含以下初始 glTF 条目：
 .\VulkanLabAssetTool.exe texture-cache build `
   --project C:\Project\vulkan_learn `
   --scene-id main-sponza `
-  --profile desktop_1024
+  --profile desktop_1024 `
+  --workers 4 `
+  --memory-budget-mib 2048
 
 .\VulkanLabAssetTool.exe texture-cache build `
   --project C:\Project\vulkan_learn `
@@ -128,6 +130,17 @@ Catalog 当前包含以下初始 glTF 条目：
 `--project` 可省略，此时资产工具与渲染器一样查找 executable locator 或当前目录祖先中的 Catalog。需要把缓存放到其他位置时可显式使用 `--cache-root`。`--scene models/... --texture-limit 1024` 旧参数仍可按 Catalog source/profile 匹配，但新脚本应使用稳定 ID。
 
 缓存按 scene ID 和 profile ID 精确匹配。`desktop_1024` 不会复用 `desktop_2048` manifest。重新执行命令会复用有效 blob，`--force` 用于强制重新编码。工具必须完整成功后才发布新 manifest，失败不会修改源资产。
+
+并行导入参数：
+
+- `--workers N`：编码子进程上限；默认取逻辑 CPU 一半并限制到 4。
+- `--memory-budget-mib N`：估算编码工作集预算，默认 2048 MiB；预算优先于 worker 上限。
+- `--preset development|production`：显式覆盖 profile preset。development 保持兼容参数，production 使用更高 quality/Zstd 并生成不同 cache key。
+- `--progress ndjson` 或 `--progress-json`：stdout 只输出机器可读 NDJSON，普通诊断与 `ktx` 输出写 stderr。
+
+按 Ctrl+C 会取消整个 Job Object 中的 `ktx.exe`。已完成 blob 可在下次命令中复用，但取消时不会发布 scene manifest；命令正常取消返回 `130`。自动化脚本应以最终 `completed`、`failed` 或 `cancelled` 事件作为结果，不根据 artifact 完成数量推断 manifest 已发布。
+
+Stage B 的 Release/Main Sponza 1024 基准（2026-07-19，同一机器、clean 独立 cache root）为：单 worker `261.19 s`，四 worker `117.15 s`，约 `2.23x` 加速；两次生成的 72-entry manifest SHA-256 完全一致。cache hit 为 `encoded=0/reused=72`，约 `3.11 s`。这些数字用于回归趋势，不是跨机器性能门槛。
 
 迁移旧运行目录缓存不会重新编码 KTX2：
 

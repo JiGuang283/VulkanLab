@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `df02615`
+> Verified against: `67bb5c1`
 
 ## 项目、Catalog 与导入
 
@@ -46,6 +46,12 @@ worker 在文件、图片、材质、primitive 和 hierarchy 等自然边界检�
 
 阶段三在原始 glTF 与运行时 loader 之间增加只读派生缓存。离线 `VulkanLabAssetTool texture-cache build` 扫描材质实际引用的图片，用 KTX-Software 生成 UASTC + Zstd KTX2 和完整 mip chain。源 glTF、GLB 和图片保持不变。
 
+资产工具把一次构建分为 scan、schedule/worker 和 publish：scan 解析 glTF、读取源 hash、计算输出尺寸/cache key，并验证可复用 blob；未命中任务进入确定性调度器。默认 worker 数为 `min(4, max(1, logicalCpuCount / 2))`，同时受默认 `2048 MiB` 估算工作集预算约束。单任务超过预算时可以独占执行，多个任务不能绕过总预算。worker 只负责一张纹理的临时输入、`ktx create` 子进程、KTX2 验证和内容寻址 blob 原子发布。
+
+Windows 下所有 `ktx.exe` 都由独立 Job Object 管理，并使用 `KILL_ON_JOB_CLOSE`。每个子进程只继承自己的输出管道；Ctrl+C、首个任务失败或资产工具退出会停止分发、终止完整子进程树并清理临时输入/输出。已经验证并原子发布的 blob 可以保留供重试复用，但只有全部任务成功后才通过 atomic replace 发布 scene manifest，因此取消和失败不会覆盖已有有效 manifest。
+
+`development` preset 保留阶段三已有的 quality 2、RDO、Zstd 9 参数和 cache key，以继续复用现有缓存；`production` 使用 quality 4、RDO 和 Zstd 18，并产生不同 key。preset 名称和完整 encoder settings 写入 manifest。使用 `--progress ndjson` 时 stdout 只输出带 `protocolVersion`、task ID、artifact 状态、计数、耗时、峰值 worker 和估算保留字节的 UTF-8 NDJSON；子进程输出和普通错误写入 stderr。
+
 默认缓存根目录为 `%LOCALAPPDATA%/VulkanLab/DerivedAssets/<projectId>`，Debug、Release 和资产工具共享：
 
 ```text
@@ -60,7 +66,7 @@ manifest schema v2 记录 project/scene/profile 稳定身份、scene、texture l
 
 `PreparedImage` 的 prebuilt mip payload 包含总字节数组、最终 `VkFormat` 和每级 mip 的 offset、size、width、height。`SceneGpuBuilder` 将所有 mip 写入 staging，并通过多个 `VkBufferImageCopy` region 上传到只需要 `TRANSFER_DST | SAMPLED` 的 image。原始 RGBA8 fallback 继续上传 base level，并由 GPU blit 生成 mip。
 
-以下情况必须记录 cache miss/invalid 原因并回退 stb，而不是使场景加载失败：manifest 不存在、profile 不匹配、源文件戳变化、schema 不支持、条目缺失、blob 缺失或损坏、KTX2 读取/转码失败。缓存生成只由显式资产工具执行，运行时不会自动编码或修改缓存。
+以下情况必须记录 cache miss/invalid 原因并回退 stb，而不是使场景加载失败：manifest 不存在、profile 不匹配、源文件戳变化、schema 不支持、条目缺失、blob 缺失或损坏、KTX2 读取/转码失败。缓存生成当前仍只由显式资产工具执行；Stage C 才会由 VulkanLab 监督独立资产工具进程进行按需导入。
 
 ## 增量 GPU Build
 
