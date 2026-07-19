@@ -11,7 +11,8 @@ using SurfaceCreator = std::function<VkSurfaceKHR(VkInstance)>;
 class VulkanContext {
   public:
     VulkanContext(SurfaceCreator            createSurface,
-                  std::vector<const char *> requiredExtensions);
+                  std::vector<const char *> requiredExtensions,
+                  bool enableValidation);
     ~VulkanContext();
 
     VulkanContext(const VulkanContext &) = delete;
@@ -19,6 +20,7 @@ class VulkanContext {
 
     VkInstance   instance() const { return instance_; }
     VkSurfaceKHR surface() const { return surface_; }
+    bool validationEnabled() const { return validationEnabled_; }
 
   private:
     void createInstance(std::vector<const char *> requiredExtensions);
@@ -31,6 +33,7 @@ class VulkanContext {
     VkInstance               instance_ = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT debugMessenger_ = VK_NULL_HANDLE;
     VkSurfaceKHR             surface_ = VK_NULL_HANDLE;
+    bool validationEnabled_ = false;
 };
 
 } // namespace vkr

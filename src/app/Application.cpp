@@ -652,7 +652,7 @@ void Application::init() {
     auto extensions = Window::getRequiredVulkanExtensions();
     context_ = std::make_unique<VulkanContext>(
         [this](VkInstance inst) { return window_->createSurface(inst); },
-        std::move(extensions));
+        std::move(extensions), config_.enableValidation);
     device_ = std::make_unique<Device>(*context_);
     descriptorAllocator_ = std::make_unique<DescriptorAllocator>(*device_);
     swapChain_ =
@@ -678,17 +678,21 @@ void Application::init() {
                                  static_cast<int>(sceneRegistry_.size()) - 1);
     pipelineCache_ = std::make_unique<PipelineCache>(*device_);
     sceneLoadManager_ = std::make_unique<SceneLoadManager>();
-    assetImportManager_ = std::make_unique<AssetImportManager>(
-        AssetImportManagerOptions{
-            projectContext_.projectRoot, config_.derivedTextureCachePath,
-            config_.assetToolPath, config_.assetImportWorkers,
-            config_.assetImportMemoryBudgetMiB});
+    if (config_.assetImportMode == AssetImportMode::OnDemand) {
+        assetImportManager_ = std::make_unique<AssetImportManager>(
+            AssetImportManagerOptions{
+                projectContext_.projectRoot, config_.derivedTextureCachePath,
+                config_.assetToolPath, config_.assetImportWorkers,
+                config_.assetImportMemoryBudgetMiB});
+    }
     sceneLoadContext_.maxTextureSize = config_.gltfMaxTextureSize;
     sceneLoadContext_.derivedTextureCachePath =
         config_.derivedTextureCachePath;
     sceneLoadContext_.projectId = catalog_.projectId;
     sceneLoadContext_.textureTranscodeTarget =
         device_->textureTranscodeTarget();
+    sceneLoadContext_.requireDerivedTextures =
+        config_.assetImportMode == AssetImportMode::CookedOnly;
     reloadArtifactIndex();
     refreshAllArtifactStatuses();
     sceneAssetOperations_->selectedSceneIndex = start;
@@ -872,6 +876,11 @@ uint64_t Application::setTextureLimit(uint32_t limit) {
                                   "2048.");
     if (sceneLoadContext_.maxTextureSize == limit)
         return 0;
+    if (config_.assetImportMode == AssetImportMode::CookedOnly) {
+        throw RuntimeCommandError(
+            "texture_limit_locked",
+            "Texture limit is fixed by the cooked package profile.");
+    }
 
     sceneLoadContext_.maxTextureSize = limit;
     refreshAllArtifactStatuses();
@@ -1111,7 +1120,8 @@ void Application::reloadArtifactIndex() {
 }
 
 void Application::persistArtifactIndex() {
-    if (!artifactIndex_)
+    if (!artifactIndex_ ||
+        config_.assetImportMode == AssetImportMode::CookedOnly)
         return;
     try {
         artifactIndex_->save();
@@ -1353,12 +1363,17 @@ void Application::processRuntimeCommand() {
         if (command->method == "system.ping") {
             result = {{"message", "pong"}};
         } else if (command->method == "system.info") {
+            ControlJson capabilities = {
+                "async_scene_load", "load_status", "load_cancel",
+                "asset_catalog"};
+            if (assetImportManager_) {
+                capabilities.push_back("asset_import");
+                capabilities.push_back("asset_cancel");
+            }
             result = {
                 {"application", "VulkanLab"},
                 {"protocolVersion", control::kProtocolVersion},
-                {"capabilities",
-                 {"async_scene_load", "load_status", "load_cancel",
-                  "asset_catalog", "asset_import", "asset_cancel"}},
+                {"capabilities", std::move(capabilities)},
                 {"pipe", control::kPipeNameUtf8},
                 {"scene", currentScene_ && currentSceneIndex_ >= 0
                               ? ControlJson(sceneRegistry_[currentSceneIndex_]
@@ -1369,6 +1384,8 @@ void Application::processRuntimeCommand() {
                                                   .id)
                                 : ControlJson(nullptr)},
                 {"projectId", catalog_.projectId},
+                {"assetMode", assetImportModeName(config_.assetImportMode)},
+                {"cookedPackage", projectContext_.cookedPackage},
                 {"cacheRoot", sceneLoadContext_.derivedTextureCachePath},
                 {"textureLimit", sceneLoadContext_.maxTextureSize},
                 {"shader", shaderVariants_.empty()
@@ -1453,7 +1470,10 @@ void Application::processRuntimeCommand() {
                 requestedTaskId = command->params["taskId"].get<uint64_t>();
             }
             if (requestedTaskId == 0) {
-                const auto activeImport = assetImportManager_->activeTask();
+                const auto activeImport =
+                    assetImportManager_
+                        ? assetImportManager_->activeTask()
+                        : std::shared_ptr<AssetImportTask>{};
                 requestedTaskId = activeImport
                                       ? activeImport->id
                                       : (latestSceneLoadTask_
@@ -1461,6 +1481,9 @@ void Application::processRuntimeCommand() {
                                              : 0);
             }
             if ((requestedTaskId & AssetImportManager::kTaskIdMask) != 0) {
+                if (!assetImportManager_)
+                    throw RuntimeCommandError(
+                        "load_not_found", "Load task was not found.");
                 const auto importTask =
                     assetImportManager_->task(requestedTaskId);
                 if (!importTask)
@@ -1486,7 +1509,10 @@ void Application::processRuntimeCommand() {
                 result = sceneLoadTaskToJson(task, superseded);
             }
         } else if (command->method == "load.cancel") {
-            const auto activeImport = assetImportManager_->activeTask();
+            const auto activeImport =
+                assetImportManager_
+                    ? assetImportManager_->activeTask()
+                    : std::shared_ptr<AssetImportTask>{};
             uint64_t taskId = activeImport
                                   ? activeImport->id
                                   : (latestSceneLoadTask_
@@ -1611,10 +1637,13 @@ void Application::processRuntimeCommand() {
             if (command->params.contains("taskId") &&
                 command->params["taskId"].is_number_unsigned())
                 taskId = command->params["taskId"].get<uint64_t>();
-            else if (const auto active = assetImportManager_->activeTask())
-                taskId = active->id;
+            else if (assetImportManager_) {
+                if (const auto active = assetImportManager_->activeTask())
+                    taskId = active->id;
+            }
             if (taskId == 0 ||
                 (taskId & AssetImportManager::kTaskIdMask) == 0 ||
+                !assetImportManager_ ||
                 !assetImportManager_->cancel(taskId)) {
                 throw RuntimeCommandError("asset_not_cancellable",
                                           "Asset import cannot be cancelled.");
@@ -2406,6 +2435,8 @@ void Application::drawGui() {
         }
     }
     constexpr uint32_t textureLimits[] = {0, 2048, 1024, 512};
+    ImGui::BeginDisabled(config_.assetImportMode ==
+                         AssetImportMode::CookedOnly);
     if (ImGui::BeginCombo("Texture Limit",
                           textureLimitLabel(sceneLoadContext_.maxTextureSize))) {
         for (uint32_t limit : textureLimits) {
@@ -2419,6 +2450,7 @@ void Application::drawGui() {
         }
         ImGui::EndCombo();
     }
+    ImGui::EndDisabled();
     ImGui::End();
 
     drawScenePanel();

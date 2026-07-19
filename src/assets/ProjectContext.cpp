@@ -1,4 +1,5 @@
 #include "ProjectContext.h"
+#include "RuntimePackage.h"
 
 #include <json.hpp>
 
@@ -92,17 +93,46 @@ ProjectContext makeContext(const std::filesystem::path &root,
     return context;
 }
 
+ProjectContext makePackageContext(const std::filesystem::path &root) {
+    RuntimePackageManifest manifest;
+    std::string error;
+    const std::filesystem::path manifestPath = root / "package_manifest.json";
+    if (!loadRuntimePackageManifest(manifestPath, manifest, error)) {
+        throw std::runtime_error("Invalid runtime package '" +
+                                 manifestPath.string() + "': " + error);
+    }
+    const RuntimePackageVerification verified =
+        verifyRuntimePackage(root, manifest);
+    ProjectContext context;
+    context.projectRoot = normalizeExistingDirectory(root);
+    context.catalogPath = context.projectRoot / manifest.catalogPath;
+    context.cacheRoot = context.projectRoot / manifest.cacheRoot;
+    context.catalogWritable = false;
+    context.cookedPackage = true;
+    context.packageProfileId = manifest.profileId;
+    context.diagnostic = "verified cooked package (" +
+                         std::to_string(verified.fileCount) + " files)";
+    return context;
+}
+
 } // namespace
 
 ProjectContext ProjectContextResolver::resolve(
     const std::optional<std::filesystem::path> &explicitProjectRoot,
     const std::filesystem::path &executablePath) {
-    if (explicitProjectRoot)
-        return makeContext(*explicitProjectRoot, "explicit --project");
-
     std::vector<std::filesystem::path> locatorCandidates;
     const std::filesystem::path executable =
         executablePath.empty() ? currentExecutablePath() : executablePath;
+    if (const auto packageRoot = findRuntimePackageRoot(executable)) {
+        if (explicitProjectRoot) {
+            throw std::runtime_error(
+                "--project cannot override a cooked runtime package");
+        }
+        return makePackageContext(*packageRoot);
+    }
+    if (explicitProjectRoot)
+        return makeContext(*explicitProjectRoot, "explicit --project");
+
     if (!executable.empty())
         locatorCandidates.push_back(executable.parent_path() / kLocatorName);
     locatorCandidates.push_back(std::filesystem::current_path() / kLocatorName);

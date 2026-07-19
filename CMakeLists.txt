@@ -126,6 +126,7 @@ if(BUILD_TESTING)
         "${CMAKE_SOURCE_DIR}/tests/ArtifactStatusTests.cpp"
         "${CMAKE_SOURCE_DIR}/tests/ArtifactIndexTests.cpp"
         "${CMAKE_SOURCE_DIR}/tests/ArtifactCachePrunerTests.cpp"
+        "${CMAKE_SOURCE_DIR}/tests/RuntimePackageTests.cpp"
         "${CMAKE_SOURCE_DIR}/tests/AssetImportManagerTests.cpp"
         "${CMAKE_SOURCE_DIR}/tests/AssetLoadCoordinatorTests.cpp"
         "${CMAKE_SOURCE_DIR}/tests/SceneCatalogEditorTests.cpp"
@@ -135,6 +136,7 @@ if(BUILD_TESTING)
         "${CMAKE_SOURCE_DIR}/src/assets/ArtifactStatus.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/ArtifactIndex.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/ArtifactCachePruner.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/RuntimePackage.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/AssetImportManager.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/AssetLoadCoordinator.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/DerivedTextureManifest.cpp"
@@ -146,6 +148,7 @@ if(BUILD_TESTING)
         "${CMAKE_SOURCE_DIR}/src/render/TextureData.cpp"
         "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool/TextureCachePipeline.cpp"
         "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool/ProcessRunner.cpp"
+        "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool/CookPackageBuilder.cpp"
     )
     target_include_directories(VulkanLabCpuTests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -174,6 +177,7 @@ if(WIN32)
 
     add_executable(VulkanLabAssetTool
         "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool/main.cpp"
+        "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool/CookPackageBuilder.cpp"
         "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool/TextureCacheBuilder.cpp"
         "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool/TextureCachePipeline.cpp"
         "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool/ProcessRunner.cpp"
@@ -183,6 +187,7 @@ if(WIN32)
         "${CMAKE_SOURCE_DIR}/src/assets/ArtifactStatus.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/ContentHash.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/CacheMutationLock.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/RuntimePackage.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/DerivedTextureManifest.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/ProjectContext.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/SceneCatalog.cpp"
@@ -229,6 +234,14 @@ if(WIN32)
                 "-DTOOL=$<TARGET_FILE:VulkanLabAssetTool>"
                 "-DTEST_ROOT=${CMAKE_BINARY_DIR}/asset_tool_texture_cache_test"
                 -P "${CMAKE_SOURCE_DIR}/tests/AssetToolTextureCacheTest.cmake"
+        )
+        add_test(
+            NAME VulkanLabAssetToolCook
+            COMMAND ${CMAKE_COMMAND}
+                "-DTOOL=$<TARGET_FILE:VulkanLabAssetTool>"
+                "-DRUNTIME_DIR=$<TARGET_FILE_DIR:VulkanLab>"
+                "-DTEST_ROOT=${CMAKE_BINARY_DIR}/asset_tool_cook_test"
+                -P "${CMAKE_SOURCE_DIR}/tests/AssetToolCookTest.cmake"
         )
     endif()
 endif()

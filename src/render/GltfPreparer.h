@@ -23,6 +23,7 @@ class GltfPreparer {
         std::string profileId;
         TextureTranscodeTarget textureTranscodeTarget =
             TextureTranscodeTarget::Rgba8;
+        bool requireDerivedTextures = false;
         std::string vertShaderPath;
         std::string fragShaderPath;
         std::optional<CameraPose> cameraOverride;

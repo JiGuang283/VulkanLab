@@ -20,6 +20,7 @@ class DerivedTextureCache {
                         std::string projectId, std::string sceneId,
                         std::string profileId, uint32_t textureLimit,
                         TextureTranscodeTarget target,
+                        bool strict,
                         ResourceLoadStats *stats);
 
     std::shared_ptr<const PreparedImage>
@@ -37,6 +38,7 @@ class DerivedTextureCache {
     std::string sceneId_;
     std::string profileId_;
     TextureTranscodeTarget target_ = TextureTranscodeTarget::Rgba8;
+    bool strict_ = false;
     ResourceLoadStats *stats_ = nullptr;
     std::optional<DerivedTextureManifest> manifest_;
     std::string status_;

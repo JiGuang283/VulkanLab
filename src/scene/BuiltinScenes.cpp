@@ -105,6 +105,8 @@ ScenePrepareFactory gltfSceneFactory(std::string modelPath, std::string vp,
         options.profileId = loadContext.profileId;
         options.textureTranscodeTarget =
             loadContext.textureTranscodeTarget;
+        options.requireDerivedTextures =
+            loadContext.requireDerivedTextures;
         options.loadStats = loadContext.loadStats;
         options.vertShaderPath = vp;
         options.fragShaderPath = fp;

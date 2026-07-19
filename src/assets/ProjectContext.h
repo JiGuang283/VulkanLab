@@ -11,6 +11,8 @@ struct ProjectContext {
     std::filesystem::path catalogPath;
     std::filesystem::path cacheRoot;
     bool catalogWritable = false;
+    bool cookedPackage = false;
+    std::string packageProfileId;
     std::string diagnostic;
 };
 

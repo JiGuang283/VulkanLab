@@ -16,6 +16,7 @@ void runTextureCachePipelineTests();
 void runArtifactStatusTests();
 void runArtifactIndexTests();
 void runArtifactCachePrunerTests();
+void runRuntimePackageTests();
 void runAssetImportManagerTests();
 void runAssetLoadCoordinatorTests();
 void runSceneCatalogEditorTests();
@@ -118,6 +119,7 @@ int main() {
         runArtifactStatusTests();
         runArtifactIndexTests();
         runArtifactCachePrunerTests();
+        runRuntimePackageTests();
         runAssetImportManagerTests();
         runAssetLoadCoordinatorTests();
         runSceneCatalogEditorTests();

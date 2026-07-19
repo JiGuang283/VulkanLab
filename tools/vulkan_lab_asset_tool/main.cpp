@@ -1,10 +1,12 @@
 #include "TextureCacheBuilder.h"
+#include "CookPackageBuilder.h"
 
 #include "assets/DerivedAssetPaths.h"
 #include "assets/CacheMutationLock.h"
 #include "assets/ArtifactCachePruner.h"
 #include "assets/ArtifactIndex.h"
 #include "assets/ProjectContext.h"
+#include "assets/RuntimePackage.h"
 #include "assets/SceneCatalog.h"
 #include "assets/SceneImportService.h"
 
@@ -67,6 +69,9 @@ void printUsage(std::ostream &output) {
         << "  VulkanLabAssetTool cache index rebuild [options]\n"
         << "  VulkanLabAssetTool cache prune [--older-than-days <n>] "
            "[--execute] [options]\n\n"
+        << "  VulkanLabAssetTool cook --platform windows-x64 "
+           "--profile <id> --output <path> [options]\n\n"
+        << "  VulkanLabAssetTool package verify --path <package-root>\n\n"
         << "Options:\n"
         << "  --project <path>     Source project root (otherwise use "
            "locator)\n"
@@ -77,6 +82,11 @@ void printUsage(std::ostream &output) {
         << "  --cache-root <path>  Override the shared derived cache root\n"
         << "  --older-than-days <n>  Retain recent orphan blobs (default: 7)\n"
         << "  --execute            Apply cache prune (default is dry-run)\n"
+        << "  --runtime-dir <path> Directory containing VulkanLab.exe and shader\n"
+        << "  --output <path>      Cooked package output directory\n"
+        << "  --path <path>        Cooked package root to verify\n"
+        << "  --platform <name>    Cook target (windows-x64 only)\n"
+        << "  --build-missing      Build non-Ready artifacts before cooking\n"
         << "  --legacy-cache-root  Legacy working-directory cache to migrate\n"
         << "  --force              Re-encode blobs even when they are valid\n"
         << "  --workers <n>        Parallel encoder processes (default: CPU/2, "
@@ -196,6 +206,42 @@ int main(int argc, char **argv) {
             return EXIT_SUCCESS;
         }
 
+        if (std::string(argv[1]) == "package" &&
+            std::string(argv[2]) == "verify") {
+            std::filesystem::path packageRoot;
+            for (int i = 3; i < argc; ++i) {
+                const std::string argument = argv[i];
+                if (argument == "--path") {
+                    packageRoot = requireValue(i, argc, argv, argument);
+                } else if (argument == "--help") {
+                    printUsage(std::cout);
+                    return EXIT_SUCCESS;
+                } else {
+                    throw std::invalid_argument("unknown option: " + argument);
+                }
+            }
+            if (packageRoot.empty())
+                throw std::invalid_argument("--path is required");
+            packageRoot =
+                std::filesystem::absolute(packageRoot).lexically_normal();
+            vkr::RuntimePackageManifest manifest;
+            std::string error;
+            if (!vkr::loadRuntimePackageManifest(
+                    packageRoot / "package_manifest.json", manifest, error)) {
+                throw std::runtime_error("package manifest is invalid: " +
+                                         error);
+            }
+            const vkr::RuntimePackageVerification verified =
+                vkr::verifyRuntimePackage(packageRoot, manifest);
+            std::cout << "Package verified\n"
+                      << "  path: " << packageRoot.string()
+                      << "\n  project: " << manifest.projectId
+                      << "\n  profile: " << manifest.profileId
+                      << "\n  files: " << verified.fileCount
+                      << "\n  bytes: " << verified.totalBytes << '\n';
+            return EXIT_SUCCESS;
+        }
+
         const bool cacheIndexRebuild =
             argc >= 4 && std::string(argv[1]) == "cache" &&
             std::string(argv[2]) == "index" &&
@@ -271,6 +317,119 @@ int main(int argc, char **argv) {
                           << candidate.ageSeconds << " s)\n";
             if (!execute && !report.candidates.empty())
                 std::cout << "Re-run with --execute to remove candidates.\n";
+            return EXIT_SUCCESS;
+        }
+
+        if (std::string(argv[1]) == "cook") {
+            std::optional<std::filesystem::path> explicitProject;
+            vkr::assettool::CookPackageOptions cook;
+            vkr::assettool::TextureCacheBuildOptions build;
+            bool buildMissing = false;
+            for (int i = 2; i < argc; ++i) {
+                const std::string argument = argv[i];
+                if (argument == "--project") {
+                    explicitProject = requireValue(i, argc, argv, argument);
+                } else if (argument == "--cache-root") {
+                    cook.cacheRoot = requireValue(i, argc, argv, argument);
+                } else if (argument == "--runtime-dir") {
+                    cook.runtimeDirectory =
+                        requireValue(i, argc, argv, argument);
+                } else if (argument == "--output") {
+                    cook.outputDirectory =
+                        requireValue(i, argc, argv, argument);
+                } else if (argument == "--platform") {
+                    cook.platform = requireValue(i, argc, argv, argument);
+                } else if (argument == "--profile") {
+                    cook.profileId = requireValue(i, argc, argv, argument);
+                } else if (argument == "--scene-id") {
+                    cook.sceneIds.push_back(
+                        requireValue(i, argc, argv, argument));
+                } else if (argument == "--build-missing") {
+                    buildMissing = true;
+                } else if (argument == "--ktx-tool") {
+                    build.ktxTool = requireValue(i, argc, argv, argument);
+                } else if (argument == "--workers") {
+                    build.maxWorkers = parsePositiveUint32(
+                        requireValue(i, argc, argv, argument), argument);
+                } else if (argument == "--memory-budget-mib") {
+                    build.memoryBudgetMiB = parsePositiveUint32(
+                        requireValue(i, argc, argv, argument), argument);
+                } else if (argument == "--help") {
+                    printUsage(std::cout);
+                    return EXIT_SUCCESS;
+                } else {
+                    throw std::invalid_argument("unknown option: " + argument);
+                }
+            }
+            if (cook.outputDirectory.empty())
+                throw std::invalid_argument("--output is required for cook");
+            vkr::ProjectContext project =
+                vkr::ProjectContextResolver::resolve(explicitProject);
+            const vkr::SceneCatalog catalog = vkr::SceneCatalog::load(
+                project.catalogPath, project.projectRoot);
+            cook.projectRoot = project.projectRoot;
+            if (cook.profileId.empty())
+                cook.profileId = catalog.defaultImportProfile;
+            const vkr::ImportProfile &profile =
+                catalog.profile(cook.profileId);
+            if (cook.cacheRoot.empty()) {
+                cook.cacheRoot = vkr::DerivedAssetPaths::defaultCacheRoot(
+                    catalog.projectId);
+            }
+            if (cook.runtimeDirectory.empty()) {
+                cook.runtimeDirectory =
+                    vkr::ProjectContextResolver::currentExecutablePath()
+                        .parent_path();
+            }
+
+            std::atomic_bool cancelRequested{false};
+            ConsoleCancellationHandler cancellationHandler(cancelRequested);
+            if (buildMissing) {
+                std::unordered_set<std::string> requested(
+                    cook.sceneIds.begin(), cook.sceneIds.end());
+                for (const vkr::CatalogScene &scene : catalog.scenes) {
+                    const bool selected = cook.sceneIds.empty()
+                                              ? !scene.optional
+                                              : requested.count(scene.id) > 0;
+                    if (!selected || scene.type != "gltf")
+                        continue;
+                    const std::filesystem::path source =
+                        project.projectRoot / scene.source;
+                    const vkr::ArtifactStatus status =
+                        vkr::inspectTextureArtifacts(
+                            {cook.cacheRoot, source, catalog.projectId,
+                             scene.id, profile.id, profile.textureLimit});
+                    if (status.ready())
+                        continue;
+                    build.scene = source;
+                    build.sceneProjectPath = scene.source;
+                    build.cacheRoot = cook.cacheRoot;
+                    build.projectId = catalog.projectId;
+                    build.sceneId = scene.id;
+                    build.profileId = profile.id;
+                    build.textureLimit = profile.textureLimit;
+                    build.qualityPreset = profile.qualityPreset;
+                    build.cancelRequested = &cancelRequested;
+                    vkr::CacheMutationLock buildLock(cook.cacheRoot,
+                                                     &cancelRequested);
+                    const int buildResult =
+                        vkr::assettool::buildTextureCache(build);
+                    if (buildResult != 0)
+                        return buildResult;
+                }
+            }
+
+            vkr::CacheMutationLock cookLock(cook.cacheRoot,
+                                            &cancelRequested);
+            const vkr::assettool::CookPackageReport report =
+                vkr::assettool::buildCookPackage(cook);
+            std::cout << "Cook complete\n"
+                      << "  output: " << report.outputDirectory.string()
+                      << "\n  scenes: " << report.sceneCount
+                      << "\n  texture manifests: " << report.manifestCount
+                      << "\n  unique blobs: " << report.blobCount
+                      << "\n  package files: " << report.fileCount
+                      << "\n  package bytes: " << report.totalBytes << '\n';
             return EXIT_SUCCESS;
         }
 

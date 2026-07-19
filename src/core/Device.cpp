@@ -7,7 +7,6 @@
 #include <vector>
 
 namespace {
-const bool                      enableValidationLayers = true;
 const std::vector<const char *> validationLayers = {
     "VK_LAYER_KHRONOS_validation"};
 const std::vector<const char *> deviceExtensions = {
@@ -180,7 +179,7 @@ void Device::createLogicalDevice() {
         static_cast<uint32_t>(deviceExtensions.size());
     createInfo.ppEnabledExtensionNames = deviceExtensions.data();
 
-    if (enableValidationLayers) {
+    if (ctx_.validationEnabled()) {
         createInfo.enabledLayerCount =
             static_cast<uint32_t>(validationLayers.size());
         createInfo.ppEnabledLayerNames = validationLayers.data();

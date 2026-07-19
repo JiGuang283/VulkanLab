@@ -6,7 +6,6 @@
 #include <vector>
 
 namespace {
-const bool                      enableValidationLayers = true;
 const std::vector<const char *> validationLayers = {
     "VK_LAYER_KHRONOS_validation"};
 
@@ -58,14 +57,16 @@ debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT      messageSeverity,
 }
 
 VulkanContext::VulkanContext(SurfaceCreator            createSurface,
-                             std::vector<const char *> requiredExtensions) {
+                             std::vector<const char *> requiredExtensions,
+                             bool enableValidation)
+    : validationEnabled_(enableValidation) {
     createInstance(std::move(requiredExtensions));
     setupDebugMessenger();
     surface_ = createSurface(instance_);
 }
 
 VulkanContext::~VulkanContext() {
-    if (enableValidationLayers) {
+    if (debugMessenger_ != VK_NULL_HANDLE) {
         DestroyDebugUtilsMessengerEXT(instance_, debugMessenger_, nullptr);
     }
     vkDestroySurfaceKHR(instance_, surface_, nullptr);
@@ -74,7 +75,7 @@ VulkanContext::~VulkanContext() {
 
 void VulkanContext::createInstance(
     std::vector<const char *> requiredExtensions) {
-    if (enableValidationLayers && !checkValidationLayerSupport()) {
+    if (validationEnabled_ && !checkValidationLayerSupport()) {
         throw std::runtime_error(
             "validation layers requested requested, but not available!");
     }
@@ -90,7 +91,7 @@ void VulkanContext::createInstance(
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = &appInfo;
 
-    if (enableValidationLayers) {
+    if (validationEnabled_) {
         requiredExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     }
     createInfo.enabledExtensionCount =
@@ -98,7 +99,7 @@ void VulkanContext::createInstance(
     createInfo.ppEnabledExtensionNames = requiredExtensions.data();
 
     VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
-    if (enableValidationLayers) {
+    if (validationEnabled_) {
         createInfo.enabledLayerCount =
             static_cast<uint32_t>(validationLayers.size());
         createInfo.ppEnabledLayerNames = validationLayers.data();
@@ -115,7 +116,7 @@ void VulkanContext::createInstance(
 }
 
 void VulkanContext::setupDebugMessenger() {
-    if (!enableValidationLayers)
+    if (!validationEnabled_)
         return;
 
     VkDebugUtilsMessengerCreateInfoEXT createInfo;

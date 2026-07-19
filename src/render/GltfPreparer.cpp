@@ -373,6 +373,7 @@ PreparedSceneData GltfPreparer::prepare(
         options.derivedTextureCachePath, modelPath, options.projectId,
         options.sceneId, options.profileId, options.maxTextureSize,
         options.textureTranscodeTarget,
+        options.requireDerivedTextures,
         options.loadStats ? &options.loadStats->resources : nullptr);
 
     std::unordered_map<int, std::shared_ptr<const PreparedImage>> imageCache;
@@ -513,8 +514,13 @@ PreparedSceneData GltfPreparer::prepare(
         applySampler(gltf, texture, preparedTexture);
         auto image = derivedCache.load(texture.source, semantic,
                                        mipmapWrapFor(preparedTexture));
-        if (!image)
+        if (!image && !options.requireDerivedTextures)
             image = decodeImage(texture.source);
+        if (!image && options.requireDerivedTextures) {
+            throw std::runtime_error(
+                "Cooked texture contract failed for glTF texture " +
+                std::to_string(gltfTextureIndex));
+        }
         if (!image)
             return -1;
         preparedTexture.image = image;

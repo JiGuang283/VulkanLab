@@ -43,6 +43,7 @@ bool parseArguments(int argc, char **argv, vkr::Config &config) {
             if (++i >= argc)
                 throw std::invalid_argument("--asset-mode requires a value");
             const std::string mode = argv[i];
+            config.assetImportModeExplicit = true;
             if (mode == "ondemand")
                 config.assetImportMode = vkr::AssetImportMode::OnDemand;
             else if (mode == "readonly")
@@ -57,10 +58,12 @@ bool parseArguments(int argc, char **argv, vkr::Config &config) {
             if (++i >= argc)
                 throw std::invalid_argument("--asset-tool requires a path");
             config.assetToolPath = argv[i];
+            config.assetToolPathExplicit = true;
         } else if (argument == "--cache-root") {
             if (++i >= argc)
                 throw std::invalid_argument("--cache-root requires a path");
             config.derivedTextureCachePath = argv[i];
+            config.cachePathExplicit = true;
         } else if (argument == "--help") {
             return false;
         } else {
@@ -99,10 +102,34 @@ int main(int argc, char **argv) {
             vkr::ProjectContextResolver::resolve(explicitProject);
         vkr::SceneCatalog catalog = vkr::SceneCatalog::load(
             projectContext.catalogPath, projectContext.projectRoot);
-        projectContext.cacheRoot =
-            vkr::DerivedAssetPaths::defaultCacheRoot(catalog.projectId);
-        if (config.derivedTextureCachePath.empty())
-            config.derivedTextureCachePath = projectContext.cacheRoot.string();
+        if (projectContext.cookedPackage) {
+            if (config.cachePathExplicit || config.assetToolPathExplicit)
+                throw std::runtime_error(
+                    "A cooked package cannot use external cache or asset tool paths");
+            if (config.assetImportModeExplicit &&
+                config.assetImportMode != vkr::AssetImportMode::CookedOnly) {
+                throw std::runtime_error(
+                    "A cooked package requires --asset-mode cooked-only");
+            }
+            if (catalog.defaultImportProfile !=
+                projectContext.packageProfileId) {
+                throw std::runtime_error(
+                    "Cooked catalog profile does not match package manifest");
+            }
+            config.assetImportMode = vkr::AssetImportMode::CookedOnly;
+            config.enableValidation = false;
+            config.gltfMaxTextureSize =
+                catalog.profile(projectContext.packageProfileId).textureLimit;
+            config.derivedTextureCachePath =
+                projectContext.cacheRoot.string();
+        } else {
+            projectContext.cacheRoot =
+                vkr::DerivedAssetPaths::defaultCacheRoot(catalog.projectId);
+            if (config.derivedTextureCachePath.empty()) {
+                config.derivedTextureCachePath =
+                    projectContext.cacheRoot.string();
+            }
+        }
         VKR_LOG_INFO("Assets", "Project '{}' from '{}' ({})", catalog.projectId,
                      projectContext.projectRoot.string(),
                      projectContext.diagnostic);

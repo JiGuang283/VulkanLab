@@ -26,6 +26,7 @@ struct SceneLoadContext {
     std::string profileId;
     TextureTranscodeTarget textureTranscodeTarget =
         TextureTranscodeTarget::Rgba8;
+    bool requireDerivedTextures = false;
     SceneLoadStats *loadStats = nullptr;
 };
 

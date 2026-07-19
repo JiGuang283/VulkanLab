@@ -20,12 +20,15 @@ struct Config {
     std::string derivedTextureCachePath;
     std::string projectPath;
     std::string assetToolPath;
+    bool cachePathExplicit = false;
+    bool assetToolPathExplicit = false;
 
     // ---- 渲染设置 ----
     bool enableValidation = true;
     bool enableRuntimeControl = false;
     uint32_t gltfMaxTextureSize = 2048; // 0 = Full resolution
     AssetImportMode assetImportMode = AssetImportMode::OnDemand;
+    bool assetImportModeExplicit = false;
     uint32_t assetImportWorkers = 0;
     uint64_t assetImportMemoryBudgetMiB = 2048;
 

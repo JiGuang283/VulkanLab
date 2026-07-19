@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <stdexcept>
 #include <system_error>
 
 namespace vkr {
@@ -39,19 +40,22 @@ DerivedTextureCache::DerivedTextureCache(
     std::filesystem::path cacheRoot, std::filesystem::path scenePath,
     std::string projectId, std::string sceneId, std::string profileId,
     uint32_t textureLimit, TextureTranscodeTarget target,
-    ResourceLoadStats *stats)
+    bool strict, ResourceLoadStats *stats)
     : cacheRoot_(std::move(cacheRoot)), scenePath_(std::move(scenePath)),
       sceneDirectory_(scenePath_.has_parent_path() ? scenePath_.parent_path()
                                                   : std::filesystem::path(".")),
       projectId_(std::move(projectId)), sceneId_(std::move(sceneId)),
       profileId_(std::move(profileId)),
-      target_(target), stats_(stats) {
+      target_(target), strict_(strict), stats_(stats) {
     DerivedTextureManifest manifest;
     const std::filesystem::path path =
         derivedManifestPath(cacheRoot_, sceneId_, profileId_);
     if (!loadDerivedTextureManifest(path, manifest, status_)) {
         if (stats_ && status_ != "manifest not found")
             ++stats_->derivedTextureInvalid;
+        if (strict_)
+            throw std::runtime_error("Cooked texture manifest error: " +
+                                     status_ + " (" + path.string() + ")");
         return;
     }
     if (manifest.schemaVersion != DerivedTextureManifest::kSchemaVersion ||
@@ -61,12 +65,18 @@ DerivedTextureCache::DerivedTextureCache(
         status_ = "manifest scene/profile mismatch";
         if (stats_)
             ++stats_->derivedTextureInvalid;
+        if (strict_)
+            throw std::runtime_error("Cooked texture manifest identity mismatch: " +
+                                     path.string());
         return;
     }
     if (!stampsEqual(manifest.scene, scenePath_)) {
         status_ = "scene source changed";
         if (stats_)
             ++stats_->derivedTextureInvalid;
+        if (strict_)
+            throw std::runtime_error("Cooked scene stamp mismatch: " +
+                                     scenePath_.string());
         return;
     }
     manifest_ = std::move(manifest);
@@ -93,6 +103,9 @@ DerivedTextureCache::load(int imageIndex, TextureSemantic semantic,
     if (!manifest_) {
         if (stats_)
             ++stats_->derivedTextureMisses;
+        if (strict_)
+            throw std::runtime_error("Cooked texture manifest is unavailable: " +
+                                     status_);
         return {};
     }
     const DerivedTextureEntry *entry =
@@ -100,6 +113,11 @@ DerivedTextureCache::load(int imageIndex, TextureSemantic semantic,
     if (!entry) {
         if (stats_)
             ++stats_->derivedTextureMisses;
+        if (strict_)
+            throw std::runtime_error(
+                "Cooked texture entry is missing for image " +
+                std::to_string(imageIndex) + " (" +
+                textureSemanticName(semantic) + ")");
         return {};
     }
     if (!sourceMatches(*entry)) {
@@ -109,6 +127,10 @@ DerivedTextureCache::load(int imageIndex, TextureSemantic semantic,
         }
         VKR_LOG_DEBUG("TextureCache", "Source changed for image {}",
                       imageIndex);
+        if (strict_)
+            throw std::runtime_error(
+                "Cooked texture source stamp mismatch for image " +
+                std::to_string(imageIndex));
         return {};
     }
 
@@ -129,6 +151,9 @@ DerivedTextureCache::load(int imageIndex, TextureSemantic semantic,
         }
         VKR_LOG_WARN("TextureCache", "Could not read '{}': {}",
                      blobPath.string(), ktxErrorString(result));
+        if (strict_)
+            throw std::runtime_error("Could not read cooked KTX2 blob: " +
+                                     blobPath.string());
         return {};
     }
 
@@ -145,6 +170,9 @@ DerivedTextureCache::load(int imageIndex, TextureSemantic semantic,
         }
         VKR_LOG_WARN("TextureCache", "Invalid derived texture '{}'",
                      blobPath.string());
+        if (strict_)
+            throw std::runtime_error("Invalid cooked KTX2 texture: " +
+                                     blobPath.string());
         return {};
     }
 
@@ -163,6 +191,9 @@ DerivedTextureCache::load(int imageIndex, TextureSemantic semantic,
         }
         VKR_LOG_WARN("TextureCache", "Could not transcode '{}': {}",
                      blobPath.string(), ktxErrorString(result));
+        if (strict_)
+            throw std::runtime_error("Could not transcode cooked KTX2 blob: " +
+                                     blobPath.string());
         return {};
     }
 
@@ -182,8 +213,13 @@ DerivedTextureCache::load(int imageIndex, TextureSemantic semantic,
         ktx_size_t sourceOffset = 0;
         result = ktxTexture_GetImageOffset(texture, level, 0, 0,
                                            &sourceOffset);
-        if (result != KTX_SUCCESS)
+        if (result != KTX_SUCCESS) {
+            if (strict_)
+                throw std::runtime_error(
+                    "Invalid mip offsets in cooked KTX2 blob: " +
+                    blobPath.string());
             return {};
+        }
         const ktx_size_t levelSize = ktxTexture_GetImageSize(texture, level);
         PreparedMipLevel mip;
         mip.offset = prepared->pixels.size();
