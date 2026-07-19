@@ -5,6 +5,8 @@
 #include "assets/SceneCatalog.h"
 #include "assets/SceneImportService.h"
 
+#include <atomic>
+#include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -14,7 +16,40 @@
 #include <string>
 #include <unordered_set>
 
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <Windows.h>
+
 namespace {
+
+std::atomic<std::atomic_bool *> gCancelRequested{nullptr};
+
+BOOL WINAPI handleConsoleSignal(DWORD signal) {
+    std::atomic_bool *cancelRequested = gCancelRequested.load();
+    if ((signal == CTRL_C_EVENT || signal == CTRL_BREAK_EVENT ||
+         signal == CTRL_CLOSE_EVENT) &&
+        cancelRequested) {
+        cancelRequested->store(true);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+class ConsoleCancellationHandler {
+  public:
+    explicit ConsoleCancellationHandler(std::atomic_bool &cancelRequested) {
+        gCancelRequested.store(&cancelRequested);
+        installed_ = SetConsoleCtrlHandler(handleConsoleSignal, TRUE) != FALSE;
+    }
+    ~ConsoleCancellationHandler() {
+        if (installed_)
+            SetConsoleCtrlHandler(handleConsoleSignal, FALSE);
+        gCancelRequested.store(nullptr);
+    }
+
+  private:
+    bool installed_ = false;
+};
 
 void printUsage(std::ostream &output) {
     output
@@ -25,7 +60,8 @@ void printUsage(std::ostream &output) {
            "--legacy-cache-root <path> [options]\n\n"
         << "  VulkanLabAssetTool catalog add --source <path> [options]\n\n"
         << "Options:\n"
-        << "  --project <path>     Source project root (otherwise use locator)\n"
+        << "  --project <path>     Source project root (otherwise use "
+           "locator)\n"
         << "  --scene <path>       Legacy alias; match a Catalog source path\n"
         << "  --scene-id <id>      Stable Catalog scene ID\n"
         << "  --profile <id>       Import profile (default: scene profile)\n"
@@ -33,6 +69,12 @@ void printUsage(std::ostream &output) {
         << "  --cache-root <path>  Override the shared derived cache root\n"
         << "  --legacy-cache-root  Legacy working-directory cache to migrate\n"
         << "  --force              Re-encode blobs even when they are valid\n"
+        << "  --workers <n>        Parallel encoder processes (default: CPU/2, "
+           "max 4)\n"
+        << "  --memory-budget-mib <n>  Encoder working-set budget (default: 2048)\n"
+        << "  --preset <name>      development or production\n"
+        << "  --progress ndjson    Emit machine-readable progress on stdout\n"
+        << "  --progress-json      Alias for --progress ndjson\n"
         << "  --ktx-tool <path>    Path to the KTX 4.4.2 `ktx` executable\n"
         << "  --help                Show this help\n";
 }
@@ -49,11 +91,20 @@ uint32_t parseTextureLimit(const std::string &value) {
     const unsigned long parsed = std::stoul(value, &consumed);
     if (consumed != value.size())
         throw std::invalid_argument("invalid texture limit: " + value);
-    static const std::unordered_set<unsigned long> allowed{0, 512, 1024,
-                                                           2048};
+    static const std::unordered_set<unsigned long> allowed{0, 512, 1024, 2048};
     if (allowed.count(parsed) == 0)
         throw std::invalid_argument(
             "texture limit must be one of 0, 512, 1024, or 2048");
+    return static_cast<uint32_t>(parsed);
+}
+
+uint32_t parsePositiveUint32(const std::string &value,
+                             const std::string &option) {
+    size_t consumed = 0;
+    const unsigned long parsed = std::stoul(value, &consumed);
+    if (consumed != value.size() || parsed == 0 || parsed > UINT32_MAX)
+        throw std::invalid_argument("invalid value for " + option + ": " +
+                                    value);
     return static_cast<uint32_t>(parsed);
 }
 
@@ -110,11 +161,12 @@ int main(int argc, char **argv) {
             if (request.profileId.empty())
                 request.profileId = catalog.defaultImportProfile;
             const vkr::SceneImportResult result =
-                vkr::SceneImportService::importScene(project, request, {},
+                vkr::SceneImportService::importScene(
+                    project, request, {},
                     [](const vkr::SceneImportProgress &progress) {
                         std::cout << "Copied " << progress.completedBytes << '/'
-                                  << progress.totalBytes << " bytes: "
-                                  << progress.currentFile << '\n';
+                                  << progress.totalBytes
+                                  << " bytes: " << progress.currentFile << '\n';
                     });
             std::cout << "Scene imported\n"
                       << "  id: " << result.scene.id << "\n"
@@ -142,6 +194,7 @@ int main(int argc, char **argv) {
         std::string profileId;
         bool hasScene = false;
         bool hasTextureLimit = false;
+        bool hasPreset = false;
         bool hasLegacyCacheRoot = false;
         for (int i = 3; i < argc; ++i) {
             const std::string argument = argv[i];
@@ -169,6 +222,28 @@ int main(int argc, char **argv) {
                 options.ktxTool = requireValue(i, argc, argv, argument);
             } else if (argument == "--force") {
                 options.force = true;
+            } else if (argument == "--workers") {
+                options.maxWorkers = parsePositiveUint32(
+                    requireValue(i, argc, argv, argument), argument);
+            } else if (argument == "--memory-budget-mib") {
+                options.memoryBudgetMiB = parsePositiveUint32(
+                    requireValue(i, argc, argv, argument), argument);
+            } else if (argument == "--preset") {
+                options.qualityPreset = requireValue(i, argc, argv, argument);
+                hasPreset = true;
+                if (options.qualityPreset != "development" &&
+                    options.qualityPreset != "production") {
+                    throw std::invalid_argument(
+                        "--preset must be development or production");
+                }
+            } else if (argument == "--progress-json") {
+                options.progressNdjson = true;
+            } else if (argument == "--progress") {
+                const std::string mode = requireValue(i, argc, argv, argument);
+                if (mode != "ndjson")
+                    throw std::invalid_argument(
+                        "--progress currently accepts only ndjson");
+                options.progressNdjson = true;
             } else if (argument == "--help") {
                 printUsage(std::cout);
                 return EXIT_SUCCESS;
@@ -179,8 +254,8 @@ int main(int argc, char **argv) {
 
         vkr::ProjectContext project =
             vkr::ProjectContextResolver::resolve(explicitProject);
-        const vkr::SceneCatalog catalog = vkr::SceneCatalog::load(
-            project.catalogPath, project.projectRoot);
+        const vkr::SceneCatalog catalog =
+            vkr::SceneCatalog::load(project.catalogPath, project.projectRoot);
         project.cacheRoot =
             vkr::DerivedAssetPaths::defaultCacheRoot(catalog.projectId);
 
@@ -242,9 +317,14 @@ int main(int argc, char **argv) {
         options.profileId = profile.id;
         if (!hasTextureLimit)
             options.textureLimit = profile.textureLimit;
+        if (!hasPreset)
+            options.qualityPreset = profile.qualityPreset;
         if (options.cacheRoot.empty())
             options.cacheRoot = project.cacheRoot;
 
+        std::atomic_bool cancelRequested{false};
+        ConsoleCancellationHandler cancellationHandler(cancelRequested);
+        options.cancelRequested = &cancelRequested;
         return vkr::assettool::buildTextureCache(options);
     } catch (const std::invalid_argument &exception) {
         std::cerr << "Argument error: " << exception.what() << "\n\n";

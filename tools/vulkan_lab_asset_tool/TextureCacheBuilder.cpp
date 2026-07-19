@@ -1,10 +1,13 @@
 #include "TextureCacheBuilder.h"
+#include "ProcessRunner.h"
+#include "TextureCachePipeline.h"
 
 #include "assets/DerivedAssetPaths.h"
 #include "assets/SceneCatalog.h"
 
 #include "assets/DerivedTextureManifest.h"
 
+#include <json.hpp>
 #include <ktx.h>
 #include <stb_image.h>
 #include <stb_image_write.h>
@@ -18,6 +21,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -25,26 +29,43 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace vkr::assettool {
 namespace {
 
-constexpr const char *kEncoderSettings =
-    "ktx-4.4.2|uastc|quality=2|rdo=1|zstd=9|mips=lanczos4|tf=semantic";
+struct EncoderPreset {
+    const char *name = "development";
+    const char *settings = nullptr;
+    const wchar_t *quality = L"2";
+    const wchar_t *zstd = L"9";
+    bool rdo = true;
+};
 
-struct ScopedHandle {
-    HANDLE value = nullptr;
-    ~ScopedHandle() {
-        if (value && value != INVALID_HANDLE_VALUE)
-            CloseHandle(value);
-    }
+const EncoderPreset &encoderPreset(const std::string &name) {
+    static const EncoderPreset development{
+        "development",
+        "ktx-4.4.2|uastc|quality=2|rdo=1|zstd=9|mips=lanczos4|tf=semantic",
+        L"2", L"9", true};
+    static const EncoderPreset production{
+        "production",
+        "ktx-4.4.2|uastc|quality=4|rdo=1|zstd=18|mips=lanczos4|tf=semantic",
+        L"4", L"18", true};
+    if (name == development.name)
+        return development;
+    if (name == production.name)
+        return production;
+    throw std::invalid_argument(
+        "texture preset must be development or production");
 };
 
 struct ScopedTemporaryFile {
@@ -70,6 +91,20 @@ struct BuildTask {
     int32_t imageIndex = -1;
     TextureSemantic semantic = TextureSemantic::LinearData;
     DerivedMipmapWrap wrap = DerivedMipmapWrap::Clamp;
+};
+
+struct ScannedTask {
+    BuildTask sourceTask;
+    DerivedFileStamp sourceStamp;
+    uint32_t sourceWidth = 0;
+    uint32_t sourceHeight = 0;
+    uint32_t outputWidth = 0;
+    uint32_t outputHeight = 0;
+    uint64_t estimatedMemoryBytes = 0;
+    std::string cacheKey;
+    std::filesystem::path blob;
+    bool reused = false;
+    size_t ownerIndex = SIZE_MAX;
 };
 
 std::string toString(tg3_str value) {
@@ -149,10 +184,10 @@ std::string sha256(const uint8_t *data, size_t size) {
     if (BCRYPT_SUCCESS(status) && size != 0) {
         size_t offset = 0;
         while (offset < size && BCRYPT_SUCCESS(status)) {
-            const ULONG chunk = static_cast<ULONG>(
-                std::min<size_t>(size - offset, ULONG_MAX));
-            status = BCryptHashData(hash,
-                                    const_cast<PUCHAR>(data + offset), chunk, 0);
+            const ULONG chunk =
+                static_cast<ULONG>(std::min<size_t>(size - offset, ULONG_MAX));
+            status = BCryptHashData(hash, const_cast<PUCHAR>(data + offset),
+                                    chunk, 0);
             offset += chunk;
         }
     }
@@ -176,8 +211,8 @@ std::string sha256(const std::string &text) {
 }
 
 bool hasPngSignature(const std::vector<uint8_t> &bytes) {
-    static constexpr std::array<uint8_t, 8> signature{
-        0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a};
+    static constexpr std::array<uint8_t, 8> signature{0x89, 'P',  'N',  'G',
+                                                      0x0d, 0x0a, 0x1a, 0x0a};
     return bytes.size() >= signature.size() &&
            std::equal(signature.begin(), signature.end(), bytes.begin());
 }
@@ -273,73 +308,11 @@ std::pair<uint32_t, uint32_t> limitedExtent(uint32_t width, uint32_t height,
             std::max(1u, static_cast<uint32_t>(std::lround(height * scale)))};
 }
 
-std::filesystem::path makeTemporaryPath(
-    const std::filesystem::path &directory, const std::string &suffix) {
+std::filesystem::path makeTemporaryPath(const std::filesystem::path &directory,
+                                        const std::string &suffix) {
     static std::atomic<uint64_t> counter{0};
-    return directory /
-           (".vulkanlab-" + std::to_string(GetCurrentProcessId()) + "-" +
-            std::to_string(counter.fetch_add(1)) + suffix);
-}
-
-std::wstring quoteWindowsArgument(const std::wstring &argument) {
-    if (argument.empty())
-        return L"\"\"";
-    if (argument.find_first_of(L" \t\n\v\"") == std::wstring::npos)
-        return argument;
-    std::wstring quoted = L"\"";
-    size_t backslashes = 0;
-    for (wchar_t character : argument) {
-        if (character == L'\\') {
-            ++backslashes;
-        } else if (character == L'\"') {
-            quoted.append(backslashes * 2 + 1, L'\\');
-            quoted.push_back(L'\"');
-            backslashes = 0;
-        } else {
-            quoted.append(backslashes, L'\\');
-            backslashes = 0;
-            quoted.push_back(character);
-        }
-    }
-    quoted.append(backslashes * 2, L'\\');
-    quoted.push_back(L'\"');
-    return quoted;
-}
-
-DWORD runProcess(const std::filesystem::path &executable,
-                 const std::vector<std::wstring> &arguments) {
-    std::wstring commandLine = quoteWindowsArgument(executable.wstring());
-    for (const std::wstring &argument : arguments) {
-        commandLine.push_back(L' ');
-        commandLine += quoteWindowsArgument(argument);
-    }
-    std::vector<wchar_t> mutableCommand(commandLine.begin(), commandLine.end());
-    mutableCommand.push_back(L'\0');
-
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    PROCESS_INFORMATION process{};
-    if (!CreateProcessW(executable.c_str(), mutableCommand.data(), nullptr,
-                        nullptr, TRUE, 0, nullptr, nullptr, &startup,
-                        &process)) {
-        throw std::system_error(static_cast<int>(GetLastError()),
-                                std::system_category(),
-                                "could not start ktx tool");
-    }
-    ScopedHandle processHandle{process.hProcess};
-    ScopedHandle threadHandle{process.hThread};
-    if (WaitForSingleObject(process.hProcess, INFINITE) != WAIT_OBJECT_0) {
-        throw std::system_error(static_cast<int>(GetLastError()),
-                                std::system_category(),
-                                "waiting for ktx tool failed");
-    }
-    DWORD exitCode = 1;
-    if (!GetExitCodeProcess(process.hProcess, &exitCode)) {
-        throw std::system_error(static_cast<int>(GetLastError()),
-                                std::system_category(),
-                                "reading ktx tool exit code failed");
-    }
-    return exitCode;
+    return directory / (".vulkanlab-" + std::to_string(GetCurrentProcessId()) +
+                        "-" + std::to_string(counter.fetch_add(1)) + suffix);
 }
 
 std::filesystem::path findKtxTool(const std::filesystem::path &requested) {
@@ -421,14 +394,16 @@ ImageSource loadImageSource(const tg3_model *model, int32_t imageIndex,
         const tg3_buffer_view &view = model->buffer_views[image.buffer_view];
         if (view.buffer < 0 ||
             view.buffer >= static_cast<int32_t>(model->buffers_count))
-            throw std::runtime_error("image bufferView references invalid buffer");
+            throw std::runtime_error(
+                "image bufferView references invalid buffer");
         const tg3_buffer &buffer = model->buffers[view.buffer];
         if (view.byte_offset + view.byte_length > buffer.data.count)
             throw std::runtime_error("image bufferView is out of range");
         const uint8_t *begin = buffer.data.data + view.byte_offset;
         result.bytes.assign(begin, begin + view.byte_length);
     } else if (image.image.data && image.image.count > 0) {
-        result.bytes.assign(image.image.data, image.image.data + image.image.count);
+        result.bytes.assign(image.image.data,
+                            image.image.data + image.image.count);
     } else if (uri.rfind("data:", 0) == 0) {
         result.bytes = decodeDataUri(uri);
     } else {
@@ -439,8 +414,8 @@ ImageSource loadImageSource(const tg3_model *model, int32_t imageIndex,
         result.externalPath = std::filesystem::path(uri).is_absolute()
                                   ? std::filesystem::path(uri)
                                   : sceneDirectory / std::filesystem::path(uri);
-        result.externalPath = std::filesystem::absolute(result.externalPath)
-                                  .lexically_normal();
+        result.externalPath =
+            std::filesystem::absolute(result.externalPath).lexically_normal();
         result.bytes = readFile(result.externalPath);
     }
 
@@ -465,8 +440,8 @@ ImageSource loadImageSource(const tg3_model *model, int32_t imageIndex,
         std::error_code relativeError;
         const std::filesystem::path relative = std::filesystem::relative(
             result.externalPath, sceneDirectory, relativeError);
-        result.stamp.path = genericPath(relativeError ? result.externalPath
-                                                      : relative);
+        result.stamp.path =
+            genericPath(relativeError ? result.externalPath : relative);
     } else {
         result.stamp = fileStamp(scenePath, sourceHash);
         result.stamp.path = scenePath.filename().generic_string();
@@ -474,8 +449,9 @@ ImageSource loadImageSource(const tg3_model *model, int32_t imageIndex,
     return result;
 }
 
-std::filesystem::path writeTemporaryPng(
-    const ImageSource &source, const std::filesystem::path &directory) {
+std::filesystem::path
+writeTemporaryPng(const ImageSource &source,
+                  const std::filesystem::path &directory) {
     int width = 0;
     int height = 0;
     int components = 0;
@@ -533,6 +509,238 @@ std::vector<BuildTask> collectTasks(const tg3_model *model) {
     return tasks;
 }
 
+uint64_t estimateTaskMemory(const ImageSource &source, uint32_t outputWidth,
+                            uint32_t outputHeight) {
+    constexpr uint64_t minimum = 64ull * 1024ull * 1024ull;
+    const uint64_t sourcePixels =
+        static_cast<uint64_t>(source.width) * source.height;
+    const uint64_t outputPixels =
+        static_cast<uint64_t>(outputWidth) * outputHeight;
+    // KTX may retain decoded source, resize, mip and encoder working buffers.
+    return minimum + sourcePixels * 16ull + outputPixels * 8ull +
+           static_cast<uint64_t>(source.bytes.size());
+}
+
+std::vector<std::wstring>
+makeKtxArguments(const ScannedTask &task, const EncoderPreset &preset,
+                 const std::filesystem::path &input,
+                 const std::filesystem::path &output) {
+    std::vector<std::wstring> arguments{
+        L"create",
+        L"--format",
+        task.sourceTask.semantic == TextureSemantic::SrgbColor
+            ? L"R8G8B8A8_SRGB"
+            : L"R8G8B8A8_UNORM",
+        L"--assign-tf",
+        task.sourceTask.semantic == TextureSemantic::SrgbColor ? L"srgb"
+                                                               : L"linear",
+        L"--encode",
+        L"uastc",
+        L"--uastc-quality",
+        preset.quality};
+    if (preset.rdo) {
+        arguments.push_back(L"--uastc-rdo");
+        arguments.push_back(L"--uastc-rdo-l");
+        arguments.push_back(task.sourceTask.semantic == TextureSemantic::Normal
+                                ? L"0.5"
+                                : L"1.0");
+    }
+    arguments.insert(arguments.end(),
+                     {L"--zstd", preset.zstd, L"--generate-mipmap",
+                      L"--mipmap-filter", L"lanczos4", L"--mipmap-wrap",
+                      std::wstring(ktxWrapName(task.sourceTask.wrap),
+                                   ktxWrapName(task.sourceTask.wrap) +
+                                       std::char_traits<char>::length(
+                                           ktxWrapName(task.sourceTask.wrap))),
+                      L"--width", std::to_wstring(task.outputWidth),
+                      L"--height", std::to_wstring(task.outputHeight)});
+    if (task.sourceTask.semantic == TextureSemantic::Normal)
+        arguments.push_back(L"--normalize");
+    arguments.push_back(input.wstring());
+    arguments.push_back(output.wstring());
+    return arguments;
+}
+
+class ProgressReporter {
+  public:
+    ProgressReporter(bool ndjson, std::string sceneId, std::string profileId,
+                     size_t total, uint32_t workers, uint64_t budgetMiB,
+                     std::chrono::steady_clock::time_point begin)
+        : ndjson_(ndjson), sceneId_(std::move(sceneId)),
+          profileId_(std::move(profileId)), total_(total), workers_(workers),
+          budgetMiB_(budgetMiB), begin_(begin),
+          taskId_(std::to_string(GetCurrentProcessId()) + "-" +
+                  std::to_string(std::chrono::steady_clock::now()
+                                     .time_since_epoch()
+                                     .count())) {}
+
+    void started(size_t reused) {
+        std::lock_guard lock(mutex_);
+        reused_ = reused;
+        if (ndjson_) {
+            emitJson({{"event", "started"},
+                      {"protocolVersion", 1},
+                      {"taskId", taskId_},
+                      {"scene", sceneId_},
+                      {"profile", profileId_},
+                      {"total", total_},
+                      {"reused", reused_},
+                      {"workers", workers_},
+                      {"memoryBudgetMiB", budgetMiB_}});
+        }
+    }
+
+    void schedulerEvent(const char *event, const TextureBuildWorkItem &item,
+                        const TextureBuildWorkResult *result) {
+        std::lock_guard lock(mutex_);
+        if (result) {
+            if (result->success)
+                ++encoded_;
+            else
+                ++failed_;
+        }
+        if (ndjson_) {
+            nlohmann::json value{{"event", event},
+                                 {"taskId", taskId_},
+                                 {"index", item.index},
+                                 {"image", item.imageIndex},
+                                 {"semantic", item.semantic},
+                                 {"estimatedBytes", item.estimatedMemoryBytes}};
+            if (result) {
+                value["durationMs"] = result->durationMs;
+                value["exitCode"] = result->exitCode;
+                if (!result->error.empty())
+                    value["message"] = result->error;
+            }
+            emitJson(value);
+            if (result) {
+                emitJson({{"event", "progress"},
+                          {"taskId", taskId_},
+                          {"completed", encoded_ + reused_ + failed_},
+                          {"reused", reused_},
+                          {"encoded", encoded_},
+                          {"failed", failed_}});
+            }
+        } else if (std::string(event) == "artifact_started") {
+            std::cout << "  [" << (item.index + 1) << '/' << total_
+                      << "] image " << item.imageIndex << ' ' << item.semantic
+                      << '\n';
+        }
+    }
+
+    void finished(const char *event, const std::filesystem::path &manifest = {},
+                  const TextureBuildScheduleStats &schedule = {}) {
+        std::lock_guard lock(mutex_);
+        const double durationMs = elapsedMs();
+        if (ndjson_) {
+            nlohmann::json value{
+                {"event", event},
+                {"taskId", taskId_},
+                {"scene", sceneId_},
+                {"profile", profileId_},
+                {"encoded", encoded_},
+                {"reused", reused_},
+                {"failed", failed_},
+                {"durationMs", durationMs},
+                {"peakWorkers", schedule.peakWorkers},
+                {"peakReservedBytes", schedule.peakReservedBytes}};
+            if (!manifest.empty())
+                value["manifest"] = manifest.generic_string();
+            emitJson(value);
+        }
+    }
+
+    size_t encoded() const { return encoded_; }
+    size_t reused() const { return reused_; }
+    double elapsedMs() const {
+        return std::chrono::duration<double, std::milli>(
+                   std::chrono::steady_clock::now() - begin_)
+            .count();
+    }
+
+  private:
+    void emitJson(const nlohmann::json &value) {
+        std::cout << value.dump() << '\n';
+        std::cout.flush();
+    }
+
+    bool ndjson_ = false;
+    std::string sceneId_;
+    std::string profileId_;
+    size_t total_ = 0;
+    uint32_t workers_ = 0;
+    uint64_t budgetMiB_ = 0;
+    std::string taskId_;
+    std::chrono::steady_clock::time_point begin_;
+    mutable std::mutex mutex_;
+    size_t encoded_ = 0;
+    size_t reused_ = 0;
+    size_t failed_ = 0;
+};
+
+std::vector<ScannedTask>
+scanTextureBuildPlan(const tg3_model *model,
+                     const std::vector<BuildTask> &tasks,
+                     const std::filesystem::path &scene, uint32_t textureLimit,
+                     const std::filesystem::path &blobDirectory,
+                     const EncoderPreset &preset, bool force) {
+    std::vector<ScannedTask> result;
+    result.reserve(tasks.size());
+    for (const BuildTask &task : tasks) {
+        ImageSource source = loadImageSource(model, task.imageIndex, scene);
+        const auto [outputWidth, outputHeight] =
+            limitedExtent(source.width, source.height, textureLimit);
+        const std::string keyMaterial =
+            std::string(preset.settings) + "|source=" + source.stamp.sha256 +
+            "|semantic=" + textureSemanticName(task.semantic) +
+            "|size=" + std::to_string(outputWidth) + "x" +
+            std::to_string(outputHeight) +
+            "|wrap=" + derivedMipmapWrapName(task.wrap);
+
+        ScannedTask scanned;
+        scanned.sourceTask = task;
+        scanned.sourceStamp = std::move(source.stamp);
+        scanned.sourceWidth = source.width;
+        scanned.sourceHeight = source.height;
+        scanned.outputWidth = outputWidth;
+        scanned.outputHeight = outputHeight;
+        scanned.estimatedMemoryBytes =
+            estimateTaskMemory(source, outputWidth, outputHeight);
+        scanned.cacheKey = sha256(keyMaterial);
+        scanned.blob = blobDirectory / (scanned.cacheKey + ".ktx2");
+        if (!force && std::filesystem::is_regular_file(scanned.blob)) {
+            try {
+                validateKtx2(scanned.blob, outputWidth, outputHeight);
+                scanned.reused = true;
+            } catch (const std::exception &exception) {
+                std::cerr << "  invalid cached blob, rebuilding: "
+                          << exception.what() << '\n';
+            }
+        }
+        result.push_back(std::move(scanned));
+    }
+    return result;
+}
+
+void appendManifestEntries(DerivedTextureManifest &manifest,
+                           const std::vector<ScannedTask> &tasks,
+                           const std::filesystem::path &cacheRoot) {
+    manifest.entries.reserve(tasks.size());
+    for (const ScannedTask &task : tasks) {
+        DerivedTextureEntry entry;
+        entry.imageIndex = task.sourceTask.imageIndex;
+        entry.semantic = task.sourceTask.semantic;
+        entry.mipWrap = task.sourceTask.wrap;
+        entry.width = task.outputWidth;
+        entry.height = task.outputHeight;
+        entry.cacheKey = task.cacheKey;
+        entry.blob =
+            genericPath(std::filesystem::relative(task.blob, cacheRoot));
+        entry.source = task.sourceStamp;
+        manifest.entries.push_back(std::move(entry));
+    }
+}
+
 void printParseErrors(const tinygltf3::ErrorStack &errors) {
     for (uint32_t i = 0; i < errors.count(); ++i) {
         const tg3_error_entry *entry = errors.entry(i);
@@ -544,10 +752,31 @@ void printParseErrors(const tinygltf3::ErrorStack &errors) {
 } // namespace
 
 int buildTextureCache(const TextureCacheBuildOptions &options) {
+    Win32JobProcessRunner processRunner;
+    return buildTextureCache(options, processRunner);
+}
+
+int buildTextureCache(const TextureCacheBuildOptions &options,
+                      IProcessRunner &processRunner) {
+    const auto buildBegin = std::chrono::steady_clock::now();
     if (options.projectId.empty() || options.sceneId.empty() ||
         options.profileId.empty())
         throw std::invalid_argument(
             "projectId, sceneId, and profileId are required");
+    const EncoderPreset &preset = encoderPreset(options.qualityPreset);
+    const uint32_t defaultWorkers = std::max(
+        1u,
+        std::min(4u, std::max(1u, std::thread::hardware_concurrency() / 2)));
+    const uint32_t maxWorkers =
+        options.maxWorkers == 0 ? defaultWorkers : options.maxWorkers;
+    if (maxWorkers == 0 || maxWorkers > 64)
+        throw std::invalid_argument("workers must be between 1 and 64");
+    if (options.memoryBudgetMiB == 0)
+        throw std::invalid_argument("memory budget must be greater than zero");
+
+    std::atomic_bool localCancellation{false};
+    std::atomic_bool &cancelRequested =
+        options.cancelRequested ? *options.cancelRequested : localCancellation;
     const std::filesystem::path sceneIdentity =
         (options.sceneProjectPath.empty() ? options.scene
                                           : options.sceneProjectPath)
@@ -576,131 +805,147 @@ int buildTextureCache(const TextureCacheBuildOptions &options) {
         throw std::runtime_error("glTF parse failed: " + scene.string());
     }
 
-    const std::vector<BuildTask> tasks = collectTasks(model.get());
+    const std::vector<BuildTask> sourceTasks = collectTasks(model.get());
+    const std::vector<ScannedTask> tasks = scanTextureBuildPlan(
+        model.get(), sourceTasks, scene, options.textureLimit, blobDirectory,
+        preset, options.force);
     DerivedTextureManifest manifest;
     manifest.projectId = options.projectId;
     manifest.sceneId = options.sceneId;
     manifest.profileId = options.profileId;
     manifest.scenePath = genericPath(sceneIdentity);
+    manifest.qualityPreset = preset.name;
+    manifest.encoderSettings = preset.settings;
     manifest.textureLimit = options.textureLimit;
     const std::vector<uint8_t> sceneBytes = readFile(scene);
     manifest.scene = fileStamp(scene, sha256(sceneBytes));
     manifest.scene.path = scene.filename().generic_string();
-    manifest.entries.reserve(tasks.size());
-
-    uint64_t encodedCount = 0;
-    uint64_t reusedCount = 0;
-    std::cout << "Building texture cache for " << scene.string() << '\n'
-              << "  profile: "
-              << (options.textureLimit == 0
-                      ? std::string("full")
-                      : std::to_string(options.textureLimit))
-              << "\n  textures: " << tasks.size() << "\n  ktx tool: "
-              << ktxTool.string() << '\n';
-
-    for (size_t taskIndex = 0; taskIndex < tasks.size(); ++taskIndex) {
-        const BuildTask &task = tasks[taskIndex];
-        ImageSource source = loadImageSource(model.get(), task.imageIndex, scene);
-        const auto [outputWidth, outputHeight] = limitedExtent(
-            source.width, source.height, options.textureLimit);
-        const std::string keyMaterial =
-            std::string(kEncoderSettings) + "|source=" + source.stamp.sha256 +
-            "|semantic=" + textureSemanticName(task.semantic) + "|size=" +
-            std::to_string(outputWidth) + "x" +
-            std::to_string(outputHeight) + "|wrap=" +
-            derivedMipmapWrapName(task.wrap);
-        const std::string cacheKey = sha256(keyMaterial);
-        const std::filesystem::path blob =
-            blobDirectory / (cacheKey + ".ktx2");
-
-        bool reuse = false;
-        if (!options.force && std::filesystem::is_regular_file(blob)) {
-            try {
-                validateKtx2(blob, outputWidth, outputHeight);
-                reuse = true;
-            } catch (const std::exception &exception) {
-                std::cerr << "  invalid cached blob, rebuilding: "
-                          << exception.what() << '\n';
-            }
-        }
-
-        if (!reuse) {
-            ScopedTemporaryFile temporaryInput;
-            const std::filesystem::path input =
-                source.png && !source.externalPath.empty()
-                    ? source.externalPath
-                    : (temporaryInput.path =
-                           writeTemporaryPng(source, blobDirectory));
-            ScopedTemporaryFile temporaryOutput{
-                makeTemporaryPath(blobDirectory, ".output.ktx2")};
-
-            std::vector<std::wstring> arguments{
-                L"create",
-                L"--format",
-                task.semantic == TextureSemantic::SrgbColor
-                    ? L"R8G8B8A8_SRGB"
-                    : L"R8G8B8A8_UNORM",
-                L"--assign-tf",
-                task.semantic == TextureSemantic::SrgbColor ? L"srgb"
-                                                            : L"linear",
-                L"--encode",
-                // KTX 4.4.2 names the 4x4 UASTC encoder "uastc".
-                L"uastc",
-                L"--uastc-quality",
-                L"2",
-                L"--uastc-rdo",
-                L"--uastc-rdo-l",
-                task.semantic == TextureSemantic::Normal ? L"0.5" : L"1.0",
-                L"--zstd",
-                L"9",
-                L"--generate-mipmap",
-                L"--mipmap-filter",
-                L"lanczos4",
-                L"--mipmap-wrap",
-                std::wstring(ktxWrapName(task.wrap),
-                             ktxWrapName(task.wrap) +
-                                 std::char_traits<char>::length(
-                                     ktxWrapName(task.wrap))),
-                L"--width",
-                std::to_wstring(outputWidth),
-                L"--height",
-                std::to_wstring(outputHeight)};
-            if (task.semantic == TextureSemantic::Normal)
-                arguments.push_back(L"--normalize");
-            arguments.push_back(input.wstring());
-            arguments.push_back(temporaryOutput.path.wstring());
-
-            std::cout << "  [" << (taskIndex + 1) << '/' << tasks.size()
-                      << "] image " << task.imageIndex << " "
-                      << textureSemanticName(task.semantic) << " "
-                      << source.width << 'x' << source.height << " -> "
-                      << outputWidth << 'x' << outputHeight << '\n';
-            const DWORD exitCode = runProcess(ktxTool, arguments);
-            if (exitCode != 0) {
-                throw std::runtime_error("ktx create failed for image " +
-                                         std::to_string(task.imageIndex) +
-                                         " with exit code " +
-                                         std::to_string(exitCode));
-            }
-            validateKtx2(temporaryOutput.path, outputWidth, outputHeight);
-            atomicReplace(temporaryOutput.path, blob);
-            temporaryOutput.path.clear();
-            ++encodedCount;
-        } else {
+    size_t reusedCount = 0;
+    std::vector<TextureBuildWorkItem> workItems;
+    workItems.reserve(tasks.size());
+    for (size_t i = 0; i < tasks.size(); ++i) {
+        if (tasks[i].reused) {
             ++reusedCount;
+            continue;
         }
-
-        DerivedTextureEntry entry;
-        entry.imageIndex = task.imageIndex;
-        entry.semantic = task.semantic;
-        entry.mipWrap = task.wrap;
-        entry.width = outputWidth;
-        entry.height = outputHeight;
-        entry.cacheKey = cacheKey;
-        entry.blob = genericPath(std::filesystem::relative(blob, cacheRoot));
-        entry.source = std::move(source.stamp);
-        manifest.entries.push_back(std::move(entry));
+        workItems.push_back({i, tasks[i].sourceTask.imageIndex,
+                             textureSemanticName(tasks[i].sourceTask.semantic),
+                             tasks[i].estimatedMemoryBytes});
     }
+
+    ProgressReporter reporter(options.progressNdjson, options.sceneId,
+                              options.profileId, tasks.size(), maxWorkers,
+                              options.memoryBudgetMiB, buildBegin);
+    if (!options.progressNdjson) {
+        std::cout << "Building texture cache for " << scene.string() << '\n'
+                  << "  profile: " << options.profileId << " (" << preset.name
+                  << ")\n  textures: " << tasks.size()
+                  << "\n  workers: " << maxWorkers
+                  << "\n  memory budget: " << options.memoryBudgetMiB
+                  << " MiB\n  ktx tool: " << ktxTool.string() << '\n';
+    }
+    reporter.started(reusedCount);
+
+    std::mutex childOutputMutex;
+    const TextureBuildSchedulerOptions schedulerOptions{
+        maxWorkers, options.memoryBudgetMiB * 1024ull * 1024ull};
+    TextureBuildScheduleStats scheduleStats;
+    const auto results = executeTextureBuildPlan(
+        workItems, schedulerOptions, cancelRequested,
+        [&](const TextureBuildWorkItem &work, const std::atomic_bool &cancel) {
+            const auto begin = std::chrono::steady_clock::now();
+            TextureBuildWorkResult result;
+            result.index = work.index;
+            const ScannedTask &task = tasks[work.index];
+            if (cancel.load()) {
+                result.cancelled = true;
+                result.error = "cancelled before encoding";
+                return result;
+            }
+            try {
+                ImageSource source = loadImageSource(
+                    model.get(), task.sourceTask.imageIndex, scene);
+                if (source.stamp.sha256 != task.sourceStamp.sha256)
+                    throw std::runtime_error(
+                        "source image changed while import was running");
+
+                ScopedTemporaryFile temporaryInput;
+                const std::filesystem::path input =
+                    source.png && !source.externalPath.empty()
+                        ? source.externalPath
+                        : (temporaryInput.path =
+                               writeTemporaryPng(source, blobDirectory));
+                ScopedTemporaryFile temporaryOutput{
+                    makeTemporaryPath(blobDirectory, ".output.ktx2")};
+                const ProcessResult process = processRunner.run(
+                    {ktxTool, makeKtxArguments(task, preset, input,
+                                               temporaryOutput.path)},
+                    cancel);
+                if (!process.output.empty()) {
+                    std::lock_guard outputLock(childOutputMutex);
+                    std::cerr << process.output;
+                    if (process.output.back() != '\n')
+                        std::cerr << '\n';
+                }
+                result.exitCode = process.exitCode;
+                result.cancelled = process.cancelled || cancel.load();
+                if (result.cancelled) {
+                    result.error = "texture encoding cancelled";
+                } else if (process.exitCode != 0) {
+                    result.error =
+                        "ktx create failed for image " +
+                        std::to_string(task.sourceTask.imageIndex) + " (" +
+                        textureSemanticName(task.sourceTask.semantic) +
+                        ") with exit code " + std::to_string(process.exitCode);
+                } else {
+                    validateKtx2(temporaryOutput.path, task.outputWidth,
+                                 task.outputHeight);
+                    if (cancel.load()) {
+                        result.cancelled = true;
+                        result.error = "texture encoding cancelled";
+                    } else {
+                        atomicReplace(temporaryOutput.path, task.blob);
+                        temporaryOutput.path.clear();
+                        result.success = true;
+                    }
+                }
+            } catch (const std::exception &exception) {
+                result.cancelled = cancel.load();
+                result.error =
+                    "image " + std::to_string(task.sourceTask.imageIndex) +
+                    " (" + textureSemanticName(task.sourceTask.semantic) +
+                    "), command exit code " + std::to_string(result.exitCode) +
+                    ": " + exception.what();
+            }
+            result.durationMs = std::chrono::duration<double, std::milli>(
+                                    std::chrono::steady_clock::now() - begin)
+                                    .count();
+            return result;
+        },
+        [&](const char *event, const TextureBuildWorkItem &item,
+            const TextureBuildWorkResult *result) {
+            reporter.schedulerEvent(event, item, result);
+        },
+        &scheduleStats);
+
+    const TextureBuildWorkResult *failure = nullptr;
+    for (const TextureBuildWorkResult &result : results) {
+        if (!result.success && !result.cancelled) {
+            failure = &result;
+            break;
+        }
+    }
+    if (cancelRequested.load()) {
+        processRunner.cancelAll();
+        if (failure) {
+            reporter.finished("failed", {}, scheduleStats);
+            throw std::runtime_error(failure->error);
+        }
+        reporter.finished("cancelled", {}, scheduleStats);
+        return 130;
+    }
+
+    appendManifestEntries(manifest, tasks, cacheRoot);
 
     const std::filesystem::path manifestPath =
         derivedManifestPath(cacheRoot, options.sceneId, options.profileId);
@@ -708,18 +953,28 @@ int buildTextureCache(const TextureCacheBuildOptions &options) {
     if (!saveDerivedTextureManifest(manifestPath, manifest, saveError))
         throw std::runtime_error("could not publish manifest: " + saveError);
 
-    std::cout << "Texture cache complete\n"
-              << "  encoded: " << encodedCount << "\n"
-              << "  reused: " << reusedCount << "\n"
-              << "  manifest: " << manifestPath.string() << '\n';
+    reporter.finished("completed", manifestPath, scheduleStats);
+    if (!options.progressNdjson) {
+        std::cout << "Texture cache complete\n"
+                  << "  encoded: " << reporter.encoded() << "\n"
+                  << "  reused: " << reporter.reused() << "\n"
+                  << "  duration: " << std::fixed << std::setprecision(2)
+                  << reporter.elapsedMs() << " ms\n"
+                  << "  peak workers: " << scheduleStats.peakWorkers << "\n"
+                  << "  peak reserved: " << std::setprecision(2)
+                  << (static_cast<double>(scheduleStats.peakReservedBytes) /
+                      (1024.0 * 1024.0))
+                  << " MiB\n"
+                  << "  manifest: " << manifestPath.string() << '\n';
+    }
     return 0;
 }
 
 int migrateTextureCache(const TextureCacheMigrationOptions &options) {
     const std::filesystem::path projectRoot =
         std::filesystem::absolute(options.projectRoot).lexically_normal();
-    const SceneCatalog catalog = SceneCatalog::load(
-        projectRoot / "assets/catalog.json", projectRoot);
+    const SceneCatalog catalog =
+        SceneCatalog::load(projectRoot / "assets/catalog.json", projectRoot);
     const std::filesystem::path legacyRoot =
         std::filesystem::absolute(options.legacyCacheRoot).lexically_normal();
     const std::filesystem::path targetRoot =
@@ -778,11 +1033,11 @@ int migrateTextureCache(const TextureCacheMigrationOptions &options) {
             const std::filesystem::path targetManifest =
                 derivedManifestPath(targetRoot, scene.id, profile.id);
             if (!saveDerivedTextureManifest(targetManifest, manifest, error))
-                throw std::runtime_error("could not publish migrated manifest: " +
-                                         error);
+                throw std::runtime_error(
+                    "could not publish migrated manifest: " + error);
             ++migrated;
-            std::cout << "Migrated " << scene.id << '/' << profile.id
-                      << " -> " << targetManifest.string() << '\n';
+            std::cout << "Migrated " << scene.id << '/' << profile.id << " -> "
+                      << targetManifest.string() << '\n';
         }
     }
     std::cout << "Texture cache migration complete\n"

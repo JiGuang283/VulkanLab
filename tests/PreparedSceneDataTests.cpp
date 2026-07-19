@@ -12,6 +12,7 @@
 void runDerivedTextureManifestTests();
 void runSceneCatalogTests();
 void runSceneImportServiceTests();
+void runTextureCachePipelineTests();
 
 namespace {
 
@@ -107,6 +108,7 @@ int main() {
         runDerivedTextureManifestTests();
         runSceneCatalogTests();
         runSceneImportServiceTests();
+        runTextureCachePipelineTests();
         std::cout << "VulkanLab CPU tests passed\n";
         return 0;
     } catch (const std::exception &error) {

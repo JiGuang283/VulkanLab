@@ -97,6 +97,8 @@ void testManifestRoundTrip() {
     source.sceneId = "test-scene";
     source.profileId = "desktop_2048";
     source.scenePath = "models/test/scene.gltf";
+    source.qualityPreset = "production";
+    source.encoderSettings = "encoder-settings-v1";
     source.textureLimit = 2048;
     source.scene = {"models/test/scene.gltf", 1234, 5678, "scene-sha256"};
     source.entries.push_back({3,
@@ -123,6 +125,9 @@ void testManifestRoundTrip() {
     requireManifest(loaded.scenePath == source.scenePath &&
                         loaded.textureLimit == source.textureLimit,
                     "manifest profile changed during round trip");
+    requireManifest(loaded.qualityPreset == source.qualityPreset &&
+                        loaded.encoderSettings == source.encoderSettings,
+                    "manifest encoder settings changed during round trip");
     requireManifest(loaded.entries.size() == 1,
                     "manifest entries changed during round trip");
     const auto &entry = loaded.entries.front();
@@ -133,6 +138,20 @@ void testManifestRoundTrip() {
     requireManifest(entry.source.sha256 == "image-sha256" &&
                         entry.blob == "blobs/linear-key.ktx2",
                     "manifest source or blob changed during round trip");
+
+    source.encoderSettings = "replacement-settings";
+    requireManifest(vkr::saveDerivedTextureManifest(manifestPath, source,
+                                                    error),
+                    "manifest atomic replacement failed");
+    requireManifest(vkr::loadDerivedTextureManifest(manifestPath, loaded,
+                                                    error) &&
+                        loaded.encoderSettings == "replacement-settings",
+                    "manifest replacement did not publish the new version");
+    for (const auto &entryPath :
+         std::filesystem::directory_iterator(manifestPath.parent_path())) {
+        requireManifest(entryPath.path().extension() == ".json",
+                        "manifest publication left a temporary file");
+    }
 }
 
 void testFileStampInvalidation() {

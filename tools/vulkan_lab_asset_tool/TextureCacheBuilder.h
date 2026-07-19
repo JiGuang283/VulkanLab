@@ -1,9 +1,13 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <string>
 
 namespace vkr::assettool {
+
+class IProcessRunner;
 
 struct TextureCacheBuildOptions {
     std::filesystem::path scene;
@@ -14,10 +18,17 @@ struct TextureCacheBuildOptions {
     uint32_t textureLimit = 0;
     std::filesystem::path cacheRoot;
     std::filesystem::path ktxTool;
+    std::string qualityPreset = "development";
+    uint32_t maxWorkers = 0;
+    uint64_t memoryBudgetMiB = 2048;
+    bool progressNdjson = false;
     bool force = false;
+    std::atomic_bool *cancelRequested = nullptr;
 };
 
 int buildTextureCache(const TextureCacheBuildOptions &options);
+int buildTextureCache(const TextureCacheBuildOptions &options,
+                      IProcessRunner &processRunner);
 
 struct TextureCacheMigrationOptions {
     std::filesystem::path projectRoot;

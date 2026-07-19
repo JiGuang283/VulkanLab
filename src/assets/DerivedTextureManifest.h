@@ -44,6 +44,8 @@ struct DerivedTextureManifest {
     std::string sceneId;
     std::string profileId;
     std::string scenePath;
+    std::string qualityPreset = "development";
+    std::string encoderSettings;
     uint32_t textureLimit = 0;
     DerivedFileStamp scene;
     std::vector<DerivedTextureEntry> entries;

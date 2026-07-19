@@ -2,9 +2,17 @@
 
 #include <json.hpp>
 
+#include <atomic>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <system_error>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <Windows.h>
+#endif
 
 namespace vkr {
 
@@ -164,6 +172,9 @@ bool loadDerivedTextureManifest(const std::filesystem::path &path,
         manifest.sceneId = root.value("sceneId", std::string{});
         manifest.profileId = root.value("profileId", std::string{});
         manifest.scenePath = root.value("scenePath", std::string{});
+        manifest.qualityPreset =
+            root.value("qualityPreset", std::string("development"));
+        manifest.encoderSettings = root.value("encoderSettings", std::string{});
         manifest.textureLimit = root.value("textureLimit", 0u);
         manifest.scene = stampFromJson(root.at("scene"));
         if (manifest.schemaVersion != DerivedTextureManifest::kSchemaVersion &&
@@ -208,20 +219,23 @@ bool loadDerivedTextureManifest(const std::filesystem::path &path,
 bool saveDerivedTextureManifest(const std::filesystem::path &path,
                                 const DerivedTextureManifest &manifest,
                                 std::string &error) {
+    std::filesystem::path temporary;
     try {
         Json root{{"schemaVersion", manifest.schemaVersion},
                   {"projectId", manifest.projectId},
                   {"sceneId", manifest.sceneId},
                   {"profileId", manifest.profileId},
                   {"scenePath", manifest.scenePath},
+                  {"qualityPreset", manifest.qualityPreset},
+                  {"encoderSettings", manifest.encoderSettings},
                   {"textureLimit", manifest.textureLimit},
                   {"scene", stampToJson(manifest.scene)},
                   {"encoder",
                    {{"name", "ktx create"},
                     {"version", "4.4.2"},
                     {"codec", "uastc-ldr-4x4"},
-                    {"quality", 2},
-                    {"zstd", 9}}},
+                    {"preset", manifest.qualityPreset},
+                    {"settings", manifest.encoderSettings}}},
                   {"entries", Json::array()}};
         for (const DerivedTextureEntry &entry : manifest.entries) {
             root["entries"].push_back(
@@ -235,18 +249,40 @@ bool saveDerivedTextureManifest(const std::filesystem::path &path,
                  {"source", stampToJson(entry.source)}});
         }
         std::filesystem::create_directories(path.parent_path());
-        const std::filesystem::path temporary = path.string() + ".tmp";
+        static std::atomic<uint64_t> temporaryCounter{0};
+        temporary = path.string() + ".tmp-" +
+                    std::to_string(temporaryCounter.fetch_add(1));
         {
             std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
             if (!output)
                 throw std::runtime_error("could not create manifest");
             output << root.dump(2) << '\n';
+            output.flush();
+            if (!output)
+                throw std::runtime_error("could not flush manifest");
         }
+#ifdef _WIN32
+        if (!MoveFileExW(temporary.c_str(), path.c_str(),
+                         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            const DWORD moveError = GetLastError();
+            std::error_code ignored;
+            std::filesystem::remove(temporary, ignored);
+            throw std::system_error(static_cast<int>(moveError),
+                                    std::system_category(),
+                                    "could not publish manifest");
+        }
+#else
         std::error_code ignored;
         std::filesystem::remove(path, ignored);
         std::filesystem::rename(temporary, path);
+#endif
+        temporary.clear();
         return true;
     } catch (const std::exception &exception) {
+        if (!temporary.empty()) {
+            std::error_code ignored;
+            std::filesystem::remove(temporary, ignored);
+        }
         error = exception.what();
         return false;
     }

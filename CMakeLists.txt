@@ -122,6 +122,7 @@ if(BUILD_TESTING)
         "${CMAKE_SOURCE_DIR}/tests/DerivedTextureManifestTests.cpp"
         "${CMAKE_SOURCE_DIR}/tests/SceneCatalogTests.cpp"
         "${CMAKE_SOURCE_DIR}/tests/SceneImportServiceTests.cpp"
+        "${CMAKE_SOURCE_DIR}/tests/TextureCachePipelineTests.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/DerivedAssetPaths.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/DerivedTextureManifest.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/ProjectContext.cpp"
@@ -129,9 +130,12 @@ if(BUILD_TESTING)
         "${CMAKE_SOURCE_DIR}/src/assets/SceneImportService.cpp"
         "${CMAKE_SOURCE_DIR}/src/render/TangentGenerator.cpp"
         "${CMAKE_SOURCE_DIR}/src/render/TextureData.cpp"
+        "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool/TextureCachePipeline.cpp"
+        "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool/ProcessRunner.cpp"
     )
     target_include_directories(VulkanLabCpuTests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool
         ${GLM_INCLUDE_DIR}
         ${GLTF_DIR}
     )
@@ -157,6 +161,8 @@ if(WIN32)
     add_executable(VulkanLabAssetTool
         "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool/main.cpp"
         "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool/TextureCacheBuilder.cpp"
+        "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool/TextureCachePipeline.cpp"
+        "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool/ProcessRunner.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/DerivedAssetPaths.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/DerivedTextureManifest.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/ProjectContext.cpp"
@@ -196,6 +202,13 @@ if(WIN32)
                 "-DTOOL=$<TARGET_FILE:VulkanLabAssetTool>"
                 "-DTEST_ROOT=${CMAKE_BINARY_DIR}/asset_tool_catalog_test"
                 -P "${CMAKE_SOURCE_DIR}/tests/AssetToolCatalogImportTest.cmake"
+        )
+        add_test(
+            NAME VulkanLabAssetToolTextureCache
+            COMMAND ${CMAKE_COMMAND}
+                "-DTOOL=$<TARGET_FILE:VulkanLabAssetTool>"
+                "-DTEST_ROOT=${CMAKE_BINARY_DIR}/asset_tool_texture_cache_test"
+                -P "${CMAKE_SOURCE_DIR}/tests/AssetToolTextureCacheTest.cmake"
         )
     endif()
 endif()
