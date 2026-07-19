@@ -2,14 +2,13 @@
 
 #include "SceneLight.h"
 #include "SceneObject.h"
+#include "SceneTypes.h"
 
 #include <functional>
 #include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
-
-#include <glm/glm.hpp>
 
 namespace vkr {
 
@@ -18,20 +17,6 @@ class MaterialInstance;
 class MaterialTemplate;
 class RenderQueue;
 class Texture;
-
-struct CameraPose {
-    glm::vec3 position{2.0f, 2.0f, 2.0f};
-    float     yaw = -135.0f;
-    float     pitch = -30.0f;
-};
-
-struct Bounds {
-    glm::vec3 min{0.0f};
-    glm::vec3 max{0.0f};
-    glm::vec3 center{0.0f};
-    float     radius = 0.0f;
-    bool      valid = false;
-};
 
 class Scene {
   public:

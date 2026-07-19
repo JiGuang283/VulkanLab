@@ -63,6 +63,20 @@ void testPreparedReferences() {
             "prepared mesh bounds were not retained");
 }
 
+void testSceneTypeDefaults() {
+    const vkr::Bounds bounds;
+    require(!bounds.valid, "default bounds unexpectedly became valid");
+    require(bounds.min == glm::vec3(0.0f) &&
+                bounds.max == glm::vec3(0.0f) &&
+                bounds.center == glm::vec3(0.0f) && bounds.radius == 0.0f,
+            "default bounds values changed");
+
+    const vkr::CameraPose camera;
+    require(camera.position == glm::vec3(2.0f, 2.0f, 2.0f) &&
+                camera.yaw == -135.0f && camera.pitch == -30.0f,
+            "default camera pose changed");
+}
+
 void testTangents() {
     std::vector<vkr::Vertex> vertices(3);
     vertices[0].pos = {0.0f, 0.0f, 0.0f};
@@ -110,6 +124,7 @@ void testTextureResize() {
 int main() {
     try {
         testPreparedReferences();
+        testSceneTypeDefaults();
         testTangents();
         testTextureResize();
         runDerivedTextureManifestTests();

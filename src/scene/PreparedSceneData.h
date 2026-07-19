@@ -1,9 +1,9 @@
 #pragma once
 
-#include "Scene.h"
 #include "render/MaterialInstance.h"
 #include "render/MaterialTextureSlot.h"
 #include "render/Vertex.h"
+#include "SceneTypes.h"
 
 #include <array>
 #include <cstdint>

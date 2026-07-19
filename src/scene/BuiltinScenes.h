@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Scene.h"
 #include "SceneFactory.h"
+#include "SceneTypes.h"
 
 #include <optional>
 

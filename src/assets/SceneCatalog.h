@@ -1,6 +1,6 @@
 #pragma once
 
-#include "scene/Scene.h"
+#include "scene/SceneTypes.h"
 
 #include <cstdint>
 #include <filesystem>

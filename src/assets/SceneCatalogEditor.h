@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ProjectContext.h"
-#include "scene/Scene.h"
+#include "scene/SceneTypes.h"
 
 #include <string>
 

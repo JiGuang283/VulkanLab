@@ -49,7 +49,12 @@ const char *validCatalog() {
         "desktop_1024": {"textureLimit": 1024}
       },
       "scenes": [
-        {"id":"scene","displayName":"Scene","source":"models/scene.glb"}
+        {
+          "id":"scene",
+          "displayName":"Scene",
+          "source":"models/scene.glb",
+          "camera":{"position":[1.0,2.0,3.0],"yaw":45.0,"pitch":-10.0}
+        }
       ]
     })";
 }
@@ -68,6 +73,12 @@ void testCatalogLoadAndProjectResolution() {
                    "catalog scene was not loaded");
     requireCatalog(catalog.profile("desktop_1024").textureLimit == 1024,
                    "catalog profile was not loaded");
+    requireCatalog(catalog.scenes[0].camera.has_value() &&
+                       catalog.scenes[0].camera->position ==
+                           glm::vec3(1.0f, 2.0f, 3.0f) &&
+                       catalog.scenes[0].camera->yaw == 45.0f &&
+                       catalog.scenes[0].camera->pitch == -10.0f,
+                   "catalog camera pose did not round trip");
     requireCatalog(
         vkr::DerivedAssetPaths::defaultCacheRoot(catalog.projectId)
                 .filename() == "catalog-test",
