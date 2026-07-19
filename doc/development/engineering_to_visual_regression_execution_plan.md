@@ -1009,12 +1009,24 @@ Release `desktop_1024` Main Sponza package：
 
 用户于 2026-07-19 确认 Viking Room、Sheen Chair 和 Main Sponza 当前画面没有问题。M0 的自动与人工基线门槛均已通过。
 
+## M1 Verification Record
+
+> Completed: 2026-07-19
+
+- Debug 和 Release 都执行了 `clean -> cmake --fresh -> full build`，随后 CTest 均为 4/4 通过。
+- 当前 solution 覆盖全部 68 个 `src/`、`tools/` C++ 翻译单元；缺失 owner 为 0，重复 owner 为 0。stb、tinygltf、tinyobj 和 VMA implementation 各自只属于一个静态库。
+- 根 `CMakeLists.txt` 为 21 行；项目 CMake 中不存在 `GLOB_RECURSE`、全局 `include_directories()` 或 `link_directories()`，tests 和 executable 不再列出生产实现 `.cpp`。
+- 15 个 tracked SPIR-V 的 SHA-256 与 M0 完全一致，clean build 后 shader 无 Git diff。
+- Release Runtime Control 的 ping、info、scene list、texture limit、shader set、scene load、stats 和 quit 全部成功。Main Sponza 1024 仍为 75 textures、405 meshes、29 materials、405 objects，KTX2 cache 72/72 hit，3 batch submits、0 legacy submits、0 queue waits，VMA allocation delta `279.74 MiB`。
+- Release Main Sponza package cook/verify 通过，protected file 集合仍为 94 个文件和 72 个唯一 blob。protected bytes 为 `225,170,695`，相对 M0 增加 1,536 bytes，来自重链接后的 runtime binary；asset/shader/package closure 未改变。
+- 本次 Runtime 日志没有 error、critical 或 Validation Error；只保留 M0 已知的 Legacy Forward location 3 warning。Debug `LNK4098` 同样可在 M0 原始 build log 中复现，不是 M1 引入。验证结束后无残留 VulkanLab、AssetTool 或 ktx 进程。
+
 ## Implementation Record
 
 | Milestone | Status | Commit(s) | Verification | Notes |
 |---|---|---|---|---|
-| M0 | Complete | `9dc1dab`, `82594e0`, M0 closeout commit containing this row | Debug/Release clean build; CTest 4/4 each; Runtime loads; package verify; representative scenes visually confirmed | No residual VulkanLab, AssetTool, or ktx process. |
-| M1 | Not started | | | |
+| M0 | Complete | `9dc1dab`, `82594e0`, `11e9d90` | Debug/Release clean build; CTest 4/4 each; Runtime loads; package verify; representative scenes visually confirmed | No residual VulkanLab, AssetTool, or ktx process. |
+| M1 | Complete | `8dc4a01`, `00c82b9`, `c85ef0e`, `fcd4016`, M1 closeout commit containing this row | Debug/Release clean + fresh build; CTest 4/4 each; unique source ownership; Runtime Sponza 1024; package verify; shader hashes unchanged | Existing GLFW Debug CRT warning and Legacy shader attribute warning remain baseline noise. |
 | M2 | Not started | | | |
 | M3 | Not started | | | |
 | M4 | Not started | | | |
