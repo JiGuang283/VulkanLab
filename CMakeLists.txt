@@ -23,6 +23,24 @@ set(KTX_FEATURE_TOOLS ON CACHE BOOL "Build KTX command-line tools" FORCE)
 set(KTX_FEATURE_TOOLS_CTS OFF CACHE BOOL "Disable KTX tools CTS" FORCE)
 add_subdirectory(external/ktx EXCLUDE_FROM_ALL)
 
+# KTX registers CLI tests whenever its tools are enabled, including tools this
+# project intentionally does not build. Keep the repository-wide CTest suite
+# focused on VulkanLab; KTX is pinned and tested upstream.
+get_property(KTX_REGISTERED_TESTS
+    DIRECTORY "${CMAKE_SOURCE_DIR}/external/ktx/tests"
+    PROPERTY TESTS)
+if(KTX_REGISTERED_TESTS)
+    set(KTX_CTEST_IGNORE_FILE
+        "${CMAKE_BINARY_DIR}/CTestCustom.cmake")
+    file(WRITE "${KTX_CTEST_IGNORE_FILE}"
+        "set(CTEST_CUSTOM_TESTS_IGNORE\n")
+    foreach(KTX_REGISTERED_TEST IN LISTS KTX_REGISTERED_TESTS)
+        file(APPEND "${KTX_CTEST_IGNORE_FILE}"
+            "  \"${KTX_REGISTERED_TEST}\"\n")
+    endforeach()
+    file(APPEND "${KTX_CTEST_IGNORE_FILE}" ")\n")
+endif()
+
 # astc-encoder defaults to the static MSVC runtime even when embedded in a
 # /MD application. Align whichever ISA target KTX selected to avoid mixing
 # CRT heaps in VulkanLab and the asset tool.
@@ -91,12 +109,22 @@ set(IMGUI_SOURCES
 
 add_executable(VulkanLab ${SOURCES} ${IMGUI_SOURCES})
 
+configure_file(
+    "${CMAKE_SOURCE_DIR}/cmake/VulkanLabProjectLocator.json.in"
+    "${CMAKE_BINARY_DIR}/generated/vulkanlab_project.json"
+    @ONLY
+)
+
 include(CTest)
 if(BUILD_TESTING)
     add_executable(VulkanLabCpuTests
         "${CMAKE_SOURCE_DIR}/tests/PreparedSceneDataTests.cpp"
         "${CMAKE_SOURCE_DIR}/tests/DerivedTextureManifestTests.cpp"
+        "${CMAKE_SOURCE_DIR}/tests/SceneCatalogTests.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/DerivedAssetPaths.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/DerivedTextureManifest.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/ProjectContext.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/SceneCatalog.cpp"
         "${CMAKE_SOURCE_DIR}/src/render/TangentGenerator.cpp"
         "${CMAKE_SOURCE_DIR}/src/render/TextureData.cpp"
     )
@@ -127,7 +155,10 @@ if(WIN32)
     add_executable(VulkanLabAssetTool
         "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool/main.cpp"
         "${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool/TextureCacheBuilder.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/DerivedAssetPaths.cpp"
         "${CMAKE_SOURCE_DIR}/src/assets/DerivedTextureManifest.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/ProjectContext.cpp"
+        "${CMAKE_SOURCE_DIR}/src/assets/SceneCatalog.cpp"
         "${CMAKE_SOURCE_DIR}/src/tiny_gltf.cpp"
         "${CMAKE_SOURCE_DIR}/src/stb_image.cpp"
         "${CMAKE_SOURCE_DIR}/src/stb_image_write.cpp"
@@ -135,6 +166,7 @@ if(WIN32)
     target_include_directories(VulkanLabAssetTool PRIVATE
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/tools/vulkan_lab_asset_tool
+        ${GLM_INCLUDE_DIR}
         ${STB_DIR}
         ${GLTF_DIR}
     )
@@ -226,6 +258,9 @@ add_custom_command(TARGET VulkanLab PRE_BUILD
 # size + mtime for fast validation, so rewriting unchanged assets invalidates
 # otherwise valid derived caches.
 add_custom_command(TARGET VulkanLab POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_BINARY_DIR}/generated/vulkanlab_project.json"
+        "$<TARGET_FILE_DIR:VulkanLab>/vulkanlab_project.json"
     COMMAND ${CMAKE_COMMAND}
         "-DSOURCE_DIR=${CMAKE_SOURCE_DIR}/shader"
         "-DDESTINATION_DIR=$<TARGET_FILE_DIR:VulkanLab>/shader"

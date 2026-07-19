@@ -100,6 +100,9 @@ ScenePrepareFactory gltfSceneFactory(std::string modelPath, std::string vp,
         options.maxTextureSize = loadContext.maxTextureSize;
         options.derivedTextureCachePath =
             loadContext.derivedTextureCachePath;
+        options.projectId = loadContext.projectId;
+        options.sceneId = loadContext.sceneId;
+        options.profileId = loadContext.profileId;
         options.textureTranscodeTarget =
             loadContext.textureTranscodeTarget;
         options.loadStats = loadContext.loadStats;

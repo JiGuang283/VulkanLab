@@ -115,6 +115,12 @@ std::filesystem::path derivedManifestPath(
            (profile + ".json");
 }
 
+std::filesystem::path derivedManifestPath(
+    const std::filesystem::path &cacheRoot, const std::string &sceneId,
+    const std::string &profileId) {
+    return cacheRoot / "manifests" / sceneId / (profileId + ".json");
+}
+
 DerivedFileStamp fileStamp(const std::filesystem::path &path,
                           const std::string &sha256) {
     DerivedFileStamp stamp;
@@ -154,11 +160,22 @@ bool loadDerivedTextureManifest(const std::filesystem::path &path,
         input >> root;
         manifest = {};
         manifest.schemaVersion = root.value("schemaVersion", 0u);
+        manifest.projectId = root.value("projectId", std::string{});
+        manifest.sceneId = root.value("sceneId", std::string{});
+        manifest.profileId = root.value("profileId", std::string{});
         manifest.scenePath = root.value("scenePath", std::string{});
         manifest.textureLimit = root.value("textureLimit", 0u);
         manifest.scene = stampFromJson(root.at("scene"));
-        if (manifest.schemaVersion != DerivedTextureManifest::kSchemaVersion) {
+        if (manifest.schemaVersion != DerivedTextureManifest::kSchemaVersion &&
+            manifest.schemaVersion !=
+                DerivedTextureManifest::kLegacySchemaVersion) {
             error = "unsupported manifest schema";
+            return false;
+        }
+        if (manifest.schemaVersion == DerivedTextureManifest::kSchemaVersion &&
+            (manifest.projectId.empty() || manifest.sceneId.empty() ||
+             manifest.profileId.empty())) {
+            error = "manifest identity is incomplete";
             return false;
         }
         for (const Json &item : root.at("entries")) {
@@ -193,6 +210,9 @@ bool saveDerivedTextureManifest(const std::filesystem::path &path,
                                 std::string &error) {
     try {
         Json root{{"schemaVersion", manifest.schemaVersion},
+                  {"projectId", manifest.projectId},
+                  {"sceneId", manifest.sceneId},
+                  {"profileId", manifest.profileId},
                   {"scenePath", manifest.scenePath},
                   {"textureLimit", manifest.textureLimit},
                   {"scene", stampToJson(manifest.scene)},

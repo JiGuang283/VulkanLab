@@ -1,6 +1,8 @@
 #include "app/Application.h"
+#include "assets/DerivedAssetPaths.h"
+#include "assets/ProjectContext.h"
+#include "assets/SceneCatalog.h"
 #include "core/Log.h"
-#include "scene/BuiltinScenes.h"
 
 #include <cstdlib>
 #include <exception>
@@ -13,11 +15,14 @@
 namespace {
 
 void printUsage(std::ostream &out) {
-    out << "Usage: VulkanLab.exe [--runtime-control] [--help]\n"
+    out << "Usage: VulkanLab.exe [--project <path>] [--runtime-control] "
+           "[--help]\n"
         << "\n"
         << "Options:\n"
         << "  --runtime-control  Enable the local VulkanLabCtl named-pipe "
            "interface.\n"
+        << "  --project <path>   Use the source project and writable scene "
+           "catalog at <path>.\n"
         << "  --help             Show this help and exit.\n";
 }
 
@@ -26,6 +31,11 @@ bool parseArguments(int argc, char **argv, vkr::Config &config) {
         const std::string argument = argv[i];
         if (argument == "--runtime-control") {
             config.enableRuntimeControl = true;
+        } else if (argument == "--project") {
+            if (++i >= argc)
+                throw std::invalid_argument(
+                    "--project requires a directory path");
+            config.projectPath = argv[i];
         } else if (argument == "--help") {
             return false;
         } else {
@@ -56,44 +66,26 @@ int main(int argc, char **argv) {
         // config.windowWidth  = 1280;
         // config.windowHeight = 720;
 
-        vkr::Application app(config);
+        const std::optional<std::filesystem::path> explicitProject =
+            config.projectPath.empty()
+                ? std::nullopt
+                : std::optional<std::filesystem::path>(config.projectPath);
+        vkr::ProjectContext projectContext =
+            vkr::ProjectContextResolver::resolve(explicitProject);
+        vkr::SceneCatalog catalog = vkr::SceneCatalog::load(
+            projectContext.catalogPath, projectContext.projectRoot);
+        projectContext.cacheRoot =
+            vkr::DerivedAssetPaths::defaultCacheRoot(catalog.projectId);
+        if (config.derivedTextureCachePath.empty())
+            config.derivedTextureCachePath = projectContext.cacheRoot.string();
+        VKR_LOG_INFO("Assets", "Project '{}' from '{}' ({})", catalog.projectId,
+                     projectContext.projectRoot.string(),
+                     projectContext.diagnostic);
+        VKR_LOG_INFO("Assets", "Derived asset cache: '{}'",
+                     projectContext.cacheRoot.string());
 
-        app.registerScene({"Viking Room",
-                           vkr::vikingRoomSceneFactory(config.texturePath,
-                                                       config.vertShaderPath,
-                                                       config.fragShaderPath)});
-        app.registerScene({"Sheen Chair",
-                           {},
-                           vkr::sheenChairSceneFactory(config.vertShaderPath,
-                                                       config.fragShaderPath)});
-
-        auto registerOptionalGltf =
-            [&](const char *name, const char *path,
-                std::optional<vkr::CameraPose> cameraOverride = std::nullopt) {
-            if (!std::filesystem::exists(path)) {
-                VKR_LOG_INFO("App", "Skipping optional scene '{}': missing {}",
-                             name, path);
-                return;
-            }
-            app.registerScene({
-                name, {},
-                vkr::gltfSceneFactory(path, config.vertShaderPath,
-                                      config.fragShaderPath, cameraOverride)});
-        };
-
-        registerOptionalGltf("A Beautiful Game",
-                             "models/ABeautifulGame.glb");
-        registerOptionalGltf("Anisotropy Barn Lamp",
-                             "models/AnisotropyBarnLamp.glb");
-        registerOptionalGltf("Car Concept", "models/CarConcept.glb");
-        registerOptionalGltf("Chronograph Watch",
-                             "models/ChronographWatch.glb");
-        registerOptionalGltf("Diffuse Transmission Teacup",
-                             "models/DiffuseTransmissionTeacup.glb");
-        registerOptionalGltf("Pot of Coals", "models/PotOfCoals.glb");
-        registerOptionalGltf(
-            "Main Sponza", "models/main_sponza/NewSponza_Main_glTF_003.gltf",
-            vkr::CameraPose{{0.0f, -35.0f, 10.0f}, 93.0f, -2.0f});
+        vkr::Application app(config, std::move(projectContext),
+                             std::move(catalog));
 
         app.run();
     } catch (const std::exception &e) {

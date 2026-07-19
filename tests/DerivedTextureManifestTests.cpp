@@ -47,6 +47,8 @@ void testManifestPathsAndLookup() {
     const auto limited =
         vkr::derivedManifestPath("derived_assets", scene, 1024);
     const auto full = vkr::derivedManifestPath("derived_assets", scene, 0);
+    const auto stable = vkr::derivedManifestPath(
+        "derived_assets", "main-sponza", "desktop_1024");
     requireManifest(limited.filename() == "1024.json",
                     "limited profile manifest name is wrong");
     requireManifest(full.filename() == "full.json",
@@ -54,6 +56,9 @@ void testManifestPathsAndLookup() {
     requireManifest(limited.parent_path().parent_path().filename() ==
                         "manifests",
                     "manifest path is outside the manifests directory");
+    requireManifest(stable == std::filesystem::path("derived_assets") /
+                                  "manifests/main-sponza/desktop_1024.json",
+                    "stable manifest path is wrong");
 
     vkr::DerivedTextureManifest manifest;
     manifest.entries.push_back({7,
@@ -88,6 +93,9 @@ void testManifestRoundTrip() {
                               "2048.json";
 
     vkr::DerivedTextureManifest source;
+    source.projectId = "vulkan-lab";
+    source.sceneId = "test-scene";
+    source.profileId = "desktop_2048";
     source.scenePath = "models/test/scene.gltf";
     source.textureLimit = 2048;
     source.scene = {"models/test/scene.gltf", 1234, 5678, "scene-sha256"};
@@ -152,7 +160,7 @@ void testUnsupportedSchemaIsRejected() {
     const auto path = temporary.path() / "unsupported.json";
     {
         std::ofstream output(path, std::ios::binary);
-        output << R"({"schemaVersion":2,"scenePath":"scene.gltf","textureLimit":1024,"scene":{"path":"scene.gltf","size":1,"writeTime":1,"sha256":"hash"},"entries":[]})";
+        output << R"({"schemaVersion":99,"scenePath":"scene.gltf","textureLimit":1024,"scene":{"path":"scene.gltf","size":1,"writeTime":1,"sha256":"hash"},"entries":[]})";
     }
 
     vkr::DerivedTextureManifest manifest;
@@ -163,6 +171,22 @@ void testUnsupportedSchemaIsRejected() {
                     "unsupported schema returned an unexpected error");
 }
 
+void testLegacySchemaCanBeReadForMigration() {
+    TemporaryDirectory temporary;
+    const auto path = temporary.path() / "legacy.json";
+    {
+        std::ofstream output(path, std::ios::binary);
+        output << R"({"schemaVersion":1,"scenePath":"models/scene.gltf","textureLimit":1024,"scene":{"path":"scene.gltf","size":1,"writeTime":1,"sha256":"hash"},"entries":[]})";
+    }
+    vkr::DerivedTextureManifest manifest;
+    std::string error;
+    requireManifest(vkr::loadDerivedTextureManifest(path, manifest, error),
+                    "legacy manifest could not be read for migration");
+    requireManifest(manifest.schemaVersion ==
+                        vkr::DerivedTextureManifest::kLegacySchemaVersion,
+                    "legacy manifest schema was not preserved");
+}
+
 } // namespace
 
 void runDerivedTextureManifestTests() {
@@ -170,4 +194,5 @@ void runDerivedTextureManifestTests() {
     testManifestRoundTrip();
     testFileStampInvalidation();
     testUnsupportedSchemaIsRejected();
+    testLegacySchemaCanBeReadForMigration();
 }

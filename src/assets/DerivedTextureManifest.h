@@ -36,9 +36,13 @@ struct DerivedTextureEntry {
 };
 
 struct DerivedTextureManifest {
-    static constexpr uint32_t kSchemaVersion = 1;
+    static constexpr uint32_t kLegacySchemaVersion = 1;
+    static constexpr uint32_t kSchemaVersion = 2;
 
     uint32_t schemaVersion = kSchemaVersion;
+    std::string projectId;
+    std::string sceneId;
+    std::string profileId;
     std::string scenePath;
     uint32_t textureLimit = 0;
     DerivedFileStamp scene;
@@ -52,6 +56,9 @@ std::string normalizedSceneKey(const std::filesystem::path &scenePath);
 std::filesystem::path derivedManifestPath(
     const std::filesystem::path &cacheRoot,
     const std::filesystem::path &scenePath, uint32_t textureLimit);
+std::filesystem::path derivedManifestPath(
+    const std::filesystem::path &cacheRoot, const std::string &sceneId,
+    const std::string &profileId);
 DerivedFileStamp fileStamp(const std::filesystem::path &path,
                           const std::string &sha256 = {});
 bool fileStampMatches(const DerivedFileStamp &stamp,

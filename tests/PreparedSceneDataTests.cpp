@@ -10,6 +10,7 @@
 #include <vector>
 
 void runDerivedTextureManifestTests();
+void runSceneCatalogTests();
 
 namespace {
 
@@ -103,6 +104,7 @@ int main() {
         testTangents();
         testTextureResize();
         runDerivedTextureManifestTests();
+        runSceneCatalogTests();
         std::cout << "VulkanLab CPU tests passed\n";
         return 0;
     } catch (const std::exception &error) {

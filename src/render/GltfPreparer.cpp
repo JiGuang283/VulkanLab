@@ -370,7 +370,8 @@ PreparedSceneData GltfPreparer::prepare(
                                    : std::filesystem::path(".");
 
     DerivedTextureCache derivedCache(
-        options.derivedTextureCachePath, modelPath, options.maxTextureSize,
+        options.derivedTextureCachePath, modelPath, options.projectId,
+        options.sceneId, options.profileId, options.maxTextureSize,
         options.textureTranscodeTarget,
         options.loadStats ? &options.loadStats->resources : nullptr);
 

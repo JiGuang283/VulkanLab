@@ -17,7 +17,8 @@ class DerivedTextureCache {
   public:
     DerivedTextureCache(std::filesystem::path cacheRoot,
                         std::filesystem::path scenePath,
-                        uint32_t textureLimit,
+                        std::string projectId, std::string sceneId,
+                        std::string profileId, uint32_t textureLimit,
                         TextureTranscodeTarget target,
                         ResourceLoadStats *stats);
 
@@ -32,6 +33,9 @@ class DerivedTextureCache {
     std::filesystem::path cacheRoot_;
     std::filesystem::path scenePath_;
     std::filesystem::path sceneDirectory_;
+    std::string projectId_;
+    std::string sceneId_;
+    std::string profileId_;
     TextureTranscodeTarget target_ = TextureTranscodeTarget::Rgba8;
     ResourceLoadStats *stats_ = nullptr;
     std::optional<DerivedTextureManifest> manifest_;

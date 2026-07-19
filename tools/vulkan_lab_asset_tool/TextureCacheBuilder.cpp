@@ -1,5 +1,8 @@
 #include "TextureCacheBuilder.h"
 
+#include "assets/DerivedAssetPaths.h"
+#include "assets/SceneCatalog.h"
+
 #include "assets/DerivedTextureManifest.h"
 
 #include <ktx.h>
@@ -541,8 +544,14 @@ void printParseErrors(const tinygltf3::ErrorStack &errors) {
 } // namespace
 
 int buildTextureCache(const TextureCacheBuildOptions &options) {
+    if (options.projectId.empty() || options.sceneId.empty() ||
+        options.profileId.empty())
+        throw std::invalid_argument(
+            "projectId, sceneId, and profileId are required");
     const std::filesystem::path sceneIdentity =
-        options.scene.lexically_normal();
+        (options.sceneProjectPath.empty() ? options.scene
+                                          : options.sceneProjectPath)
+            .lexically_normal();
     const std::filesystem::path scene =
         std::filesystem::absolute(options.scene).lexically_normal();
     if (!std::filesystem::is_regular_file(scene))
@@ -569,6 +578,9 @@ int buildTextureCache(const TextureCacheBuildOptions &options) {
 
     const std::vector<BuildTask> tasks = collectTasks(model.get());
     DerivedTextureManifest manifest;
+    manifest.projectId = options.projectId;
+    manifest.sceneId = options.sceneId;
+    manifest.profileId = options.profileId;
     manifest.scenePath = genericPath(sceneIdentity);
     manifest.textureLimit = options.textureLimit;
     const std::vector<uint8_t> sceneBytes = readFile(scene);
@@ -691,7 +703,7 @@ int buildTextureCache(const TextureCacheBuildOptions &options) {
     }
 
     const std::filesystem::path manifestPath =
-        derivedManifestPath(cacheRoot, sceneIdentity, options.textureLimit);
+        derivedManifestPath(cacheRoot, options.sceneId, options.profileId);
     std::string saveError;
     if (!saveDerivedTextureManifest(manifestPath, manifest, saveError))
         throw std::runtime_error("could not publish manifest: " + saveError);
@@ -700,6 +712,83 @@ int buildTextureCache(const TextureCacheBuildOptions &options) {
               << "  encoded: " << encodedCount << "\n"
               << "  reused: " << reusedCount << "\n"
               << "  manifest: " << manifestPath.string() << '\n';
+    return 0;
+}
+
+int migrateTextureCache(const TextureCacheMigrationOptions &options) {
+    const std::filesystem::path projectRoot =
+        std::filesystem::absolute(options.projectRoot).lexically_normal();
+    const SceneCatalog catalog = SceneCatalog::load(
+        projectRoot / "assets/catalog.json", projectRoot);
+    const std::filesystem::path legacyRoot =
+        std::filesystem::absolute(options.legacyCacheRoot).lexically_normal();
+    const std::filesystem::path targetRoot =
+        std::filesystem::absolute(options.cacheRoot).lexically_normal();
+
+    uint64_t migrated = 0;
+    uint64_t copiedBlobs = 0;
+    uint64_t skipped = 0;
+    for (const CatalogScene &scene : catalog.scenes) {
+        if (scene.type != "gltf")
+            continue;
+        const std::filesystem::path source = projectRoot / scene.source;
+        if (!std::filesystem::is_regular_file(source)) {
+            ++skipped;
+            continue;
+        }
+        for (const auto &profilePair : catalog.importProfiles) {
+            const ImportProfile &profile = profilePair.second;
+            const std::filesystem::path legacyManifestPath =
+                derivedManifestPath(legacyRoot, scene.source,
+                                    profile.textureLimit);
+            if (!std::filesystem::is_regular_file(legacyManifestPath))
+                continue;
+
+            DerivedTextureManifest manifest;
+            std::string error;
+            if (!loadDerivedTextureManifest(legacyManifestPath, manifest,
+                                            error))
+                throw std::runtime_error("could not read legacy manifest '" +
+                                         legacyManifestPath.string() +
+                                         "': " + error);
+            if (manifest.schemaVersion !=
+                DerivedTextureManifest::kLegacySchemaVersion)
+                continue;
+            manifest.schemaVersion = DerivedTextureManifest::kSchemaVersion;
+            manifest.projectId = catalog.projectId;
+            manifest.sceneId = scene.id;
+            manifest.profileId = profile.id;
+            manifest.scenePath = scene.source.generic_string();
+
+            for (const DerivedTextureEntry &entry : manifest.entries) {
+                const std::filesystem::path oldBlob = legacyRoot / entry.blob;
+                const std::filesystem::path newBlob = targetRoot / entry.blob;
+                if (!std::filesystem::is_regular_file(oldBlob))
+                    throw std::runtime_error("legacy blob is missing: " +
+                                             oldBlob.string());
+                if (!std::filesystem::is_regular_file(newBlob)) {
+                    std::filesystem::create_directories(newBlob.parent_path());
+                    std::filesystem::copy_file(
+                        oldBlob, newBlob,
+                        std::filesystem::copy_options::skip_existing);
+                    ++copiedBlobs;
+                }
+            }
+
+            const std::filesystem::path targetManifest =
+                derivedManifestPath(targetRoot, scene.id, profile.id);
+            if (!saveDerivedTextureManifest(targetManifest, manifest, error))
+                throw std::runtime_error("could not publish migrated manifest: " +
+                                         error);
+            ++migrated;
+            std::cout << "Migrated " << scene.id << '/' << profile.id
+                      << " -> " << targetManifest.string() << '\n';
+        }
+    }
+    std::cout << "Texture cache migration complete\n"
+              << "  manifests: " << migrated << "\n"
+              << "  copied blobs: " << copiedBlobs << "\n"
+              << "  unavailable scenes: " << skipped << '\n';
     return 0;
 }
 

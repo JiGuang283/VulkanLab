@@ -2,6 +2,8 @@
 
 #include "Config.h"
 
+#include "assets/ProjectContext.h"
+#include "assets/SceneCatalog.h"
 #include "diagnostics/SceneLoadStats.h"
 #include "render/RenderQueue.h"
 #include "render/ShaderVariant.h"
@@ -42,7 +44,8 @@ enum class InputMode {
 
 class Application {
   public:
-    explicit Application(const Config &config = {});
+    Application(const Config &config, ProjectContext projectContext,
+                SceneCatalog catalog);
     ~Application();
 
     Application(const Application &) = delete;
@@ -78,8 +81,11 @@ class Application {
     void setShaderVariant(int index);
     int findSceneIndexByName(const std::string &name) const;
     int findShaderVariantIndexByName(const std::string &name) const;
+    std::string profileIdForTextureLimit(const SceneEntry &entry) const;
 
     Config config_;
+    ProjectContext projectContext_;
+    SceneCatalog catalog_;
 
     // 基础设施（创建顺序 = 析构逆序）
     std::unique_ptr<Window>              window_;

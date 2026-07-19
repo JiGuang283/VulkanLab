@@ -18,6 +18,9 @@ class GltfPreparer {
         bool     generateMissingNormals = true;
         uint32_t maxTextureSize = 2048;
         std::string derivedTextureCachePath = "derived_assets";
+        std::string projectId;
+        std::string sceneId;
+        std::string profileId;
         TextureTranscodeTarget textureTranscodeTarget =
             TextureTranscodeTarget::Rgba8;
         std::string vertShaderPath;

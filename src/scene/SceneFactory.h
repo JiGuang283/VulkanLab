@@ -21,6 +21,9 @@ struct SceneLoadStats;
 struct SceneLoadContext {
     uint32_t maxTextureSize = 2048; // 0 = Full resolution
     std::string derivedTextureCachePath = "derived_assets";
+    std::string projectId;
+    std::string sceneId;
+    std::string profileId;
     TextureTranscodeTarget textureTranscodeTarget =
         TextureTranscodeTarget::Rgba8;
     SceneLoadStats *loadStats = nullptr;
@@ -44,6 +47,12 @@ struct SceneEntry {
     std::string         name;
     SceneFactory        factory;
     ScenePrepareFactory prepareFactory;
+    std::string         id;
+    std::string         profileId;
+    std::string         sourcePath;
+    bool                builtin = false;
+    bool                available = true;
+    std::string         unavailableReason;
 
     bool supportsBackgroundPrepare() const {
         return static_cast<bool>(prepareFactory);

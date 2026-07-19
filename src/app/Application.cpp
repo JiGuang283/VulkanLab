@@ -1,6 +1,7 @@
 #include "Application.h"
 #include "UniformData.h"
 
+#include "assets/DerivedAssetPaths.h"
 #include "control/NamedPipeServerWin32.h"
 #include "control/RuntimeCommand.h"
 #include "control/RuntimeControlProtocol.h"
@@ -23,6 +24,7 @@
 #include "scene/SceneLight.h"
 #include "scene/SceneLoadManager.h"
 #include "scene/SceneLoadTask.h"
+#include "scene/SceneRegistryBuilder.h"
 #include "window/InputManager.h"
 #include "window/Window.h"
 
@@ -423,7 +425,14 @@ void logSceneLoadStats(const SceneLoadStats &stats) {
 
 } // namespace
 
-Application::Application(const Config &config) : config_(config) {}
+Application::Application(const Config &config, ProjectContext projectContext,
+                         SceneCatalog catalog)
+    : config_(config), projectContext_(std::move(projectContext)),
+      catalog_(std::move(catalog)) {
+    if (config_.derivedTextureCachePath.empty())
+        config_.derivedTextureCachePath = projectContext_.cacheRoot.string();
+    sceneRegistry_ = buildSceneRegistry(catalog_, projectContext_, config_);
+}
 
 Application::~Application() {
     if (runtimeControlServer_)
@@ -507,6 +516,7 @@ void Application::init() {
     sceneLoadContext_.maxTextureSize = config_.gltfMaxTextureSize;
     sceneLoadContext_.derivedTextureCachePath =
         config_.derivedTextureCachePath;
+    sceneLoadContext_.projectId = catalog_.projectId;
     sceneLoadContext_.textureTranscodeTarget =
         device_->textureTranscodeTarget();
     loadScene(start);
@@ -519,6 +529,11 @@ void Application::init() {
 
 void Application::loadScene(int index, bool replaceCurrent) {
     const auto &entry = sceneRegistry_[index];
+    if (!entry.available)
+        throw RuntimeCommandError("scene_unavailable",
+                                  entry.unavailableReason);
+    sceneLoadContext_.sceneId = entry.id;
+    sceneLoadContext_.profileId = profileIdForTextureLimit(entry);
     SceneLoadStats stats{};
     stats.sceneName = entry.name;
     stats.maxTextureSize = sceneLoadContext_.maxTextureSize;
@@ -692,6 +707,11 @@ uint64_t Application::requestSceneLoad(int index) {
     if (index < 0 || index >= static_cast<int>(sceneRegistry_.size()))
         throw RuntimeCommandError("invalid_scene", "Invalid scene index.");
     const SceneEntry &entry = sceneRegistry_[index];
+    if (!entry.available)
+        throw RuntimeCommandError("scene_unavailable",
+                                  entry.unavailableReason);
+    sceneLoadContext_.sceneId = entry.id;
+    sceneLoadContext_.profileId = profileIdForTextureLimit(entry);
     if (!entry.prepareFactory) {
         if (sceneLoadManager_) {
             if (latestSceneLoadTask_)
@@ -841,6 +861,22 @@ int Application::findShaderVariantIndexByName(const std::string &name) const {
     return -1;
 }
 
+std::string
+Application::profileIdForTextureLimit(const SceneEntry &entry) const {
+    const auto preferred = catalog_.importProfiles.find(entry.profileId);
+    if (preferred != catalog_.importProfiles.end() &&
+        preferred->second.textureLimit == sceneLoadContext_.maxTextureSize)
+        return preferred->first;
+    for (const auto &pair : catalog_.importProfiles) {
+        if (pair.second.textureLimit == sceneLoadContext_.maxTextureSize)
+            return pair.first;
+    }
+    return sceneLoadContext_.maxTextureSize == 0
+               ? std::string("runtime_full")
+               : std::string("runtime_") +
+                     std::to_string(sceneLoadContext_.maxTextureSize);
+}
+
 void Application::processRuntimeCommand() {
     if (!runtimeCommandQueue_)
         return;
@@ -864,6 +900,12 @@ void Application::processRuntimeCommand() {
                               ? ControlJson(sceneRegistry_[currentSceneIndex_]
                                                 .name)
                               : ControlJson(nullptr)},
+                {"sceneId", currentScene_ && currentSceneIndex_ >= 0
+                                ? ControlJson(sceneRegistry_[currentSceneIndex_]
+                                                  .id)
+                                : ControlJson(nullptr)},
+                {"projectId", catalog_.projectId},
+                {"cacheRoot", projectContext_.cacheRoot.string()},
                 {"textureLimit", sceneLoadContext_.maxTextureSize},
                 {"shader", shaderVariants_.empty()
                                ? ControlJson(nullptr)
@@ -871,14 +913,27 @@ void Application::processRuntimeCommand() {
                 {"loadTask", sceneLoadTaskToJson(latestSceneLoadTask_)}};
         } else if (command->method == "scene.list") {
             ControlJson scenes = ControlJson::array();
+            ControlJson entries = ControlJson::array();
             for (const auto &entry : sceneRegistry_)
                 scenes.push_back(entry.name);
-            result = {{"scenes", std::move(scenes)}};
+            for (const auto &entry : sceneRegistry_) {
+                entries.push_back({{"id", entry.id},
+                                   {"name", entry.name},
+                                   {"profileId", entry.profileId},
+                                   {"available", entry.available},
+                                   {"source", entry.sourcePath}});
+            }
+            result = {{"scenes", std::move(scenes)},
+                      {"entries", std::move(entries)}};
         } else if (command->method == "scene.current") {
             result = {{"name", currentScene_ && currentSceneIndex_ >= 0
                                    ? ControlJson(sceneRegistry_[currentSceneIndex_]
                                                      .name)
-                                   : ControlJson(nullptr)}};
+                                   : ControlJson(nullptr)},
+                      {"id", currentScene_ && currentSceneIndex_ >= 0
+                                 ? ControlJson(sceneRegistry_[currentSceneIndex_]
+                                                   .id)
+                                 : ControlJson(nullptr)}};
         } else if (command->method == "scene.load") {
             const std::string name = requiredStringParam(*command, "name");
             const int index = findSceneIndexByName(name);

@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "projectId": "vulkan-lab",
+  "defaultImportProfile": "desktop_2048",
+  "importProfiles": {
+    "desktop_512": {
+      "textureLimit": 512,
+      "textureEncoder": "uastc",
+      "qualityPreset": "development"
+    },
+    "desktop_1024": {
+      "textureLimit": 1024,
+      "textureEncoder": "uastc",
+      "qualityPreset": "development"
+    },
+    "desktop_2048": {
+      "textureLimit": 2048,
+      "textureEncoder": "uastc",
+      "qualityPreset": "development"
+    },
+    "desktop_full": {
+      "textureLimit": 0,
+      "textureEncoder": "uastc",
+      "qualityPreset": "development"
+    }
+  },
+  "scenes": [
+    {
+      "id": "viking-room",
+      "displayName": "Viking Room",
+      "type": "builtin",
+      "builtinFactory": "viking_room",
+      "importProfile": "desktop_2048"
+    },
+    {
+      "id": "sheen-chair",
+      "displayName": "Sheen Chair",
+      "source": "models/SheenChair.glb",
+      "importProfile": "desktop_2048"
+    },
+    {
+      "id": "a-beautiful-game",
+      "displayName": "A Beautiful Game",
+      "source": "models/ABeautifulGame.glb",
+      "importProfile": "desktop_2048",
+      "optional": true
+    },
+    {
+      "id": "anisotropy-barn-lamp",
+      "displayName": "Anisotropy Barn Lamp",
+      "source": "models/AnisotropyBarnLamp.glb",
+      "importProfile": "desktop_2048",
+      "optional": true
+    },
+    {
+      "id": "car-concept",
+      "displayName": "Car Concept",
+      "source": "models/CarConcept.glb",
+      "importProfile": "desktop_2048",
+      "optional": true
+    },
+    {
+      "id": "chronograph-watch",
+      "displayName": "Chronograph Watch",
+      "source": "models/ChronographWatch.glb",
+      "importProfile": "desktop_2048",
+      "optional": true
+    },
+    {
+      "id": "diffuse-transmission-teacup",
+      "displayName": "Diffuse Transmission Teacup",
+      "source": "models/DiffuseTransmissionTeacup.glb",
+      "importProfile": "desktop_2048",
+      "optional": true
+    },
+    {
+      "id": "pot-of-coals",
+      "displayName": "Pot of Coals",
+      "source": "models/PotOfCoals.glb",
+      "importProfile": "desktop_2048",
+      "optional": true
+    },
+    {
+      "id": "main-sponza",
+      "displayName": "Main Sponza",
+      "source": "models/main_sponza/NewSponza_Main_glTF_003.gltf",
+      "importProfile": "desktop_1024",
+      "optional": true,
+      "camera": {
+        "position": [0.0, -35.0, 10.0],
+        "yaw": 93.0,
+        "pitch": -2.0
+      }
+    }
+  ]
+}

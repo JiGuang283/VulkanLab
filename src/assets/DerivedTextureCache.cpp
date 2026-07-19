@@ -37,22 +37,27 @@ bool stampsEqual(const DerivedFileStamp &expected,
 
 DerivedTextureCache::DerivedTextureCache(
     std::filesystem::path cacheRoot, std::filesystem::path scenePath,
+    std::string projectId, std::string sceneId, std::string profileId,
     uint32_t textureLimit, TextureTranscodeTarget target,
     ResourceLoadStats *stats)
     : cacheRoot_(std::move(cacheRoot)), scenePath_(std::move(scenePath)),
       sceneDirectory_(scenePath_.has_parent_path() ? scenePath_.parent_path()
                                                   : std::filesystem::path(".")),
+      projectId_(std::move(projectId)), sceneId_(std::move(sceneId)),
+      profileId_(std::move(profileId)),
       target_(target), stats_(stats) {
     DerivedTextureManifest manifest;
     const std::filesystem::path path =
-        derivedManifestPath(cacheRoot_, scenePath_, textureLimit);
+        derivedManifestPath(cacheRoot_, sceneId_, profileId_);
     if (!loadDerivedTextureManifest(path, manifest, status_)) {
         if (stats_ && status_ != "manifest not found")
             ++stats_->derivedTextureInvalid;
         return;
     }
-    if (manifest.textureLimit != textureLimit ||
-        manifest.scenePath != scenePath_.lexically_normal().generic_string()) {
+    if (manifest.schemaVersion != DerivedTextureManifest::kSchemaVersion ||
+        manifest.projectId != projectId_ || manifest.sceneId != sceneId_ ||
+        manifest.profileId != profileId_ ||
+        manifest.textureLimit != textureLimit) {
         status_ = "manifest scene/profile mismatch";
         if (stats_)
             ++stats_->derivedTextureInvalid;
@@ -75,14 +80,8 @@ bool DerivedTextureCache::sourceMatches(
     if (entry.source.path.empty())
         return false;
     std::filesystem::path path(entry.source.path);
-    if (!path.is_absolute()) {
-        const std::filesystem::path direct = path;
-        std::error_code error;
-        if (std::filesystem::exists(direct, error))
-            path = direct;
-        else
-            path = sceneDirectory_ / path;
-    }
+    if (!path.is_absolute())
+        path = sceneDirectory_ / path;
     return stampsEqual(entry.source, path);
 }
 
