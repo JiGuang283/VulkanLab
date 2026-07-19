@@ -90,19 +90,21 @@ Runtime Control 默认关闭。需要从另一个终端控制运行中的渲染�
 
 原始 glTF、GLB、PNG 和 JPEG 不会被修改。`VulkanLabAssetTool` 显式生成独立的 KTX2 缓存，默认目录名为 `derived_assets`。缓存路径相对于执行工具或渲染器时的工作目录，因此生成目录必须与渲染器的运行目录一致，或者通过 `--cache-root` 明确指定运行目录下的缓存。
 
-从仓库根目录为 Debug 运行目录生成 Main Sponza 1024 和 2048 两个 profile：
+构建完成后，从 Debug 运行目录为 Main Sponza 生成 1024 和 2048 两个 profile：
 
 ```powershell
-.\build-debug\Debug\VulkanLabAssetTool.exe texture-cache build `
-  --scene models/main_sponza/NewSponza_Main_glTF_003.gltf `
-  --texture-limit 1024 `
-  --cache-root build-debug/Debug/derived_assets
+cd build-debug\Debug
 
-.\build-debug\Debug\VulkanLabAssetTool.exe texture-cache build `
+.\VulkanLabAssetTool.exe texture-cache build `
   --scene models/main_sponza/NewSponza_Main_glTF_003.gltf `
-  --texture-limit 2048 `
-  --cache-root build-debug/Debug/derived_assets
+  --texture-limit 1024
+
+.\VulkanLabAssetTool.exe texture-cache build `
+  --scene models/main_sponza/NewSponza_Main_glTF_003.gltf `
+  --texture-limit 2048
 ```
+
+工具应读取渲染器实际加载的那份场景资产。当前 CMake 会把 `models/` 复制到运行目录，并可能改变复制文件的修改时间；如果从仓库根目录读取源资产生成 manifest，运行时的 size + mtime 快速校验可能判定缓存失效。需要把缓存放到其他位置时，可以继续使用 `--cache-root`，但 `--scene` 仍应指向运行时加载的资产副本。
 
 缓存按 scene 和 texture limit 精确匹配。设置为 `1024` 时不会复用 `2048` profile；`Full` 对应 `--texture-limit 0`。重新执行命令会复用有效 blob，`--force` 用于强制重新编码。工具必须完整成功后才发布新 manifest，失败不会修改源资产。
 

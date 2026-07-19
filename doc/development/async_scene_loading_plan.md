@@ -228,7 +228,7 @@ GPU upload 使用 graphics queue，暂不引入 transfer queue。独立上传 su
 
 ## Stage 3: KTX2 And Derived Asset Pipeline
 
-> Implementation: In progress since 2026-07-19
+> Implementation: Completed on 2026-07-19; final visual acceptance remains manual
 
 阶段 2 解决响应性，不会减少 PNG/JPEG decode 成本和 RGBA8 纹理常驻体积。阶段 3 引入离线派生资产，优先采用成熟的 KTX-Software/libktx 与 Basis Universal，不自行设计压缩格式。
 
@@ -273,6 +273,16 @@ VulkanLabAssetTool texture-cache build --scene models/main_sponza/NewSponza_Main
 - sRGB、normal、MR、AO、alpha 和 emissive 视觉回归通过。
 - cache key 改变时正确重建，不复用不同语义或不同尺寸的旧纹理。
 - cache hit 统计与实际材质引用一致，cache miss/invalid 原因可见；无 BC7 设备走 RGBA32 prebuilt mip 路径且不崩溃。
+
+### Main Sponza 1024 验证记录
+
+2026-07-19 的 Debug 验证生成了 72 个实际使用的 KTX2 blob，第二次资产构建全部复用。运行时命中结果为 `72/72`，全部转码为 BC7 并使用预生成 mip，`textureDecodes=0`、`resizedTextures=0`。
+
+- 无缓存回退：总加载 `81.57 s`，纹理 GPU 估算 `384.00 MiB`，VMA allocation delta `567.71 MiB`。
+- KTX2/BC7 命中：总加载 `7.20 s`，纹理 GPU 估算 `96.00 MiB`，VMA allocation delta `279.74 MiB`。
+- 加载期间 Runtime Control `ping` 能立即返回；BC7 路径使用 3 个增量 batch，没有 legacy queue wait。
+- Windows GPU process counter 在加载完成后记录约 `592.82 MiB` dedicated usage；它包含驱动和非 VMA 开销，不能与 VMA allocation 直接等同。
+- 最终 sRGB、normal、MR、AO、alpha、emissive 画面验收仍需人工完成。
 
 ## Stage 4: Residency And Streaming, Conditional
 
