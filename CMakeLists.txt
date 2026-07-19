@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.22)
 project(VulkanLab LANGUAGES C CXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -10,6 +10,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/$<CONFIG>")
 
 include(cmake/ProjectOptions.cmake)
 include(cmake/Dependencies.cmake)
+include(cmake/BuildInfo.cmake)
 
 configure_file(
     "${PROJECT_SOURCE_DIR}/cmake/VulkanLabProjectLocator.json.in"

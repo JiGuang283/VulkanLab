@@ -12,6 +12,7 @@ add_executable(VulkanLabCpuTests
     AssetLoadCoordinatorTests.cpp
     SceneCatalogEditorTests.cpp
     RuntimeCommandDispatcherTests.cpp
+    BuildInfoTests.cpp
 )
 target_link_libraries(VulkanLabCpuTests PRIVATE
     vkl_build_options

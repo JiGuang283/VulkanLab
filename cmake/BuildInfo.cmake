@@ -1,0 +1,34 @@
+include_guard(GLOBAL)
+
+find_package(Git QUIET)
+find_program(VKL_GLSLC_EXECUTABLE glslc
+    HINTS "$ENV{VULKAN_SDK}/Bin"
+)
+
+set(VKL_BUILD_INFO_INCLUDE_DIR
+    "${PROJECT_BINARY_DIR}/generated/$<CONFIG>")
+set(VKL_BUILD_INFO_HEADER
+    "${VKL_BUILD_INFO_INCLUDE_DIR}/BuildInfoGenerated.h")
+
+set(VKL_COMPILER_DESCRIPTION
+    "${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
+if(Vulkan_VERSION)
+    set(VKL_VULKAN_SDK_VERSION "${Vulkan_VERSION}")
+else()
+    set(VKL_VULKAN_SDK_VERSION "unknown")
+endif()
+
+add_custom_target(VulkanLabBuildInfo
+    COMMAND ${CMAKE_COMMAND}
+        "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_FILE=${VKL_BUILD_INFO_HEADER}"
+        "-DBUILD_CONFIG=$<CONFIG>"
+        "-DCOMPILER_DESCRIPTION=${VKL_COMPILER_DESCRIPTION}"
+        "-DVULKAN_SDK_VERSION=${VKL_VULKAN_SDK_VERSION}"
+        "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}"
+        "-DGLSLC_EXECUTABLE=${VKL_GLSLC_EXECUTABLE}"
+        -P "${PROJECT_SOURCE_DIR}/cmake/GenerateBuildInfo.cmake"
+    BYPRODUCTS "${VKL_BUILD_INFO_HEADER}"
+    COMMENT "Updating VulkanLab build metadata"
+    VERBATIM
+)

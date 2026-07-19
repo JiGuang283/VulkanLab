@@ -19,6 +19,7 @@
 #include "core/SwapChain.h"
 #include "core/UploadContext.h"
 #include "core/VulkanContext.h"
+#include "diagnostics/BuildInfo.h"
 #include "render/GuiSystem.h"
 #include "render/MaterialInstance.h"
 #include "render/MaterialTextureSlot.h"
@@ -1323,6 +1324,7 @@ void Application::processRuntimeCommand() {
 }
 
 ControlJson Application::runtimeSystemInfo() {
+    const BuildInfo &build = currentBuildInfo();
     ControlJson capabilities = {"async_scene_load", "load_status",
                                 "load_cancel", "asset_catalog"};
     if (assetImportManager_) {
@@ -1341,6 +1343,13 @@ ControlJson Application::runtimeSystemInfo() {
                         ? ControlJson(sceneRegistry_[currentSceneIndex_].id)
                         : ControlJson(nullptr)},
         {"projectId", catalog_.projectId},
+        {"build",
+         {{"revision", build.revision},
+          {"dirty", build.dirty},
+          {"configuration", build.configuration},
+          {"compiler", build.compiler},
+          {"vulkanSdk", build.vulkanSdk},
+          {"glslc", build.glslc}}},
         {"projectRoot", projectContext_.projectRoot.string()},
         {"runtimeRoot", projectContext_.runtimeRoot.string()},
         {"assetMode", assetImportModeName(config_.assetImportMode)},

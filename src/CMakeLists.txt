@@ -1,8 +1,13 @@
 add_library(vkl_foundation STATIC
     core/Log.cpp
+    diagnostics/BuildInfo.cpp
 )
 add_library(VulkanLab::Foundation ALIAS vkl_foundation)
 target_include_directories(vkl_foundation PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_include_directories(vkl_foundation PRIVATE
+    "${VKL_BUILD_INFO_INCLUDE_DIR}"
+)
+add_dependencies(vkl_foundation VulkanLabBuildInfo)
 target_link_libraries(vkl_foundation PUBLIC
     vkl_build_options
     vkl_spdlog
