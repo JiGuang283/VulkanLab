@@ -2,13 +2,13 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `a51297c`
+> Verified against: `dca6ddb`
 
 ## 环境要求
 
 - Windows 10/11 和支持 Vulkan 的显卡驱动。
 - Visual Studio 2022 C++ 工具链。
-- CMake 3.20 或更高版本。
+- CMake 3.22 或更高版本。
 - Vulkan SDK。CMake 需要能找到 Vulkan、`glslc` 和 SDK 中的 GLM 头文件。
 - 仓库内 `external/` 依赖完整，尤其是 `glfw/lib-vc2022`、ImGui、stb、VMA 和 glTF 头文件。
 - 阶段三使用 KTX-Software v4.4.2 submodule。首次克隆或更新后必须递归初始化：
@@ -19,7 +19,18 @@ git submodule update --init --recursive external/ktx
 
 如果模型资产由 Git LFS 管理，还需要先安装 Git LFS 并在仓库根目录执行 `git lfs pull`。KTX2 派生缓存本身不提交到 Git LFS 或普通 Git。
 
-首次配置：
+推荐使用仓库 presets 配置、构建和测试：
+
+```powershell
+cmake --preset windows-msvc-debug
+cmake --build --preset windows-msvc-debug
+ctest --preset windows-msvc-test
+
+cmake --preset windows-msvc-release
+cmake --build --preset windows-msvc-release
+```
+
+Debug 和 Release 分别使用 `build/windows-msvc-debug/` 与 `build/windows-msvc-release/`。也可以继续使用自定义 build 目录，首次配置：
 
 ```powershell
 cmake -S . -B build-debug
@@ -32,6 +43,8 @@ cmake -S . -B build
 cmake --build build-debug --config Debug
 cmake --build build --config Release
 ```
+
+构建会生成 Git revision/dirty、configuration、compiler、Vulkan SDK 和 `glslc` 版本信息。启用 Runtime Control 后可通过 `VulkanLabCtl.exe --json info` 查看。确定性窗口、fixed delta、无 GUI 和诊断输出配置见 [诊断与自动化启动配置](diagnostics.md)。
 
 CMake 将 `shader/` 下显式登记的 15 个 GLSL 源增量编译到 `build-*/generated/<Config>/shader/`，再把对应 SPIR-V stage 到可执行文件旁的 `shader/`。源码树不保存 SPIR-V，也没有独立的 `compile.bat`；普通 C++ rebuild 不会重新调用 `glslc`，修改一个 Shader 只更新对应产物。需要单独构建 Shader 时使用：
 

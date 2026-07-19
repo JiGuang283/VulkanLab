@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `fa30693`
+> Verified against: `dca6ddb`
 
 Runtime Control 允许在 VulkanLab 已经运行时，从另一个终端切换场景、纹理限制和 Shader，并读取加载统计或关闭程序。控制接口仅用于本机调试，通过 Windows Named Pipe 通信，不开放网络端口。
 
@@ -31,7 +31,7 @@ build/Release/VulkanLab.exe
 build/Release/VulkanLabCtl.exe
 ```
 
-VulkanLab 使用相对路径读取 Shader、模型和纹理，因此应从对应输出目录启动。例如：
+VulkanLab 通过 executable 旁的 project locator 解析开发资产，因此可从仓库根目录、输出目录或其他工作目录启动。例如：
 
 ```powershell
 cd build\Release
@@ -58,7 +58,7 @@ cd build\Release
 ```
 
 - `ping`：检查 Named Pipe 是否可连接。
-- `info`：显示协议版本、当前场景、纹理限制和 Shader。
+- `info`：显示协议版本、当前场景、纹理限制、Shader、BuildInfo 和诊断启动配置。
 - `quit`：收到成功响应后安全关闭 VulkanLab。
 
 ### 场景
