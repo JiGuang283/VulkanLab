@@ -157,17 +157,11 @@ target_link_libraries(VulkanLab PRIVATE
 )
 add_dependencies(VulkanLab VulkanLabShaders)
 
-# M3 replaces these directory copies with a runtime asset manifest.
+# Developer builds locate source assets through vulkanlab_project.json. Only
+# the locator belongs beside the executable; cooked packages stage their own
+# verified resource closure.
 add_custom_command(TARGET VulkanLab POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${PROJECT_BINARY_DIR}/generated/vulkanlab_project.json"
         "$<TARGET_FILE_DIR:VulkanLab>/vulkanlab_project.json"
-    COMMAND ${CMAKE_COMMAND}
-        "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}/textures"
-        "-DDESTINATION_DIR=$<TARGET_FILE_DIR:VulkanLab>/textures"
-        -P "${PROJECT_SOURCE_DIR}/cmake/CopyDirectoryPreserveTimestamps.cmake"
-    COMMAND ${CMAKE_COMMAND}
-        "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}/models"
-        "-DDESTINATION_DIR=$<TARGET_FILE_DIR:VulkanLab>/models"
-        -P "${PROJECT_SOURCE_DIR}/cmake/CopyDirectoryPreserveTimestamps.cmake"
 )
