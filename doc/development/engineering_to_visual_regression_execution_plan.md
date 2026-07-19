@@ -1021,13 +1021,24 @@ Release `desktop_1024` Main Sponza package：
 - Release Main Sponza package cook/verify 通过，protected file 集合仍为 94 个文件和 72 个唯一 blob。protected bytes 为 `225,170,695`，相对 M0 增加 1,536 bytes，来自重链接后的 runtime binary；asset/shader/package closure 未改变。
 - 本次 Runtime 日志没有 error、critical 或 Validation Error；只保留 M0 已知的 Legacy Forward location 3 warning。Debug `LNK4098` 同样可在 M0 原始 build log 中复现，不是 M1 引入。验证结束后无残留 VulkanLab、AssetTool 或 ktx 进程。
 
+## M2 Verification Record
+
+> Completed: 2026-07-19
+
+- Debug 和 Release 都从 `clean` 状态生成 15 个 `generated/<Config>/shader/**/*.spv`，并 stage 15 个同内容文件到各自 runtime。两种配置的 size 和 SHA-256 均与 M0 baseline 完全一致。
+- 源码树中的 SPIR-V 数量为 0；15 个 tracked binary 和 `shader/compile.bat` 已删除，`.gitignore` 禁止把 build artifact 写回 `shader/`。
+- 连续 no-op build 的 Shader action 为 0。只 touch `material_debug/alpha.frag` 后，日志只包含该文件的一次 compile 和一次 staging，且只有对应 generated/runtime 输出时间变化。
+- Debug/Release CTest 均为 4/4。源码树无 SPIR-V 时，Release Runtime Control 完成 Viking Room、Sheen Chair、`PBR-lite NormalMapped`、`Debug BaseColor` 和 quit 回归，日志无 error、critical 或 Validation Error。
+- Release Main Sponza 1024 cook/package verify 通过：94 个 protected files、72 个唯一 blob、15 个 SPIR-V、0 个 GLSL source，package bytes 保持 `225,170,695`。
+- `ShaderVariant` runtime 相对路径、display name 和 Cook 的 shader closure 未改变；Runtime 与 Cook 都只消费 per-config runtime staging。验证结束后无残留 VulkanLab、AssetTool 或 ktx 进程，工作树没有生成文件。
+
 ## Implementation Record
 
 | Milestone | Status | Commit(s) | Verification | Notes |
 |---|---|---|---|---|
 | M0 | Complete | `9dc1dab`, `82594e0`, `11e9d90` | Debug/Release clean build; CTest 4/4 each; Runtime loads; package verify; representative scenes visually confirmed | No residual VulkanLab, AssetTool, or ktx process. |
 | M1 | Complete | `8dc4a01`, `00c82b9`, `c85ef0e`, `fcd4016`, M1 closeout commit containing this row | Debug/Release clean + fresh build; CTest 4/4 each; unique source ownership; Runtime Sponza 1024; package verify; shader hashes unchanged | Existing GLFW Debug CRT warning and Legacy shader attribute warning remain baseline noise. |
-| M2 | Not started | | | |
+| M2 | Complete | `a484784`, `cac363e`, `75d282a`, M2 closeout commit containing this row | Clean Debug/Release shader generation; exact baseline hashes; no-op and one-file incremental checks; CTest 4/4 each; Runtime shader switching; package verify | Source tree contains GLSL only; runtime and Cook share per-config staged SPIR-V. |
 | M3 | Not started | | | |
 | M4 | Not started | | | |
 | M5 | Not started | | | |
