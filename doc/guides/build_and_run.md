@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `c3aa7eb`
+> Verified against: `df02615`
 
 ## 环境要求
 
@@ -58,6 +58,12 @@ cd build-debug\Debug
 .\VulkanLab.exe
 ```
 
+CMake 会把 `vulkanlab_project.json` 写到 Debug/Release 可执行文件旁，IDE 或输出目录启动时会自动定位源码项目。也可以显式指定项目；Catalog 错误会在创建窗口和 Vulkan 前返回：
+
+```powershell
+.\VulkanLab.exe --project C:\Project\vulkan_learn
+```
+
 Runtime Control 默认关闭。需要从另一个终端控制运行中的渲染器时：
 
 ```powershell
@@ -74,7 +80,22 @@ Runtime Control 默认关闭。需要从另一个终端控制运行中的渲染�
 
 ## 场景资产
 
-`Viking Room` 和 `Sheen Chair` 会固定注册。以下 glTF 场景仅在对应文件存在时注册：
+场景由源码项目的 `assets/catalog.json` 注册，新增可选 glTF 不需要修改或重新编译 `main.cpp`。`Viking Room` 使用内建 factory；其余条目由项目相对 `source` 创建 glTF prepare factory。可选源文件缺失时仍显示为 `Unavailable`，但不阻止启动。
+
+Scenes 面板提供 `Import Scene...`：选择 `.glb/.gltf` 后确认名称、稳定 scene ID、profile、Copy/Reference 和是否自动加载。`.gltf` 的本地 `.bin` 与图片依赖会一起复制到 `models/imported/<scene-id>/`；远程、缺失或逃逸依赖不会写入 Catalog。
+
+同一导入事务也可通过 CLI 自动执行：
+
+```powershell
+.\VulkanLabAssetTool.exe catalog add `
+  --project C:\Project\vulkan_learn `
+  --source D:\Assets\Example\scene.gltf `
+  --display-name "Example Scene" `
+  --scene-id example-scene `
+  --profile desktop_1024
+```
+
+Catalog 当前包含以下初始 glTF 条目：
 
 - `A Beautiful Game`
 - `Anisotropy Barn Lamp`
@@ -84,31 +105,39 @@ Runtime Control 默认关闭。需要从另一个终端控制运行中的渲染�
 - `Pot of Coals`
 - `Main Sponza`
 
-`Main Sponza` 的入口是 `models/main_sponza/NewSponza_Main_glTF_003.gltf`。缺失的可选模型只会被跳过，不影响程序启动。CMake 当前复制整个 `models/` 目录，大型本地资产会明显增加构建后的复制时间。
+`Main Sponza` 的入口是 `models/main_sponza/NewSponza_Main_glTF_003.gltf`。CMake 当前仍复制整个 `models/` 目录，大型本地资产会明显增加构建后的复制时间。
 
 ## KTX2 派生纹理缓存
 
-原始 glTF、GLB、PNG 和 JPEG 不会被修改。`VulkanLabAssetTool` 显式生成独立的 KTX2 缓存，默认目录名为 `derived_assets`。缓存路径相对于执行工具或渲染器时的工作目录，因此生成目录必须与渲染器的运行目录一致，或者通过 `--cache-root` 明确指定运行目录下的缓存。
+原始 glTF、GLB、PNG 和 JPEG 不会被修改。`VulkanLabAssetTool` 显式生成独立的 KTX2 缓存。默认共享根目录为 `%LOCALAPPDATA%/VulkanLab/DerivedAssets/<projectId>`，由 ProjectContext 和 Catalog 统一解析，因此 Debug、Release 和资产工具不再各自生成工作目录缓存。
 
 构建完成后，从 Debug 运行目录为 Main Sponza 生成 1024 和 2048 两个 profile：
 
 ```powershell
-cd build-debug\Debug
+.\VulkanLabAssetTool.exe texture-cache build `
+  --project C:\Project\vulkan_learn `
+  --scene-id main-sponza `
+  --profile desktop_1024
 
 .\VulkanLabAssetTool.exe texture-cache build `
-  --scene models/main_sponza/NewSponza_Main_glTF_003.gltf `
-  --texture-limit 1024
-
-.\VulkanLabAssetTool.exe texture-cache build `
-  --scene models/main_sponza/NewSponza_Main_glTF_003.gltf `
-  --texture-limit 2048
+  --project C:\Project\vulkan_learn `
+  --scene-id main-sponza `
+  --profile desktop_2048
 ```
 
-工具默认从当前工作目录解析场景和缓存路径，因此从运行目录执行最不容易混淆 Debug、Release 和 texture profile。构建系统会保留复制资产的时间戳，普通重复构建不会让 size + mtime 快速校验失效。源资产实际发生变化后，需要重新构建并重新运行资产工具。需要把缓存放到其他位置时，可以使用 `--cache-root`。
+`--project` 可省略，此时资产工具与渲染器一样查找 executable locator 或当前目录祖先中的 Catalog。需要把缓存放到其他位置时可显式使用 `--cache-root`。`--scene models/... --texture-limit 1024` 旧参数仍可按 Catalog source/profile 匹配，但新脚本应使用稳定 ID。
 
-缓存按 scene 和 texture limit 精确匹配。设置为 `1024` 时不会复用 `2048` profile；`Full` 对应 `--texture-limit 0`。重新执行命令会复用有效 blob，`--force` 用于强制重新编码。工具必须完整成功后才发布新 manifest，失败不会修改源资产。
+缓存按 scene ID 和 profile ID 精确匹配。`desktop_1024` 不会复用 `desktop_2048` manifest。重新执行命令会复用有效 blob，`--force` 用于强制重新编码。工具必须完整成功后才发布新 manifest，失败不会修改源资产。
 
-使用 `build-debug/Debug` 作为工作目录启动渲染器后，默认配置会读取 `build-debug/Debug/derived_assets`：
+迁移旧运行目录缓存不会重新编码 KTX2：
+
+```powershell
+.\VulkanLabAssetTool.exe texture-cache migrate `
+  --project C:\Project\vulkan_learn `
+  --legacy-cache-root C:\Project\vulkan_learn\build-debug\Debug\derived_assets
+```
+
+使用输出目录启动渲染器时，locator 仍会选择相同的用户级共享缓存：
 
 ```powershell
 cd build-debug\Debug

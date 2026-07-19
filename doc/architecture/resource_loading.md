@@ -2,7 +2,21 @@
 
 > Status: Current
 > Last verified: 2026-07-19
-> Verified against: `c3aa7eb`
+> Verified against: `df02615`
+
+## 项目、Catalog 与导入
+
+开发运行由 `ProjectContextResolver` 统一解析项目根目录。优先使用 `--project <path>`，否则读取可执行文件旁由 CMake 生成的 `vulkanlab_project.json`；Debug、Release 和资产工具因此指向同一个源码 `assets/catalog.json`。Catalog 使用稳定 `projectId`、scene `id` 和 import profile ID，具体 glTF 场景不再硬编码在 `main.cpp`。
+
+Scenes 面板的 `Import Scene...` 通过 Win32 `IFileOpenDialog` 选择 `.gltf/.glb`。可测试的 `SceneImportService` 在 worker 中执行以下事务：
+
+1. 解析 glTF JSON（GLB 只读取 JSON chunk），收集本地 buffer/image URI。
+2. 接受 data URI，拒绝远程 scheme、绝对路径、缺失文件、路径逃逸和 symlink 逃逸。
+3. Copy 模式把主文件与依赖闭包写入 `models/imported/.staging-*`，保持 URI 相对结构并从 staging 二次 preflight。
+4. 原子重命名为 `models/imported/<scene-id>/`。
+5. 用临时文件验证新 Catalog，检查磁盘版本未变化，再以 atomic replace 发布。
+
+任何步骤失败或取消都会删除本次 staging；目录已发布但 Catalog 未发布时会回滚新目录。项目内源文件也可选择 Reference Existing，只在 Catalog 中保存项目相对路径。`VulkanLabAssetTool catalog add` 调用相同服务，供自动化使用。
 
 ## 加载入口
 
@@ -28,21 +42,21 @@ worker 在文件、图片、材质、primitive 和 hierarchy 等自然边界检�
 
 图片格式仍按语义选择：BaseColor/Emissive 使用 sRGB，Normal/MetallicRoughness/Occlusion 使用 linear。同一 glTF image 在不同语义下可以对应不同派生纹理，不能只按 image index 复用；sampler 映射 repeat、clamp、mirrored repeat、min/mag filter 和 mipmap mode。
 
-## KTX2 派生资产（阶段三开发中）
+## KTX2 派生资产
 
 阶段三在原始 glTF 与运行时 loader 之间增加只读派生缓存。离线 `VulkanLabAssetTool texture-cache build` 扫描材质实际引用的图片，用 KTX-Software 生成 UASTC + Zstd KTX2 和完整 mip chain。源 glTF、GLB 和图片保持不变。
 
-默认缓存根目录为 `derived_assets`：
+默认缓存根目录为 `%LOCALAPPDATA%/VulkanLab/DerivedAssets/<projectId>`，Debug、Release 和资产工具共享：
 
 ```text
-derived_assets/
-  manifests/<normalized-scene-key>/<full|512|1024|2048>.json
+DerivedAssets/<projectId>/
+  manifests/<scene-id>/<profile-id>.json
   blobs/<content-cache-key>.ktx2
 ```
 
-manifest schema v1 记录 scene、texture limit、源文件 size/write time/SHA-256，以及每个 image 的语义、mipmap wrap、输出尺寸、cache key 和 blob。`TextureSemantic` 固定为 `SrgbColor`、`LinearData` 和 `Normal`；BaseColor/Emissive 使用 `SrgbColor`，MetallicRoughness/Occlusion 使用 `LinearData`，normal map 使用 `Normal`。同一图片以不同语义或 wrap 参与材质时必须生成独立条目。
+manifest schema v2 记录 project/scene/profile 稳定身份、scene、texture limit、源文件 size/write time/SHA-256，以及每个 image 的语义、mipmap wrap、输出尺寸、cache key 和 blob。schema v1 仍可读取用于显式 migration，但运行时只查询 v2 稳定路径。`TextureSemantic` 固定为 `SrgbColor`、`LinearData` 和 `Normal`；BaseColor/Emissive 使用 `SrgbColor`，MetallicRoughness/Occlusion 使用 `LinearData`，normal map 使用 `Normal`。同一图片以不同语义或 wrap 参与材质时必须生成独立条目。
 
-运行时按 scene 和 texture limit 查找精确 profile，并用 size + write time 快速检查依赖。命中后由 worker 使用 libktx 读取 KTX2：支持 BC7 的设备转码到 BC7 SRGB/UNORM，不支持 BC7 时转为 RGBA32。两条路径都保留离线 mip chain，不执行 stb decode、bilinear resize 或 GPU blit mip generation。
+运行时按 scene ID 和实际 texture limit 对应的 profile ID 查找精确 manifest，并用 size + write time 快速检查依赖。命中后由 worker 使用 libktx 读取 KTX2：支持 BC7 的设备转码到 BC7 SRGB/UNORM，不支持 BC7 时转为 RGBA32。两条路径都保留离线 mip chain，不执行 stb decode、bilinear resize 或 GPU blit mip generation。
 
 `PreparedImage` 的 prebuilt mip payload 包含总字节数组、最终 `VkFormat` 和每级 mip 的 offset、size、width、height。`SceneGpuBuilder` 将所有 mip 写入 staging，并通过多个 `VkBufferImageCopy` region 上传到只需要 `TRANSFER_DST | SAMPLED` 的 image。原始 RGBA8 fallback 继续上传 base level，并由 GPU blit 生成 mip。
 

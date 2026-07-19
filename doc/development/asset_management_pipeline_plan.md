@@ -497,6 +497,19 @@ CookedOnly 运行时禁止调用资产工具和 source fallback。artifact 缺�
 - catalog 非法时在创建 Vulkan/Window 前失败并报告具体字段。
 - 场景 UI 和 Runtime Control 继续按 display name 工作，同时结果包含稳定 scene ID。
 
+#### Implementation Status (2026-07-19)
+
+Stage A 已实现于 `412ca02` 和 `df02615`：
+
+- `assets/catalog.json`、`ProjectContextResolver` 和 CMake developer locator 已替换 `main.cpp` 的逐场景硬编码。
+- Debug、Release 和 `VulkanLabAssetTool` 默认使用 `%LOCALAPPDATA%/VulkanLab/DerivedAssets/<projectId>`。
+- manifest schema v2 使用 scene/profile 稳定 ID；`texture-cache migrate` 已把 Main Sponza 1024 的 72 个旧 blob 无重编码迁移并由运行时命中。
+- `SceneImportService` 已实现 `.glb/.gltf` preflight、依赖闭包、URI 安全检查、staging、二次验证、目录/Catalog 原子发布和取消回滚。
+- Scenes 面板已接入 `IFileOpenDialog`、导入 modal、worker 进度/取消和可选 source fallback 自动加载；CLI `catalog add` 复用同一服务。
+- Debug/Release 构建、CPU tests、CLI import CTest、Runtime Control Catalog 查询以及 Main Sponza 72/72 cache-hit 加载已通过。
+
+仍需人工体验检查 Windows 文件对话框、modal 文本布局和从真实外部模型导入后的最终画面；这些检查不改变 Stage A 的公开接口或事务实现。
+
 ### Stage B: Parallel Incremental Importer
 
 #### Scope

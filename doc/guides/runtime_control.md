@@ -1,8 +1,8 @@
 # VulkanLab Runtime Control 使用说明
 
 > Status: Current
-> Last verified: 2026-07-18
-> Verified against: Stage 2 working tree based on `d4539b7`
+> Last verified: 2026-07-19
+> Verified against: `df02615`
 
 Runtime Control 允许在 VulkanLab 已经运行时，从另一个终端切换场景、纹理限制和 Shader，并读取加载统计或关闭程序。控制接口仅用于本机调试，通过 Windows Named Pipe 通信，不开放网络端口。
 
@@ -74,7 +74,9 @@ cd build\Release
 .\VulkanLabCtl.exe load cancel 12
 ```
 
-场景名称使用完整显示名称匹配，不区分 ASCII 大小写。名称中包含空格时必须加引号。可选模型文件不存在时，对应场景不会注册，也不会出现在 `scene list` 中。
+场景名称使用 Catalog 的完整 display name 匹配，不区分 ASCII 大小写。名称中包含空格时必须加引号。可选模型文件不存在时，`scene list --json` 的 `entries` 中仍保留条目并显示 `available=false`；加载该条目返回 `scene_unavailable`。
+
+`scene list --json` 兼容保留 `scenes` 字符串数组，并新增结构化 `entries`，包含稳定 `id`、`name`、`profileId`、`available` 和 `source`。`scene current --json` 同时返回 display name 与稳定 scene ID。`info --json` 还返回 `projectId`、当前 `sceneId` 和 Debug/Release 共用的 `cacheRoot`。
 
 协议中的 `scene.load` 和 `scene.reload` 会立即返回 taskId。VulkanLabCtl 默认每 100 ms 轮询 `load.status`，因此命令行行为仍是等待完成后输出 LoadStats。使用 `--no-wait` 会立即返回；之后可按 taskId 查询或取消。
 
