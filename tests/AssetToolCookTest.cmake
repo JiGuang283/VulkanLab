@@ -8,12 +8,22 @@ endif()
 if(NOT DEFINED TEST_ROOT)
     message(FATAL_ERROR "TEST_ROOT was not provided")
 endif()
+if(NOT DEFINED SOURCE_DIR OR
+   NOT EXISTS "${SOURCE_DIR}/models/viking_room.obj" OR
+   NOT EXISTS "${SOURCE_DIR}/textures/viking_room.png")
+    message(FATAL_ERROR "VulkanLab source assets were not provided")
+endif()
 
 file(REMOVE_RECURSE "${TEST_ROOT}")
 set(project "${TEST_ROOT}/project")
 set(cache "${TEST_ROOT}/cache")
 set(package "${TEST_ROOT}/package")
-file(MAKE_DIRECTORY "${project}/assets" "${project}/models")
+file(MAKE_DIRECTORY
+    "${project}/assets" "${project}/models" "${project}/textures")
+file(COPY "${SOURCE_DIR}/models/viking_room.obj"
+     DESTINATION "${project}/models")
+file(COPY "${SOURCE_DIR}/textures/viking_room.png"
+     DESTINATION "${project}/textures")
 file(WRITE "${project}/assets/catalog.json" [=[
 {
   "schemaVersion": 1,
@@ -26,12 +36,21 @@ file(WRITE "${project}/assets/catalog.json" [=[
       "qualityPreset": "development"
     }
   },
-  "scenes": [{
-    "id": "tiny-scene",
-    "displayName": "Tiny Scene",
-    "source": "models/tiny.gltf",
-    "importProfile": "desktop-512"
-  }]
+  "scenes": [
+    {
+      "id": "viking-room",
+      "displayName": "Viking Room",
+      "type": "builtin",
+      "builtinFactory": "viking_room",
+      "importProfile": "desktop-512"
+    },
+    {
+      "id": "tiny-scene",
+      "displayName": "Tiny Scene",
+      "source": "models/tiny.gltf",
+      "importProfile": "desktop-512"
+    }
+  ]
 }
 ]=])
 file(WRITE "${project}/models/mesh.bin" "mesh")
@@ -59,6 +78,7 @@ set(cook_command
     --output "${package}"
     --platform windows-x64
     --profile desktop-512
+    --scene-id viking-room
     --scene-id tiny-scene)
 
 execute_process(
@@ -127,6 +147,8 @@ foreach(required
         "assets/catalog.json"
         "models/tiny.gltf"
         "models/mesh.bin"
+        "models/viking_room.obj"
+        "textures/viking_room.png"
         "runtime_assets/artifact_index.json"
         "runtime_assets/manifests/tiny-scene/desktop-512.json"
         "package_manifest.json")
@@ -140,8 +162,10 @@ if(EXISTS "${package}/models/unused.png" OR
 endif()
 file(GLOB_RECURSE packaged_images
     "${package}/*.png" "${package}/*.jpg" "${package}/*.jpeg")
+list(REMOVE_ITEM packaged_images "${package}/textures/viking_room.png")
 if(packaged_images)
-    message(FATAL_ERROR "cooked package contains source images: ${packaged_images}")
+    message(FATAL_ERROR
+        "cooked package contains unexpected source images: ${packaged_images}")
 endif()
 file(GLOB_RECURSE packaged_shaders "${package}/*.spv")
 list(LENGTH packaged_shaders shader_count)

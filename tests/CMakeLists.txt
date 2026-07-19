@@ -41,7 +41,14 @@ if(WIN32)
         COMMAND ${CMAKE_COMMAND}
             "-DTOOL=$<TARGET_FILE:VulkanLabAssetTool>"
             "-DRUNTIME_DIR=$<TARGET_FILE_DIR:VulkanLab>"
+            "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
             "-DTEST_ROOT=${PROJECT_BINARY_DIR}/asset_tool_cook_test"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/AssetToolCookTest.cmake"
+    )
+    add_test(
+        NAME VulkanLabDeveloperRuntimeLayout
+        COMMAND ${CMAKE_COMMAND}
+            "-DRUNTIME_DIR=$<TARGET_FILE_DIR:VulkanLab>"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/DeveloperRuntimeLayoutTest.cmake"
     )
 endif()

@@ -40,6 +40,22 @@ class CatalogFixture {
     std::filesystem::path root;
 };
 
+class ScopedCurrentPath {
+  public:
+    explicit ScopedCurrentPath(const std::filesystem::path &path)
+        : previous_(std::filesystem::current_path()) {
+        std::filesystem::current_path(path);
+    }
+
+    ~ScopedCurrentPath() {
+        std::error_code ignored;
+        std::filesystem::current_path(previous_, ignored);
+    }
+
+  private:
+    std::filesystem::path previous_;
+};
+
 const char *validCatalog() {
     return R"({
       "schemaVersion": 1,
@@ -62,8 +78,26 @@ const char *validCatalog() {
 void testCatalogLoadAndProjectResolution() {
     CatalogFixture fixture;
     fixture.write(validCatalog());
+    const std::filesystem::path runtime = fixture.root / "runtime";
+    std::filesystem::create_directories(runtime);
     const vkr::ProjectContext context =
-        vkr::ProjectContextResolver::resolve(fixture.root);
+        vkr::ProjectContextResolver::resolve(
+            fixture.root, runtime / "VulkanLab.exe");
+    const std::filesystem::path canonicalProject =
+        std::filesystem::weakly_canonical(fixture.root);
+    const std::filesystem::path canonicalRuntime =
+        std::filesystem::weakly_canonical(runtime);
+    requireCatalog(context.projectRoot == canonicalProject &&
+                       context.runtimeRoot == canonicalRuntime &&
+                       context.captureRoot ==
+                           canonicalRuntime / "artifacts/captures",
+                   "explicit ProjectContext roots were not resolved");
+    requireCatalog(
+        context.resolveProjectPath("models/scene.glb") ==
+                canonicalProject / "models/scene.glb" &&
+            context.resolveRuntimePath("shader/test.spv") ==
+                canonicalRuntime / "shader/test.spv",
+        "ProjectContext relative path resolution used the wrong root");
     const vkr::SceneCatalog catalog =
         vkr::SceneCatalog::load(context.catalogPath, context.projectRoot);
     requireCatalog(catalog.projectId == "catalog-test",
@@ -83,6 +117,51 @@ void testCatalogLoadAndProjectResolution() {
         vkr::DerivedAssetPaths::defaultCacheRoot(catalog.projectId)
                 .filename() == "catalog-test",
         "shared cache root omitted project ID");
+}
+
+void testDeveloperLocatorAndAncestorDiscovery() {
+    CatalogFixture fixture;
+    fixture.write(validCatalog());
+    const std::filesystem::path runtime = fixture.root / "runtime";
+    const std::filesystem::path working = fixture.root / "nested/working";
+    std::filesystem::create_directories(runtime);
+    std::filesystem::create_directories(working);
+    {
+        std::ofstream locator(runtime / "vulkanlab_project.json",
+                              std::ios::binary);
+        locator << "{\"projectRoot\":\""
+                << fixture.root.generic_string() << "\"}";
+    }
+
+    {
+        ScopedCurrentPath currentPath(working);
+        const vkr::ProjectContext context =
+            vkr::ProjectContextResolver::resolve(
+                std::nullopt, runtime / "VulkanLab.exe");
+        requireCatalog(context.projectRoot ==
+                           std::filesystem::weakly_canonical(fixture.root) &&
+                           context.runtimeRoot ==
+                               std::filesystem::weakly_canonical(runtime) &&
+                           context.diagnostic.find("developer locator") !=
+                               std::string::npos,
+                       "developer locator did not win from another CWD");
+    }
+
+    std::filesystem::remove(runtime / "vulkanlab_project.json");
+    {
+        ScopedCurrentPath currentPath(working);
+        const vkr::ProjectContext context =
+            vkr::ProjectContextResolver::resolve(
+                std::nullopt, runtime / "VulkanLab.exe");
+        requireCatalog(
+            context.projectRoot ==
+                    std::filesystem::weakly_canonical(fixture.root) &&
+                context.runtimeRoot ==
+                    std::filesystem::weakly_canonical(runtime) &&
+                context.diagnostic.find("working-directory ancestor") !=
+                    std::string::npos,
+            "ancestor Catalog discovery did not retain the runtime root");
+    }
 }
 
 void testCatalogRejectsEscapingSource() {
@@ -133,6 +212,7 @@ void testCatalogRejectsDuplicateDisplayName() {
 
 void runSceneCatalogTests() {
     testCatalogLoadAndProjectResolution();
+    testDeveloperLocatorAndAncestorDiscovery();
     testCatalogRejectsEscapingSource();
     testCatalogRejectsDuplicateDisplayName();
 }
