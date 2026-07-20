@@ -1,8 +1,8 @@
 # 构建与运行
 
 > Status: Current
-> Last verified: 2026-07-19
-> Verified against: `dca6ddb`
+> Last verified: 2026-07-20
+> Verified against: `a25f8ad`
 
 ## 环境要求
 
@@ -88,6 +88,15 @@ Runtime Control 默认关闭。需要从另一个终端控制运行中的渲染�
 ```powershell
 .\VulkanLab.exe --runtime-control
 ```
+
+并行运行或自动化时应为实例指定唯一 endpoint：
+
+```powershell
+.\VulkanLab.exe --runtime-control --runtime-control-pipe smoke_01
+.\VulkanLabCtl.exe --pipe smoke_01 ping
+```
+
+确定性截图运行还可组合 `--automation --window-size 800x600 --fixed-delta 0.016666667 --no-gui --capture-root <path>`。完整命令、相机控制、稳定帧等待和异步截图流程见 [Runtime Control](runtime_control.md)与[诊断配置](diagnostics.md)。
 
 派生资产运行模式通过启动参数显式选择，Debug/Release 默认都使用 `OnDemand`：
 

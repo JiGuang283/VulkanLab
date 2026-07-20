@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-20
-> Verified against: `b925b2d`
+> Verified against: `8cffc9d`
 
 ## RenderQueue
 
@@ -71,7 +71,7 @@ SceneLight 支持 Directional、Point 和 Spot。GlobalUBO 最多上传 1 个 di
 
 ## Swapchain 截图
 
-开发运行时提供异步 PNG 截图，入口为 `Capture` 面板或 F12。Cooked package 当前不创建 CaptureService。截图根目录由 `ProjectContext::captureRoot` 提供；输出路径必须是该目录下的相对 `.png` 路径。
+开发运行时提供异步 PNG 截图，入口为 `Capture` 面板、F12 或 Runtime Control v3 的 `capture.screenshot/status/cancel`。Cooked package 当前不创建 CaptureService。截图根目录由 `ProjectContext::captureRoot` 提供；输出路径必须是该目录下的相对 `.png` 路径。
 
 - SwapChain 只有同时支持 `VK_IMAGE_USAGE_TRANSFER_SRC_BIT` 和 8-bit RGBA/BGRA UNORM/SRGB format 时才启用截图。
 - MainForwardPass 结束后，截图在同一个 frame command buffer 中执行 `PRESENT -> TRANSFER_SRC`、image-to-buffer copy 和 `TRANSFER_SRC -> PRESENT`。
@@ -79,6 +79,7 @@ SceneLight 支持 Directional、Point 和 Spot。GlobalUBO 最多上传 1 个 di
 - BGRA/RGBA 转换、PNG 编码和 SHA-256 在惰性启动的 worker 中执行；worker 不访问 Vulkan、GLFW、ImGui 或 Scene。
 - 同时最多有一个 Recording/WaitingForGpu task，非终态 task 上限为 8，终态历史上限为 32。取消已提交 task 时仍先等待其正常 GPU 完成。
 - `includeGui=false` 时只丢弃截图目标帧的 ImGui draw，不破坏下一帧 backend 状态。
+- Runtime Control 只创建、查询或取消任务；不会在服务端等待未来帧。`render.wait` 同样由控制客户端轮询 present progress 实现。
 
 截图提交和读回路径不调用 `vkQueueWaitIdle()` 或 `vkDeviceWaitIdle()`；正常 frame fence、resize 已有的 device-idle 和应用关闭同步不属于截图等待路径。
 

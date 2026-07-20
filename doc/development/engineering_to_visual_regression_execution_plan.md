@@ -1056,6 +1056,23 @@ Release `desktop_1024` Main Sponza package：
 - `src/diagnostics/Capture*` 不调用 `vkQueueWaitIdle()`、`vkDeviceWaitIdle()` 或 fence wait；GPU 完成只由 FrameSync completed submission serial 驱动。
 - 用户使用 Vulkan Configurator 3.4.1 的 Synchronization Preset 完成手工验证。21:06:19–21:06:31 运行中截图任务成功，日志包含 0 个 `SYNC-HAZARD`、0 个 error/critical 和 0 个其他 validation message；输出为 800×600，非黑像素比例 26.73%，SHA-256 为 `8ac8d912a338a91a82582771f54c1f255e728d46edb47b34b9f36ae5d1ddbdd2`。验证后 Vulkan Configurator override 已清除。
 
+## M6 Verification Record
+
+> Completed: 2026-07-20
+
+- Runtime Control 协议升级到 v3；默认 endpoint 仍为 `\\.\pipe\VulkanLab`。suffix parser 覆盖空默认值、合法字符、非法字符和 64 字符上限，Application 非法 suffix 返回 `1`，VulkanLabCtl 非法 suffix 返回 `2`。
+- 两个 Debug VulkanLab 实例分别使用 `m6_endpoint_a` 和 `m6_endpoint_b` 同时运行；各自的 `system.info.pipe` 正确，客户端不能通过默认 pipe 误连，两个实例都由自己的 endpoint 正常退出。
+- 默认未传 `--runtime-control` 时不创建控制服务，渲染器继续运行，客户端 ping 返回 `2`，日志包含预期的 disabled 说明。
+- malformed JSON、非 object JSON、声明长度 65,537 bytes 和未知方法分别得到结构化协议错误；单消息 64 KiB 限制、单连接单请求和 remote-client rejection 保持不变。
+- `camera.set/get` 使用同一个运行时 Camera。测试设置 position `(4,-3,2)`、yaw `123.5`、pitch `-20.25` 后精确回读；非有限数字和错误 position 形状由 client/server parser tests 拒绝。
+- `render.wait` 以客户端轮询实现。它在 scene/import operation 终态成功、pending upload 为 0、generation 稳定、窗口可渲染后观察新的 present；测试等待 8 帧时得到 18–21 个 stable frames，并覆盖 timeout/minimized 错误路径。
+- Debug 端到端流程在唯一 endpoint 上加载 Sheen Chair、切换 `PBR-lite NormalMapped`、设置 camera、等待稳定并保存 `suite/sheen-normal.png`。PNG 画面方向与构图正确，SHA-256 为 `849c43bd2c402727b652f7e1d878d80a8be131aac132201e2fbb546090574937`。
+- capture 协议覆盖异步 request/status/cancel、未知 task、`../escape.png` 路径逃逸、终态结果和 shutdown。取消任务没有留下 PNG 或临时文件；完成结果包含 extent、format、frame serial、绝对输出路径、SHA-256 和分阶段 timing。
+- `app.quit` 在 pipe 写回并 flush 成功响应后才请求主循环退出。所有测试结束后无残留 VulkanLab 或 VulkanLabCtl 进程。
+- Debug 和 Release 完整构建通过，CTest 均为 5/5：CPU、AssetToolCatalogImport、AssetToolTextureCache、AssetToolCook 和 DeveloperRuntimeLayout。
+- Release CookedOnly 最小包 verify 通过：21 个文件、5,078,599 bytes。Runtime Control v3 可查询状态，但不声明 capture capability；截图明确返回 `capture_disabled`，随后正常退出。
+- 当前 capture/control 路径没有新增 `vkQueueWaitIdle()`、`vkDeviceWaitIdle()` 或服务端未来帧等待。运行日志无 error、critical、`SYNC-HAZARD` 或新增 validation message，只保留既有 Legacy Forward location 3 未消费 warning。
+
 ## Implementation Record
 
 | Milestone | Status | Commit(s) | Verification | Notes |
