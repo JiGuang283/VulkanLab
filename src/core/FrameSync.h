@@ -1,5 +1,7 @@
 #pragma once
 
+#include "diagnostics/SubmissionSerialTracker.h"
+
 #include <array>
 #include <optional>
 #include <vector>
@@ -33,7 +35,7 @@ class FrameSync {
 
     /// 返回 nullopt 表示本帧应跳过（窗口最小化或交换链需重建）
     std::optional<FrameContext> beginFrame();
-    void                        endFrame(const FrameContext &ctx);
+    uint64_t                    endFrame(const FrameContext &ctx);
 
     void notifyResize() { framebufferResized_ = true; }
 
@@ -51,6 +53,13 @@ class FrameSync {
     const UploadSyncCounters &uploadSyncCounters() const {
         return uploadSyncCounters_;
     }
+    uint64_t completedSubmissionSerial() const {
+        return submissionSerials_.completedSerial();
+    }
+    uint64_t lastSubmittedSerial() const {
+        return submissionSerials_.lastSubmittedSerial();
+    }
+    void markAllSubmissionsCompleted() { submissionSerials_.completeAll(); }
 
   private:
     struct PerFrame {
@@ -75,6 +84,7 @@ class FrameSync {
     bool     framebufferResized_ = false;
     bool     swapChainOutOfDate_ = false;
     UploadSyncCounters uploadSyncCounters_{};
+    SubmissionSerialTracker submissionSerials_{MAX_FRAMES_IN_FLIGHT};
 };
 
 } // namespace vkr

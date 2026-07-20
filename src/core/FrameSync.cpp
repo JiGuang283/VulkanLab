@@ -37,8 +37,9 @@ std::optional<FrameSync::FrameContext> FrameSync::beginFrame() {
 
     VkDevice d = device_->logicalDevice();
 
-    vkWaitForFences(d, 1, &frames_[currentFrame_].inFlight, VK_TRUE,
-                    UINT64_MAX);
+    VK_CHECK(vkWaitForFences(d, 1, &frames_[currentFrame_].inFlight, VK_TRUE,
+                             UINT64_MAX));
+    submissionSerials_.completeFrameSlot(currentFrame_);
 
     uint32_t imageIndex;
     VkResult result = vkAcquireNextImageKHR(
@@ -65,8 +66,7 @@ std::optional<FrameSync::FrameContext> FrameSync::beginFrame() {
                         imageIndex};
 }
 
-void FrameSync::endFrame(const FrameContext &ctx) {
-    VkDevice d = device_->logicalDevice();
+uint64_t FrameSync::endFrame(const FrameContext &ctx) {
     VK_CHECK(vkEndCommandBuffer(ctx.cmd));
 
     // Submit
@@ -87,6 +87,8 @@ void FrameSync::endFrame(const FrameContext &ctx) {
 
     VK_CHECK(vkQueueSubmit(device_->graphicsQueue(), 1, &submitInfo,
                            frames_[ctx.frameIndex].inFlight));
+    const uint64_t submissionSerial =
+        submissionSerials_.recordSubmission(ctx.frameIndex);
 
     // Present
     VkSwapchainKHR   swapChains[] = {swapChain_->handle()};
@@ -109,6 +111,7 @@ void FrameSync::endFrame(const FrameContext &ctx) {
     }
 
     currentFrame_ = (currentFrame_ + 1) % MAX_FRAMES_IN_FLIGHT;
+    return submissionSerial;
 }
 
 void FrameSync::onSwapChainRecreated() {

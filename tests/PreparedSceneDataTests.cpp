@@ -23,6 +23,7 @@ void runSceneCatalogEditorTests();
 void runRuntimeCommandDispatcherTests();
 void runBuildInfoTests();
 void runDiagnosticsConfigTests();
+void runSubmissionSerialTrackerTests();
 
 namespace {
 
@@ -144,6 +145,7 @@ int main() {
         runRuntimeCommandDispatcherTests();
         runBuildInfoTests();
         runDiagnosticsConfigTests();
+        runSubmissionSerialTrackerTests();
         std::cout << "VulkanLab CPU tests passed\n";
         return 0;
     } catch (const std::exception &error) {
