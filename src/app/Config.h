@@ -3,6 +3,7 @@
 #include "diagnostics/DiagnosticsConfig.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 
 namespace vkr {
@@ -20,7 +21,7 @@ struct Config {
     std::string vertShaderPath = "shader/legacy/forward.vert.spv";
     std::string fragShaderPath = "shader/legacy/forward.frag.spv";
     std::string derivedTextureCachePath;
-    std::string projectPath;
+    std::filesystem::path projectPath;
     std::string assetToolPath;
     bool cachePathExplicit = false;
     bool assetToolPathExplicit = false;

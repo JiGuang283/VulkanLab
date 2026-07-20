@@ -2,6 +2,7 @@
 #include "UniformData.h"
 
 #include "assets/DerivedAssetPaths.h"
+#include "assets/ContentHash.h"
 #include "assets/ArtifactIndex.h"
 #include "assets/ArtifactStatus.h"
 #include "assets/AssetLoadCoordinator.h"
@@ -220,7 +221,7 @@ ControlJson assetImportTaskToJson(
           {"workers", task->workers.load()},
           {"activeImage", task->activeImage.load()},
           {"estimatedMemoryBytes", task->estimatedMemoryBytes.load()}}},
-        {"logPath", task->logPath.string()},
+        {"logPath", task->logPath.u8string()},
         {"exitCode", task->processExitCode}};
     {
         std::lock_guard<std::mutex> lock(task->mutex);
@@ -368,7 +369,7 @@ ControlJson captureTaskToJson(const CaptureTaskSnapshot &task) {
             {"height", task.result.height},
             {"format", describeCaptureFormat(task.result.format).name},
             {"frameSerial", task.result.frameSerial},
-            {"outputPath", task.result.outputPath.string()},
+            {"outputPath", task.result.outputPath.u8string()},
             {"sha256", task.result.sha256},
             {"timingsMs",
              {{"recording", task.result.timings.recordingMs},
@@ -382,7 +383,7 @@ ControlJson captureTaskToJson(const CaptureTaskSnapshot &task) {
         {"state", captureTaskStateName(task.state)},
         {"terminal", isTerminalCaptureTaskState(task.state)},
         {"request",
-         {{"path", task.request.relativeOutputPath.string()},
+         {{"path", task.request.relativeOutputPath.u8string()},
           {"includeGui", task.request.includeGui}}},
         {"result", std::move(result)},
         {"error", task.result.error.empty()
@@ -581,7 +582,7 @@ ControlJson artifactStatusToJson(const SceneEntry &entry,
             {"state", artifactStateName(status.state)},
             {"ready", status.ready()},
             {"reason", status.reason},
-            {"manifest", status.manifestPath.string()},
+            {"manifest", status.manifestPath.u8string()},
             {"artifactCount", status.entryCount},
             {"blobBytes", status.blobBytes}};
 }
@@ -593,7 +594,7 @@ Application::Application(const Config &config, ProjectContext projectContext,
     : config_(config), projectContext_(std::move(projectContext)),
       catalog_(std::move(catalog)) {
     if (config_.derivedTextureCachePath.empty())
-        config_.derivedTextureCachePath = projectContext_.cacheRoot.string();
+        config_.derivedTextureCachePath = projectContext_.cacheRoot.u8string();
     sceneRegistry_ = buildSceneRegistry(catalog_, projectContext_, config_);
     sceneImportUi_ = std::make_unique<SceneImportUiState>();
     sceneAssetOperations_ = std::make_unique<SceneAssetOperationState>();
@@ -714,8 +715,11 @@ void Application::init() {
     if (config_.assetImportMode == AssetImportMode::OnDemand) {
         assetImportManager_ = std::make_unique<AssetImportManager>(
             AssetImportManagerOptions{
-                projectContext_.projectRoot, config_.derivedTextureCachePath,
-                config_.assetToolPath, config_.assetImportWorkers,
+                projectContext_.projectRoot,
+                std::filesystem::u8path(
+                    config_.derivedTextureCachePath),
+                std::filesystem::u8path(config_.assetToolPath),
+                config_.assetImportWorkers,
                 config_.assetImportMemoryBudgetMiB});
     }
     sceneLoadContext_.maxTextureSize = config_.gltfMaxTextureSize;
@@ -1136,7 +1140,8 @@ void Application::reloadArtifactIndex() {
         std::string diagnostic;
         artifactIndex_ = std::make_unique<ArtifactIndex>(
             ArtifactIndex::loadOrRebuild(
-                sceneLoadContext_.derivedTextureCachePath,
+                std::filesystem::u8path(
+                    sceneLoadContext_.derivedTextureCachePath),
                 projectContext_.projectRoot, catalog_, &rebuilt,
                 &diagnostic));
         artifactUsage_ = artifactIndex_->usage();
@@ -1190,7 +1195,9 @@ void Application::refreshArtifactStatus(int sceneIndex, bool admission) {
         status.reason = entry.unavailableReason;
     } else {
         const ArtifactStatusRequest request{
-            sceneLoadContext_.derivedTextureCachePath, entry.sourcePath,
+            std::filesystem::u8path(
+                sceneLoadContext_.derivedTextureCachePath),
+            entry.sourcePath,
             catalog_.projectId, entry.id, profileId,
             sceneLoadContext_.maxTextureSize};
         status = artifactIndex_
@@ -1377,6 +1384,7 @@ void Application::processRuntimeCommand() {
 
 ControlJson Application::runtimeSystemInfo() {
     const BuildInfo &build = currentBuildInfo();
+    const VkPhysicalDeviceProperties gpu = device_->physicalDeviceProperties();
     ControlJson fixedDelta = nullptr;
     if (config_.diagnostics.fixedDeltaSeconds)
         fixedDelta = *config_.diagnostics.fixedDeltaSeconds;
@@ -1389,6 +1397,8 @@ ControlJson Application::runtimeSystemInfo() {
     }
     if (captureService_ && swapChain_->captureSupported())
         capabilities.push_back("capture");
+    const ShaderVariant *shader =
+        shaderVariants_.empty() ? nullptr : &currentShaderVariant();
     return {
         {"application", "VulkanLab"},
         {"protocolVersion", control::kProtocolVersion},
@@ -1408,6 +1418,13 @@ ControlJson Application::runtimeSystemInfo() {
           {"compiler", build.compiler},
           {"vulkanSdk", build.vulkanSdk},
           {"glslc", build.glslc}}},
+        {"gpu",
+         {{"name", gpu.deviceName},
+          {"vendorId", gpu.vendorID},
+          {"deviceId", gpu.deviceID},
+          {"deviceType", static_cast<uint32_t>(gpu.deviceType)},
+          {"driverVersion", gpu.driverVersion},
+          {"apiVersion", gpu.apiVersion}}},
         {"diagnostics",
          {{"automation", config_.diagnostics.automationMode},
           {"fixedDelta", fixedDelta},
@@ -1415,17 +1432,23 @@ ControlJson Application::runtimeSystemInfo() {
           {"windowResizable", config_.diagnostics.windowResizable()},
           {"guiVisible", config_.diagnostics.guiVisible},
           {"runtimePipeSuffix", config_.diagnostics.runtimePipeSuffix},
-          {"captureRoot", projectContext_.captureRoot.string()}}},
-        {"projectRoot", projectContext_.projectRoot.string()},
-        {"runtimeRoot", projectContext_.runtimeRoot.string()},
+          {"captureRoot", projectContext_.captureRoot.u8string()}}},
+        {"projectRoot", projectContext_.projectRoot.u8string()},
+        {"runtimeRoot", projectContext_.runtimeRoot.u8string()},
         {"assetMode", assetImportModeName(config_.assetImportMode)},
         {"cookedPackage", projectContext_.cookedPackage},
         {"cacheRoot", sceneLoadContext_.derivedTextureCachePath},
-        {"captureRoot", projectContext_.captureRoot.string()},
+        {"captureRoot", projectContext_.captureRoot.u8string()},
         {"textureLimit", sceneLoadContext_.maxTextureSize},
-        {"shader", shaderVariants_.empty()
-                       ? ControlJson(nullptr)
-                       : ControlJson(currentShaderVariant().displayName)},
+        {"shader", shader ? ControlJson(shader->displayName)
+                           : ControlJson(nullptr)},
+        {"shaderInfo",
+         shader ? ControlJson{{"name", shader->displayName},
+                              {"vertexSha256",
+                               sha256File(shader->vertSpvPath)},
+                              {"fragmentSha256",
+                               sha256File(shader->fragSpvPath)}}
+                : ControlJson(nullptr)},
         {"loadTask", sceneLoadTaskToJson(latestSceneLoadTask_)}};
 }
 
@@ -1613,7 +1636,7 @@ ControlJson Application::runtimeAssetCatalog() {
         }
     }
     return {{"projectId", catalog_.projectId},
-            {"catalog", projectContext_.catalogPath.string()},
+            {"catalog", projectContext_.catalogPath.u8string()},
             {"mode", assetImportModeName(config_.assetImportMode)},
             {"entries", std::move(entries)}};
 }
@@ -1678,13 +1701,14 @@ Application::runtimeAssetCancel(std::optional<uint64_t> requestedTaskId) {
 
 ControlJson Application::runtimeAssetCacheInfo() {
     const std::filesystem::path root =
-        sceneLoadContext_.derivedTextureCachePath;
+        std::filesystem::u8path(
+            sceneLoadContext_.derivedTextureCachePath);
     if (artifactIndex_)
         artifactUsage_ = artifactIndex_->usage();
     const ArtifactIndexUsage usage =
         artifactUsage_.value_or(ArtifactIndexUsage{});
-    return {{"root", root.string()},
-            {"index", artifactIndex_ ? artifactIndex_->path().string() : ""},
+    return {{"root", root.u8string()},
+            {"index", artifactIndex_ ? artifactIndex_->path().u8string() : ""},
             {"indexSchema", ArtifactIndex::kSchemaVersion},
             {"records", usage.records},
             {"readyRecords", usage.readyRecords},

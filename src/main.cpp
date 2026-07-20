@@ -6,6 +6,7 @@
 #include "core/Log.h"
 
 #include <cstdlib>
+#include <cwchar>
 #include <exception>
 #include <filesystem>
 #include <iostream>
@@ -13,7 +14,31 @@
 #include <stdexcept>
 #include <string>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <Windows.h>
+#endif
+
 namespace {
+
+std::string utf8Argument(const wchar_t *value) {
+    if (!value || *value == L'\0')
+        return {};
+    const int inputLength = static_cast<int>(std::wcslen(value));
+    const int outputLength = WideCharToMultiByte(
+        CP_UTF8, WC_ERR_INVALID_CHARS, value, inputLength, nullptr, 0,
+        nullptr, nullptr);
+    if (outputLength <= 0)
+        throw std::invalid_argument("Command line contains invalid Unicode");
+    std::string result(static_cast<size_t>(outputLength), '\0');
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value,
+                            inputLength, result.data(), outputLength,
+                            nullptr, nullptr) != outputLength) {
+        throw std::invalid_argument("Command line contains invalid Unicode");
+    }
+    return result;
+}
 
 void printUsage(std::ostream &out) {
     out << "Usage: VulkanLab.exe [--project <path>] [--runtime-control] "
@@ -41,54 +66,54 @@ void printUsage(std::ostream &out) {
         << "  --help             Show this help and exit.\n";
 }
 
-bool parseArguments(int argc, char **argv, vkr::Config &config) {
+bool parseArguments(int argc, wchar_t **argv, vkr::Config &config) {
     for (int i = 1; i < argc; ++i) {
-        const std::string argument = argv[i];
-        if (argument == "--runtime-control") {
+        const std::wstring argument = argv[i];
+        if (argument == L"--runtime-control") {
             config.enableRuntimeControl = true;
-        } else if (argument == "--runtime-control-pipe") {
+        } else if (argument == L"--runtime-control-pipe") {
             if (++i >= argc)
                 throw std::invalid_argument(
                     "--runtime-control-pipe requires a suffix");
-            const std::string suffix = argv[i];
+            const std::string suffix = utf8Argument(argv[i]);
             if (suffix.empty())
                 throw std::invalid_argument(
                     "--runtime-control-pipe requires a non-empty suffix");
             vkr::control::makeRuntimeControlEndpoint(suffix);
             config.diagnostics.runtimePipeSuffix = suffix;
-        } else if (argument == "--automation") {
+        } else if (argument == L"--automation") {
             config.diagnostics.automationMode = true;
-        } else if (argument == "--window-size") {
+        } else if (argument == L"--window-size") {
             if (++i >= argc)
                 throw std::invalid_argument(
                     "--window-size requires WIDTHxHEIGHT");
             const vkr::DiagnosticWindowSize size =
-                vkr::parseDiagnosticWindowSize(argv[i]);
+                vkr::parseDiagnosticWindowSize(utf8Argument(argv[i]));
             config.windowWidth = size.width;
             config.windowHeight = size.height;
             config.diagnostics.fixedWindowSize = true;
-        } else if (argument == "--fixed-delta") {
+        } else if (argument == L"--fixed-delta") {
             if (++i >= argc)
                 throw std::invalid_argument(
                     "--fixed-delta requires a value in seconds");
             config.diagnostics.fixedDeltaSeconds =
-                vkr::parseDiagnosticFixedDelta(argv[i]);
-        } else if (argument == "--no-gui") {
+                vkr::parseDiagnosticFixedDelta(utf8Argument(argv[i]));
+        } else if (argument == L"--no-gui") {
             config.diagnostics.guiVisible = false;
-        } else if (argument == "--capture-root") {
+        } else if (argument == L"--capture-root") {
             if (++i >= argc)
                 throw std::invalid_argument(
                     "--capture-root requires a directory path");
             config.diagnostics.captureRoot = argv[i];
-        } else if (argument == "--project") {
+        } else if (argument == L"--project") {
             if (++i >= argc)
                 throw std::invalid_argument(
                     "--project requires a directory path");
             config.projectPath = argv[i];
-        } else if (argument == "--asset-mode") {
+        } else if (argument == L"--asset-mode") {
             if (++i >= argc)
                 throw std::invalid_argument("--asset-mode requires a value");
-            const std::string mode = argv[i];
+            const std::string mode = utf8Argument(argv[i]);
             config.assetImportModeExplicit = true;
             if (mode == "ondemand")
                 config.assetImportMode = vkr::AssetImportMode::OnDemand;
@@ -100,20 +125,23 @@ bool parseArguments(int argc, char **argv, vkr::Config &config) {
                 throw std::invalid_argument(
                     "--asset-mode must be ondemand, readonly, or "
                     "cooked-only");
-        } else if (argument == "--asset-tool") {
+        } else if (argument == L"--asset-tool") {
             if (++i >= argc)
                 throw std::invalid_argument("--asset-tool requires a path");
-            config.assetToolPath = argv[i];
+            config.assetToolPath =
+                std::filesystem::path(argv[i]).u8string();
             config.assetToolPathExplicit = true;
-        } else if (argument == "--cache-root") {
+        } else if (argument == L"--cache-root") {
             if (++i >= argc)
                 throw std::invalid_argument("--cache-root requires a path");
-            config.derivedTextureCachePath = argv[i];
+            config.derivedTextureCachePath =
+                std::filesystem::path(argv[i]).u8string();
             config.cachePathExplicit = true;
-        } else if (argument == "--help") {
+        } else if (argument == L"--help") {
             return false;
         } else {
-            throw std::invalid_argument("Unknown argument: " + argument);
+            throw std::invalid_argument("Unknown argument: " +
+                                        utf8Argument(argv[i]));
         }
     }
     return true;
@@ -121,7 +149,7 @@ bool parseArguments(int argc, char **argv, vkr::Config &config) {
 
 } // namespace
 
-int main(int argc, char **argv) {
+int wmain(int argc, wchar_t **argv) {
     vkr::Config config;
     try {
         if (!parseArguments(argc, argv, config)) {
@@ -172,21 +200,23 @@ int main(int argc, char **argv) {
             config.gltfMaxTextureSize =
                 catalog.profile(projectContext.packageProfileId).textureLimit;
             config.derivedTextureCachePath =
-                projectContext.cacheRoot.string();
+                projectContext.cacheRoot.u8string();
         } else {
             projectContext.cacheRoot = config.derivedTextureCachePath.empty()
                                            ? vkr::DerivedAssetPaths::defaultCacheRoot(
                                                  catalog.projectId)
                                            : std::filesystem::absolute(
-                                                 config.derivedTextureCachePath)
+                                                 std::filesystem::u8path(
+                                                     config.derivedTextureCachePath))
                                                  .lexically_normal();
             config.derivedTextureCachePath =
-                projectContext.cacheRoot.string();
+                projectContext.cacheRoot.u8string();
             if (config.assetToolPathExplicit) {
                 config.assetToolPath =
-                    std::filesystem::absolute(config.assetToolPath)
+                    std::filesystem::absolute(std::filesystem::u8path(
+                                                  config.assetToolPath))
                         .lexically_normal()
-                        .string();
+                        .u8string();
             }
         }
         if (captureRootExplicit) {
@@ -196,10 +226,10 @@ int main(int argc, char **argv) {
         }
         config.diagnostics.captureRoot = projectContext.captureRoot;
         VKR_LOG_INFO("Assets", "Project '{}' from '{}' ({})", catalog.projectId,
-                     projectContext.projectRoot.string(),
+                     projectContext.projectRoot.u8string(),
                      projectContext.diagnostic);
         VKR_LOG_INFO("Assets", "Runtime root: '{}'",
-                     projectContext.runtimeRoot.string());
+                     projectContext.runtimeRoot.u8string());
         VKR_LOG_INFO("Assets", "Derived asset cache: '{}'",
                      config.derivedTextureCachePath);
 

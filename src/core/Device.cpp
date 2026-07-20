@@ -24,6 +24,13 @@ Device::~Device() {
     vmaDestroyAllocator(allocator_);
     vkDestroyDevice(device_, nullptr);
 }
+
+VkPhysicalDeviceProperties Device::physicalDeviceProperties() const {
+    VkPhysicalDeviceProperties properties{};
+    vkGetPhysicalDeviceProperties(physicalDevice_, &properties);
+    return properties;
+}
+
 SwapChainSupportDetails
 Device::querySwapChainSupport(VkPhysicalDevice device) const {
     SwapChainSupportDetails details;

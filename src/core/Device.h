@@ -22,6 +22,7 @@ class Device {
 
     VkDevice              logicalDevice() const { return device_; }
     VkPhysicalDevice      physicalDevice() const { return physicalDevice_; }
+    VkPhysicalDeviceProperties physicalDeviceProperties() const;
     VkQueue               graphicsQueue() const { return graphicsQueue_; }
     VkQueue               presentQueue() const { return presentQueue_; }
     QueueFamilyIndices    queueFamilies() const;
