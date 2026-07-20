@@ -1,12 +1,14 @@
 # VulkanLab 开发诊断与自动化工具链计划
 
 > Status: Active
-> Last verified: 2026-07-19
-> Verified against: `3bca8f3`
+> Last verified: 2026-07-21
+> Verified against: `d6f17cf`
+
+> Progress: Stage 0-1 已完成。当前入口是 Stage 2：RenderDoc Labels And Validation Profiles；已完成切片保留为设计背景，当前操作以 guides/architecture 为准。
 
 ## Summary
 
-VulkanLab 已具备 Runtime Control、响应式场景加载、KTX2 派生纹理、Catalog、Cook/package、加载统计和基础 CTest。当前主要短板已经从“缺少资产管线”转为“修改后的正确性和性能仍需要大量人工判断”：渲染结果依赖肉眼检查，GPU 对象缺少稳定名称和 pass 标记，glTF 合规问题通常要到加载阶段才暴露，逐帧 CPU/GPU 性能没有统一 timeline，Shader 与 C++ 接口主要依靠人工保持一致。
+VulkanLab 已具备 Runtime Control v3、响应式场景加载、KTX2 派生纹理、Catalog、Cook/package、加载统计、确定性截图和初始自动视觉回归。当前下一项短板是 GPU 对象缺少稳定名称和 pass 标记、Validation 配置不可复现；后续还包括 glTF 导入校验、统一 CPU/GPU timeline 和 Shader 接口契约。
 
 本计划建立一套分层工具链，使后续材质、光照、阴影、后处理和资源管理开发具备以下闭环：
 
@@ -25,7 +27,7 @@ VulkanLab 已具备 Runtime Control、响应式场景加载、KTX2 派生纹理�
 
 前置工作由[工程结构与构建系统重构计划](engineering_refactor_plan.md)负责。该计划完成 target 化、build-tree Shader 和开发资源布局后，本计划 Stage 0 直接复用其 CMake Presets/build metadata，Stage 1 再接入截图服务；两份计划不重复实现同一构建基础。
 
-当前从工程基础推进到本计划 Stage 1 的具体顺序、提交和验收以[工程基础到自动视觉回归执行计划](engineering_to_visual_regression_execution_plan.md)为准。
+Stage 0-1 的具体提交和验收见[工程基础到自动视觉回归执行记录](../archive/plans/engineering/engineering_to_visual_regression_execution_plan.md)。后续从本文 Stage 2 顺序继续。
 
 当前实现依据：
 

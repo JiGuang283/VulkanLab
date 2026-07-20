@@ -1,8 +1,10 @@
 # VulkanLab 工程结构与构建系统重构计划
 
 > Status: Active
-> Last verified: 2026-07-19
-> Verified against: `3bca8f3`
+> Last verified: 2026-07-21
+> Verified against: `d6f17cf`
+
+> Progress: target-based CMake、build-tree Shader、ProjectContext、RuntimeCommandDispatcher、Presets 和 BuildInfo 已由归档的 M0-M7 执行切片完成。Editor Panels、SceneWorkflowController 等剩余范围仍未实施。
 
 ## Summary
 
@@ -31,7 +33,7 @@ Application 单体
 
 本计划是[开发诊断与自动化工具链计划](development_toolchain_plan.md) Stage 0/1 的前置工作。完成 target、Shader 和开发资源布局后，再实施异步截图与视觉回归，避免在即将废弃的构建和 Application 边界上继续叠加功能。
 
-当前实施切片从 Stage 0 推进到工具链 Stage 1，具体顺序见[工程基础到自动视觉回归执行计划](engineering_to_visual_regression_execution_plan.md)。
+已完成的 Stage 0 到工具链 Stage 1 实施切片及验收记录见[工程基础到自动视觉回归执行记录](../archive/plans/engineering/engineering_to_visual_regression_execution_plan.md)。
 
 ## Current Baseline
 

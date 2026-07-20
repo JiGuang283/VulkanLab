@@ -1,8 +1,8 @@
 # 工程基础到自动视觉回归执行计划
 
-> Status: Active
-> Last verified: 2026-07-20
-> Verified against: `4bcabe9`
+> Status: Archived (Completed)
+> Last verified: 2026-07-21
+> Verified against: `d6f17cf`
 
 ## Summary
 
@@ -27,8 +27,8 @@ clean checkout
 
 本执行计划组合并细化两份长期计划：
 
-- [工程结构与构建系统重构计划](engineering_refactor_plan.md)
-- [开发诊断与自动化工具链计划](development_toolchain_plan.md)
+- [工程结构与构建系统重构计划](../../../development/engineering_refactor_plan.md)
+- [开发诊断与自动化工具链计划](../../../development/development_toolchain_plan.md)
 
 它只覆盖工程重构中支撑自动化所必需的部分，以及工具链 Stage 1 的完整实现。Editor Panels 全量拆分、SceneWorkflowController、完整测试框架迁移、RenderDoc、GPU-AV profile、glTF Validator、Tracy、Shader reflection、CI 和 geometry optimization 不在本轮范围内。
 
@@ -926,7 +926,7 @@ ctest --preset windows-msvc-test -L visual
 - 构建/测试后工作树干净，Cook package 不含开发测试产物。
 - 当前 guides/architecture 已更新，本文 Implementation Record 完整。
 
-完成后归档本文。下一阶段按[开发诊断与自动化工具链计划](development_toolchain_plan.md)进入 RenderDoc labels/Validation profiles，而不是立即扩大 screenshot 架构。
+完成后归档本文。下一阶段按[开发诊断与自动化工具链计划](../../../development/development_toolchain_plan.md)进入 RenderDoc labels/Validation profiles，而不是立即扩大 screenshot 架构。
 
 ## M0 Baseline Record
 
@@ -1091,6 +1091,18 @@ Release `desktop_1024` Main Sponza package：
 - Main Sponza 扩展 smoke 首次发现 spec 的 `desktop_1024` 只校验 profile ID、没有应用其 texture limit。commit `4bcabe9` 让 `scene.list` 返回 profile texture limit，并由 Runner 在加载前设置和回读验证。修复后 Release smoke 为 75 textures、405 meshes、72/72 derived hits、96 MiB texture estimate、279.74 MiB VMA allocation delta，总运行约 3.47 s；报告中的 requested/load texture limit 均为 1024。
 - profile 修复后 Debug 完整 CTest 9/9 通过。Release 首轮仅遇到既有 CatalogImport staging rename 瞬时文件锁；该测试隔离重试通过，随后 Release 完整 CTest 9/9 通过。
 
+## Final Completion Record
+
+> Completed: 2026-07-21
+
+- 用户按最终门禁检查目标 GPU 的后台运行以及 Main Sponza 画面/显存曲线，并回复“没问题”。此前的 M0 代表画面、M5 Synchronization Validation 截图流程和 M7 Viking golden 也均已人工确认。
+- Release VulkanLab 被 Win32 `SetWindowPos(HWND_BOTTOM)` 置于后台 3 秒时，`presentedFrames` 从 104,527 增至 111,778，增加 7,251 帧，`rendering=true/minimized=false`。普通后台遮挡不会停止 present。
+- 窗口最小化后 `rendering=false/minimized=true`，只在状态切换期间增加 9 帧；恢复后 46 帧内重新进入 `rendering=true`，客户端 `render wait --stable-frames 30` 得到 42 个稳定帧。v1 明确支持后台可见窗口；最小化暂停并在恢复后继续，不宣称 headless present。
+- Windows `GPU Local Adapter Memory` 对 VulkanLab 所在 RTX 4060 adapter 的采样为：Viking 稳态 143.21 MiB，Main Sponza 1024 加载峰值 527.71 MiB，加载后稳态 527.29 MiB，稳态净增 384.07 MiB。加载完成后曲线稳定，没有继续增长。
+- 同次 Main Sponza 加载为 75 textures、405 meshes、72/72 derived hits、96 MiB texture estimate 和 279.74 MiB VMA allocation delta；VMA block delta 为 384 MiB，与 Windows adapter memory 增量一致。加载路径保持 0 legacy submit、0 queue wait。
+- 使用 `PBR-lite NormalMapped` 和 camera `position=(-15,0,8), yaw=0, pitch=0` 生成最终 800×600 中庭截图。画面显示完整拱廊、材质与法线细节，无黑屏、fallback 贴图或明显几何错误；PNG SHA-256 为 `c119b4279ad4b6206bc40711262e255d8c4456d5ce27df632b2b65f5c6434ed2`，产物位于 ignored build artifacts，不提交仓库。
+- 当前 clean BuildInfo revision 为 `d6f17cfbb2de6422ccef21d10c8ebb92211d0163`、dirty=false。最终 Debug/Release CTest 均为 9/9，所有进程正常退出；日志没有 error、critical、`SYNC-HAZARD` 或新增 validation error，只保留既有 Legacy vertex location 3 未消费 warning。
+
 ## Implementation Record
 
 | Milestone | Status | Commit(s) | Verification | Notes |
@@ -1102,4 +1114,4 @@ Release `desktop_1024` Main Sponza package：
 | M4 | Complete | `2215023`, `7747968`, `dca6ddb`, `ce98b26`, M4 closeout commit containing this row | Preset Debug/Release clean builds; CTest 5/5 each; Runtime Control v2 snapshots; default/automation/CookedOnly runtime; package verify | Runtime pipe suffix and capture commands remain intentionally pending for M5/M6. One transient Windows staging-directory rename failure passed on isolated retry and full-suite retry. |
 | M5 | Complete | `9587c85`, `17cdb20`, `b925b2d`, `7f3ed11`, M5 closeout commit containing this row | Debug/Release build; CTest 5/5 each; Viking/Sheen capture; resize/minimize/continuous/GUI-exclusion smoke; manual synchronization validation | Capture is asynchronous, bounded, format-gated and submission-serial driven; no screenshot queue/device idle. |
 | M6 | Complete | `b19e7c3`, `df95807`, `8cffc9d`, `a25f8ad`, `9e03157`, M6 closeout commit containing this row | Debug/Release build; CTest 5/5 each; default and dual-instance endpoints; malformed/oversize protocol; camera/render wait; scene-to-capture E2E; CookedOnly capability gate; clean quit | Runtime Control v3 is client-polled and instance-isolated; capture paths remain confined and no server-side future-frame wait was introduced. |
-| M7 | Complete | `9b53805`, `a314984`, `6bd2e1d`, `4bcabe9`, M7 closeout commit containing this row | Debug/Release clean build; CTest 9/9 each; three smoke; repeated Viking golden; failure injection; cross-GPU skip; parallel/Unicode path; package exclusion; user-approved baseline; Main Sponza profile smoke | Runner is process-isolated and does not link Vulkan; default runs never overwrite golden. |
+| M7 | Complete | `9b53805`, `a314984`, `6bd2e1d`, `4bcabe9`, `d6f17cf`, archive closeout commit containing this row | Debug/Release clean build; CTest 9/9 each; three smoke; repeated Viking golden; failure injection; cross-GPU skip; parallel/Unicode path; package exclusion; user-approved baseline; Main Sponza profile/background/VRAM checks | Runner is process-isolated and does not link Vulkan; default runs never overwrite golden. |
