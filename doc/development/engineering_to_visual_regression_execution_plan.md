@@ -1044,8 +1044,7 @@ Release `desktop_1024` Main Sponza package：
 
 ## M5 Verification Record
 
-> Automatic verification completed: 2026-07-20
-> Manual synchronization validation: Pending
+> Completed: 2026-07-20
 
 - FrameSync submission serial 使用纯 CPU 测试覆盖双 frame-slot 单调推进、slot reuse、非法 reuse 和已知 device-idle completion。
 - Capture CPU 测试覆盖状态转换、8 个 active task 上限、32 项终态历史策略、task ID namespace、相对 PNG 路径约束、byte size/overflow、支持 format、BGRA 转 RGBA、alpha 保留和 2×2 row order。
@@ -1053,8 +1052,9 @@ Release `desktop_1024` Main Sponza package：
 - Debug Viking Room GPU 冒烟生成 4 张 PNG：两张 800×600 连续截图，以及 DPI resize/最小化恢复后的两张 1028×694 截图。采样非黑像素比例为 15.42%–19.19%，alpha 保持 255，画面方向正确。
 - 启用 ImGui 的 640×480 运行中，`includeGui=false` 截图没有 UI；后续帧仍可响应 ping 并通过 `app.quit` 正常退出。
 - resize、最小化恢复、连续截图和关闭期间没有新增 error、critical 或 Vulkan validation error。日志只保留既有 Legacy Forward location 3 未消费 warning。
+- Viking Room 截图完成后通过现有 Runtime Control 加载 Sheen Chair，再次截图成功；两张 PNG 均为 800×600，场景切换、截图和退出日志无 error、critical 或 `SYNC-HAZARD`。
 - `src/diagnostics/Capture*` 不调用 `vkQueueWaitIdle()`、`vkDeviceWaitIdle()` 或 fence wait；GPU 完成只由 FrameSync completed submission serial 驱动。
-- M5 尚未完成：仍需用户通过 Vulkan Configurator 开启 synchronization validation，运行一次截图并确认日志无同步错误。
+- 用户使用 Vulkan Configurator 3.4.1 的 Synchronization Preset 完成手工验证。21:06:19–21:06:31 运行中截图任务成功，日志包含 0 个 `SYNC-HAZARD`、0 个 error/critical 和 0 个其他 validation message；输出为 800×600，非黑像素比例 26.73%，SHA-256 为 `8ac8d912a338a91a82582771f54c1f255e728d46edb47b34b9f36ae5d1ddbdd2`。验证后 Vulkan Configurator override 已清除。
 
 ## Implementation Record
 
@@ -1065,6 +1065,6 @@ Release `desktop_1024` Main Sponza package：
 | M2 | Complete | `a484784`, `cac363e`, `75d282a`, M2 closeout commit containing this row | Clean Debug/Release shader generation; exact baseline hashes; no-op and one-file incremental checks; CTest 4/4 each; Runtime shader switching; package verify | Source tree contains GLSL only; runtime and Cook share per-config staged SPIR-V. |
 | M3 | Complete | `5d1f7b5`, `9464008`, `a51297c`, M3 closeout commit containing this row | Debug/Release build; CTest 5/5 each; no-copy runtime loads from arbitrary CWD; external cooked package load and verify | CWD is no longer a resource API; developer outputs contain no full model or texture copy. |
 | M4 | Complete | `2215023`, `7747968`, `dca6ddb`, `ce98b26`, M4 closeout commit containing this row | Preset Debug/Release clean builds; CTest 5/5 each; Runtime Control v2 snapshots; default/automation/CookedOnly runtime; package verify | Runtime pipe suffix and capture commands remain intentionally pending for M5/M6. One transient Windows staging-directory rename failure passed on isolated retry and full-suite retry. |
-| M5 | In progress | `9587c85`, `17cdb20`, `b925b2d`, M5 verification commit containing this row | Debug/Release build; CTest 5/5 each; Viking GPU capture; resize/minimize/continuous/GUI-exclusion smoke | Automatic gates pass; manual synchronization validation remains mandatory. |
+| M5 | Complete | `9587c85`, `17cdb20`, `b925b2d`, `7f3ed11`, M5 closeout commit containing this row | Debug/Release build; CTest 5/5 each; Viking/Sheen capture; resize/minimize/continuous/GUI-exclusion smoke; manual synchronization validation | Capture is asynchronous, bounded, format-gated and submission-serial driven; no screenshot queue/device idle. |
 | M6 | Not started | | | |
 | M7 | Not started | | | |
