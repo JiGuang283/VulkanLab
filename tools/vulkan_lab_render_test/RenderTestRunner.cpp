@@ -495,9 +495,36 @@ class RunnerSession {
                 "scene_profile_mismatch",
                 "Catalog profile does not match the render test spec.");
         }
+        const uint32_t profileTextureLimit =
+            sceneEntry->value("textureLimit",
+                              std::numeric_limits<uint32_t>::max());
+        if (profileTextureLimit != 0 && profileTextureLimit != 512 &&
+            profileTextureLimit != 1024 && profileTextureLimit != 2048) {
+            throw RunnerFailure(
+                "scene_profile_invalid",
+                "Runtime did not report a valid texture limit for the "
+                "requested Catalog profile.");
+        }
         if (!sceneEntry->value("available", false))
             throw RunnerFailure("scene_unavailable",
                                 "Spec scene is unavailable in this project.");
+        if (info.value("textureLimit", std::numeric_limits<uint32_t>::max()) !=
+            profileTextureLimit) {
+            Json profileLoad = invoke(
+                "texture_limit.set", {{"value", profileTextureLimit}});
+            waitForLoad(profileLoad);
+            info = invoke("system.info");
+            if (info.value("textureLimit",
+                           std::numeric_limits<uint32_t>::max()) !=
+                profileTextureLimit) {
+                throw RunnerFailure(
+                    "scene_profile_apply_failed",
+                    "Renderer did not apply the requested Catalog profile.");
+            }
+        }
+        report_["runtime"]["requestedProfile"] = {
+            {"id", spec_->profileId},
+            {"textureLimit", profileTextureLimit}};
         const std::string sceneName =
             sceneEntry->value("name", std::string{});
         Json load = invoke("scene.load", {{"name", sceneName}});

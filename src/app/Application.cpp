@@ -1461,6 +1461,8 @@ ControlJson Application::runtimeSceneList() {
         entries.push_back({{"id", entry.id},
                            {"name", entry.name},
                            {"profileId", entry.profileId},
+                           {"textureLimit",
+                            catalog_.profile(entry.profileId).textureLimit},
                            {"available", entry.available},
                            {"source", entry.sourcePath}});
     }
