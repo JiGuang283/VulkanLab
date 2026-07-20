@@ -96,6 +96,9 @@ add_library(vkl_engine STATIC
     core/UploadContext.cpp
     core/VulkanContext.cpp
     core/VulkanException.cpp
+    diagnostics/CaptureService.cpp
+    diagnostics/CaptureTaskQueue.cpp
+    diagnostics/CaptureTypes.cpp
     platform/FileDialogWin32.cpp
     render/FallbackTextures.cpp
     render/GltfPreparer.cpp

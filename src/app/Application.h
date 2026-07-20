@@ -33,6 +33,7 @@ class FrameSync;
 class Renderer;
 class PipelineCache;
 class GuiSystem;
+class CaptureService;
 struct RuntimeCommand;
 class RuntimeCommandQueue;
 class NamedPipeServerWin32;
@@ -77,6 +78,8 @@ class Application final : public RuntimeControlHost {
     void updateAssetImports();
     void drawScenePanel();
     void drawAssetsPanel();
+    void drawCapturePanel();
+    void requestManualCapture(bool includeGui);
     void updateSceneImport();
     void refreshSceneRegistry(const std::string &selectSceneId = {});
     void reloadArtifactIndex();
@@ -145,6 +148,7 @@ class Application final : public RuntimeControlHost {
     std::unique_ptr<Renderer>            renderer_;
     std::unique_ptr<PipelineCache>       pipelineCache_;
     std::unique_ptr<GuiSystem>           gui_;
+    std::unique_ptr<CaptureService>      captureService_;
     RenderQueue                          renderQueue_;
     std::vector<ShaderVariant>           shaderVariants_;
     int                                  currentShaderVariantIndex_ = 0;
@@ -170,6 +174,9 @@ class Application final : public RuntimeControlHost {
     RuntimeCommandDispatcher runtimeCommandDispatcher_;
     std::shared_ptr<RuntimeCommand> pendingQuitCommand_;
     std::unique_ptr<SceneImportUiState> sceneImportUi_;
+    uint64_t lastCaptureTaskId_ = 0;
+    bool captureIncludeGui_ = false;
+    std::string captureUiError_;
 
     // 输入模式
     InputMode  mode_ = InputMode::UI;

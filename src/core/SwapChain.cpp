@@ -1,6 +1,7 @@
 #include "SwapChain.h"
 #include "Device.h"
 #include "VulkanCheck.h"
+#include "diagnostics/CaptureTypes.h"
 
 #include <algorithm>
 #include <limits>
@@ -93,7 +94,24 @@ void SwapChain::createSwapChain() {
     createInfo.imageColorSpace = surfaceFormat.colorSpace;
     createInfo.imageExtent = extent;
     createInfo.imageArrayLayers = 1;
+    const bool transferSourceSupported =
+        (swapChainSupport.capabilities.supportedUsageFlags &
+         VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
+    const bool formatSupported =
+        describeCaptureFormat(surfaceFormat.format).supported;
+    captureSupported_ = transferSourceSupported && formatSupported;
+    captureUnsupportedReason_.clear();
+    if (!transferSourceSupported) {
+        captureUnsupportedReason_ =
+            "surface does not support swapchain TRANSFER_SRC usage";
+    } else if (!formatSupported) {
+        captureUnsupportedReason_ =
+            "swapchain format is not a supported 8-bit RGBA/BGRA format";
+    }
+
     createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    if (captureSupported_)
+        createInfo.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
     QueueFamilyIndices indices = device_->queueFamilies();
     uint32_t           queueFamilyIndices[] = {indices.graphicsFamily.value(),

@@ -24,6 +24,8 @@ class Buffer {
 
     void *map();
     void  unmap();
+    void invalidate(VkDeviceSize offset = 0,
+                    VkDeviceSize size = VK_WHOLE_SIZE);
     void *mappedData() const { return mapped_; }
 
   private:

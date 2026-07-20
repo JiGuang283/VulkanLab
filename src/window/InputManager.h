@@ -19,6 +19,7 @@ enum class Key : int {
     Space = 32,      // GLFW_KEY_SPACE
     LeftShift = 340, // GLFW_KEY_LEFT_SHIFT
     Escape = 256,    // GLFW_KEY_ESCAPE
+    F12 = 301,       // GLFW_KEY_F12
 };
 
 enum class MouseButton : int {

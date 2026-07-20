@@ -27,6 +27,9 @@ class GuiSystem {
     /// Must be called while a compatible render pass is active.
     void render(VkCommandBuffer cmd);
 
+    /// End the current ImGui frame without producing draw commands.
+    void discardFrame();
+
     /// After swap chain recreation, update the backend's image count.
     void onSwapChainRecreated(uint32_t minImageCount);
 

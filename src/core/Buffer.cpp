@@ -2,6 +2,8 @@
 #include "Device.h"
 #include "VulkanCheck.h"
 
+#include <stdexcept>
+
 namespace vkr {
 
 Buffer::Buffer(Device &device, VkDeviceSize size, VkBufferUsageFlags usage,
@@ -56,9 +58,20 @@ Buffer &Buffer::operator=(Buffer &&other) noexcept {
 
 void *Buffer::map() {
     if (!mapped_) {
-        vmaMapMemory(device_->allocator(), allocation_, &mapped_);
+        VK_CHECK(vmaMapMemory(device_->allocator(), allocation_, &mapped_));
     }
     return mapped_;
+}
+
+void Buffer::invalidate(VkDeviceSize offset, VkDeviceSize size) {
+    if (offset > size_)
+        throw std::out_of_range("buffer invalidate range is out of bounds");
+    if (size == VK_WHOLE_SIZE)
+        size = size_ - offset;
+    if (size > size_ - offset)
+        throw std::out_of_range("buffer invalidate range is out of bounds");
+    VK_CHECK(vmaInvalidateAllocation(device_->allocator(), allocation_, offset,
+                                     size));
 }
 
 void Buffer::unmap() {

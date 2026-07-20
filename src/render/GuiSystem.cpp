@@ -88,6 +88,10 @@ void GuiSystem::render(VkCommandBuffer cmd) {
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
 }
 
+void GuiSystem::discardFrame() {
+    ImGui::EndFrame();
+}
+
 void GuiSystem::onSwapChainRecreated(uint32_t minImageCount) {
     ImGui_ImplVulkan_SetMinImageCount(minImageCount);
 }

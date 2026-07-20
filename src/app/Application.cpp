@@ -20,6 +20,7 @@
 #include "core/UploadContext.h"
 #include "core/VulkanContext.h"
 #include "diagnostics/BuildInfo.h"
+#include "diagnostics/CaptureService.h"
 #include "render/GuiSystem.h"
 #include "render/MaterialInstance.h"
 #include "render/MaterialTextureSlot.h"
@@ -586,8 +587,15 @@ Application::~Application() {
     sceneGpuBuilder_.reset();
     if (sceneLoadManager_)
         sceneLoadManager_->shutdown();
-    if (device_)
+    if (device_) {
         vkDeviceWaitIdle(device_->logicalDevice());
+        if (frameSync_)
+            frameSync_->markAllSubmissionsCompleted();
+        if (captureService_ && frameSync_) {
+            captureService_->shutdown(
+                frameSync_->completedSubmissionSerial());
+        }
+    }
 }
 
 void Application::run() {
@@ -649,6 +657,10 @@ void Application::init() {
     renderer_ = std::make_unique<Renderer>(
         *device_, *swapChain_, *frameSync_, *descriptorAllocator_,
         sizeof(GlobalUBO));
+    if (!projectContext_.cookedPackage) {
+        captureService_ = std::make_unique<CaptureService>(
+            *device_, projectContext_.captureRoot);
+    }
 
     window_->setResizeCallback(
         [this](int, int) { frameSync_->notifyResize(); });
@@ -2377,6 +2389,105 @@ void Application::drawAssetsPanel() {
     ImGui::End();
 }
 
+void Application::requestManualCapture(bool includeGui) {
+    captureUiError_.clear();
+    if (!captureService_) {
+        captureUiError_ =
+            "Capture is unavailable in this runtime configuration.";
+        VKR_LOG_WARN("Capture", "{}", captureUiError_);
+        return;
+    }
+
+    try {
+        lastCaptureTaskId_ = captureService_->request({}, includeGui);
+    } catch (const std::exception &error) {
+        captureUiError_ = error.what();
+        VKR_LOG_ERROR("Capture", "Could not queue capture: {}",
+                      captureUiError_);
+    }
+}
+
+void Application::drawCapturePanel() {
+    ImGui::Begin("Capture");
+    if (!captureService_) {
+        ImGui::TextDisabled("Capture is unavailable in this package.");
+        ImGui::End();
+        return;
+    }
+
+    ImGui::Checkbox("Include GUI", &captureIncludeGui_);
+    const bool supported = swapChain_->captureSupported();
+    ImGui::BeginDisabled(!supported);
+    if (ImGui::Button("Capture"))
+        requestManualCapture(captureIncludeGui_);
+    ImGui::EndDisabled();
+
+    std::optional<CaptureTaskSnapshot> latest;
+    if (lastCaptureTaskId_ != 0)
+        latest = captureService_->task(lastCaptureTaskId_);
+    const bool canCancel =
+        latest && !isTerminalCaptureTaskState(latest->state) &&
+        latest->state != CaptureTaskState::Cancelling;
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!canCancel);
+    if (ImGui::Button("Cancel") && latest)
+        captureService_->cancel(latest->request.taskId);
+    ImGui::EndDisabled();
+
+    if (!supported) {
+        ImGui::TextWrapped("Unavailable: %s",
+                           swapChain_->captureUnsupportedReason().c_str());
+    }
+    if (!captureUiError_.empty())
+        ImGui::TextWrapped("Error: %s", captureUiError_.c_str());
+
+    ImGui::Separator();
+    ImGui::Text("Root: %s", captureService_->captureRoot().string().c_str());
+    const std::vector<CaptureTaskSnapshot> tasks = captureService_->tasks();
+    ImGui::Text("Tasks: %llu",
+                static_cast<unsigned long long>(tasks.size()));
+    for (auto it = tasks.rbegin(); it != tasks.rend(); ++it) {
+        const CaptureTaskSnapshot &task = *it;
+        ImGui::PushID(static_cast<int>(task.request.taskId & 0x7fffffff));
+        const bool open = ImGui::TreeNode(
+            "Task", "Task %llu - %s",
+            static_cast<unsigned long long>(task.request.taskId),
+            captureTaskStateName(task.state));
+        if (open) {
+            ImGui::Text("GUI: %s", task.request.includeGui ? "Included"
+                                                           : "Excluded");
+            if (task.result.width != 0) {
+                ImGui::Text("Image: %ux%u %s", task.result.width,
+                            task.result.height,
+                            describeCaptureFormat(task.result.format).name);
+                ImGui::Text("Frame serial: %llu",
+                            static_cast<unsigned long long>(
+                                task.result.frameSerial));
+            }
+            if (!task.result.outputPath.empty())
+                ImGui::TextWrapped("Output: %s",
+                                   task.result.outputPath.string().c_str());
+            if (!task.result.sha256.empty())
+                ImGui::TextWrapped("SHA-256: %s",
+                                   task.result.sha256.c_str());
+            if (!task.result.error.empty())
+                ImGui::TextWrapped("Error: %s",
+                                   task.result.error.c_str());
+            if (isTerminalCaptureTaskState(task.state)) {
+                ImGui::Text(
+                    "Timing: %.2f ms total, %.2f GPU, %.2f CPU, %.2f encode",
+                    task.result.timings.totalMs,
+                    task.result.timings.gpuWaitMs,
+                    task.result.timings.cpuCopyMs,
+                    task.result.timings.encodeMs);
+            }
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
+    }
+    ImGui::End();
+}
+
 void Application::drawGui() {
     ImGui::Begin("Renderer");
     if (!shaderVariants_.empty()) {
@@ -2416,6 +2527,7 @@ void Application::drawGui() {
 
     drawScenePanel();
     drawAssetsPanel();
+    drawCapturePanel();
 
     ImGui::Begin("Loading");
     if (!latestSceneLoadTask_) {
@@ -2700,7 +2812,17 @@ void Application::drawGui() {
 }
 
 void Application::handleSwapChainRecreate() {
+    const VkExtent2D framebufferExtent = window_->framebufferExtent();
+    if (framebufferExtent.width == 0 || framebufferExtent.height == 0)
+        return;
+
     renderer_->recreateSwapChain();
+    frameSync_->markAllSubmissionsCompleted();
+    if (captureService_) {
+        captureService_->update(frameSync_->completedSubmissionSerial());
+        captureService_->onSwapChainRecreated(
+            frameSync_->completedSubmissionSerial());
+    }
     pipelineCache_->clear();
     frameSync_->onSwapChainRecreated();
     if (gui_)
@@ -2725,6 +2847,11 @@ void Application::mainLoop() {
     while (!window_->shouldClose()) {
         window_->pollEvents();
         input_->update();
+
+        if (captureService_) {
+            captureService_->update(
+                frameSync_->completedSubmissionSerial());
+        }
 
         updateAssetImports();
         processRuntimeCommand();
@@ -2762,6 +2889,8 @@ void Application::mainLoop() {
         }
         if (input_->isKeyDown(Key::Escape))
             window_->setShouldClose(true);
+        if (input_->isKeyPressed(Key::F12))
+            requestManualCapture(captureIncludeGui_);
 
         // 5. 场景 tick
         simulationTime = config_.diagnostics.fixedDeltaSeconds
@@ -2781,9 +2910,23 @@ void Application::mainLoop() {
             if (frameSync_->swapChainNeedsRecreation())
                 handleSwapChainRecreate();
             if (gui_)
-                ImGui::EndFrame();
+                gui_->discardFrame();
             input_->endFrame();
+            const VkExtent2D framebufferExtent =
+                window_->framebufferExtent();
+            if (framebufferExtent.width == 0 ||
+                framebufferExtent.height == 0) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(16));
+            }
             continue;
+        }
+
+        std::optional<CaptureFrameSelection> captureSelection;
+        if (captureService_) {
+            captureService_->update(
+                frameSync_->completedSubmissionSerial());
+            captureSelection = captureService_->prepareFrame(*swapChain_);
         }
 
         updateUniforms(ctx->frameIndex);
@@ -2793,9 +2936,20 @@ void Application::mainLoop() {
         renderQueue_.sortOpaque();
         renderQueue_.sortTransparent(camera_.position());
 
-        renderer_->renderFrame(*ctx, renderQueue_, *pipelineCache_, gui_.get(),
+        GuiSystem *frameGui = gui_.get();
+        if (captureSelection && !captureSelection->includeGui && gui_) {
+            gui_->discardFrame();
+            frameGui = nullptr;
+        }
+        renderer_->renderFrame(*ctx, renderQueue_, *pipelineCache_, frameGui,
                                currentShaderVariant());
-        frameSync_->endFrame(*ctx);
+        if (captureSelection) {
+            captureService_->recordCopy(ctx->cmd,
+                                        swapChain_->image(ctx->imageIndex));
+        }
+        const uint64_t submissionSerial = frameSync_->endFrame(*ctx);
+        if (captureSelection)
+            captureService_->frameSubmitted(submissionSerial);
 
         if (frameSync_->swapChainNeedsRecreation())
             handleSwapChainRecreate();
@@ -2805,6 +2959,9 @@ void Application::mainLoop() {
     }
 
     vkDeviceWaitIdle(device_->logicalDevice());
+    frameSync_->markAllSubmissionsCompleted();
+    if (captureService_)
+        captureService_->shutdown(frameSync_->completedSubmissionSerial());
 }
 
 } // namespace vkr
