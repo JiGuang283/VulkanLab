@@ -1813,13 +1813,34 @@ ControlJson Application::runtimeRenderStatus() {
                  {"name", sceneRegistry_[currentSceneIndex_].name}};
     }
 
+    ControlJson loadTask = sceneLoadTaskToJson(latestSceneLoadTask_);
+    if (assetImportManager_) {
+        const auto importHistory = assetImportManager_->history();
+        const auto activeImport = std::find_if(
+            importHistory.rbegin(), importHistory.rend(),
+            [](const std::shared_ptr<AssetImportTask> &task) {
+                return task &&
+                       !isTerminalAssetImportState(task->state.load());
+            });
+        if (activeImport != importHistory.rend()) {
+            std::shared_ptr<SceneLoadTask> linkedLoad;
+            const auto linked = sceneAssetOperations_->importToLoadTask.find(
+                (*activeImport)->id);
+            if (linked != sceneAssetOperations_->importToLoadTask.end() &&
+                linked->second != 0) {
+                linkedLoad = sceneLoadManager_->task(linked->second);
+            }
+            loadTask = loadOperationToJson(*activeImport, linkedLoad);
+        }
+    }
+
     const bool captureEnabled = captureService_ != nullptr;
     const bool captureSupported =
         captureEnabled && swapChain_->captureSupported();
     return {
         {"scene", std::move(scene)},
         {"sceneGeneration", sceneGeneration_},
-        {"loadTask", sceneLoadTaskToJson(latestSceneLoadTask_)},
+        {"loadTask", std::move(loadTask)},
         {"frameSerial", frameSync_->lastSubmittedSerial()},
         {"completedSubmissionSerial",
          frameSync_->completedSubmissionSerial()},
