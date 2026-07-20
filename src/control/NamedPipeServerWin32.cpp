@@ -136,9 +136,12 @@ ControlJson parseRequest(const std::string &payload,
 #endif
 
 struct NamedPipeServerWin32::Impl {
-    explicit Impl(RuntimeCommandQueue &commandQueue) : queue(commandQueue) {}
+    Impl(RuntimeCommandQueue &commandQueue,
+         control::RuntimeControlEndpoint controlEndpoint)
+        : queue(commandQueue), endpoint(std::move(controlEndpoint)) {}
 
     RuntimeCommandQueue &queue;
+    control::RuntimeControlEndpoint endpoint;
     std::atomic_bool stopping{false};
     std::atomic_bool isRunning{false};
     std::thread worker;
@@ -150,7 +153,7 @@ struct NamedPipeServerWin32::Impl {
     void run() {
         isRunning = true;
         VKR_LOG_INFO("Control", "Runtime control listening on {}",
-                     control::kPipeNameUtf8);
+                     endpoint.nameUtf8);
 
         HANDLE connectEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         if (!connectEvent) {
@@ -231,8 +234,10 @@ struct NamedPipeServerWin32::Impl {
 #endif
 };
 
-NamedPipeServerWin32::NamedPipeServerWin32(RuntimeCommandQueue &queue)
-    : impl_(std::make_unique<Impl>(queue)) {}
+NamedPipeServerWin32::NamedPipeServerWin32(
+    RuntimeCommandQueue &queue,
+    control::RuntimeControlEndpoint endpoint)
+    : impl_(std::make_unique<Impl>(queue, std::move(endpoint))) {}
 
 NamedPipeServerWin32::~NamedPipeServerWin32() {
     stop();
@@ -251,7 +256,7 @@ bool NamedPipeServerWin32::start() {
     }
 
     impl_->pipe = CreateNamedPipeW(
-        control::kPipeName,
+        impl_->endpoint.name.c_str(),
         PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED |
             FILE_FLAG_FIRST_PIPE_INSTANCE,
         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |

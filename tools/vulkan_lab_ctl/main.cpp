@@ -1,44 +1,26 @@
-#include "control/RuntimeControlProtocol.h"
+#include "control/RuntimeControlClientWin32.h"
 
 #include <json.hpp>
 
+#include <chrono>
 #include <cstdint>
-#include <optional>
 #include <iomanip>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
-
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
 
 namespace {
 
 using Json = nlohmann::json;
 
-class Handle {
-  public:
-    explicit Handle(HANDLE value = INVALID_HANDLE_VALUE) : value_(value) {}
-    ~Handle() {
-        if (value_ != INVALID_HANDLE_VALUE && value_ != nullptr)
-            CloseHandle(value_);
-    }
-    Handle(const Handle &) = delete;
-    Handle &operator=(const Handle &) = delete;
-    HANDLE get() const { return value_; }
-    bool valid() const {
-        return value_ != INVALID_HANDLE_VALUE && value_ != nullptr;
-    }
-
-  private:
-    HANDLE value_;
-};
-
 struct ParsedCommand {
     std::string method;
     Json params = Json::object();
+    vkr::control::RuntimeControlEndpoint endpoint =
+        vkr::control::makeRuntimeControlEndpoint();
     bool jsonOutput = false;
     bool waitForLoad = true;
     bool force = false;
@@ -48,7 +30,7 @@ struct ParsedCommand {
 void printUsage() {
     std::cerr
         << "Usage:\n"
-        << "  VulkanLabCtl [--json] ping|info|quit\n"
+        << "  VulkanLabCtl [--pipe <suffix>] [--json] ping|info|quit\n"
         << "  VulkanLabCtl [--json] scene list|current|reload\n"
         << "  VulkanLabCtl [--json] [--no-wait] scene load <name>\n"
         << "  VulkanLabCtl [--json] load status [task-id]\n"
@@ -85,22 +67,32 @@ ParsedCommand parseCommand(int argc, char **argv) {
     bool waitForLoad = true;
     bool force = false;
     bool loadAfter = false;
+    std::string pipeSuffix;
     for (int i = 1; i < argc; ++i) {
-        if (std::string(argv[i]) == "--json")
+        const std::string argument = argv[i];
+        if (argument == "--pipe") {
+            if (++i >= argc)
+                throw std::invalid_argument("--pipe requires a suffix");
+            pipeSuffix = argv[i];
+            if (pipeSuffix.empty())
+                throw std::invalid_argument(
+                    "--pipe requires a non-empty suffix");
+        } else if (argument == "--json")
             jsonOutput = true;
-        else if (std::string(argv[i]) == "--no-wait")
+        else if (argument == "--no-wait")
             waitForLoad = false;
-        else if (std::string(argv[i]) == "--force")
+        else if (argument == "--force")
             force = true;
-        else if (std::string(argv[i]) == "--load-after")
+        else if (argument == "--load-after")
             loadAfter = true;
         else
-            args.emplace_back(argv[i]);
+            args.push_back(argument);
     }
     if (args.empty())
         throw std::invalid_argument("missing command");
 
     ParsedCommand parsed;
+    parsed.endpoint = vkr::control::makeRuntimeControlEndpoint(pipeSuffix);
     parsed.jsonOutput = jsonOutput;
     parsed.waitForLoad = waitForLoad;
     parsed.force = force;
@@ -179,69 +171,6 @@ ParsedCommand parseCommand(int argc, char **argv) {
     return parsed;
 }
 
-bool writeExact(HANDLE pipe, const void *data, DWORD size) {
-    const auto *bytes = static_cast<const unsigned char *>(data);
-    DWORD completed = 0;
-    while (completed < size) {
-        DWORD written = 0;
-        if (!WriteFile(pipe, bytes + completed, size - completed, &written,
-                       nullptr) ||
-            written == 0) {
-            return false;
-        }
-        completed += written;
-    }
-    return true;
-}
-
-bool readExact(HANDLE pipe, void *data, DWORD size) {
-    auto *bytes = static_cast<unsigned char *>(data);
-    DWORD completed = 0;
-    while (completed < size) {
-        DWORD read = 0;
-        if (!ReadFile(pipe, bytes + completed, size - completed, &read,
-                      nullptr) ||
-            read == 0) {
-            return false;
-        }
-        completed += read;
-    }
-    return true;
-}
-
-Json sendRequest(const Json &request) {
-    if (!WaitNamedPipeW(vkr::control::kPipeName, 5000))
-        throw std::runtime_error(
-            "VulkanLab runtime control pipe is unavailable");
-
-    Handle pipe(CreateFileW(vkr::control::kPipeName,
-                            GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-                            OPEN_EXISTING, 0, nullptr));
-    if (!pipe.valid())
-        throw std::runtime_error("failed to connect to VulkanLab runtime "
-                                 "control pipe");
-
-    const std::string payload = request.dump();
-    if (payload.empty() || payload.size() > vkr::control::kMaxMessageBytes)
-        throw std::runtime_error("request exceeds protocol message limit");
-    const uint32_t length = static_cast<uint32_t>(payload.size());
-    if (!writeExact(pipe.get(), &length, sizeof(length)) ||
-        !writeExact(pipe.get(), payload.data(), length)) {
-        throw std::runtime_error("failed to write runtime control request");
-    }
-
-    uint32_t responseLength = 0;
-    if (!readExact(pipe.get(), &responseLength, sizeof(responseLength)) ||
-        responseLength == 0 ||
-        responseLength > vkr::control::kMaxMessageBytes) {
-        throw std::runtime_error("invalid runtime control response size");
-    }
-    std::string responsePayload(responseLength, '\0');
-    if (!readExact(pipe.get(), responsePayload.data(), responseLength))
-        throw std::runtime_error("failed to read runtime control response");
-    return Json::parse(responsePayload);
-}
-
 std::optional<uint64_t> loadTaskId(const Json &result) {
     if (result.contains("taskId") && result["taskId"].is_number_unsigned())
         return result["taskId"].get<uint64_t>();
@@ -252,14 +181,15 @@ std::optional<uint64_t> loadTaskId(const Json &result) {
     return std::nullopt;
 }
 
-Json waitForLoad(uint64_t taskId) {
+Json waitForLoad(const vkr::RuntimeControlClientWin32 &client,
+                 uint64_t taskId) {
     for (;;) {
-        Sleep(100);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
         const Json request = {
             {"id", 2},
             {"method", "load.status"},
             {"params", {{"taskId", taskId}}}};
-        const Json response = sendRequest(request);
+        const Json response = client.send(request);
         if (!response.value("ok", false))
             return response;
         const Json &result = response.at("result");
@@ -380,10 +310,11 @@ void printHuman(const std::string &method, const Json &result) {
 int main(int argc, char **argv) {
     try {
         const ParsedCommand command = parseCommand(argc, argv);
+        const vkr::RuntimeControlClientWin32 client(command.endpoint);
         const Json request = {{"id", 1},
                               {"method", command.method},
                               {"params", command.params}};
-        Json response = sendRequest(request);
+        Json response = client.send(request);
 
         const bool startsLoad = command.method == "scene.load" ||
                                 command.method == "scene.reload" ||
@@ -393,7 +324,7 @@ int main(int argc, char **argv) {
             startsLoad) {
             const auto taskId = loadTaskId(response.at("result"));
             if (taskId)
-                response = waitForLoad(*taskId);
+                response = waitForLoad(client, *taskId);
         }
 
         if (command.jsonOutput)

@@ -567,6 +567,10 @@ Application::Application(const Config &config, ProjectContext projectContext,
     sceneRegistry_ = buildSceneRegistry(catalog_, projectContext_, config_);
     sceneImportUi_ = std::make_unique<SceneImportUiState>();
     sceneAssetOperations_ = std::make_unique<SceneAssetOperationState>();
+    runtimeControlPipeName_ =
+        control::makeRuntimeControlEndpoint(
+            config_.diagnostics.runtimePipeSuffix)
+            .nameUtf8;
 }
 
 Application::~Application() {
@@ -602,8 +606,9 @@ void Application::run() {
     init();
     if (config_.enableRuntimeControl) {
         runtimeCommandQueue_ = std::make_unique<RuntimeCommandQueue>();
-        runtimeControlServer_ =
-            std::make_unique<NamedPipeServerWin32>(*runtimeCommandQueue_);
+        runtimeControlServer_ = std::make_unique<NamedPipeServerWin32>(
+            *runtimeCommandQueue_, control::makeRuntimeControlEndpoint(
+                                       config_.diagnostics.runtimePipeSuffix));
         runtimeControlServer_->start();
     } else {
         VKR_LOG_INFO(
@@ -1353,7 +1358,7 @@ ControlJson Application::runtimeSystemInfo() {
         {"application", "VulkanLab"},
         {"protocolVersion", control::kProtocolVersion},
         {"capabilities", std::move(capabilities)},
-        {"pipe", control::kPipeNameUtf8},
+        {"pipe", runtimeControlPipeName_},
         {"scene", currentScene_ && currentSceneIndex_ >= 0
                       ? ControlJson(sceneRegistry_[currentSceneIndex_].name)
                       : ControlJson(nullptr)},

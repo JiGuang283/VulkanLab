@@ -173,6 +173,7 @@ class Application final : public RuntimeControlHost {
     std::unique_ptr<NamedPipeServerWin32> runtimeControlServer_;
     RuntimeCommandDispatcher runtimeCommandDispatcher_;
     std::shared_ptr<RuntimeCommand> pendingQuitCommand_;
+    std::string runtimeControlPipeName_;
     std::unique_ptr<SceneImportUiState> sceneImportUi_;
     uint64_t lastCaptureTaskId_ = 0;
     bool captureIncludeGui_ = false;

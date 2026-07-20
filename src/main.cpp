@@ -2,6 +2,7 @@
 #include "assets/DerivedAssetPaths.h"
 #include "assets/ProjectContext.h"
 #include "assets/SceneCatalog.h"
+#include "control/RuntimeControlProtocol.h"
 #include "core/Log.h"
 
 #include <cstdlib>
@@ -16,12 +17,16 @@ namespace {
 
 void printUsage(std::ostream &out) {
     out << "Usage: VulkanLab.exe [--project <path>] [--runtime-control] "
+           "[--runtime-control-pipe <suffix>] "
            "[--asset-mode <mode>] [--cache-root <path>] [diagnostics] "
            "[--help]\n"
         << "\n"
         << "Options:\n"
         << "  --runtime-control  Enable the local VulkanLabCtl named-pipe "
            "interface.\n"
+        << "  --runtime-control-pipe <suffix>  Use "
+           "\\\\.\\pipe\\VulkanLab.<suffix>; ASCII letters, digits, '-' "
+           "and '_' only.\n"
         << "  --project <path>   Use the source project and writable scene "
            "catalog at <path>.\n"
         << "  --asset-mode <mode>  ondemand, readonly, or cooked-only.\n"
@@ -41,6 +46,16 @@ bool parseArguments(int argc, char **argv, vkr::Config &config) {
         const std::string argument = argv[i];
         if (argument == "--runtime-control") {
             config.enableRuntimeControl = true;
+        } else if (argument == "--runtime-control-pipe") {
+            if (++i >= argc)
+                throw std::invalid_argument(
+                    "--runtime-control-pipe requires a suffix");
+            const std::string suffix = argv[i];
+            if (suffix.empty())
+                throw std::invalid_argument(
+                    "--runtime-control-pipe requires a non-empty suffix");
+            vkr::control::makeRuntimeControlEndpoint(suffix);
+            config.diagnostics.runtimePipeSuffix = suffix;
         } else if (argument == "--automation") {
             config.diagnostics.automationMode = true;
         } else if (argument == "--window-size") {

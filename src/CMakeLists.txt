@@ -69,8 +69,10 @@ target_link_libraries(vkl_asset_runtime
 
 add_library(vkl_control STATIC
     control/NamedPipeServerWin32.cpp
+    control/RuntimeControlClientWin32.cpp
     control/RuntimeCommand.cpp
     control/RuntimeCommandDispatcher.cpp
+    control/RuntimeControlProtocol.cpp
 )
 add_library(VulkanLab::Control ALIAS vkl_control)
 target_include_directories(vkl_control PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")

@@ -21,6 +21,7 @@ void runAssetImportManagerTests();
 void runAssetLoadCoordinatorTests();
 void runSceneCatalogEditorTests();
 void runRuntimeCommandDispatcherTests();
+void runRuntimeControlProtocolTests();
 void runBuildInfoTests();
 void runDiagnosticsConfigTests();
 void runSubmissionSerialTrackerTests();
@@ -144,6 +145,7 @@ int main() {
         runAssetLoadCoordinatorTests();
         runSceneCatalogEditorTests();
         runRuntimeCommandDispatcherTests();
+        runRuntimeControlProtocolTests();
         runBuildInfoTests();
         runDiagnosticsConfigTests();
         runSubmissionSerialTrackerTests();

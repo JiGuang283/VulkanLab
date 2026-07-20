@@ -12,6 +12,7 @@ add_executable(VulkanLabCpuTests
     AssetLoadCoordinatorTests.cpp
     SceneCatalogEditorTests.cpp
     RuntimeCommandDispatcherTests.cpp
+    RuntimeControlProtocolTests.cpp
     BuildInfoTests.cpp
     DiagnosticsConfigTests.cpp
     SubmissionSerialTrackerTests.cpp
