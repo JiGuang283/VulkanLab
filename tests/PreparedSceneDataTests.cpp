@@ -24,6 +24,7 @@ void runRuntimeCommandDispatcherTests();
 void runBuildInfoTests();
 void runDiagnosticsConfigTests();
 void runSubmissionSerialTrackerTests();
+void runCaptureTests();
 
 namespace {
 
@@ -146,6 +147,7 @@ int main() {
         runBuildInfoTests();
         runDiagnosticsConfigTests();
         runSubmissionSerialTrackerTests();
+        runCaptureTests();
         std::cout << "VulkanLab CPU tests passed\n";
         return 0;
     } catch (const std::exception &error) {

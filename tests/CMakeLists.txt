@@ -15,6 +15,7 @@ add_executable(VulkanLabCpuTests
     BuildInfoTests.cpp
     DiagnosticsConfigTests.cpp
     SubmissionSerialTrackerTests.cpp
+    CaptureTests.cpp
 )
 target_link_libraries(VulkanLabCpuTests PRIVATE
     vkl_build_options
