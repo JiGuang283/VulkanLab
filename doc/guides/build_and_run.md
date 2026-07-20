@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-20
-> Verified against: `a25f8ad`
+> Verified against: `4bcabe9`
 
 ## 环境要求
 
@@ -28,6 +28,7 @@ ctest --preset windows-msvc-test
 
 cmake --preset windows-msvc-release
 cmake --build --preset windows-msvc-release
+ctest --test-dir build/windows-msvc-release -C Release --output-on-failure
 ```
 
 Debug 和 Release 分别使用 `build/windows-msvc-debug/` 与 `build/windows-msvc-release/`。也可以继续使用自定义 build 目录，首次配置：
@@ -67,6 +68,22 @@ build/Release/VulkanLabCtl.exe
 build-debug/Debug/VulkanLabAssetTool.exe
 build/Release/VulkanLabAssetTool.exe
 ```
+
+开发构建还会生成独立视觉测试程序，它不进入 Cook package：
+
+```text
+build/windows-msvc-debug/Debug/VulkanLabRenderTest.exe
+build/windows-msvc-release/Release/VulkanLabRenderTest.exe
+```
+
+需要 GPU 和可呈现窗口的 smoke/golden 测试使用 `visual` 标签；纯 CPU、资产和 package 测试使用 `unit` 标签：
+
+```powershell
+ctest --preset windows-msvc-test -L unit --output-on-failure
+ctest --preset windows-msvc-test -L visual --output-on-failure
+```
+
+规格、结果目录、错误码和基线审核流程见[自动视觉回归](visual_regression.md)。
 
 ## 启动
 

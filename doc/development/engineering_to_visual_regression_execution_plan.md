@@ -1,8 +1,8 @@
 # 工程基础到自动视觉回归执行计划
 
 > Status: Active
-> Last verified: 2026-07-19
-> Verified against: `9dc1dab`
+> Last verified: 2026-07-20
+> Verified against: `4bcabe9`
 
 ## Summary
 
@@ -1073,6 +1073,24 @@ Release `desktop_1024` Main Sponza package：
 - Release CookedOnly 最小包 verify 通过：21 个文件、5,078,599 bytes。Runtime Control v3 可查询状态，但不声明 capture capability；截图明确返回 `capture_disabled`，随后正常退出。
 - 当前 capture/control 路径没有新增 `vkQueueWaitIdle()`、`vkDeviceWaitIdle()` 或服务端未来帧等待。运行日志无 error、critical、`SYNC-HAZARD` 或新增 validation message，只保留既有 Legacy Forward location 3 未消费 warning。
 
+## M7 Verification Record
+
+> Completed: 2026-07-20
+
+- 新增独立 `VulkanLabRenderTest.exe`。PE dependency 检查只包含 Windows/MSVC runtime 依赖，不链接 Vulkan、Application 或 Renderer；渲染器由 Win32 Job Object 托管，正常先执行 `app.quit`，异常和超时终止完整进程树。
+- Test Spec v1 使用稳定 scene/profile ID，并严格拒绝未知字段、非法 viewport/fixed delta、缺失 golden 字段和 `--accept` 用于 smoke。CPU tests 覆盖 spec、RGBA comparator、路径、进程参数和受控进程生命周期。
+- Runner 报告包含 Runtime Control 步骤、BuildInfo、GPU、Shader SPIR-V hash、LoadStats、截图 timing、smoke/golden 指标、首个错误和 cleanup；失败保留 renderer log/stdio、actual PNG，尺寸匹配的 golden 失败额外保留 diff PNG。
+- Debug 和 Release clean build 通过。批准 baseline 后，两种配置完整 CTest 均为 9/9：5 项 `unit`/asset/package、3 项 smoke 和 1 项 Viking golden；Debug/Release golden 又分别连续运行两次通过。
+- 三项快速 smoke 为 Viking Room + Legacy Forward、Sheen Chair + PBR-lite NormalMapped、Sheen Chair + Debug BaseColor。日志没有 error、critical、`SYNC-HAZARD` 或新增 validation error。
+- 故障注入分别验证 `renderer_not_found`、`renderer_start_failed`、`load_failed`、`capture_timeout`、`smoke_compare_failed`、`golden_compare_failed`、`quit_timeout` 和 `renderer_crash`。失败后无残留 VulkanLab、RenderTest、Ctl、AssetTool 或 ktx 进程。
+- 两个 Runner 并行运行使用不同 pipe、capture root 和 result root，均正常完成。带中文和空格的 project/spec/output/capture 路径端到端通过。
+- 默认 VulkanLab 不启用 Runtime Control，客户端 ping 返回 `2`，日志记录 disabled，退出后无残留进程。Cook package 文件集合明确排除 RenderTest、tests/goldens/captures、开发文档和源 GLSL。
+- 同 GPU 的两张批准前候选图差异为 MAE `0.002315`、RMSE `0.08859`、坏像素比例 `0.00013125`，低于阈值。用户审核并批准 Viking Room Legacy Forward 候选后，以显式 `--accept` 生成 commit `6bd2e1d` 中的 baseline 和 metadata。
+- 正式 baseline 为 800×600、SHA-256 `60c3435f94b259c7cfc679bbf8255a76566d32aadb1c906bbc143a326f05ab62`，reference GPU 为 NVIDIA GeForce RTX 4060 Laptop GPU。批准截图相对候选图 MAE `0.001749`、RMSE `0.06823`、坏像素比例 `0.000075`。
+- 修改临时 baseline 的 9.01% 像素后，Runner 返回 `golden_compare_failed`，MAE `9.3328`，并保留 actual/diff；修改临时 metadata 为不同 vendor/device 后，smoke 通过、golden 返回 `reference_gpu_mismatch` 和进程退出码 `125`。两项测试都未修改正式 baseline。
+- Main Sponza 扩展 smoke 首次发现 spec 的 `desktop_1024` 只校验 profile ID、没有应用其 texture limit。commit `4bcabe9` 让 `scene.list` 返回 profile texture limit，并由 Runner 在加载前设置和回读验证。修复后 Release smoke 为 75 textures、405 meshes、72/72 derived hits、96 MiB texture estimate、279.74 MiB VMA allocation delta，总运行约 3.47 s；报告中的 requested/load texture limit 均为 1024。
+- profile 修复后 Debug 完整 CTest 9/9 通过。Release 首轮仅遇到既有 CatalogImport staging rename 瞬时文件锁；该测试隔离重试通过，随后 Release 完整 CTest 9/9 通过。
+
 ## Implementation Record
 
 | Milestone | Status | Commit(s) | Verification | Notes |
@@ -1084,4 +1102,4 @@ Release `desktop_1024` Main Sponza package：
 | M4 | Complete | `2215023`, `7747968`, `dca6ddb`, `ce98b26`, M4 closeout commit containing this row | Preset Debug/Release clean builds; CTest 5/5 each; Runtime Control v2 snapshots; default/automation/CookedOnly runtime; package verify | Runtime pipe suffix and capture commands remain intentionally pending for M5/M6. One transient Windows staging-directory rename failure passed on isolated retry and full-suite retry. |
 | M5 | Complete | `9587c85`, `17cdb20`, `b925b2d`, `7f3ed11`, M5 closeout commit containing this row | Debug/Release build; CTest 5/5 each; Viking/Sheen capture; resize/minimize/continuous/GUI-exclusion smoke; manual synchronization validation | Capture is asynchronous, bounded, format-gated and submission-serial driven; no screenshot queue/device idle. |
 | M6 | Complete | `b19e7c3`, `df95807`, `8cffc9d`, `a25f8ad`, `9e03157`, M6 closeout commit containing this row | Debug/Release build; CTest 5/5 each; default and dual-instance endpoints; malformed/oversize protocol; camera/render wait; scene-to-capture E2E; CookedOnly capability gate; clean quit | Runtime Control v3 is client-polled and instance-isolated; capture paths remain confined and no server-side future-frame wait was introduced. |
-| M7 | Not started | | | |
+| M7 | Complete | `9b53805`, `a314984`, `6bd2e1d`, `4bcabe9`, M7 closeout commit containing this row | Debug/Release clean build; CTest 9/9 each; three smoke; repeated Viking golden; failure injection; cross-GPU skip; parallel/Unicode path; package exclusion; user-approved baseline; Main Sponza profile smoke | Runner is process-isolated and does not link Vulkan; default runs never overwrite golden. |

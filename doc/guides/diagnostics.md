@@ -2,9 +2,9 @@
 
 > Status: Current
 > Last verified: 2026-07-20
-> Verified against: `a25f8ad`
+> Verified against: `4bcabe9`
 
-本文说明当前可用的构建诊断信息、确定性启动参数、独立 Runtime Control endpoint 和截图输出。自动视觉回归 runner 尚未完成，相关内容在文末明确标记为 Pending。
+本文说明当前可用的构建诊断信息、确定性启动参数、独立 Runtime Control endpoint 和截图输出。端到端 smoke/golden 编排见[自动视觉回归](visual_regression.md)。
 
 ## CMake Presets
 
@@ -84,14 +84,10 @@ Debug 和 Release 分别写入 `build/windows-msvc-debug/` 与 `build/windows-ms
 - `capture.screenshot/status/cancel` 与异步 PNG 输出；
 - `--runtime-control-pipe <suffix>` 和多实例隔离；
 - `system.info.protocolVersion = 3` 和按实例声明的 capability 列表。
+- 独立 `VulkanLabRenderTest`、CPU PNG comparator、JSON 报告和 diff PNG；
+- 受 GPU identity 约束、只能通过 `--accept` 更新的 golden baseline 流程。
 
-以下能力仍为 **Pending**：
-
-- `VulkanLabRenderTest` runner；
-- PNG comparator、diff/heatmap 和 JSON/JUnit 报告；
-- golden baseline 的显式 approve/update 流程。
-
-截图是异步任务。`capture.screenshot` 返回 task ID 后，调用者必须轮询 `capture.status` 并确认 `state=Completed`，不能只根据目标文件是否暂时存在判断成功。完整命令和协议见 [Runtime Control](runtime_control.md)。
+截图是异步任务。`capture.screenshot` 返回 task ID 后，调用者必须轮询 `capture.status` 并确认 `state=Completed`，不能只根据目标文件是否暂时存在判断成功。完整命令和协议见 [Runtime Control](runtime_control.md)；一般测试应直接使用 RenderTest runner。
 
 ## 参数校验
 

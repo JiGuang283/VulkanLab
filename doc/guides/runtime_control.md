@@ -2,9 +2,9 @@
 
 > Status: Current
 > Last verified: 2026-07-20
-> Verified against: `a25f8ad`
+> Verified against: `4bcabe9`
 
-Runtime Control 通过 Windows Named Pipe 控制已经运行的 VulkanLab。它面向本机开发、诊断和自动化，可以查询状态、加载场景、设置相机和 Shader、等待渲染稳定、异步截图并安全退出程序。
+Runtime Control 通过 Windows Named Pipe 控制已经运行的 VulkanLab。它面向本机开发、诊断和自动化，可以查询状态、加载场景、设置相机和 Shader、等待渲染稳定、异步截图并安全退出程序。`scene.list.entries[]` 同时返回稳定 scene ID、Catalog profile ID 和该 profile 的纹理限制。
 
 Runtime Control 默认关闭。启用时必须显式传入 `--runtime-control`；Named Pipe 拒绝远程客户端，不开放网络端口。
 
@@ -223,7 +223,7 @@ try {
 }
 ```
 
-M7 会把这段编排固化为 `VulkanLabRenderTest`，当前脚本仍需自行检查每条命令的 `$LASTEXITCODE`。
+日常 smoke/golden 测试应使用已经固化这段编排的 `VulkanLabRenderTest`；手写脚本仍需自行检查每条命令的 `$LASTEXITCODE`。规格和报告说明见[自动视觉回归](visual_regression.md)。
 
 ## 返回码
 
