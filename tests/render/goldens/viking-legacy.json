@@ -1,0 +1,42 @@
+{
+  "acceptedAtUtc": "2026-07-20T15:40:58Z",
+  "build": {
+    "compiler": "MSVC 19.44.35226.0",
+    "configuration": "Debug",
+    "dirty": false,
+    "glslc": "shaderc v2023.8 v2025.5",
+    "revision": "a3149841d63784310c379114982ee82b15815f55",
+    "vulkanSdk": "1.4.335"
+  },
+  "gpu": {
+    "apiVersion": 4211029,
+    "deviceId": 10464,
+    "deviceType": 2,
+    "driverVersion": 2559541248,
+    "name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "vendorId": 4318
+  },
+  "image": {
+    "height": 600,
+    "sha256": "60c3435f94b259c7cfc679bbf8255a76566d32aadb1c906bbc143a326f05ab62",
+    "width": 800
+  },
+  "schemaVersion": 1,
+  "shaderInfo": {
+    "fragmentSha256": "a771aa7be4bd8635b4d203ae9a18ac992e238b51e84dda34592486acab20ee88",
+    "name": "Legacy Forward",
+    "vertexSha256": "86f30b917af869c8a37c45a43fa04651e730ec894ab29e8859afb78c21ad387b"
+  },
+  "spec": {
+    "fixedDelta": 1e-06,
+    "includeGui": false,
+    "name": "viking-legacy-golden",
+    "profileId": "desktop_2048",
+    "sceneId": "viking-room",
+    "shader": "Legacy Forward",
+    "viewport": [
+      800,
+      600
+    ]
+  }
+}
