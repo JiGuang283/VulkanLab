@@ -3,6 +3,7 @@
 #include <json.hpp>
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
@@ -25,6 +26,9 @@ struct ParsedCommand {
     bool waitForLoad = true;
     bool force = false;
     bool loadAfter = false;
+    bool renderWait = false;
+    uint32_t stableFrames = 8;
+    uint32_t timeoutMs = 30000;
 };
 
 void printUsage() {
@@ -45,7 +49,53 @@ void printUsage() {
         << "  VulkanLabCtl [--json] texture-limit set <full|512|1024|2048>\n"
         << "  VulkanLabCtl [--json] shader list|current\n"
         << "  VulkanLabCtl [--json] shader set <name>\n"
+        << "  VulkanLabCtl [--json] camera get\n"
+        << "  VulkanLabCtl [--json] camera set --position X,Y,Z --yaw Y --pitch P\n"
+        << "  VulkanLabCtl [--json] render status\n"
+        << "  VulkanLabCtl [--json] render wait [--stable-frames N] "
+           "[--timeout-ms N]\n"
         << "  VulkanLabCtl [--json] stats\n";
+}
+
+float parseFiniteFloat(const std::string &value, const char *name) {
+    size_t consumed = 0;
+    const float parsed = std::stof(value, &consumed);
+    if (consumed != value.size() || !std::isfinite(parsed))
+        throw std::invalid_argument(std::string(name) +
+                                    " must be a finite number");
+    return parsed;
+}
+
+Json parsePosition(const std::string &value) {
+    Json result = Json::array();
+    size_t start = 0;
+    for (size_t component = 0; component < 3; ++component) {
+        const size_t separator = value.find(',', start);
+        if ((component < 2 && separator == std::string::npos) ||
+            (component == 2 && separator != std::string::npos)) {
+            throw std::invalid_argument(
+                "--position must use the form X,Y,Z");
+        }
+        const size_t end = separator == std::string::npos
+                               ? value.size()
+                               : separator;
+        if (end == start)
+            throw std::invalid_argument(
+                "--position must use the form X,Y,Z");
+        result.push_back(parseFiniteFloat(
+            value.substr(start, end - start), "--position component"));
+        start = end + 1;
+    }
+    return result;
+}
+
+uint32_t parsePositiveUint32(const std::string &value, const char *name) {
+    size_t consumed = 0;
+    const unsigned long long parsed = std::stoull(value, &consumed);
+    if (consumed != value.size() || parsed == 0 || parsed > UINT32_MAX)
+        throw std::invalid_argument(std::string(name) +
+                                    " must be in 1..4294967295");
+    return static_cast<uint32_t>(parsed);
 }
 
 uint32_t parseTextureLimit(const std::string &value) {
@@ -68,6 +118,11 @@ ParsedCommand parseCommand(int argc, char **argv) {
     bool force = false;
     bool loadAfter = false;
     std::string pipeSuffix;
+    std::optional<std::string> position;
+    std::optional<std::string> yaw;
+    std::optional<std::string> pitch;
+    std::optional<std::string> stableFrames;
+    std::optional<std::string> timeoutMs;
     for (int i = 1; i < argc; ++i) {
         const std::string argument = argv[i];
         if (argument == "--pipe") {
@@ -79,6 +134,23 @@ ParsedCommand parseCommand(int argc, char **argv) {
                     "--pipe requires a non-empty suffix");
         } else if (argument == "--json")
             jsonOutput = true;
+        else if (argument == "--position" || argument == "--yaw" ||
+                 argument == "--pitch" ||
+                 argument == "--stable-frames" ||
+                 argument == "--timeout-ms") {
+            if (++i >= argc)
+                throw std::invalid_argument(argument + " requires a value");
+            if (argument == "--position")
+                position = argv[i];
+            else if (argument == "--yaw")
+                yaw = argv[i];
+            else if (argument == "--pitch")
+                pitch = argv[i];
+            else if (argument == "--stable-frames")
+                stableFrames = argv[i];
+            else
+                timeoutMs = argv[i];
+        }
         else if (argument == "--no-wait")
             waitForLoad = false;
         else if (argument == "--force")
@@ -97,6 +169,11 @@ ParsedCommand parseCommand(int argc, char **argv) {
     parsed.waitForLoad = waitForLoad;
     parsed.force = force;
     parsed.loadAfter = loadAfter;
+    if (stableFrames)
+        parsed.stableFrames =
+            parsePositiveUint32(*stableFrames, "--stable-frames");
+    if (timeoutMs)
+        parsed.timeoutMs = parsePositiveUint32(*timeoutMs, "--timeout-ms");
     if (args == std::vector<std::string>{"ping"}) {
         parsed.method = "system.ping";
     } else if (args == std::vector<std::string>{"info"}) {
@@ -165,6 +242,22 @@ ParsedCommand parseCommand(int argc, char **argv) {
                args[1] == "set") {
         parsed.method = "shader.set";
         parsed.params = {{"name", args[2]}};
+    } else if (args == std::vector<std::string>{"camera", "get"}) {
+        parsed.method = "camera.get";
+    } else if (args == std::vector<std::string>{"camera", "set"}) {
+        if (!position || !yaw || !pitch) {
+            throw std::invalid_argument(
+                "camera set requires --position, --yaw, and --pitch");
+        }
+        parsed.method = "camera.set";
+        parsed.params = {{"position", parsePosition(*position)},
+                         {"yaw", parseFiniteFloat(*yaw, "--yaw")},
+                         {"pitch", parseFiniteFloat(*pitch, "--pitch")}};
+    } else if (args == std::vector<std::string>{"render", "status"}) {
+        parsed.method = "render.status";
+    } else if (args == std::vector<std::string>{"render", "wait"}) {
+        parsed.method = "render.status";
+        parsed.renderWait = true;
     } else {
         throw std::invalid_argument("unknown or incomplete command");
     }
@@ -196,6 +289,86 @@ Json waitForLoad(const vkr::RuntimeControlClientWin32 &client,
         if (result.value("terminal", false))
             return response;
     }
+}
+
+bool terminalLoadFailed(const Json &load) {
+    if (!load.is_object() || !load.value("terminal", false))
+        return false;
+    const std::string state = load.value("state", std::string{});
+    return state == "Failed" || state == "Cancelled";
+}
+
+Json waitForRender(const vkr::RuntimeControlClientWin32 &client,
+                   uint32_t stableFrameTarget, uint32_t timeoutMs) {
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeoutMs);
+    std::optional<uint64_t> generation;
+    uint64_t lastPresented = 0;
+    uint64_t stableFrames = 0;
+    bool sawMinimized = false;
+    uint64_t requestId = 1;
+
+    while (std::chrono::steady_clock::now() < deadline) {
+        const Json response =
+            client.invoke(requestId++, "render.status");
+        if (!response.value("ok", false))
+            return response;
+        const Json &status = response.at("result");
+
+        Json load = status.value("loadTask", Json(nullptr));
+        if (load.is_object() && !load.value("terminal", false) &&
+            load.contains("taskId")) {
+            const Json loadResponse = client.invoke(
+                requestId++, "load.status",
+                {{"taskId", load.at("taskId")}});
+            if (!loadResponse.value("ok", false))
+                return loadResponse;
+            load = loadResponse.at("result");
+        }
+        if (terminalLoadFailed(load)) {
+            return vkr::makeRuntimeError(
+                1, "render_load_failed",
+                "Scene load reached terminal state " +
+                    load.value("state", std::string("Unknown")) + ".");
+        }
+
+        const uint64_t currentGeneration =
+            status.value("sceneGeneration", uint64_t{0});
+        const uint64_t presented =
+            status.value("presentedFrames", uint64_t{0});
+        const bool minimized = status.value("minimized", false);
+        sawMinimized = sawMinimized || minimized;
+        const bool loadReady =
+            load.is_null() || load.value("terminal", false);
+        const bool ready = status.value("rendering", false) && loadReady &&
+                           status.value("pendingUpload", uint64_t{0}) == 0 &&
+                           !minimized &&
+                           !status.value("swapchainRecreatePending", false);
+
+        if (!generation || *generation != currentGeneration ||
+            presented < lastPresented || !ready) {
+            stableFrames = 0;
+        } else {
+            stableFrames += presented - lastPresented;
+        }
+        generation = currentGeneration;
+        lastPresented = presented;
+
+        if (ready && stableFrames >= stableFrameTarget) {
+            Json result = status;
+            result["stable"] = true;
+            result["stableFrames"] = stableFrames;
+            result["stableFrameTarget"] = stableFrameTarget;
+            return vkr::makeRuntimeSuccess(1, std::move(result));
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    return vkr::makeRuntimeError(
+        1, sawMinimized ? "window_not_rendering" : "render_wait_timeout",
+        sawMinimized
+            ? "The window was minimized and did not present stable frames."
+            : "Timed out waiting for stable presented frames.");
 }
 
 void printStats(const Json &stats) {
@@ -296,6 +469,40 @@ void printHuman(const std::string &method, const Json &result) {
                   << " MiB\n";
     } else if (method == "shader.set") {
         std::cout << result.at("shader").get<std::string>() << '\n';
+    } else if (method == "camera.get" || method == "camera.set") {
+        const auto &position = result.at("position");
+        std::cout << std::fixed << std::setprecision(3) << "position: "
+                  << position.at(0).get<float>() << ", "
+                  << position.at(1).get<float>() << ", "
+                  << position.at(2).get<float>() << '\n'
+                  << "yaw: " << result.at("yaw").get<float>()
+                  << ", pitch: " << result.at("pitch").get<float>()
+                  << '\n';
+    } else if (method == "render.status") {
+        const Json &scene = result.at("scene");
+        std::cout << "scene: "
+                  << (scene.is_object()
+                          ? scene.at("name").get<std::string>()
+                          : std::string("<none>"))
+                  << ", generation: "
+                  << result.at("sceneGeneration").get<uint64_t>() << '\n'
+                  << "frames: "
+                  << result.at("presentedFrames").get<uint64_t>()
+                  << ", submitted/completed: "
+                  << result.at("frameSerial").get<uint64_t>() << "/"
+                  << result.at("completedSubmissionSerial").get<uint64_t>()
+                  << ", pending upload: "
+                  << result.at("pendingUpload").get<uint64_t>() << '\n'
+                  << "rendering: " << std::boolalpha
+                  << result.at("rendering").get<bool>()
+                  << ", minimized: "
+                  << result.at("minimized").get<bool>() << '\n';
+        if (result.value("stable", false)) {
+            std::cout << "stable frames: "
+                      << result.at("stableFrames").get<uint64_t>() << "/"
+                      << result.at("stableFrameTarget").get<uint32_t>()
+                      << '\n';
+        }
     } else if (method == "stats.last_load") {
         printStats(result);
     } else if (method == "app.quit") {
@@ -311,10 +518,11 @@ int main(int argc, char **argv) {
     try {
         const ParsedCommand command = parseCommand(argc, argv);
         const vkr::RuntimeControlClientWin32 client(command.endpoint);
-        const Json request = {{"id", 1},
-                              {"method", command.method},
-                              {"params", command.params}};
-        Json response = client.send(request);
+        Json response = command.renderWait
+                            ? waitForRender(client, command.stableFrames,
+                                            command.timeoutMs)
+                            : client.invoke(1, command.method,
+                                            command.params);
 
         const bool startsLoad = command.method == "scene.load" ||
                                 command.method == "scene.reload" ||

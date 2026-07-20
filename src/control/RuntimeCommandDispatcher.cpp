@@ -2,6 +2,7 @@
 
 #include "core/Log.h"
 
+#include <cmath>
 #include <limits>
 #include <utility>
 
@@ -64,6 +65,56 @@ bool optionalBool(const RuntimeCommand &command, const char *name,
     return command.params[name].get<bool>();
 }
 
+float requiredFiniteFloat(const RuntimeCommand &command, const char *name) {
+    if (!command.params.contains(name) ||
+        !command.params[name].is_number()) {
+        throw RuntimeCommandError(
+            "invalid_params", std::string("Parameter '") + name +
+                                  "' must be a finite number.");
+    }
+    const double value = command.params[name].get<double>();
+    if (!std::isfinite(value) ||
+        value < -std::numeric_limits<float>::max() ||
+        value > std::numeric_limits<float>::max()) {
+        throw RuntimeCommandError(
+            "invalid_params", std::string("Parameter '") + name +
+                                  "' must be a finite number.");
+    }
+    return static_cast<float>(value);
+}
+
+RuntimeCameraPose requiredCameraPose(const RuntimeCommand &command) {
+    if (!command.params.contains("position") ||
+        !command.params["position"].is_array() ||
+        command.params["position"].size() != 3) {
+        throw RuntimeCommandError(
+            "invalid_params",
+            "Parameter 'position' must be an array of three finite numbers.");
+    }
+
+    RuntimeCameraPose pose;
+    for (size_t index = 0; index < pose.position.size(); ++index) {
+        const ControlJson &component = command.params["position"][index];
+        if (!component.is_number()) {
+            throw RuntimeCommandError(
+                "invalid_params",
+                "Parameter 'position' must be an array of three finite numbers.");
+        }
+        const double value = component.get<double>();
+        if (!std::isfinite(value) ||
+            value < -std::numeric_limits<float>::max() ||
+            value > std::numeric_limits<float>::max()) {
+            throw RuntimeCommandError(
+                "invalid_params",
+                "Parameter 'position' must be an array of three finite numbers.");
+        }
+        pose.position[index] = static_cast<float>(value);
+    }
+    pose.yaw = requiredFiniteFloat(command, "yaw");
+    pose.pitch = requiredFiniteFloat(command, "pitch");
+    return pose;
+}
+
 } // namespace
 
 RuntimeCommandError::RuntimeCommandError(std::string code,
@@ -118,6 +169,12 @@ RuntimeDispatchResult RuntimeCommandDispatcher::dispatch(
             result = host.runtimeShaderCurrent();
         } else if (command.method == "shader.set") {
             result = host.runtimeShaderSet(requiredString(command, "name"));
+        } else if (command.method == "camera.get") {
+            result = host.runtimeCameraGet();
+        } else if (command.method == "camera.set") {
+            result = host.runtimeCameraSet(requiredCameraPose(command));
+        } else if (command.method == "render.status") {
+            result = host.runtimeRenderStatus();
         } else if (command.method == "stats.last_load") {
             result = host.runtimeLastLoadStats();
         } else if (command.method == "app.quit") {

@@ -124,6 +124,9 @@ class Application final : public RuntimeControlHost {
     ControlJson runtimeShaderList() override;
     ControlJson runtimeShaderCurrent() override;
     ControlJson runtimeShaderSet(const std::string &name) override;
+    ControlJson runtimeCameraGet() override;
+    ControlJson runtimeCameraSet(const RuntimeCameraPose &pose) override;
+    ControlJson runtimeRenderStatus() override;
     ControlJson runtimeLastLoadStats() override;
     ControlJson runtimeQuit() override;
 
@@ -178,6 +181,8 @@ class Application final : public RuntimeControlHost {
     uint64_t lastCaptureTaskId_ = 0;
     bool captureIncludeGui_ = false;
     std::string captureUiError_;
+    uint64_t sceneGeneration_ = 0;
+    uint64_t presentedFrameCount_ = 0;
 
     // 输入模式
     InputMode  mode_ = InputMode::UI;

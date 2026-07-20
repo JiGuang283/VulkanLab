@@ -796,6 +796,7 @@ void Application::loadScene(int index, bool replaceCurrent) {
 
         currentScene_ = std::move(loadedScene);
         currentSceneIndex_ = index;
+        ++sceneGeneration_;
         if (currentScene_->initialCamera) {
             const auto &p = *currentScene_->initialCamera;
             camera_.setPosition(p.position);
@@ -956,6 +957,7 @@ void Application::updateSceneLoading() {
         if (sceneGpuBuilder_->ready()) {
             currentScene_ = sceneGpuBuilder_->takeScene();
             currentSceneIndex_ = task->sceneIndex;
+            ++sceneGeneration_;
             if (currentScene_ && currentScene_->initialCamera) {
                 const auto &pose = *currentScene_->initialCamera;
                 camera_.setPosition(pose.position);
@@ -1349,7 +1351,8 @@ ControlJson Application::runtimeSystemInfo() {
     if (config_.diagnostics.fixedDeltaSeconds)
         fixedDelta = *config_.diagnostics.fixedDeltaSeconds;
     ControlJson capabilities = {"async_scene_load", "load_status",
-                                "load_cancel", "asset_catalog"};
+                                "load_cancel", "asset_catalog",
+                                "camera_control", "render_status"};
     if (assetImportManager_) {
         capabilities.push_back("asset_import");
         capabilities.push_back("asset_cancel");
@@ -1690,6 +1693,123 @@ ControlJson Application::runtimeShaderSet(const std::string &name) {
     }
     setShaderVariant(index);
     return {{"shader", shaderVariants_[index].displayName}};
+}
+
+ControlJson Application::runtimeCameraGet() {
+    const glm::vec3 position = camera_.position();
+    return {{"position", {position.x, position.y, position.z}},
+            {"yaw", camera_.yaw()},
+            {"pitch", camera_.pitch()},
+            {"nearPlane", camera_.nearPlane()},
+            {"farPlane", camera_.farPlane()}};
+}
+
+ControlJson
+Application::runtimeCameraSet(const RuntimeCameraPose &pose) {
+    camera_.setPosition(
+        {pose.position[0], pose.position[1], pose.position[2]});
+    camera_.setYawPitch(pose.yaw, pose.pitch);
+    return runtimeCameraGet();
+}
+
+ControlJson Application::runtimeRenderStatus() {
+    const VkExtent2D framebufferExtent = window_->framebufferExtent();
+    const bool minimized = framebufferExtent.width == 0 ||
+                           framebufferExtent.height == 0;
+    const bool recreatePending = frameSync_->swapChainNeedsRecreation();
+
+    uint64_t pendingTextures = 0;
+    uint64_t pendingMeshes = 0;
+    uint64_t pendingUploads = 0;
+    uint32_t inFlightUploadBatches = 0;
+    if (sceneGpuBuilder_) {
+        pendingTextures = sceneGpuBuilder_->pendingTextureCount();
+        pendingMeshes = sceneGpuBuilder_->pendingMeshCount();
+        pendingUploads = sceneGpuBuilder_->pendingUploadCount();
+        inFlightUploadBatches =
+            sceneGpuBuilder_->inFlightUploadBatches();
+    }
+
+    ControlJson captureQueue = {{"total", 0},
+                                {"active", 0},
+                                {"queued", 0},
+                                {"recording", 0},
+                                {"waitingForGpu", 0},
+                                {"encoding", 0},
+                                {"cancelling", 0}};
+    if (captureService_) {
+        const std::vector<CaptureTaskSnapshot> tasks =
+            captureService_->tasks();
+        captureQueue["total"] = tasks.size();
+        for (const CaptureTaskSnapshot &task : tasks) {
+            if (!isTerminalCaptureTaskState(task.state)) {
+                captureQueue["active"] =
+                    captureQueue["active"].get<uint64_t>() + 1;
+            }
+            const char *field = nullptr;
+            switch (task.state) {
+            case CaptureTaskState::Queued:
+                field = "queued";
+                break;
+            case CaptureTaskState::Recording:
+                field = "recording";
+                break;
+            case CaptureTaskState::WaitingForGpu:
+                field = "waitingForGpu";
+                break;
+            case CaptureTaskState::Encoding:
+                field = "encoding";
+                break;
+            case CaptureTaskState::Cancelling:
+                field = "cancelling";
+                break;
+            case CaptureTaskState::Completed:
+            case CaptureTaskState::Failed:
+            case CaptureTaskState::Cancelled:
+                break;
+            }
+            if (field) {
+                captureQueue[field] =
+                    captureQueue[field].get<uint64_t>() + 1;
+            }
+        }
+    }
+
+    ControlJson scene = nullptr;
+    if (currentScene_ && currentSceneIndex_ >= 0) {
+        scene = {{"id", sceneRegistry_[currentSceneIndex_].id},
+                 {"name", sceneRegistry_[currentSceneIndex_].name}};
+    }
+
+    const bool captureEnabled = captureService_ != nullptr;
+    const bool captureSupported =
+        captureEnabled && swapChain_->captureSupported();
+    return {
+        {"scene", std::move(scene)},
+        {"sceneGeneration", sceneGeneration_},
+        {"loadTask", sceneLoadTaskToJson(latestSceneLoadTask_)},
+        {"frameSerial", frameSync_->lastSubmittedSerial()},
+        {"completedSubmissionSerial",
+         frameSync_->completedSubmissionSerial()},
+        {"presentedFrames", presentedFrameCount_},
+        {"pendingUpload", pendingUploads},
+        {"pendingUploadDetail",
+         {{"textures", pendingTextures},
+          {"meshes", pendingMeshes},
+          {"inFlightBatches", inFlightUploadBatches}}},
+        {"captureQueue", std::move(captureQueue)},
+        {"capture",
+         {{"enabled", captureEnabled},
+          {"supported", captureSupported},
+          {"accepting",
+           captureEnabled && captureService_->acceptingRequests()},
+          {"reason", captureEnabled && !captureSupported
+                         ? swapChain_->captureUnsupportedReason()
+                         : std::string{}}}},
+        {"guiVisible", config_.diagnostics.guiVisible},
+        {"minimized", minimized},
+        {"swapchainRecreatePending", recreatePending},
+        {"rendering", currentScene_ && !minimized && !recreatePending}};
 }
 
 ControlJson Application::runtimeLastLoadStats() {
@@ -2953,6 +3073,7 @@ void Application::mainLoop() {
                                         swapChain_->image(ctx->imageIndex));
         }
         const uint64_t submissionSerial = frameSync_->endFrame(*ctx);
+        ++presentedFrameCount_;
         if (captureSelection)
             captureService_->frameSubmitted(submissionSerial);
 

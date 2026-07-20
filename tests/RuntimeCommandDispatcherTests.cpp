@@ -1,5 +1,6 @@
 #include "control/RuntimeCommandDispatcher.h"
 
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -93,6 +94,19 @@ class FakeRuntimeHost final : public vkr::RuntimeControlHost {
                                            "host rejected shader");
         return reply("shader.set", {{"name", name}});
     }
+    vkr::ControlJson runtimeCameraGet() override {
+        return reply("camera.get");
+    }
+    vkr::ControlJson
+    runtimeCameraSet(const vkr::RuntimeCameraPose &pose) override {
+        return reply("camera.set",
+                     {{"position", pose.position},
+                      {"yaw", pose.yaw},
+                      {"pitch", pose.pitch}});
+    }
+    vkr::ControlJson runtimeRenderStatus() override {
+        return reply("render.status");
+    }
     vkr::ControlJson runtimeLastLoadStats() override {
         return reply("stats.last_load");
     }
@@ -109,7 +123,7 @@ struct DispatchCase {
     bool requestQuit = false;
 };
 
-void testAllV2Methods() {
+void testAllProtocolMethods() {
     const auto result = [](const char *action,
                            vkr::ControlJson arguments =
                                vkr::ControlJson::object()) {
@@ -150,6 +164,16 @@ void testAllV2Methods() {
         {"shader.current", {}, result("shader.current")},
         {"shader.set", {{"name", "PBR"}},
          result("shader.set", {{"name", "PBR"}})},
+        {"camera.get", {}, result("camera.get")},
+        {"camera.set",
+         {{"position", {1.0, 2.0, 3.0}},
+          {"yaw", -135.0},
+          {"pitch", -30.0}},
+         result("camera.set",
+                {{"position", {1.0f, 2.0f, 3.0f}},
+                 {"yaw", -135.0f},
+                 {"pitch", -30.0f}})},
+        {"render.status", {}, result("render.status")},
         {"stats.last_load", {}, result("stats.last_load")},
         {"app.quit", {}, result("app.quit"), true},
     };
@@ -205,6 +229,30 @@ void testValidationAndErrorMapping() {
                  "Unknown method 'missing.method'.");
     requireError("shader.set", {{"name", "host-error"}},
                  "shader_not_found", "host rejected shader");
+    requireError(
+        "camera.set",
+        {{"position", {1.0, 2.0}}, {"yaw", 0.0}, {"pitch", 0.0}},
+        "invalid_params",
+        "Parameter 'position' must be an array of three finite numbers.");
+    requireError(
+        "camera.set",
+        {{"position", {1.0, "bad", 3.0}},
+         {"yaw", 0.0},
+         {"pitch", 0.0}},
+        "invalid_params",
+        "Parameter 'position' must be an array of three finite numbers.");
+    requireError(
+        "camera.set",
+        {{"position", {1.0, 2.0, 3.0}},
+         {"yaw", std::numeric_limits<double>::infinity()},
+         {"pitch", 0.0}},
+        "invalid_params", "Parameter 'yaw' must be a finite number.");
+    requireError(
+        "camera.set",
+        {{"position", {1.0, 2.0, 3.0}},
+         {"yaw", 0.0},
+         {"pitch", "bad"}},
+        "invalid_params", "Parameter 'pitch' must be a finite number.");
 
     vkr::RuntimeCommand command;
     command.id = 88;
@@ -223,6 +271,6 @@ void testValidationAndErrorMapping() {
 } // namespace
 
 void runRuntimeCommandDispatcherTests() {
-    testAllV2Methods();
+    testAllProtocolMethods();
     testValidationAndErrorMapping();
 }

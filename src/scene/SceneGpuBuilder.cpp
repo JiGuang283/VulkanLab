@@ -343,6 +343,30 @@ std::unique_ptr<Scene> SceneGpuBuilder::takeScene() {
     return std::move(scene_);
 }
 
+uint64_t SceneGpuBuilder::pendingTextureCount() const {
+    return prepared_ && textureIndex_ < prepared_->textures.size()
+               ? static_cast<uint64_t>(prepared_->textures.size() -
+                                       textureIndex_)
+               : 0;
+}
+
+uint64_t SceneGpuBuilder::pendingMeshCount() const {
+    return prepared_ && meshIndex_ < prepared_->meshes.size()
+               ? static_cast<uint64_t>(prepared_->meshes.size() - meshIndex_)
+               : 0;
+}
+
+uint64_t SceneGpuBuilder::pendingUploadCount() const {
+    uint64_t pending = pendingTextureCount() + pendingMeshCount();
+    if (pending == 0 && uploadQueue_ && !uploadQueue_->idle())
+        pending = 1;
+    return pending;
+}
+
+uint32_t SceneGpuBuilder::inFlightUploadBatches() const {
+    return uploadQueue_ ? uploadQueue_->inFlightCount() : 0;
+}
+
 bool SceneGpuBuilder::budgetExpired(
     const std::chrono::steady_clock::time_point &start, uint64_t bytes,
     const Budget &budget) const {

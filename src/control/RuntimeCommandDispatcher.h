@@ -2,12 +2,19 @@
 
 #include "RuntimeCommand.h"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <string>
 
 namespace vkr {
+
+struct RuntimeCameraPose {
+    std::array<float, 3> position{};
+    float yaw = 0.0f;
+    float pitch = 0.0f;
+};
 
 class RuntimeCommandError : public std::runtime_error {
   public:
@@ -46,6 +53,9 @@ class RuntimeControlHost {
     virtual ControlJson runtimeShaderList() = 0;
     virtual ControlJson runtimeShaderCurrent() = 0;
     virtual ControlJson runtimeShaderSet(const std::string &name) = 0;
+    virtual ControlJson runtimeCameraGet() = 0;
+    virtual ControlJson runtimeCameraSet(const RuntimeCameraPose &pose) = 0;
+    virtual ControlJson runtimeRenderStatus() = 0;
     virtual ControlJson runtimeLastLoadStats() = 0;
     virtual ControlJson runtimeQuit() = 0;
 };

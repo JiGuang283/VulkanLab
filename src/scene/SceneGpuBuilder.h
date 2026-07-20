@@ -43,6 +43,10 @@ class SceneGpuBuilder {
     bool cancelled() const;
     std::unique_ptr<Scene> takeScene();
     std::shared_ptr<SceneLoadTask> task() const { return task_; }
+    uint64_t pendingUploadCount() const;
+    uint64_t pendingTextureCount() const;
+    uint64_t pendingMeshCount() const;
+    uint32_t inFlightUploadBatches() const;
 
   private:
     enum class Phase {
