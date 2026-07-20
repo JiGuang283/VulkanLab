@@ -160,6 +160,23 @@ if(EXISTS "${package}/models/unused.png" OR
    EXISTS "${package}/shader/debug")
     message(FATAL_ERROR "cooked package contains an unused source asset")
 endif()
+foreach(unexpected
+        "VulkanLabRenderTest.exe"
+        "tests"
+        "goldens"
+        "artifacts/captures"
+        "doc")
+    if(EXISTS "${package}/${unexpected}")
+        message(FATAL_ERROR
+            "cooked package contains development-only ${unexpected}")
+    endif()
+endforeach()
+file(GLOB_RECURSE packaged_shader_sources
+    "${package}/*.vert" "${package}/*.frag" "${package}/*.glsl")
+if(packaged_shader_sources)
+    message(FATAL_ERROR
+        "cooked package contains source shaders: ${packaged_shader_sources}")
+endif()
 file(GLOB_RECURSE packaged_images
     "${package}/*.png" "${package}/*.jpg" "${package}/*.jpeg")
 list(REMOVE_ITEM packaged_images "${package}/textures/viking_room.png")

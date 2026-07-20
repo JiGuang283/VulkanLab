@@ -3,10 +3,14 @@
 #include "scene/PreparedSceneData.h"
 
 #include <cmath>
+#include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <string_view>
+#include <thread>
 #include <vector>
 
 void runDerivedTextureManifestTests();
@@ -26,6 +30,9 @@ void runBuildInfoTests();
 void runDiagnosticsConfigTests();
 void runSubmissionSerialTrackerTests();
 void runCaptureTests();
+void runRenderTestSpecTests();
+void runImageComparatorTests();
+void runManagedProcessWin32Tests();
 
 namespace {
 
@@ -127,7 +134,31 @@ void testTextureResize() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+    if (argc == 2 &&
+        std::string_view(argv[1]) == "--managed-process-echo") {
+#ifdef _WIN32
+        char *value = nullptr;
+        size_t valueLength = 0;
+        if (_dupenv_s(&value, &valueLength, "VKR_PROCESS_TEST") != 0 ||
+            !value)
+            return 3;
+        std::cout << value << '\n';
+        std::free(value);
+#else
+        const char *value = std::getenv("VKR_PROCESS_TEST");
+        if (!value)
+            return 3;
+        std::cout << value << '\n';
+#endif
+        return 0;
+    }
+    if (argc == 2 &&
+        std::string_view(argv[1]) == "--managed-process-sleep") {
+        std::this_thread::sleep_for(std::chrono::seconds(30));
+        return 0;
+    }
+
     try {
         testPreparedReferences();
         testSceneTypeDefaults();
@@ -150,6 +181,9 @@ int main() {
         runDiagnosticsConfigTests();
         runSubmissionSerialTrackerTests();
         runCaptureTests();
+        runRenderTestSpecTests();
+        runImageComparatorTests();
+        runManagedProcessWin32Tests();
         std::cout << "VulkanLab CPU tests passed\n";
         return 0;
     } catch (const std::exception &error) {

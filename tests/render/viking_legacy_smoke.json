@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "name": "viking-legacy-smoke",
+  "sceneId": "viking-room",
+  "profileId": "desktop_2048",
+  "shader": "Legacy Forward",
+  "camera": {
+    "position": [2.0, 2.0, 2.0],
+    "yaw": -135.0,
+    "pitch": -30.0
+  },
+  "viewport": [800, 600],
+  "fixedDelta": 0.016666667,
+  "stableFrames": 8,
+  "includeGui": false,
+  "mode": "smoke",
+  "thresholds": {
+    "minimumNonBlackRatio": 0.05,
+    "maximumSolidColorRatio": 0.98
+  }
+}

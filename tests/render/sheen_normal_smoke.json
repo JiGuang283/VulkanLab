@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "name": "sheen-normal-smoke",
+  "sceneId": "sheen-chair",
+  "profileId": "desktop_2048",
+  "shader": "PBR-lite NormalMapped",
+  "camera": {
+    "position": [1.5, 1.5, 1.0],
+    "yaw": -135.0,
+    "pitch": -20.0
+  },
+  "viewport": [800, 600],
+  "fixedDelta": 0.016666667,
+  "stableFrames": 8,
+  "includeGui": false,
+  "mode": "smoke",
+  "thresholds": {
+    "minimumNonBlackRatio": 0.05,
+    "maximumSolidColorRatio": 0.98
+  }
+}
