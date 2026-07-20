@@ -56,6 +56,10 @@ class RuntimeControlHost {
     virtual ControlJson runtimeCameraGet() = 0;
     virtual ControlJson runtimeCameraSet(const RuntimeCameraPose &pose) = 0;
     virtual ControlJson runtimeRenderStatus() = 0;
+    virtual ControlJson runtimeCaptureScreenshot(const std::string &path,
+                                                 bool includeGui) = 0;
+    virtual ControlJson runtimeCaptureStatus(uint64_t taskId) = 0;
+    virtual ControlJson runtimeCaptureCancel(uint64_t taskId) = 0;
     virtual ControlJson runtimeLastLoadStats() = 0;
     virtual ControlJson runtimeQuit() = 0;
 };

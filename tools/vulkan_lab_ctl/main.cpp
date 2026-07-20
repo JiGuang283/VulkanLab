@@ -26,6 +26,7 @@ struct ParsedCommand {
     bool waitForLoad = true;
     bool force = false;
     bool loadAfter = false;
+    bool includeGui = false;
     bool renderWait = false;
     uint32_t stableFrames = 8;
     uint32_t timeoutMs = 30000;
@@ -54,6 +55,10 @@ void printUsage() {
         << "  VulkanLabCtl [--json] render status\n"
         << "  VulkanLabCtl [--json] render wait [--stable-frames N] "
            "[--timeout-ms N]\n"
+        << "  VulkanLabCtl [--json] capture screenshot <relative.png> "
+           "[--no-gui|--include-gui]\n"
+        << "  VulkanLabCtl [--json] capture status <task-id>\n"
+        << "  VulkanLabCtl [--json] capture cancel <task-id>\n"
         << "  VulkanLabCtl [--json] stats\n";
 }
 
@@ -117,6 +122,7 @@ ParsedCommand parseCommand(int argc, char **argv) {
     bool waitForLoad = true;
     bool force = false;
     bool loadAfter = false;
+    bool includeGui = false;
     std::string pipeSuffix;
     std::optional<std::string> position;
     std::optional<std::string> yaw;
@@ -157,6 +163,10 @@ ParsedCommand parseCommand(int argc, char **argv) {
             force = true;
         else if (argument == "--load-after")
             loadAfter = true;
+        else if (argument == "--include-gui")
+            includeGui = true;
+        else if (argument == "--no-gui")
+            includeGui = false;
         else
             args.push_back(argument);
     }
@@ -169,6 +179,7 @@ ParsedCommand parseCommand(int argc, char **argv) {
     parsed.waitForLoad = waitForLoad;
     parsed.force = force;
     parsed.loadAfter = loadAfter;
+    parsed.includeGui = includeGui;
     if (stableFrames)
         parsed.stableFrames =
             parsePositiveUint32(*stableFrames, "--stable-frames");
@@ -258,6 +269,18 @@ ParsedCommand parseCommand(int argc, char **argv) {
     } else if (args == std::vector<std::string>{"render", "wait"}) {
         parsed.method = "render.status";
         parsed.renderWait = true;
+    } else if (args.size() == 3 && args[0] == "capture" &&
+               args[1] == "screenshot") {
+        parsed.method = "capture.screenshot";
+        parsed.params = {{"path", args[2]}, {"includeGui", includeGui}};
+    } else if (args.size() == 3 && args[0] == "capture" &&
+               args[1] == "status") {
+        parsed.method = "capture.status";
+        parsed.params = {{"taskId", std::stoull(args[2])}};
+    } else if (args.size() == 3 && args[0] == "capture" &&
+               args[1] == "cancel") {
+        parsed.method = "capture.cancel";
+        parsed.params = {{"taskId", std::stoull(args[2])}};
     } else {
         throw std::invalid_argument("unknown or incomplete command");
     }
@@ -503,6 +526,22 @@ void printHuman(const std::string &method, const Json &result) {
                       << result.at("stableFrameTarget").get<uint32_t>()
                       << '\n';
         }
+    } else if (method == "capture.screenshot" ||
+               method == "capture.status" ||
+               method == "capture.cancel") {
+        std::cout << "capture " << result.at("taskId").get<uint64_t>()
+                  << ": " << result.at("state").get<std::string>() << '\n';
+        if (result.at("result").is_object()) {
+            const Json &capture = result.at("result");
+            std::cout << capture.at("width").get<uint32_t>() << "x"
+                      << capture.at("height").get<uint32_t>() << " -> "
+                      << capture.at("outputPath").get<std::string>() << '\n'
+                      << "sha256: "
+                      << capture.at("sha256").get<std::string>() << '\n';
+        }
+        if (!result.at("error").is_null())
+            std::cout << "error: "
+                      << result.at("error").get<std::string>() << '\n';
     } else if (method == "stats.last_load") {
         printStats(result);
     } else if (method == "app.quit") {

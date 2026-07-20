@@ -127,6 +127,10 @@ class Application final : public RuntimeControlHost {
     ControlJson runtimeCameraGet() override;
     ControlJson runtimeCameraSet(const RuntimeCameraPose &pose) override;
     ControlJson runtimeRenderStatus() override;
+    ControlJson runtimeCaptureScreenshot(const std::string &path,
+                                         bool includeGui) override;
+    ControlJson runtimeCaptureStatus(uint64_t taskId) override;
+    ControlJson runtimeCaptureCancel(uint64_t taskId) override;
     ControlJson runtimeLastLoadStats() override;
     ControlJson runtimeQuit() override;
 

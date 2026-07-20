@@ -107,6 +107,17 @@ class FakeRuntimeHost final : public vkr::RuntimeControlHost {
     vkr::ControlJson runtimeRenderStatus() override {
         return reply("render.status");
     }
+    vkr::ControlJson runtimeCaptureScreenshot(const std::string &path,
+                                              bool includeGui) override {
+        return reply("capture.screenshot",
+                     {{"path", path}, {"includeGui", includeGui}});
+    }
+    vkr::ControlJson runtimeCaptureStatus(uint64_t taskId) override {
+        return reply("capture.status", {{"taskId", taskId}});
+    }
+    vkr::ControlJson runtimeCaptureCancel(uint64_t taskId) override {
+        return reply("capture.cancel", {{"taskId", taskId}});
+    }
     vkr::ControlJson runtimeLastLoadStats() override {
         return reply("stats.last_load");
     }
@@ -174,6 +185,17 @@ void testAllProtocolMethods() {
                  {"yaw", -135.0f},
                  {"pitch", -30.0f}})},
         {"render.status", {}, result("render.status")},
+        {"capture.screenshot", {{"path", "suite/frame.png"}},
+         result("capture.screenshot",
+                {{"path", "suite/frame.png"}, {"includeGui", false}})},
+        {"capture.screenshot",
+         {{"path", "suite/gui.png"}, {"includeGui", true}},
+         result("capture.screenshot",
+                {{"path", "suite/gui.png"}, {"includeGui", true}})},
+        {"capture.status", {{"taskId", uint64_t{100}}},
+         result("capture.status", {{"taskId", uint64_t{100}}})},
+        {"capture.cancel", {{"taskId", uint64_t{101}}},
+         result("capture.cancel", {{"taskId", uint64_t{101}}})},
         {"stats.last_load", {}, result("stats.last_load")},
         {"app.quit", {}, result("app.quit"), true},
     };
@@ -253,6 +275,16 @@ void testValidationAndErrorMapping() {
          {"yaw", 0.0},
          {"pitch", "bad"}},
         "invalid_params", "Parameter 'pitch' must be a finite number.");
+    requireError("capture.screenshot", {}, "invalid_params",
+                 "Parameter 'path' must be a string.");
+    requireError("capture.screenshot",
+                 {{"path", "frame.png"}, {"includeGui", "no"}},
+                 "invalid_params",
+                 "Parameter 'includeGui' must be a boolean.");
+    requireError("capture.status", {}, "invalid_params",
+                 "Parameter 'taskId' must be an unsigned integer.");
+    requireError("capture.cancel", {{"taskId", -1}}, "invalid_params",
+                 "Parameter 'taskId' must be an unsigned integer.");
 
     vkr::RuntimeCommand command;
     command.id = 88;

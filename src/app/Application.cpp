@@ -360,6 +360,36 @@ ControlJson sceneLoadTaskToJson(
     return result;
 }
 
+ControlJson captureTaskToJson(const CaptureTaskSnapshot &task) {
+    ControlJson result = nullptr;
+    if (task.state == CaptureTaskState::Completed) {
+        result = {
+            {"width", task.result.width},
+            {"height", task.result.height},
+            {"format", describeCaptureFormat(task.result.format).name},
+            {"frameSerial", task.result.frameSerial},
+            {"outputPath", task.result.outputPath.string()},
+            {"sha256", task.result.sha256},
+            {"timingsMs",
+             {{"recording", task.result.timings.recordingMs},
+              {"gpuWait", task.result.timings.gpuWaitMs},
+              {"cpuCopy", task.result.timings.cpuCopyMs},
+              {"encode", task.result.timings.encodeMs},
+              {"total", task.result.timings.totalMs}}}};
+    }
+    return {
+        {"taskId", task.request.taskId},
+        {"state", captureTaskStateName(task.state)},
+        {"terminal", isTerminalCaptureTaskState(task.state)},
+        {"request",
+         {{"path", task.request.relativeOutputPath.string()},
+          {"includeGui", task.request.includeGui}}},
+        {"result", std::move(result)},
+        {"error", task.result.error.empty()
+                      ? ControlJson(nullptr)
+                      : ControlJson(task.result.error)}};
+}
+
 void validateSceneLoadStats(const SceneLoadStats &stats) {
     const double detailedMax =
         std::max({stats.deviceIdleMs, stats.teardownMs, stats.sceneFactoryMs,
@@ -1357,6 +1387,8 @@ ControlJson Application::runtimeSystemInfo() {
         capabilities.push_back("asset_import");
         capabilities.push_back("asset_cancel");
     }
+    if (captureService_ && swapChain_->captureSupported())
+        capabilities.push_back("capture");
     return {
         {"application", "VulkanLab"},
         {"protocolVersion", control::kProtocolVersion},
@@ -1810,6 +1842,76 @@ ControlJson Application::runtimeRenderStatus() {
         {"minimized", minimized},
         {"swapchainRecreatePending", recreatePending},
         {"rendering", currentScene_ && !minimized && !recreatePending}};
+}
+
+ControlJson Application::runtimeCaptureScreenshot(const std::string &path,
+                                                   bool includeGui) {
+    if (!captureService_) {
+        throw RuntimeCommandError(
+            "capture_disabled",
+            "Capture is disabled for this runtime configuration.");
+    }
+    if (!swapChain_->captureSupported()) {
+        throw RuntimeCommandError("capture_unsupported",
+                                  swapChain_->captureUnsupportedReason());
+    }
+    if (!captureService_->acceptingRequests()) {
+        throw RuntimeCommandError("capture_disabled",
+                                  "Capture service is shutting down.");
+    }
+
+    try {
+        const uint64_t taskId = captureService_->request(
+            std::filesystem::u8path(path), includeGui);
+        const auto task = captureService_->task(taskId);
+        if (!task)
+            throw std::logic_error("queued capture task was not retained");
+        return captureTaskToJson(*task);
+    } catch (const std::invalid_argument &error) {
+        throw RuntimeCommandError("invalid_capture_path", error.what());
+    } catch (const std::length_error &error) {
+        throw RuntimeCommandError("capture_queue_full", error.what());
+    } catch (const RuntimeCommandError &) {
+        throw;
+    } catch (const std::exception &error) {
+        throw RuntimeCommandError("capture_failed", error.what());
+    }
+}
+
+ControlJson Application::runtimeCaptureStatus(uint64_t taskId) {
+    if (!captureService_) {
+        throw RuntimeCommandError(
+            "capture_disabled",
+            "Capture is disabled for this runtime configuration.");
+    }
+    const auto task = captureService_->task(taskId);
+    if (!task) {
+        throw RuntimeCommandError("capture_not_found",
+                                  "Capture task was not found.");
+    }
+    return captureTaskToJson(*task);
+}
+
+ControlJson Application::runtimeCaptureCancel(uint64_t taskId) {
+    if (!captureService_) {
+        throw RuntimeCommandError(
+            "capture_disabled",
+            "Capture is disabled for this runtime configuration.");
+    }
+    const auto task = captureService_->task(taskId);
+    if (!task) {
+        throw RuntimeCommandError("capture_not_found",
+                                  "Capture task was not found.");
+    }
+    if (isTerminalCaptureTaskState(task->state) ||
+        !captureService_->cancel(taskId)) {
+        throw RuntimeCommandError("capture_not_cancellable",
+                                  "Capture task cannot be cancelled.");
+    }
+    const auto updated = captureService_->task(taskId);
+    if (!updated)
+        throw std::logic_error("cancelled capture task was not retained");
+    return captureTaskToJson(*updated);
 }
 
 ControlJson Application::runtimeLastLoadStats() {

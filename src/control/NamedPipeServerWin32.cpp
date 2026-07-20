@@ -222,9 +222,9 @@ struct NamedPipeServerWin32::Impl {
 
             if (!response.is_null() && !response.empty())
                 writeFrame(pipe, stopEvent, response.dump());
+            FlushFileBuffers(pipe);
             if (command)
                 command->responseDelivered = true;
-            FlushFileBuffers(pipe);
             DisconnectNamedPipe(pipe);
         }
 

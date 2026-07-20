@@ -53,6 +53,16 @@ uint32_t requiredUint32(const RuntimeCommand &command, const char *name) {
     return static_cast<uint32_t>(*value);
 }
 
+uint64_t requiredUint64(const RuntimeCommand &command, const char *name) {
+    const std::optional<uint64_t> value = optionalUnsigned(command, name);
+    if (!value) {
+        throw RuntimeCommandError(
+            "invalid_params", std::string("Parameter '") + name +
+                                  "' must be an unsigned integer.");
+    }
+    return *value;
+}
+
 bool optionalBool(const RuntimeCommand &command, const char *name,
                   bool fallback) {
     if (!command.params.contains(name))
@@ -175,6 +185,16 @@ RuntimeDispatchResult RuntimeCommandDispatcher::dispatch(
             result = host.runtimeCameraSet(requiredCameraPose(command));
         } else if (command.method == "render.status") {
             result = host.runtimeRenderStatus();
+        } else if (command.method == "capture.screenshot") {
+            result = host.runtimeCaptureScreenshot(
+                requiredString(command, "path"),
+                optionalBool(command, "includeGui", false));
+        } else if (command.method == "capture.status") {
+            result = host.runtimeCaptureStatus(
+                requiredUint64(command, "taskId"));
+        } else if (command.method == "capture.cancel") {
+            result = host.runtimeCaptureCancel(
+                requiredUint64(command, "taskId"));
         } else if (command.method == "stats.last_load") {
             result = host.runtimeLastLoadStats();
         } else if (command.method == "app.quit") {
