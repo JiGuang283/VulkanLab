@@ -1,8 +1,8 @@
 # 系统架构概览
 
 > Status: Current
-> Last verified: 2026-07-20
-> Verified against: `4bcabe9`
+> Last verified: 2026-07-21
+> Verified against: current working tree based on `a154f52`
 
 VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Application` 为组合根，场景、渲染提交、GPU 资源和调试控制之间保持显式所有权，不使用全局引擎服务定位器。
 
@@ -66,10 +66,10 @@ CaptureService 的主线程部分创建 readback buffer、记录 image copy 并�
 3. 应用待切换场景，更新计时、输入模式、相机和 Scene tick。
 4. 轮询场景导入 future，构建 Scenes、Loading 和最近一次 LoadStats 等 ImGui 界面。
 5. `FrameSync::beginFrame()` 获取 frame index、swapchain image 和 command buffer。
-6. Application 把相机、环境光和 SceneLight 写入当前帧 GlobalUBO。
+6. Application 选择第一盏方向光、按场景 bounds 拟合阴影矩阵，并把相机、环境光、SceneLight 和阴影参数写入当前帧 GlobalUBO。
 7. Scene 生成 RenderCommand，RenderQueue 分别排序 opaque 与 transparent 命令。
-8. Renderer 组装 RenderFrameContext，RenderPipeline 执行 MainForwardPass，并在同一 render pass 末尾按需绘制 ImGui。
-9. 若有截图任务，在同一个 frame command buffer 中把 swapchain image 复制到 readback buffer，然后恢复 present layout。
+8. Renderer 组装 RenderFrameContext，RenderPipeline 依次执行 DirectionalShadowPass、输出线性 HDR 的 MainForwardPass，以及 ToneMapPass；ImGui 在 tone mapping 后绘制。
+9. 若有截图任务，在同一个 frame command buffer 中把最终 swapchain image 复制到 readback buffer，然后恢复 present layout。
 10. `FrameSync::endFrame()` 提交和 present；需要时重建 SwapChain 相关资源。后续帧推进 completed submission serial，并把已完成截图交给 CPU worker。
 
 详细渲染行为见 [渲染流程](rendering.md)，场景创建与上传见 [资源加载](resource_loading.md)。

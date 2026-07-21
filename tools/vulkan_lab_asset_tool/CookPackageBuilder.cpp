@@ -8,6 +8,7 @@
 #include "assets/SceneCatalog.h"
 #include "assets/SceneImportService.h"
 #include "render/ShaderVariant.h"
+#include "render/RendererShaderPaths.h"
 
 #include <json.hpp>
 
@@ -171,6 +172,8 @@ void copyShaders(const std::filesystem::path &runtimeDirectory,
         paths.insert(generic(variant.vertSpvPath));
         paths.insert(generic(variant.fragSpvPath));
     }
+    for (const std::string_view relative : kRendererShaderPaths)
+        paths.insert(std::string(relative));
     for (const std::string &relative : paths) {
         const std::filesystem::path source =
             (runtimeDirectory / relative).lexically_normal();

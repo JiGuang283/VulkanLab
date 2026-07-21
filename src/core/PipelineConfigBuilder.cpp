@@ -41,13 +41,38 @@ PipelineConfigBuilder &PipelineConfigBuilder::depth(bool test, bool write,
 }
 
 PipelineConfigBuilder &PipelineConfigBuilder::blending(bool enable) {
-    config_.blendEnable = enable;
+    if (config_.colorBlendAttachments.empty())
+        config_.colorBlendAttachments.resize(1);
+    for (auto &attachment : config_.colorBlendAttachments)
+        attachment.blendEnable = enable;
+    return *this;
+}
+
+PipelineConfigBuilder &PipelineConfigBuilder::depthBias(bool enable) {
+    config_.depthBiasEnable = enable;
+    return *this;
+}
+
+PipelineConfigBuilder &
+PipelineConfigBuilder::colorAttachmentCount(uint32_t count) {
+    config_.colorBlendAttachments.resize(count);
+    return *this;
+}
+
+PipelineConfigBuilder &
+PipelineConfigBuilder::topology(VkPrimitiveTopology topology) {
+    config_.topology = topology;
     return *this;
 }
 
 PipelineConfigBuilder &
 PipelineConfigBuilder::msaa(VkSampleCountFlagBits samples) {
     config_.msaaSamples = samples;
+    return *this;
+}
+
+PipelineConfigBuilder &PipelineConfigBuilder::subpass(uint32_t subpass) {
+    config_.subpass = subpass;
     return *this;
 }
 

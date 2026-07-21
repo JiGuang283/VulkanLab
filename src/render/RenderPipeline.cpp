@@ -15,6 +15,11 @@ void RenderPipeline::addPass(std::unique_ptr<IRenderPass> pass) {
     passes_.push_back(std::move(pass));
 }
 
+void RenderPipeline::releaseSwapChainResources() {
+    for (auto pass = passes_.rbegin(); pass != passes_.rend(); ++pass)
+        (*pass)->releaseSwapChainResources();
+}
+
 void RenderPipeline::onResize(const SwapChain &swapChain) {
     for (auto &pass : passes_)
         pass->onResize(swapChain);

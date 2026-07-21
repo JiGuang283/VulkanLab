@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 2,
+  "name": "viking-pbr-shadow-smoke",
+  "sceneId": "viking-room",
+  "profileId": "desktop_2048",
+  "shader": "PBR-lite NormalMapped",
+  "camera": {
+    "position": [2.0, 2.0, 2.0],
+    "yaw": -135.0,
+    "pitch": -30.0
+  },
+  "viewport": [800, 600],
+  "fixedDelta": 0.016666667,
+  "stableFrames": 8,
+  "includeGui": false,
+  "renderSettings": {
+    "shadowsEnabled": true,
+    "shadowReceiverBias": 0.0015,
+    "shadowConstantBias": 1.25,
+    "shadowSlopeBias": 1.75,
+    "exposureEv": 0.0,
+    "toneMapper": "aces"
+  },
+  "mode": "smoke",
+  "thresholds": {
+    "minimumNonBlackRatio": 0.05,
+    "maximumSolidColorRatio": 0.98
+  }
+}

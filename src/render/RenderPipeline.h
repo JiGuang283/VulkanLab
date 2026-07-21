@@ -19,6 +19,7 @@ class RenderPipeline {
     RenderPipeline &operator=(const RenderPipeline &) = delete;
 
     void addPass(std::unique_ptr<IRenderPass> pass);
+    void releaseSwapChainResources();
     void onResize(const SwapChain &swapChain);
     void execute(const RenderFrameContext &frame, const RenderQueue &queue);
 

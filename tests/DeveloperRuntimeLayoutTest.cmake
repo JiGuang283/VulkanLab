@@ -16,7 +16,7 @@ endif()
 
 file(GLOB_RECURSE runtime_shaders "${RUNTIME_DIR}/shader/*.spv")
 list(LENGTH runtime_shaders shader_count)
-if(NOT shader_count EQUAL 15)
+if(NOT shader_count EQUAL 20)
     message(FATAL_ERROR
-        "expected 15 runtime shaders, found ${shader_count}")
+        "expected 20 runtime shaders, found ${shader_count}")
 endif()

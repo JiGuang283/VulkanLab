@@ -13,7 +13,9 @@ namespace vkr {
 class MaterialTemplate;
 
 enum class PassId : uint32_t {
-    MainForward = 0,
+    DirectionalShadow = 0,
+    MainForward = 1,
+    ToneMap = 2,
 };
 
 struct PipelineKey {
@@ -25,13 +27,14 @@ struct PipelineKey {
     VkRenderPass           renderPass = VK_NULL_HANDLE;
     uint32_t               subpass = 0;
     VkSampleCountFlagBits  samples = VK_SAMPLE_COUNT_1_BIT;
+    bool                   alphaMasked = false;
 
     bool operator==(const PipelineKey &rhs) const {
         return materialTemplate == rhs.materialTemplate && pass == rhs.pass &&
                shaderVariant == rhs.shaderVariant &&
                queue == rhs.queue && cullMode == rhs.cullMode &&
                renderPass == rhs.renderPass && subpass == rhs.subpass &&
-               samples == rhs.samples;
+               samples == rhs.samples && alphaMasked == rhs.alphaMasked;
     }
 };
 
@@ -46,6 +49,7 @@ struct PipelineKeyHash {
         combine(seed, key.renderPass);
         combine(seed, key.subpass);
         combine(seed, key.samples);
+        combine(seed, key.alphaMasked);
         return seed;
     }
 

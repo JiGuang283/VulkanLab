@@ -66,6 +66,45 @@ void testValidSmokeSpec() {
     requireSpec(std::abs(spec.camera.position[0] - 2.0f) < 0.0001f &&
                     std::abs(spec.camera.yaw + 135.0f) < 0.0001f,
                 "camera values changed during spec parsing");
+    requireSpec(spec.renderSettings.shadowsEnabled &&
+                    spec.renderSettings.toneMapper == vkr::ToneMapper::Aces &&
+                    std::abs(spec.renderSettings.exposureEv) < 0.0001f,
+                "schema v1 did not retain default render settings");
+}
+
+void testSchemaV2RenderSettings() {
+    Json document = validSpec();
+    document["schemaVersion"] = 2;
+    document["renderSettings"] = {
+        {"shadowsEnabled", false},
+        {"shadowReceiverBias", 0.002f},
+        {"shadowConstantBias", 2.0f},
+        {"shadowSlopeBias", 3.0f},
+        {"exposureEv", 1.5f},
+        {"toneMapper", "reinhard"},
+    };
+    const auto source =
+        std::filesystem::temp_directory_path() / "render-tests" /
+        "viking-v2.json";
+    const auto spec =
+        vkr::render_test::parseRenderTestSpec(document, source);
+    requireSpec(!spec.renderSettings.shadowsEnabled &&
+                    std::abs(spec.renderSettings.shadowReceiverBias -
+                             0.002f) < 0.0001f &&
+                    std::abs(spec.renderSettings.exposureEv - 1.5f) <
+                        0.0001f &&
+                    spec.renderSettings.toneMapper ==
+                        vkr::ToneMapper::Reinhard,
+                "schema v2 render settings changed during parsing");
+
+    const Json serialized =
+        vkr::render_test::renderTestSpecToJson(spec);
+    requireSpec(serialized["schemaVersion"] == 2 &&
+                    serialized["renderSettings"]["toneMapper"] ==
+                        "reinhard" &&
+                    serialized["renderSettings"]["shadowsEnabled"] ==
+                        false,
+                "schema v2 render settings were not serialized");
 }
 
 void testValidGoldenSpecAndResolvedPaths() {
@@ -104,6 +143,30 @@ void testStrictValidation() {
     requireInvalidSpec(
         [&] { vkr::render_test::parseRenderTestSpec(unknown, source); },
         "unknown top-level spec field was accepted");
+
+    Json settingsInV1 = validSpec();
+    settingsInV1["renderSettings"] = Json::object();
+    requireInvalidSpec(
+        [&] {
+            vkr::render_test::parseRenderTestSpec(settingsInV1, source);
+        },
+        "schema v1 accepted renderSettings");
+
+    Json badSettings = validSpec();
+    badSettings["schemaVersion"] = 2;
+    badSettings["renderSettings"] = {{"exposureEv", 100.0}};
+    requireInvalidSpec(
+        [&] {
+            vkr::render_test::parseRenderTestSpec(badSettings, source);
+        },
+        "out-of-range exposure was accepted");
+
+    badSettings["renderSettings"] = {{"toneMapper", "unknown"}};
+    requireInvalidSpec(
+        [&] {
+            vkr::render_test::parseRenderTestSpec(badSettings, source);
+        },
+        "unknown tone mapper was accepted");
 
     Json badCamera = validSpec();
     badCamera["camera"]["yaw"] =
@@ -175,6 +238,7 @@ void testGoldenPathConfinement() {
 
 void runRenderTestSpecTests() {
     testValidSmokeSpec();
+    testSchemaV2RenderSettings();
     testValidGoldenSpecAndResolvedPaths();
     testStrictValidation();
     testGoldenPathConfinement();

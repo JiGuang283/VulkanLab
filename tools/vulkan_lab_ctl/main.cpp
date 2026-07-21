@@ -53,6 +53,11 @@ void printUsage() {
         << "  VulkanLabCtl [--json] camera get\n"
         << "  VulkanLabCtl [--json] camera set --position X,Y,Z --yaw Y --pitch P\n"
         << "  VulkanLabCtl [--json] render status\n"
+        << "  VulkanLabCtl [--json] render-settings get\n"
+        << "  VulkanLabCtl [--json] render-settings set "
+           "[--shadows on|off] [--receiver-bias N] "
+           "[--constant-bias N] [--slope-bias N] "
+           "[--exposure N] [--tone-mapper passthrough|reinhard|aces]\n"
         << "  VulkanLabCtl [--json] render wait [--stable-frames N] "
            "[--timeout-ms N]\n"
         << "  VulkanLabCtl [--json] capture screenshot <relative.png> "
@@ -116,6 +121,14 @@ uint32_t parseTextureLimit(const std::string &value) {
     return static_cast<uint32_t>(parsed);
 }
 
+bool parseOnOff(const std::string &value, const char *name) {
+    if (value == "on")
+        return true;
+    if (value == "off")
+        return false;
+    throw std::invalid_argument(std::string(name) + " must be on or off");
+}
+
 ParsedCommand parseCommand(int argc, char **argv) {
     std::vector<std::string> args;
     bool jsonOutput = false;
@@ -129,6 +142,12 @@ ParsedCommand parseCommand(int argc, char **argv) {
     std::optional<std::string> pitch;
     std::optional<std::string> stableFrames;
     std::optional<std::string> timeoutMs;
+    std::optional<std::string> shadows;
+    std::optional<std::string> receiverBias;
+    std::optional<std::string> constantBias;
+    std::optional<std::string> slopeBias;
+    std::optional<std::string> exposure;
+    std::optional<std::string> toneMapper;
     for (int i = 1; i < argc; ++i) {
         const std::string argument = argv[i];
         if (argument == "--pipe") {
@@ -143,7 +162,13 @@ ParsedCommand parseCommand(int argc, char **argv) {
         else if (argument == "--position" || argument == "--yaw" ||
                  argument == "--pitch" ||
                  argument == "--stable-frames" ||
-                 argument == "--timeout-ms") {
+                 argument == "--timeout-ms" ||
+                 argument == "--shadows" ||
+                 argument == "--receiver-bias" ||
+                 argument == "--constant-bias" ||
+                 argument == "--slope-bias" ||
+                 argument == "--exposure" ||
+                 argument == "--tone-mapper") {
             if (++i >= argc)
                 throw std::invalid_argument(argument + " requires a value");
             if (argument == "--position")
@@ -154,8 +179,20 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 pitch = argv[i];
             else if (argument == "--stable-frames")
                 stableFrames = argv[i];
-            else
+            else if (argument == "--timeout-ms")
                 timeoutMs = argv[i];
+            else if (argument == "--shadows")
+                shadows = argv[i];
+            else if (argument == "--receiver-bias")
+                receiverBias = argv[i];
+            else if (argument == "--constant-bias")
+                constantBias = argv[i];
+            else if (argument == "--slope-bias")
+                slopeBias = argv[i];
+            else if (argument == "--exposure")
+                exposure = argv[i];
+            else
+                toneMapper = argv[i];
         }
         else if (argument == "--no-wait")
             waitForLoad = false;
@@ -269,6 +306,38 @@ ParsedCommand parseCommand(int argc, char **argv) {
     } else if (args == std::vector<std::string>{"render", "wait"}) {
         parsed.method = "render.status";
         parsed.renderWait = true;
+    } else if (args ==
+               std::vector<std::string>{"render-settings", "get"}) {
+        parsed.method = "render_settings.get";
+    } else if (args ==
+               std::vector<std::string>{"render-settings", "set"}) {
+        parsed.method = "render_settings.set";
+        if (shadows)
+            parsed.params["shadowsEnabled"] =
+                parseOnOff(*shadows, "--shadows");
+        if (receiverBias)
+            parsed.params["shadowReceiverBias"] =
+                parseFiniteFloat(*receiverBias, "--receiver-bias");
+        if (constantBias)
+            parsed.params["shadowConstantBias"] =
+                parseFiniteFloat(*constantBias, "--constant-bias");
+        if (slopeBias)
+            parsed.params["shadowSlopeBias"] =
+                parseFiniteFloat(*slopeBias, "--slope-bias");
+        if (exposure)
+            parsed.params["exposureEv"] =
+                parseFiniteFloat(*exposure, "--exposure");
+        if (toneMapper) {
+            if (*toneMapper != "passthrough" && *toneMapper != "reinhard" &&
+                *toneMapper != "aces") {
+                throw std::invalid_argument(
+                    "--tone-mapper must be passthrough, reinhard, or aces");
+            }
+            parsed.params["toneMapper"] = *toneMapper;
+        }
+        if (parsed.params.empty())
+            throw std::invalid_argument(
+                "render-settings set requires at least one option");
     } else if (args.size() == 3 && args[0] == "capture" &&
                args[1] == "screenshot") {
         parsed.method = "capture.screenshot";
@@ -526,6 +595,18 @@ void printHuman(const std::string &method, const Json &result) {
                       << result.at("stableFrameTarget").get<uint32_t>()
                       << '\n';
         }
+    } else if (method == "render_settings.get" ||
+               method == "render_settings.set") {
+        std::cout << "shadows: "
+                  << (result.at("shadowsEnabled").get<bool>() ? "on" : "off")
+                  << ", map: " << result.at("shadowMapSize").get<uint32_t>()
+                  << "\nreceiver/constant/slope bias: "
+                  << result.at("shadowReceiverBias").get<float>() << "/"
+                  << result.at("shadowConstantBias").get<float>() << "/"
+                  << result.at("shadowSlopeBias").get<float>()
+                  << "\nexposure: " << result.at("exposureEv").get<float>()
+                  << " EV, tone mapper: "
+                  << result.at("toneMapper").get<std::string>() << '\n';
     } else if (method == "capture.screenshot" ||
                method == "capture.status" ||
                method == "capture.cancel") {

@@ -23,10 +23,12 @@
 #include "diagnostics/BuildInfo.h"
 #include "diagnostics/CaptureService.h"
 #include "render/GuiSystem.h"
+#include "render/DirectionalShadow.h"
 #include "render/MaterialInstance.h"
 #include "render/MaterialTextureSlot.h"
 #include "render/PipelineCache.h"
 #include "render/Renderer.h"
+#include "render/RendererShaderPaths.h"
 #include "scene/PreparedSceneData.h"
 #include "scene/SceneFactory.h"
 #include "scene/SceneGpuBuilder.h"
@@ -692,7 +694,19 @@ void Application::init() {
     frameSync_ = std::make_unique<FrameSync>(*device_, *swapChain_);
     renderer_ = std::make_unique<Renderer>(
         *device_, *swapChain_, *frameSync_, *descriptorAllocator_,
-        sizeof(GlobalUBO));
+        sizeof(GlobalUBO),
+        RendererShaderPaths{
+            projectContext_.resolveRuntimePath(kShadowVertexShaderPath)
+                .string(),
+            projectContext_
+                .resolveRuntimePath(kShadowMaskFragmentShaderPath)
+                .string(),
+            projectContext_
+                .resolveRuntimePath(kFullscreenVertexShaderPath)
+                .string(),
+            projectContext_
+                .resolveRuntimePath(kToneMapFragmentShaderPath)
+                .string()});
     if (!projectContext_.cookedPackage) {
         captureService_ = std::make_unique<CaptureService>(
             *device_, projectContext_.captureRoot);
@@ -1102,6 +1116,18 @@ void Application::setShaderVariant(int index) {
                  shaderVariants_[index].displayName);
 }
 
+void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
+    RenderSettings next = renderSettings_;
+    applyRenderSettingsPatch(next, patch);
+    next.shadowReceiverBias =
+        glm::clamp(next.shadowReceiverBias, 0.0f, 0.05f);
+    next.shadowConstantBias =
+        glm::clamp(next.shadowConstantBias, 0.0f, 10.0f);
+    next.shadowSlopeBias = glm::clamp(next.shadowSlopeBias, 0.0f, 10.0f);
+    next.exposureEv = glm::clamp(next.exposureEv, -10.0f, 10.0f);
+    renderSettings_ = next;
+}
+
 int Application::findSceneIndexByName(const std::string &name) const {
     for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
         if (asciiEqualsIgnoreCase(sceneRegistry_[i].name, name))
@@ -1390,7 +1416,8 @@ ControlJson Application::runtimeSystemInfo() {
         fixedDelta = *config_.diagnostics.fixedDeltaSeconds;
     ControlJson capabilities = {"async_scene_load", "load_status",
                                 "load_cancel", "asset_catalog",
-                                "camera_control", "render_status"};
+                                "camera_control", "render_status",
+                                "render_settings"};
     if (assetImportManager_) {
         capabilities.push_back("asset_import");
         capabilities.push_back("asset_cancel");
@@ -1891,6 +1918,23 @@ ControlJson Application::runtimeRenderStatus() {
         {"rendering", currentScene_ && !minimized && !recreatePending}};
 }
 
+ControlJson Application::runtimeRenderSettingsGet() {
+    return {{"shadowsEnabled", renderSettings_.shadowsEnabled},
+            {"shadowMapSize", kDirectionalShadowMapSize},
+            {"shadowReceiverBias", renderSettings_.shadowReceiverBias},
+            {"shadowConstantBias", renderSettings_.shadowConstantBias},
+            {"shadowSlopeBias", renderSettings_.shadowSlopeBias},
+            {"exposureEv", renderSettings_.exposureEv},
+            {"toneMapper", toneMapperName(renderSettings_.toneMapper)},
+            {"toneMappingPolicy", "pbr_only"}};
+}
+
+ControlJson Application::runtimeRenderSettingsSet(
+    const RenderSettingsPatch &patch) {
+    applyRenderSettings(patch);
+    return runtimeRenderSettingsGet();
+}
+
 ControlJson Application::runtimeCaptureScreenshot(const std::string &path,
                                                    bool includeGui) {
     if (!captureService_) {
@@ -2049,7 +2093,8 @@ void Application::processCameraInput(float dt) {
                    -d.y * config_.mouseSensitivity);
 }
 
-void Application::updateUniforms(uint32_t frameIndex) {
+void Application::updateUniforms(
+    uint32_t frameIndex, const DirectionalShadowFrameData &shadow) {
     GlobalUBO ubo{};
     ubo.view = camera_.viewMatrix();
     ubo.proj = camera_.projectionMatrix();
@@ -2096,6 +2141,10 @@ void Application::updateUniforms(uint32_t frameIndex) {
     ubo.lightCounts =
         glm::vec4(static_cast<float>(directionalCount),
                   static_cast<float>(punctualCount), 0.0f, 0.0f);
+    ubo.directionalShadowViewProj = shadow.lightViewProjection;
+    ubo.shadowParams =
+        glm::vec4(shadow.enabled ? 1.0f : 0.0f,
+                  renderSettings_.shadowReceiverBias, shadow.texelSize, 0.0f);
     lastUploadedDirectionalLights_ = directionalCount;
     lastUploadedPunctualLights_ = punctualCount;
     if (ignoredCount != lastIgnoredLights_) {
@@ -2107,6 +2156,29 @@ void Application::updateUniforms(uint32_t frameIndex) {
         lastIgnoredLights_ = ignoredCount;
     }
     std::memcpy(renderer_->mappedUniformBuffer(frameIndex), &ubo, sizeof(ubo));
+}
+
+DirectionalShadowFrameData Application::directionalShadowFrameData() const {
+    if (!currentScene_)
+        return {};
+
+    const SceneLight *directional = nullptr;
+    SceneLight fallbackSun{};
+    const auto &lights = currentScene_->lights();
+    if (lights.empty()) {
+        fallbackSun = makeDefaultSun(defaultSunDirection_, defaultSunColor_,
+                                     defaultSunIntensity_);
+        directional = &fallbackSun;
+    } else {
+        for (const SceneLight &light : lights) {
+            if (light.type == LightType::Directional) {
+                directional = &light;
+                break;
+            }
+        }
+    }
+    return buildDirectionalShadowFrameData(
+        currentScene_->bounds(), directional, renderSettings_.shadowsEnabled);
 }
 
 void Application::refreshSceneRegistry(const std::string &selectSceneId) {
@@ -2797,6 +2869,25 @@ void Application::drawGui() {
         ImGui::EndCombo();
     }
     ImGui::EndDisabled();
+    ImGui::Separator();
+    float exposureEv = renderSettings_.exposureEv;
+    if (ImGui::DragFloat("Exposure EV", &exposureEv, 0.05f, -10.0f,
+                         10.0f)) {
+        RenderSettingsPatch patch;
+        patch.exposureEv = exposureEv;
+        applyRenderSettings(patch);
+    }
+    constexpr const char *toneMapperLabels[] = {"PassThrough", "Reinhard",
+                                                "ACES"};
+    int toneMapperIndex = static_cast<int>(renderSettings_.toneMapper);
+    if (ImGui::Combo("PBR Tone Mapper", &toneMapperIndex,
+                     toneMapperLabels,
+                     static_cast<int>(std::size(toneMapperLabels)))) {
+        RenderSettingsPatch patch;
+        patch.toneMapper = static_cast<ToneMapper>(toneMapperIndex);
+        applyRenderSettings(patch);
+    }
+    ImGui::TextUnformatted("Legacy and debug views use PassThrough");
     ImGui::End();
 
     drawScenePanel();
@@ -2848,6 +2939,38 @@ void Application::drawGui() {
     ImGui::End();
 
     ImGui::Begin("Lighting");
+    bool shadowsEnabled = renderSettings_.shadowsEnabled;
+    if (ImGui::Checkbox("Directional Shadows", &shadowsEnabled)) {
+        RenderSettingsPatch patch;
+        patch.shadowsEnabled = shadowsEnabled;
+        applyRenderSettings(patch);
+    }
+    ImGui::BeginDisabled(!renderSettings_.shadowsEnabled);
+    float receiverBias = renderSettings_.shadowReceiverBias;
+    if (ImGui::DragFloat("Shadow Receiver Bias", &receiverBias, 0.00005f,
+                         0.0f, 0.05f, "%.5f")) {
+        RenderSettingsPatch patch;
+        patch.shadowReceiverBias = receiverBias;
+        applyRenderSettings(patch);
+    }
+    float constantBias = renderSettings_.shadowConstantBias;
+    if (ImGui::DragFloat("Shadow Constant Bias", &constantBias, 0.05f,
+                         0.0f, 10.0f)) {
+        RenderSettingsPatch patch;
+        patch.shadowConstantBias = constantBias;
+        applyRenderSettings(patch);
+    }
+    float slopeBias = renderSettings_.shadowSlopeBias;
+    if (ImGui::DragFloat("Shadow Slope Bias", &slopeBias, 0.05f, 0.0f,
+                         10.0f)) {
+        RenderSettingsPatch patch;
+        patch.shadowSlopeBias = slopeBias;
+        applyRenderSettings(patch);
+    }
+    ImGui::Text("Shadow Map: %ux%u", kDirectionalShadowMapSize,
+                kDirectionalShadowMapSize);
+    ImGui::EndDisabled();
+    ImGui::Separator();
     ImGui::ColorEdit3("Ambient Color", &ambientColor_.x);
     ImGui::DragFloat("Ambient Intensity", &ambientIntensity_, 0.01f, 0.0f,
                      10.0f);
@@ -3203,7 +3326,9 @@ void Application::mainLoop() {
             captureSelection = captureService_->prepareFrame(*swapChain_);
         }
 
-        updateUniforms(ctx->frameIndex);
+        const DirectionalShadowFrameData shadow =
+            directionalShadowFrameData();
+        updateUniforms(ctx->frameIndex, shadow);
         renderQueue_.clear();
         if (currentScene_)
             currentScene_->collectRenderCommands(renderQueue_);
@@ -3216,7 +3341,7 @@ void Application::mainLoop() {
             frameGui = nullptr;
         }
         renderer_->renderFrame(*ctx, renderQueue_, *pipelineCache_, frameGui,
-                               currentShaderVariant());
+                               currentShaderVariant(), renderSettings_, shadow);
         if (captureSelection) {
             captureService_->recordCopy(ctx->cmd,
                                         swapChain_->image(ctx->imageIndex));

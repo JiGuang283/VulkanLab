@@ -18,6 +18,7 @@ enum class ShaderVariantId : uint32_t {
     DebugEmissive = 8,
     DebugAlpha = 9,
     DebugTransmission = 10,
+    DebugShadow = 11,
 };
 
 struct ShaderVariant {
@@ -27,7 +28,7 @@ struct ShaderVariant {
     std::string     fragSpvPath;
 };
 
-inline const std::array<ShaderVariant, 11> kShaderVariants = {{
+inline const std::array<ShaderVariant, 12> kShaderVariants = {{
     {ShaderVariantId::LegacyForward, "Legacy Forward",
      "shader/legacy/forward.vert.spv", "shader/legacy/forward.frag.spv"},
     {ShaderVariantId::PbrLiteForward, "PBR-lite Forward",
@@ -60,6 +61,9 @@ inline const std::array<ShaderVariant, 11> kShaderVariants = {{
     {ShaderVariantId::DebugTransmission, "Debug Transmission",
      "shader/material_debug/material.vert.spv",
      "shader/material_debug/transmission.frag.spv"},
+    {ShaderVariantId::DebugShadow, "Debug Shadow",
+     "shader/pbr_lite/forward.vert.spv",
+     "shader/material_debug/shadow.frag.spv"},
 }};
 
 inline const ShaderVariant &defaultShaderVariant() {

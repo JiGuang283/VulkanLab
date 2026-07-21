@@ -42,10 +42,14 @@ Pipeline::Pipeline(Device &device, VkRenderPass renderPass,
     : device_(&device) {
 
     auto vertShaderCode = readFile(config.vertShaderPath);
-    auto fragShaderCode = readFile(config.fragShaderPath);
+    std::vector<char> fragShaderCode;
+    if (!config.fragShaderPath.empty())
+        fragShaderCode = readFile(config.fragShaderPath);
 
     VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
-    VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
+    VkShaderModule fragShaderModule =
+        fragShaderCode.empty() ? VK_NULL_HANDLE
+                               : createShaderModule(fragShaderCode);
 
     VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
     vertShaderStageInfo.sType =
@@ -54,23 +58,29 @@ Pipeline::Pipeline(Device &device, VkRenderPass renderPass,
     vertShaderStageInfo.module = vertShaderModule;
     vertShaderStageInfo.pName = "main";
 
-    VkPipelineShaderStageCreateInfo fragShaderStageInfo{};
-    fragShaderStageInfo.sType =
-        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    fragShaderStageInfo.module = fragShaderModule;
-    fragShaderStageInfo.pName = "main";
-
-    VkPipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo,
-                                                      fragShaderStageInfo};
+    std::vector<VkPipelineShaderStageCreateInfo> shaderStages = {
+        vertShaderStageInfo};
+    if (fragShaderModule != VK_NULL_HANDLE) {
+        VkPipelineShaderStageCreateInfo fragShaderStageInfo{};
+        fragShaderStageInfo.sType =
+            VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        fragShaderStageInfo.module = fragShaderModule;
+        fragShaderStageInfo.pName = "main";
+        shaderStages.push_back(fragShaderStageInfo);
+    }
 
     // 顶点输入
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType =
         VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 
-    vertexInputInfo.vertexBindingDescriptionCount = 1;
-    vertexInputInfo.pVertexBindingDescriptions = &config.vertexLayout.binding;
+    vertexInputInfo.vertexBindingDescriptionCount =
+        static_cast<uint32_t>(config.vertexLayout.bindings.size());
+    vertexInputInfo.pVertexBindingDescriptions =
+        config.vertexLayout.bindings.empty()
+            ? nullptr
+            : config.vertexLayout.bindings.data();
     vertexInputInfo.vertexAttributeDescriptionCount =
         static_cast<uint32_t>(config.vertexLayout.attributes.size());
     vertexInputInfo.pVertexAttributeDescriptions =
@@ -80,7 +90,7 @@ Pipeline::Pipeline(Device &device, VkRenderPass renderPass,
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType =
         VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    inputAssembly.topology = config.topology;
     inputAssembly.primitiveRestartEnable = VK_FALSE;
 
     // 视口（动态状态，这里仅占位）
@@ -99,7 +109,7 @@ Pipeline::Pipeline(Device &device, VkRenderPass renderPass,
     rasterizer.lineWidth = 1.0f;
     rasterizer.cullMode = config.cullMode;
     rasterizer.frontFace = config.frontFace;
-    rasterizer.depthBiasEnable = VK_FALSE;
+    rasterizer.depthBiasEnable = config.depthBiasEnable ? VK_TRUE : VK_FALSE;
 
     // 多重采样
     VkPipelineMultisampleStateCreateInfo multisampling{};
@@ -124,19 +134,19 @@ Pipeline::Pipeline(Device &device, VkRenderPass renderPass,
     depthStencil.back = {};
 
     // 颜色混合
-    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
-    colorBlendAttachment.colorWriteMask =
-        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    colorBlendAttachment.blendEnable = config.blendEnable ? VK_TRUE : VK_FALSE;
-    if (config.blendEnable) {
-        colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-        colorBlendAttachment.dstColorBlendFactor =
-            VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
-        colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-        colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-        colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+    std::vector<VkPipelineColorBlendAttachmentState> colorBlendAttachments;
+    colorBlendAttachments.reserve(config.colorBlendAttachments.size());
+    for (const auto &source : config.colorBlendAttachments) {
+        VkPipelineColorBlendAttachmentState attachment{};
+        attachment.colorWriteMask = source.colorWriteMask;
+        attachment.blendEnable = source.blendEnable ? VK_TRUE : VK_FALSE;
+        attachment.srcColorBlendFactor = source.srcColorBlendFactor;
+        attachment.dstColorBlendFactor = source.dstColorBlendFactor;
+        attachment.colorBlendOp = source.colorBlendOp;
+        attachment.srcAlphaBlendFactor = source.srcAlphaBlendFactor;
+        attachment.dstAlphaBlendFactor = source.dstAlphaBlendFactor;
+        attachment.alphaBlendOp = source.alphaBlendOp;
+        colorBlendAttachments.push_back(attachment);
     }
 
     VkPipelineColorBlendStateCreateInfo colorBlending{};
@@ -144,8 +154,11 @@ Pipeline::Pipeline(Device &device, VkRenderPass renderPass,
         VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     colorBlending.logicOpEnable = VK_FALSE;
     colorBlending.logicOp = VK_LOGIC_OP_COPY;
-    colorBlending.attachmentCount = 1;
-    colorBlending.pAttachments = &colorBlendAttachment;
+    colorBlending.attachmentCount =
+        static_cast<uint32_t>(colorBlendAttachments.size());
+    colorBlending.pAttachments = colorBlendAttachments.empty()
+                                     ? nullptr
+                                     : colorBlendAttachments.data();
     colorBlending.blendConstants[0] = 0.0f;
     colorBlending.blendConstants[1] = 0.0f;
     colorBlending.blendConstants[2] = 0.0f;
@@ -154,6 +167,8 @@ Pipeline::Pipeline(Device &device, VkRenderPass renderPass,
     // 动态状态
     std::vector<VkDynamicState> dynamicStates = {VK_DYNAMIC_STATE_VIEWPORT,
                                                  VK_DYNAMIC_STATE_SCISSOR};
+    if (config.depthBiasEnable)
+        dynamicStates.push_back(VK_DYNAMIC_STATE_DEPTH_BIAS);
 
     VkPipelineDynamicStateCreateInfo dynamicState{};
     dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
@@ -176,8 +191,8 @@ Pipeline::Pipeline(Device &device, VkRenderPass renderPass,
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipelineInfo.stageCount = 2;
-    pipelineInfo.pStages = shaderStages;
+    pipelineInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
+    pipelineInfo.pStages = shaderStages.data();
     pipelineInfo.pVertexInputState = &vertexInputInfo;
     pipelineInfo.pInputAssemblyState = &inputAssembly;
     pipelineInfo.pViewportState = &viewportState;
@@ -188,14 +203,16 @@ Pipeline::Pipeline(Device &device, VkRenderPass renderPass,
     pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = pipelineLayout_;
     pipelineInfo.renderPass = renderPass;
-    pipelineInfo.subpass = 0;
+    pipelineInfo.subpass = config.subpass;
     pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
     pipelineInfo.basePipelineIndex = -1;
 
     VK_CHECK(vkCreateGraphicsPipelines(device_->logicalDevice(), VK_NULL_HANDLE,
                                        1, &pipelineInfo, nullptr, &pipeline_));
 
-    vkDestroyShaderModule(device_->logicalDevice(), fragShaderModule, nullptr);
+    if (fragShaderModule != VK_NULL_HANDLE)
+        vkDestroyShaderModule(device_->logicalDevice(), fragShaderModule,
+                              nullptr);
     vkDestroyShaderModule(device_->logicalDevice(), vertShaderModule, nullptr);
 }
 

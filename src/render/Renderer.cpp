@@ -6,11 +6,16 @@
 #include "core/SwapChain.h"
 #include "core/VulkanCheck.h"
 #include "render/GuiSystem.h"
+#include "render/DirectionalShadow.h"
+#include "render/FrameRenderTargets.h"
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
 #include "render/RenderQueue.h"
+#include "render/RenderSettings.h"
 #include "render/ShaderVariant.h"
+#include "render/pass/DirectionalShadowPass.h"
 #include "render/pass/MainForwardPass.h"
+#include "render/pass/ToneMapPass.h"
 
 #include <memory>
 #include <utility>
@@ -19,13 +24,17 @@ namespace vkr {
 
 Renderer::Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
                    DescriptorAllocator &descriptorAllocator,
-                   VkDeviceSize uniformBufferSize)
+                   VkDeviceSize uniformBufferSize,
+                   RendererShaderPaths shaderPaths)
     : device_(&device), swapChain_(&swapChain), frameSync_(&frameSync),
       descriptorAllocator_(&descriptorAllocator),
-      uniformBufferSize_(uniformBufferSize) {
+      uniformBufferSize_(uniformBufferSize),
+      shaderPaths_(std::move(shaderPaths)) {
     createUniformBuffers();
     createGlobalDescriptorSetLayout();
     createGlobalDescriptorSets();
+    frameTargets_ =
+        std::make_unique<FrameRenderTargets>(device, swapChain.extent());
     createRenderPipeline();
 }
 
@@ -41,7 +50,9 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
                            const RenderQueue &queue,
                            PipelineCache &pipelineCache,
                            GuiSystem *gui,
-                           const ShaderVariant &shaderVariant) {
+                           const ShaderVariant &shaderVariant,
+                           const RenderSettings &settings,
+                           const DirectionalShadowFrameData &shadow) {
     RenderFrameContext renderFrame{};
     renderFrame.cmd = frame.cmd;
     renderFrame.frameIndex = frame.frameIndex;
@@ -50,8 +61,11 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.globalDescriptorSet = globalDescriptorSet(frame.frameIndex);
     renderFrame.globalDescriptorSetLayout = globalDescriptorSetLayout_;
     renderFrame.pipelineCache = &pipelineCache;
+    renderFrame.targets = frameTargets_.get();
     renderFrame.gui = gui;
     renderFrame.shaderVariant = &shaderVariant;
+    renderFrame.settings = &settings;
+    renderFrame.shadow = &shadow;
 
     pipeline_.execute(renderFrame, queue);
 }
@@ -59,12 +73,14 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
 void Renderer::recreateSwapChain() {
     vkDeviceWaitIdle(device_->logicalDevice());
 
+    pipeline_.releaseSwapChainResources();
     swapChain_->recreate();
+    frameTargets_->recreateExtentTargets(swapChain_->extent());
     pipeline_.onResize(*swapChain_);
 }
 
 VkRenderPass Renderer::renderPass() const {
-    return mainForwardPass_ ? mainForwardPass_->renderPass() : VK_NULL_HANDLE;
+    return toneMapPass_ ? toneMapPass_->renderPass() : VK_NULL_HANDLE;
 }
 
 void Renderer::createUniformBuffers() {
@@ -129,10 +145,20 @@ void Renderer::createGlobalDescriptorSets() {
 }
 
 void Renderer::createRenderPipeline() {
-    auto mainPass =
-        std::make_unique<MainForwardPass>(*device_, *swapChain_, *frameSync_);
+    pipeline_.addPass(std::make_unique<DirectionalShadowPass>(
+        *device_, *frameTargets_, globalDescriptorSetLayout_,
+        shaderPaths_.shadowVert, shaderPaths_.shadowMaskFrag));
+
+    auto mainPass = std::make_unique<MainForwardPass>(
+        *device_, *frameTargets_, *descriptorAllocator_);
     mainForwardPass_ = mainPass.get();
     pipeline_.addPass(std::move(mainPass));
+
+    auto toneMapPass = std::make_unique<ToneMapPass>(
+        *device_, *swapChain_, *frameTargets_, *descriptorAllocator_,
+        shaderPaths_.fullscreenVert, shaderPaths_.toneMapFrag);
+    toneMapPass_ = toneMapPass.get();
+    pipeline_.addPass(std::move(toneMapPass));
 }
 
 void *Renderer::mappedUniformBuffer(uint32_t frameIndex) const {

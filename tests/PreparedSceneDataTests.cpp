@@ -33,6 +33,7 @@ void runCaptureTests();
 void runRenderTestSpecTests();
 void runImageComparatorTests();
 void runManagedProcessWin32Tests();
+void runDirectionalShadowTests();
 
 namespace {
 
@@ -184,6 +185,7 @@ int main(int argc, char **argv) {
         runRenderTestSpecTests();
         runImageComparatorTests();
         runManagedProcessWin32Tests();
+        runDirectionalShadowTests();
         std::cout << "VulkanLab CPU tests passed\n";
         return 0;
     } catch (const std::exception &error) {

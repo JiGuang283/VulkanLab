@@ -107,6 +107,26 @@ class FakeRuntimeHost final : public vkr::RuntimeControlHost {
     vkr::ControlJson runtimeRenderStatus() override {
         return reply("render.status");
     }
+    vkr::ControlJson runtimeRenderSettingsGet() override {
+        return reply("render_settings.get");
+    }
+    vkr::ControlJson runtimeRenderSettingsSet(
+        const vkr::RenderSettingsPatch &patch) override {
+        vkr::ControlJson arguments = vkr::ControlJson::object();
+        if (patch.shadowsEnabled)
+            arguments["shadowsEnabled"] = *patch.shadowsEnabled;
+        if (patch.shadowReceiverBias)
+            arguments["shadowReceiverBias"] = *patch.shadowReceiverBias;
+        if (patch.shadowConstantBias)
+            arguments["shadowConstantBias"] = *patch.shadowConstantBias;
+        if (patch.shadowSlopeBias)
+            arguments["shadowSlopeBias"] = *patch.shadowSlopeBias;
+        if (patch.exposureEv)
+            arguments["exposureEv"] = *patch.exposureEv;
+        if (patch.toneMapper)
+            arguments["toneMapper"] = vkr::toneMapperName(*patch.toneMapper);
+        return reply("render_settings.set", std::move(arguments));
+    }
     vkr::ControlJson runtimeCaptureScreenshot(const std::string &path,
                                               bool includeGui) override {
         return reply("capture.screenshot",
@@ -185,6 +205,21 @@ void testAllProtocolMethods() {
                  {"yaw", -135.0f},
                  {"pitch", -30.0f}})},
         {"render.status", {}, result("render.status")},
+        {"render_settings.get", {}, result("render_settings.get")},
+        {"render_settings.set",
+         {{"shadowsEnabled", false},
+          {"shadowReceiverBias", 0.002},
+          {"shadowConstantBias", 1.5},
+          {"shadowSlopeBias", 2.0},
+          {"exposureEv", -1.0},
+          {"toneMapper", "reinhard"}},
+         result("render_settings.set",
+                {{"shadowsEnabled", false},
+                 {"shadowReceiverBias", 0.002f},
+                 {"shadowConstantBias", 1.5f},
+                 {"shadowSlopeBias", 2.0f},
+                 {"exposureEv", -1.0f},
+                 {"toneMapper", "reinhard"}})},
         {"capture.screenshot", {{"path", "suite/frame.png"}},
          result("capture.screenshot",
                 {{"path", "suite/frame.png"}, {"includeGui", false}})},
@@ -281,6 +316,14 @@ void testValidationAndErrorMapping() {
                  {{"path", "frame.png"}, {"includeGui", "no"}},
                  "invalid_params",
                  "Parameter 'includeGui' must be a boolean.");
+    requireError("render_settings.set", {}, "invalid_params",
+                 "render_settings.set requires at least one setting.");
+    requireError("render_settings.set", {{"toneMapper", "bad"}},
+                 "invalid_params",
+                 "Parameter 'toneMapper' must be passthrough, reinhard, or aces.");
+    requireError("render_settings.set", {{"exposureEv", 11.0}},
+                 "invalid_params",
+                 "Parameter 'exposureEv' is outside the supported range.");
     requireError("capture.status", {}, "invalid_params",
                  "Parameter 'taskId' must be an unsigned integer.");
     requireError("capture.cancel", {{"taskId", -1}}, "invalid_params",

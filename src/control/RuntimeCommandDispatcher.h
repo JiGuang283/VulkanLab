@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RuntimeCommand.h"
+#include "render/RenderSettings.h"
 
 #include <array>
 #include <cstdint>
@@ -56,6 +57,9 @@ class RuntimeControlHost {
     virtual ControlJson runtimeCameraGet() = 0;
     virtual ControlJson runtimeCameraSet(const RuntimeCameraPose &pose) = 0;
     virtual ControlJson runtimeRenderStatus() = 0;
+    virtual ControlJson runtimeRenderSettingsGet() = 0;
+    virtual ControlJson
+    runtimeRenderSettingsSet(const RenderSettingsPatch &patch) = 0;
     virtual ControlJson runtimeCaptureScreenshot(const std::string &path,
                                                  bool includeGui) = 0;
     virtual ControlJson runtimeCaptureStatus(uint64_t taskId) = 0;

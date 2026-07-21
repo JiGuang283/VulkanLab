@@ -6,7 +6,10 @@
 namespace vkr {
 
 class GuiSystem;
+class FrameRenderTargets;
 class PipelineCache;
+struct DirectionalShadowFrameData;
+struct RenderSettings;
 struct ShaderVariant;
 
 struct RenderFrameContext {
@@ -17,8 +20,11 @@ struct RenderFrameContext {
     VkDescriptorSet globalDescriptorSet = VK_NULL_HANDLE;
     VkDescriptorSetLayout globalDescriptorSetLayout = VK_NULL_HANDLE;
     PipelineCache  *pipelineCache = nullptr;
+    FrameRenderTargets *targets = nullptr;
     GuiSystem      *gui = nullptr;
     const ShaderVariant *shaderVariant = nullptr;
+    const RenderSettings *settings = nullptr;
+    const DirectionalShadowFrameData *shadow = nullptr;
 };
 
 } // namespace vkr

@@ -24,6 +24,8 @@ struct GlobalUBO {
     alignas(16) glm::vec4 lightCounts;
     alignas(16) GpuLight directionalLights[kMaxDirectionalLights];
     alignas(16) GpuLight punctualLights[kMaxPunctualLights];
+    alignas(16) glm::mat4 directionalShadowViewProj{1.0f};
+    alignas(16) glm::vec4 shadowParams{0.0f};
 };
 
 } // namespace vkr

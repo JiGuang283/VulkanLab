@@ -103,6 +103,8 @@ add_library(vkl_engine STATIC
     diagnostics/CaptureTypes.cpp
     platform/FileDialogWin32.cpp
     render/FallbackTextures.cpp
+    render/DirectionalShadow.cpp
+    render/FrameRenderTargets.cpp
     render/GltfPreparer.cpp
     render/GuiSystem.cpp
     render/MaterialInstance.cpp
@@ -116,6 +118,8 @@ add_library(vkl_engine STATIC
     render/Texture.cpp
     render/TextureData.cpp
     render/pass/MainForwardPass.cpp
+    render/pass/DirectionalShadowPass.cpp
+    render/pass/ToneMapPass.cpp
     scene/BuiltinScenes.cpp
     scene/Camera.cpp
     scene/Scene.cpp

@@ -22,6 +22,8 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     vec4 lightCounts;
     GpuLight directionalLights[MAX_DIRECTIONAL_LIGHTS];
     GpuLight punctualLights[MAX_PUNCTUAL_LIGHTS];
+    mat4 directionalShadowViewProj;
+    vec4 shadowParams;
 } ubo;
 
 layout(location = 0) in vec3 fragPositionWS;
@@ -34,6 +36,7 @@ layout(set = 1, binding = 0) uniform sampler2D baseColorTexture;
 layout(set = 1, binding = 2) uniform sampler2D metallicRoughnessTexture;
 layout(set = 1, binding = 3) uniform sampler2D occlusionTexture;
 layout(set = 1, binding = 4) uniform sampler2D emissiveTexture;
+layout(set = 2, binding = 0) uniform sampler2DShadow directionalShadowMap;
 
 layout(push_constant) uniform PushConstants {
     mat4 model;
@@ -151,6 +154,29 @@ vec3 evaluatePbrLight(vec3 n, vec3 v, vec3 l, vec3 radiance, vec3 albedo,
     return (kd * albedo / PI + specular) * radiance * ndl;
 }
 
+float directionalShadowVisibility(vec3 positionWS)
+{
+    if (ubo.shadowParams.x < 0.5)
+        return 1.0;
+    vec4 clip = ubo.directionalShadowViewProj * vec4(positionWS, 1.0);
+    vec3 coord = clip.xyz / clip.w;
+    vec2 uv = coord.xy * 0.5 + 0.5;
+    if (coord.z <= 0.0 || coord.z >= 1.0 ||
+        any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
+        return 1.0;
+
+    float visibility = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            vec2 offset = vec2(x, y) * ubo.shadowParams.z;
+            visibility += texture(directionalShadowMap,
+                                  vec3(uv + offset,
+                                       coord.z - ubo.shadowParams.y));
+        }
+    }
+    return visibility / 9.0;
+}
+
 float rangeAttenuation(float distanceToLight, float range)
 {
     float attenuation = 1.0 / max(distanceToLight * distanceToLight, 0.01);
@@ -183,8 +209,10 @@ vec3 evaluateDirectLighting(vec3 n, vec3 v, vec3 positionWS, vec3 albedo,
         GpuLight light = ubo.directionalLights[i];
         vec3 l = normalize(light.directionInnerCos.xyz);
         vec3 radiance = light.colorIntensity.rgb * light.colorIntensity.a;
-        direct += evaluatePbrLight(n, v, l, radiance, albedo, roughness,
-                                   metallic);
+        float visibility = i == 0 ? directionalShadowVisibility(positionWS)
+                                  : 1.0;
+        direct += visibility * evaluatePbrLight(
+            n, v, l, radiance, albedo, roughness, metallic);
     }
 
     for (int i = 0; i < punctualCount; ++i) {

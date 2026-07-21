@@ -16,6 +16,11 @@ set(VKL_SHADER_SOURCES
     material_debug/emissive.frag
     material_debug/alpha.frag
     material_debug/transmission.frag
+    material_debug/shadow.frag
+    shadow/depth.vert
+    shadow/depth_mask.frag
+    postprocess/fullscreen.vert
+    postprocess/tonemap.frag
 )
 
 set(VKL_GENERATED_SHADER_ROOT

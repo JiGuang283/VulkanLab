@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 2,
+  "name": "viking-pbr-shadow-golden",
+  "sceneId": "viking-room",
+  "profileId": "desktop_2048",
+  "shader": "PBR-lite NormalMapped",
+  "camera": {
+    "position": [2.0, 2.0, 2.0],
+    "yaw": -135.0,
+    "pitch": -30.0
+  },
+  "viewport": [800, 600],
+  "fixedDelta": 0.000001,
+  "stableFrames": 8,
+  "includeGui": false,
+  "renderSettings": {
+    "shadowsEnabled": true,
+    "shadowReceiverBias": 0.0015,
+    "shadowConstantBias": 1.25,
+    "shadowSlopeBias": 1.75,
+    "exposureEv": 0.0,
+    "toneMapper": "aces"
+  },
+  "mode": "golden",
+  "thresholds": {
+    "minimumNonBlackRatio": 0.05,
+    "maximumSolidColorRatio": 0.98
+  },
+  "golden": {
+    "baselineImage": "goldens/viking-pbr-shadow.png",
+    "baselineMetadata": "goldens/viking-pbr-shadow.json",
+    "perChannelAbsoluteThreshold": [4, 4, 4, 0],
+    "maximumMae": 1.0,
+    "maximumRmse": 4.0,
+    "maximumBadPixelRatio": 0.02
+  }
+}

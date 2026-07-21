@@ -75,6 +75,63 @@ bool optionalBool(const RuntimeCommand &command, const char *name,
     return command.params[name].get<bool>();
 }
 
+float requiredFiniteFloat(const RuntimeCommand &command, const char *name);
+
+std::optional<bool> optionalBoolValue(const RuntimeCommand &command,
+                                      const char *name) {
+    if (!command.params.contains(name))
+        return std::nullopt;
+    if (!command.params[name].is_boolean()) {
+        throw RuntimeCommandError(
+            "invalid_params",
+            std::string("Parameter '") + name + "' must be a boolean.");
+    }
+    return command.params[name].get<bool>();
+}
+
+std::optional<float> optionalFiniteFloat(const RuntimeCommand &command,
+                                         const char *name, float minimum,
+                                         float maximum) {
+    if (!command.params.contains(name))
+        return std::nullopt;
+    const float value = requiredFiniteFloat(command, name);
+    if (value < minimum || value > maximum) {
+        throw RuntimeCommandError(
+            "invalid_params", std::string("Parameter '") + name +
+                                  "' is outside the supported range.");
+    }
+    return value;
+}
+
+RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
+    RenderSettingsPatch patch;
+    patch.shadowsEnabled = optionalBoolValue(command, "shadowsEnabled");
+    patch.shadowReceiverBias = optionalFiniteFloat(
+        command, "shadowReceiverBias", 0.0f, 0.05f);
+    patch.shadowConstantBias = optionalFiniteFloat(
+        command, "shadowConstantBias", 0.0f, 10.0f);
+    patch.shadowSlopeBias = optionalFiniteFloat(
+        command, "shadowSlopeBias", 0.0f, 10.0f);
+    patch.exposureEv =
+        optionalFiniteFloat(command, "exposureEv", -10.0f, 10.0f);
+    if (const auto toneMapper = optionalString(command, "toneMapper")) {
+        patch.toneMapper = toneMapperFromName(*toneMapper);
+        if (!patch.toneMapper) {
+            throw RuntimeCommandError(
+                "invalid_params",
+                "Parameter 'toneMapper' must be passthrough, reinhard, or aces.");
+        }
+    }
+    if (!patch.shadowsEnabled && !patch.shadowReceiverBias &&
+        !patch.shadowConstantBias && !patch.shadowSlopeBias &&
+        !patch.exposureEv && !patch.toneMapper) {
+        throw RuntimeCommandError(
+            "invalid_params",
+            "render_settings.set requires at least one setting.");
+    }
+    return patch;
+}
+
 float requiredFiniteFloat(const RuntimeCommand &command, const char *name) {
     if (!command.params.contains(name) ||
         !command.params[name].is_number()) {
@@ -185,6 +242,11 @@ RuntimeDispatchResult RuntimeCommandDispatcher::dispatch(
             result = host.runtimeCameraSet(requiredCameraPose(command));
         } else if (command.method == "render.status") {
             result = host.runtimeRenderStatus();
+        } else if (command.method == "render_settings.get") {
+            result = host.runtimeRenderSettingsGet();
+        } else if (command.method == "render_settings.set") {
+            result = host.runtimeRenderSettingsSet(
+                renderSettingsPatch(command));
         } else if (command.method == "capture.screenshot") {
             result = host.runtimeCaptureScreenshot(
                 requiredString(command, "path"),

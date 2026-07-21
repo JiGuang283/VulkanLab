@@ -14,8 +14,12 @@ class PipelineConfigBuilder {
                   VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL);
     PipelineConfigBuilder &depth(bool test, bool write,
                                  VkCompareOp compare = VK_COMPARE_OP_LESS);
+    PipelineConfigBuilder &depthBias(bool enable);
     PipelineConfigBuilder &blending(bool enable);
+    PipelineConfigBuilder &colorAttachmentCount(uint32_t count);
+    PipelineConfigBuilder &topology(VkPrimitiveTopology topology);
     PipelineConfigBuilder &msaa(VkSampleCountFlagBits samples);
+    PipelineConfigBuilder &subpass(uint32_t subpass);
     PipelineConfigBuilder &descriptorLayout(VkDescriptorSetLayout layout);
     PipelineConfigBuilder &pushConstant(VkPushConstantRange range);
 

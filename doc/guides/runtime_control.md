@@ -1,8 +1,8 @@
 # VulkanLab Runtime Control 使用说明
 
 > Status: Current
-> Last verified: 2026-07-20
-> Verified against: `4bcabe9`
+> Last verified: 2026-07-21
+> Verified against: current working tree based on `a154f52`
 
 Runtime Control 通过 Windows Named Pipe 控制已经运行的 VulkanLab。它面向本机开发、诊断和自动化，可以查询状态、加载场景、设置相机和 Shader、等待渲染稳定、异步截图并安全退出程序。`scene.list.entries[]` 同时返回稳定 scene ID、Catalog profile ID 和该 profile 的纹理限制。
 
@@ -149,6 +149,24 @@ cd build\windows-msvc-debug\Debug
 ```
 
 Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模式修改纹理限制会触发当前 glTF 场景的新加载任务；控制工具默认等待完成。允许值为 `full`、`512`、`1024` 和 `2048`。CookedOnly profile 固定，修改返回 `texture_limit_locked`。
+
+### 阴影、曝光与 Tone Mapping
+
+```powershell
+.\VulkanLabCtl.exe render-settings get
+.\VulkanLabCtl.exe render-settings set --shadows on
+.\VulkanLabCtl.exe render-settings set `
+  --receiver-bias 0.0015 `
+  --constant-bias 1.25 `
+  --slope-bias 1.75
+.\VulkanLabCtl.exe render-settings set `
+  --exposure 1.0 `
+  --tone-mapper aces
+```
+
+`render-settings set` 支持部分更新，并要求至少提供一个选项。`--shadows` 接受 `on/off`，`--tone-mapper` 接受 `aces`、`reinhard` 或 `passthrough`。Receiver bias 范围为 `[0, 0.05]`，constant/slope bias 为 `[0, 10]`，exposure 为 `[-10, 10]` EV。
+
+Tone Mapper 和 Exposure 只影响两个 PBR-lite variant。Legacy 与所有 Debug variant 强制 PassThrough；阴影只影响 PBR-lite 的第一盏方向光，但 `Debug Shadow` 可显示最终 visibility。UI 的 Renderer/Lighting 面板与 Runtime Control 修改同一个 `RenderSettings` 对象。
 
 ### 派生资产
 

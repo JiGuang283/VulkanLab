@@ -20,6 +20,7 @@ add_executable(VulkanLabCpuTests
     RenderTestSpecTests.cpp
     ImageComparatorTests.cpp
     ManagedProcessWin32Tests.cpp
+    DirectionalShadowTests.cpp
 )
 target_link_libraries(VulkanLabCpuTests PRIVATE
     vkl_build_options
@@ -96,10 +97,20 @@ if(WIN32)
         VulkanLabRenderSmokeSheenNormal sheen_normal_smoke.json)
     vulkanlab_add_visual_test(
         VulkanLabRenderSmokeSheenBaseColor sheen_basecolor_smoke.json)
+    vulkanlab_add_visual_test(
+        VulkanLabRenderSmokeVikingPbrShadow viking_pbr_shadow_smoke.json)
+    vulkanlab_add_visual_test(
+        VulkanLabRenderSmokeVikingDebugShadow viking_debug_shadow_smoke.json)
 
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/render/goldens/viking-legacy.png"
        AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/render/goldens/viking-legacy.json")
         vulkanlab_add_visual_test(
             VulkanLabRenderGoldenViking viking_legacy_golden.json)
+    endif()
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/render/goldens/viking-pbr-shadow.png"
+       AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/render/goldens/viking-pbr-shadow.json")
+        vulkanlab_add_visual_test(
+            VulkanLabRenderGoldenVikingPbrShadow
+            viking_pbr_shadow_golden.json)
     endif()
 endif()

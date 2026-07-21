@@ -466,7 +466,8 @@ class RunnerSession {
             throw RunnerFailure("protocol_endpoint_mismatch",
                                 "Renderer reported the wrong pipe endpoint.");
         for (const std::string capability :
-             {"camera_control", "render_status", "capture"}) {
+             {"camera_control", "render_status", "capture",
+              "render_settings"}) {
             if (!containsCapability(info, capability)) {
                 throw RunnerFailure(
                     "runtime_capability_missing",
@@ -535,6 +536,18 @@ class RunnerSession {
                {{"position", spec_->camera.position},
                 {"yaw", spec_->camera.yaw},
                 {"pitch", spec_->camera.pitch}});
+        invoke("render_settings.set",
+               {{"shadowsEnabled",
+                 spec_->renderSettings.shadowsEnabled},
+                {"shadowReceiverBias",
+                 spec_->renderSettings.shadowReceiverBias},
+                {"shadowConstantBias",
+                 spec_->renderSettings.shadowConstantBias},
+                {"shadowSlopeBias",
+                 spec_->renderSettings.shadowSlopeBias},
+                {"exposureEv", spec_->renderSettings.exposureEv},
+                {"toneMapper",
+                 toneMapperName(spec_->renderSettings.toneMapper)}});
         info = invoke("system.info");
         report_["runtime"]["infoAfterSetup"] = info;
         if (info.value("shader", std::string{}) != spec_->shader)

@@ -77,6 +77,64 @@ double requiredFinite(const nlohmann::json &object, const char *key) {
     return result;
 }
 
+float optionalFiniteFloat(const nlohmann::json &object, const char *key,
+                          float fallback, float minimum, float maximum) {
+    const auto found = object.find(key);
+    if (found == object.end())
+        return fallback;
+    if (!found->is_number())
+        throw std::invalid_argument(std::string("field '") + key +
+                                    "' must be a number");
+    const double value = found->get<double>();
+    if (!std::isfinite(value) || value < minimum || value > maximum)
+        throw std::invalid_argument(std::string("field '") + key +
+                                    "' is outside the supported range");
+    return static_cast<float>(value);
+}
+
+void parseRenderSettings(const nlohmann::json &document,
+                         RenderSettings &settings) {
+    const auto found = document.find("renderSettings");
+    if (found == document.end())
+        return;
+    requireObject(*found, "renderSettings");
+    rejectUnknownKeys(*found,
+                      {"shadowsEnabled", "shadowReceiverBias",
+                       "shadowConstantBias", "shadowSlopeBias",
+                       "exposureEv", "toneMapper"},
+                      "renderSettings");
+
+    const auto shadows = found->find("shadowsEnabled");
+    if (shadows != found->end()) {
+        if (!shadows->is_boolean())
+            throw std::invalid_argument(
+                "field 'shadowsEnabled' must be a boolean");
+        settings.shadowsEnabled = shadows->get<bool>();
+    }
+    settings.shadowReceiverBias = optionalFiniteFloat(
+        *found, "shadowReceiverBias", settings.shadowReceiverBias, 0.0f,
+        0.05f);
+    settings.shadowConstantBias = optionalFiniteFloat(
+        *found, "shadowConstantBias", settings.shadowConstantBias, 0.0f,
+        10.0f);
+    settings.shadowSlopeBias = optionalFiniteFloat(
+        *found, "shadowSlopeBias", settings.shadowSlopeBias, 0.0f, 10.0f);
+    settings.exposureEv = optionalFiniteFloat(
+        *found, "exposureEv", settings.exposureEv, -10.0f, 10.0f);
+
+    const auto toneMapper = found->find("toneMapper");
+    if (toneMapper != found->end()) {
+        if (!toneMapper->is_string())
+            throw std::invalid_argument(
+                "field 'toneMapper' must be a string");
+        const auto parsed = toneMapperFromName(toneMapper->get<std::string>());
+        if (!parsed)
+            throw std::invalid_argument(
+                "toneMapper must be 'passthrough', 'reinhard', or 'aces'");
+        settings.toneMapper = *parsed;
+    }
+}
+
 double requiredRatio(const nlohmann::json &object, const char *key) {
     const double result = requiredFinite(object, key);
     if (result < 0.0 || result > 1.0)
@@ -219,15 +277,19 @@ RenderTestSpec parseRenderTestSpec(const nlohmann::json &document,
                       {"schemaVersion", "name", "sceneId", "profileId",
                        "shader", "camera", "viewport", "fixedDelta",
                        "stableFrames", "includeGui", "mode", "thresholds",
-                       "golden"},
+                       "golden", "renderSettings"},
                       "render test spec");
 
     RenderTestSpec spec;
     spec.sourcePath = std::filesystem::absolute(sourcePath).lexically_normal();
     const uint32_t schemaVersion =
         requiredUint32(document, "schemaVersion", 1, UINT32_MAX);
-    if (schemaVersion != RenderTestSpec::kSchemaVersion)
+    if (schemaVersion != 1 &&
+        schemaVersion != RenderTestSpec::kSchemaVersion)
         throw std::invalid_argument("unsupported render test schemaVersion");
+    if (schemaVersion == 1 && document.contains("renderSettings"))
+        throw std::invalid_argument(
+            "renderSettings requires render test schemaVersion 2");
     spec.name = requiredString(document, "name", 128);
     spec.sceneId = requiredString(document, "sceneId", 128);
     spec.profileId = requiredString(document, "profileId", 128);
@@ -261,6 +323,7 @@ RenderTestSpec parseRenderTestSpec(const nlohmann::json &document,
     if (!includeGui.is_boolean())
         throw std::invalid_argument("field 'includeGui' must be a boolean");
     spec.includeGui = includeGui.get<bool>();
+    parseRenderSettings(document, spec.renderSettings);
 
     const std::string mode = requiredString(document, "mode", 16);
     if (mode == "smoke")
@@ -356,6 +419,13 @@ nlohmann::json renderTestSpecToJson(const RenderTestSpec &spec) {
         {"fixedDelta", spec.fixedDelta},
         {"stableFrames", spec.stableFrames},
         {"includeGui", spec.includeGui},
+        {"renderSettings",
+         {{"shadowsEnabled", spec.renderSettings.shadowsEnabled},
+          {"shadowReceiverBias", spec.renderSettings.shadowReceiverBias},
+          {"shadowConstantBias", spec.renderSettings.shadowConstantBias},
+          {"shadowSlopeBias", spec.renderSettings.shadowSlopeBias},
+          {"exposureEv", spec.renderSettings.exposureEv},
+          {"toneMapper", toneMapperName(spec.renderSettings.toneMapper)}}},
         {"mode", renderTestModeName(spec.mode)},
         {"thresholds",
          {{"minimumNonBlackRatio",

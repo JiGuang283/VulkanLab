@@ -1,5 +1,7 @@
 #pragma once
 
+#include "render/RenderSettings.h"
+
 #include <json.hpp>
 
 #include <array>
@@ -37,7 +39,7 @@ struct GoldenSpec {
 };
 
 struct RenderTestSpec {
-    static constexpr uint32_t kSchemaVersion = 1;
+    static constexpr uint32_t kSchemaVersion = 2;
 
     std::filesystem::path sourcePath;
     std::string name;
@@ -49,6 +51,7 @@ struct RenderTestSpec {
     double fixedDelta = 1.0 / 60.0;
     uint32_t stableFrames = 8;
     bool includeGui = false;
+    RenderSettings renderSettings;
     RenderTestMode mode = RenderTestMode::Smoke;
     SmokeThresholds smokeThresholds;
     std::optional<GoldenSpec> golden;

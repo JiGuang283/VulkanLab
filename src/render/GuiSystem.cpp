@@ -58,7 +58,7 @@ GuiSystem::GuiSystem(VkInstance instance, Device &device,
 
     initInfo.PipelineInfoMain.RenderPass = renderPass;
     initInfo.PipelineInfoMain.Subpass = 0;
-    initInfo.PipelineInfoMain.MSAASamples = device.msaaSamples();
+    initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 
     if (!ImGui_ImplVulkan_Init(&initInfo))
         throw std::runtime_error("ImGui_ImplVulkan_Init failed");

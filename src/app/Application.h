@@ -9,7 +9,9 @@
 #include "control/RuntimeCommandDispatcher.h"
 #include "diagnostics/SceneLoadStats.h"
 #include "render/RenderQueue.h"
+#include "render/RenderSettings.h"
 #include "render/ShaderVariant.h"
+#include "render/DirectionalShadow.h"
 #include "scene/Camera.h"
 #include "scene/Scene.h"
 #include "scene/SceneFactory.h"
@@ -68,7 +70,9 @@ class Application final : public RuntimeControlHost {
 
     void updateInputMode();
     void processCameraInput(float dt);
-    void updateUniforms(uint32_t frameIndex);
+    void updateUniforms(uint32_t frameIndex,
+                        const DirectionalShadowFrameData &shadow);
+    DirectionalShadowFrameData directionalShadowFrameData() const;
     void drawGui();
     void handleSwapChainRecreate();
     const ShaderVariant &currentShaderVariant() const;
@@ -99,6 +103,7 @@ class Application final : public RuntimeControlHost {
                            bool success);
     uint64_t setTextureLimit(uint32_t limit);
     void setShaderVariant(int index);
+    void applyRenderSettings(const RenderSettingsPatch &patch);
     int findSceneIndexByName(const std::string &name) const;
     int findShaderVariantIndexByName(const std::string &name) const;
     std::string profileIdForTextureLimit(const SceneEntry &entry) const;
@@ -127,6 +132,9 @@ class Application final : public RuntimeControlHost {
     ControlJson runtimeCameraGet() override;
     ControlJson runtimeCameraSet(const RuntimeCameraPose &pose) override;
     ControlJson runtimeRenderStatus() override;
+    ControlJson runtimeRenderSettingsGet() override;
+    ControlJson
+    runtimeRenderSettingsSet(const RenderSettingsPatch &patch) override;
     ControlJson runtimeCaptureScreenshot(const std::string &path,
                                          bool includeGui) override;
     ControlJson runtimeCaptureStatus(uint64_t taskId) override;
@@ -202,6 +210,7 @@ class Application final : public RuntimeControlHost {
     uint32_t  lastUploadedDirectionalLights_ = 0;
     uint32_t  lastUploadedPunctualLights_ = 0;
     uint32_t  lastIgnoredLights_ = 0;
+    RenderSettings renderSettings_{};
 };
 
 } // namespace vkr
