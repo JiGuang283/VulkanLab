@@ -38,6 +38,8 @@ Renderer::Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
         registerDefaultRendererResources(*renderResources_, device);
     renderResources_->realize(swapChain.extent());
     createRenderPipeline();
+    gpuPassProfiler_ =
+        std::make_unique<GpuPassProfiler>(device, pipeline_.passNames());
 }
 
 Renderer::~Renderer() {
@@ -69,7 +71,11 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.shaderVariant = &shaderVariant;
     renderFrame.view = &view;
 
-    pipeline_.execute(renderFrame, *renderResources_, queue);
+    gpuPassProfiler_->collect(frame.frameIndex);
+    gpuPassProfiler_->beginFrame(frame.cmd, frame.frameIndex,
+                                 frameSync_->lastSubmittedSerial() + 1);
+    pipeline_.execute(renderFrame, *renderResources_, queue,
+                      gpuPassProfiler_.get());
 }
 
 void Renderer::recreateSwapChain() {
@@ -165,6 +171,10 @@ void Renderer::createRenderPipeline() {
     toneMapPass_ = toneMapPass.get();
     pipeline_.addPass(std::move(toneMapPass));
     pipeline_.validateResources(*renderResources_);
+}
+
+const GpuPassTimings &Renderer::gpuPassTimings() const {
+    return gpuPassProfiler_->latest();
 }
 
 VkDescriptorSet Renderer::globalDescriptorSet(uint32_t frameIndex) const {

@@ -25,6 +25,7 @@ add_executable(VulkanLabCpuTests
     RenderResourceRegistryTests.cpp
     PipelineKeyTests.cpp
     ShaderContractTests.cpp
+    GpuPassProfilerTests.cpp
 )
 target_link_libraries(VulkanLabCpuTests PRIVATE
     vkl_build_options

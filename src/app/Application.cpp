@@ -1846,6 +1846,10 @@ ControlJson Application::runtimeRenderStatus() {
     const bool captureEnabled = captureService_ != nullptr;
     const bool captureSupported =
         captureEnabled && swapChain_->captureSupported();
+    const GpuPassTimings &gpuTimings = renderer_->gpuPassTimings();
+    ControlJson gpuPasses = ControlJson::object();
+    for (const GpuPassTiming &pass : gpuTimings.passes)
+        gpuPasses[pass.name] = pass.milliseconds;
     return {
         {"scene", std::move(scene)},
         {"sceneGeneration", sceneGeneration_},
@@ -1854,6 +1858,11 @@ ControlJson Application::runtimeRenderStatus() {
         {"completedSubmissionSerial",
          frameSync_->completedSubmissionSerial()},
         {"presentedFrames", presentedFrameCount_},
+        {"gpuTimings",
+         {{"available", gpuTimings.available},
+          {"frameSerial", gpuTimings.frameSerial},
+          {"passes", std::move(gpuPasses)},
+          {"totalMs", gpuTimings.totalMs}}},
         {"pendingUpload", pendingUploads},
         {"pendingUploadDetail",
          {{"textures", pendingTextures},
@@ -2950,6 +2959,21 @@ void Application::drawGui() {
     ImGui::Text("Mode:   %s", mode_ == InputMode::UI ? "UI" : "CameraDrag");
     if (currentScene_)
         ImGui::Text("Objects: %zu", currentScene_->objects().size());
+    if (ImGui::CollapsingHeader("GPU Pass Timings",
+                                ImGuiTreeNodeFlags_DefaultOpen)) {
+        const GpuPassTimings &timings = renderer_->gpuPassTimings();
+        if (!timings.available) {
+            ImGui::TextUnformatted("Unavailable");
+        } else {
+            ImGui::Text("Frame Serial: %llu",
+                        static_cast<unsigned long long>(
+                            timings.frameSerial));
+            for (const GpuPassTiming &pass : timings.passes)
+                ImGui::Text("%s: %.3f ms", pass.name.c_str(),
+                            pass.milliseconds);
+            ImGui::Text("Total: %.3f ms", timings.totalMs);
+        }
+    }
     if (lastSceneLoadStats_ &&
         ImGui::CollapsingHeader("Last Scene Load",
                                 ImGuiTreeNodeFlags_DefaultOpen)) {

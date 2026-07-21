@@ -104,6 +104,7 @@ add_library(vkl_engine STATIC
     platform/FileDialogWin32.cpp
     render/FallbackTextures.cpp
     render/DirectionalShadow.cpp
+    render/GpuPassProfiler.cpp
     render/GltfPreparer.cpp
     render/GuiSystem.cpp
     render/MaterialInstance.cpp

@@ -1,6 +1,7 @@
 #include "RenderPipeline.h"
 
 #include "RenderFrame.h"
+#include "GpuPassProfiler.h"
 #include "RenderQueue.h"
 #include "RenderResourceRegistry.h"
 #include "core/SwapChain.h"
@@ -39,11 +40,26 @@ void RenderPipeline::validateResources(
     validateRenderResourceContracts(resources.imageDescriptions(), usages);
 }
 
+std::vector<std::string> RenderPipeline::passNames() const {
+    std::vector<std::string> names;
+    names.reserve(passes_.size());
+    for (const auto &pass : passes_)
+        names.emplace_back(pass->name());
+    return names;
+}
+
 void RenderPipeline::execute(const RenderFrameContext &frame,
                              const RenderResourceRegistry &resources,
-                             const RenderQueue &queue) {
-    for (auto &pass : passes_)
+                             const RenderQueue &queue,
+                             GpuPassProfiler *profiler) {
+    for (uint32_t passIndex = 0; passIndex < passes_.size(); ++passIndex) {
+        if (profiler)
+            profiler->beginPass(frame.cmd, frame.frameIndex, passIndex);
+        auto &pass = passes_[passIndex];
         pass->execute(frame, resources, queue);
+        if (profiler)
+            profiler->endPass(frame.cmd, frame.frameIndex, passIndex);
+    }
 }
 
 } // namespace vkr

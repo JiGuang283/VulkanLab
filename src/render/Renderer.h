@@ -5,6 +5,7 @@
 #include "core/FrameSync.h"
 #include "core/SwapChain.h"
 #include "render/RenderPipeline.h"
+#include "render/GpuPassProfiler.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/RendererShaderPaths.h"
 
@@ -43,6 +44,7 @@ class Renderer {
 
     // ---- 访问器 ----
     VkRenderPass renderPass() const;
+    const GpuPassTimings &gpuPassTimings() const;
     VkDescriptorSetLayout globalDescriptorSetLayout() const {
         return globalDescriptorSetLayout_;
     }
@@ -68,6 +70,7 @@ class Renderer {
     RendererResourceHandles resourceHandles_{};
     RendererShaderPaths shaderPaths_;
     RenderPipeline pipeline_;
+    std::unique_ptr<GpuPassProfiler> gpuPassProfiler_;
     MainForwardPass *mainForwardPass_ = nullptr;
     ToneMapPass *toneMapPass_ = nullptr;
 };

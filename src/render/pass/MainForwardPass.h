@@ -26,7 +26,7 @@ class MainForwardPass final : public IRenderPass {
     MainForwardPass(const MainForwardPass &) = delete;
     MainForwardPass &operator=(const MainForwardPass &) = delete;
 
-    std::string_view name() const override { return "MainForwardPass"; }
+    std::string_view name() const override { return "MainForward"; }
     std::vector<RenderImageUsage> resourceUsages() const override;
     void releaseSwapChainResources() override;
     void onResize(const SwapChain &swapChain,

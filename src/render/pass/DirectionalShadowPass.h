@@ -29,7 +29,7 @@ class DirectionalShadowPass final : public IRenderPass {
     DirectionalShadowPass &operator=(const DirectionalShadowPass &) = delete;
 
     std::string_view name() const override {
-        return "DirectionalShadowPass";
+        return "DirectionalShadow";
     }
     std::vector<RenderImageUsage> resourceUsages() const override;
     void onResize(const SwapChain &,

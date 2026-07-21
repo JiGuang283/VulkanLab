@@ -31,7 +31,7 @@ class ToneMapPass final : public IRenderPass {
     ToneMapPass(const ToneMapPass &) = delete;
     ToneMapPass &operator=(const ToneMapPass &) = delete;
 
-    std::string_view name() const override { return "ToneMapPass"; }
+    std::string_view name() const override { return "ToneMap + UI"; }
     std::vector<RenderImageUsage> resourceUsages() const override;
     void releaseSwapChainResources() override;
     void onResize(const SwapChain &swapChain,

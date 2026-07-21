@@ -589,6 +589,21 @@ void printHuman(const std::string &method, const Json &result) {
                   << result.at("rendering").get<bool>()
                   << ", minimized: "
                   << result.at("minimized").get<bool>() << '\n';
+        const Json &gpuTimings = result.at("gpuTimings");
+        if (gpuTimings.value("available", false)) {
+            std::cout << "GPU frame "
+                      << gpuTimings.at("frameSerial").get<uint64_t>()
+                      << ": " << std::fixed << std::setprecision(3)
+                      << gpuTimings.at("totalMs").get<double>()
+                      << " ms total\n";
+            for (const auto &[name, milliseconds] :
+                 gpuTimings.at("passes").items()) {
+                std::cout << "  " << name << ": "
+                          << milliseconds.get<double>() << " ms\n";
+            }
+        } else {
+            std::cout << "GPU timings: unavailable\n";
+        }
         if (result.value("stable", false)) {
             std::cout << "stable frames: "
                       << result.at("stableFrames").get<uint64_t>() << "/"
