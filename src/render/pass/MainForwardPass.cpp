@@ -6,7 +6,6 @@
 #include "core/Pipeline.h"
 #include "core/PipelineConfigBuilder.h"
 #include "core/VulkanCheck.h"
-#include "render/FrameRenderTargets.h"
 #include "render/GpuMaterialData.h"
 #include "render/MaterialInstance.h"
 #include "render/MaterialTemplate.h"
@@ -15,6 +14,7 @@
 #include "render/PipelineKey.h"
 #include "render/RenderFrame.h"
 #include "render/RenderQueue.h"
+#include "render/RenderResourceRegistry.h"
 #include "render/ShaderVariant.h"
 
 #include <array>
@@ -39,13 +39,15 @@ float alphaModeToShaderValue(AlphaMode mode) {
 
 } // namespace
 
-MainForwardPass::MainForwardPass(Device &device, FrameRenderTargets &targets,
+MainForwardPass::MainForwardPass(Device &device,
+                                 const RenderResourceRegistry &resources,
+                                 RendererResourceHandles resourceHandles,
                                  DescriptorAllocator &descriptorAllocator)
-    : device_(&device), targets_(&targets),
+    : device_(&device), resourceHandles_(resourceHandles),
       descriptorAllocator_(&descriptorAllocator) {
-    createRenderPass();
-    createFramebuffers();
-    createShadowDescriptors();
+    createRenderPass(resources);
+    createFramebuffers(resources);
+    createShadowDescriptors(resources);
 }
 
 MainForwardPass::~MainForwardPass() {
@@ -64,18 +66,45 @@ void MainForwardPass::releaseSwapChainResources() {
     destroyFramebuffers();
 }
 
-void MainForwardPass::onResize(const SwapChain &) {
-    createFramebuffers();
+std::vector<RenderImageUsage> MainForwardPass::resourceUsages() const {
+    std::vector<RenderImageUsage> usages = {
+        {resourceHandles_.directionalShadowDepth,
+         RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}};
+    if (resourceHandles_.hdrMsaaColor.valid()) {
+        usages.push_back({resourceHandles_.hdrMsaaColor,
+                          RenderImageAccess::ColorAttachmentWrite,
+                          VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
+    }
+    usages.push_back({resourceHandles_.mainDepth,
+                      RenderImageAccess::DepthAttachmentWrite,
+                      VK_IMAGE_LAYOUT_UNDEFINED,
+                      VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL});
+    usages.push_back({resourceHandles_.hdrColor,
+                      RenderImageAccess::ColorAttachmentWrite,
+                      VK_IMAGE_LAYOUT_UNDEFINED,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    return usages;
+}
+
+void MainForwardPass::onResize(
+    const SwapChain &, const RenderResourceRegistry &resources) {
+    createFramebuffers(resources);
 }
 
 void MainForwardPass::execute(const RenderFrameContext &frame,
+                              const RenderResourceRegistry &resources,
                               const RenderQueue &queue) {
-    begin(frame.cmd, frame.frameIndex);
-    drawQueue(frame, queue);
+    begin(frame.cmd, frame.frameIndex, resources);
+    drawQueue(frame, resources, queue);
     vkCmdEndRenderPass(frame.cmd);
 }
 
-void MainForwardPass::begin(VkCommandBuffer cmd, uint32_t frameIndex) {
+void MainForwardPass::begin(VkCommandBuffer cmd, uint32_t frameIndex,
+                            const RenderResourceRegistry &resources) {
+    const VkExtent2D extent = resources.extent(resourceHandles_.hdrColor);
     std::array<VkClearValue, 2> clearValues{};
     clearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
     clearValues[1].depthStencil = {1.0f, 0};
@@ -85,22 +114,23 @@ void MainForwardPass::begin(VkCommandBuffer cmd, uint32_t frameIndex) {
     beginInfo.renderPass = renderPass_;
     beginInfo.framebuffer = framebuffers_.at(frameIndex);
     beginInfo.renderArea.offset = {0, 0};
-    beginInfo.renderArea.extent = targets_->extent();
+    beginInfo.renderArea.extent = extent;
     beginInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
     beginInfo.pClearValues = clearValues.data();
     vkCmdBeginRenderPass(cmd, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
     VkViewport viewport{};
-    viewport.width = static_cast<float>(targets_->extent().width);
-    viewport.height = static_cast<float>(targets_->extent().height);
+    viewport.width = static_cast<float>(extent.width);
+    viewport.height = static_cast<float>(extent.height);
     viewport.maxDepth = 1.0f;
     vkCmdSetViewport(cmd, 0, 1, &viewport);
 
-    VkRect2D scissor{{0, 0}, targets_->extent()};
+    VkRect2D scissor{{0, 0}, extent};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 }
 
 void MainForwardPass::drawQueue(const RenderFrameContext &frame,
+                                const RenderResourceRegistry &resources,
                                 const RenderQueue &queue) {
     if (!frame.pipelineCache)
         return;
@@ -125,7 +155,8 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
             pipelineConfig.depthTest = true;
             pipelineConfig.depthWrite = !transparent;
             pipelineConfig.cullMode = cullMode;
-            pipelineConfig.msaaSamples = targets_->samples();
+            pipelineConfig.msaaSamples =
+                resources.description(resourceHandles_.mainDepth).samples;
             if (frame.shaderVariant) {
                 pipelineConfig.vertShaderPath =
                     frame.shaderVariant->vertSpvPath;
@@ -147,7 +178,8 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
             key.queue = queueType;
             key.cullMode = cullMode;
             key.renderPass = renderPass_;
-            key.samples = targets_->samples();
+            key.samples =
+                resources.description(resourceHandles_.mainDepth).samples;
 
             Pipeline &pipeline =
                 frame.pipelineCache->getOrCreate(key, pipelineConfig);
@@ -197,13 +229,17 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
     drawCommands(queue.transparent(), RenderQueueType::Transparent);
 }
 
-void MainForwardPass::createRenderPass() {
-    const bool multisampled =
-        targets_->samples() != VK_SAMPLE_COUNT_1_BIT;
+void MainForwardPass::createRenderPass(
+    const RenderResourceRegistry &resources) {
+    const RenderImageDesc &hdrDesc =
+        resources.description(resourceHandles_.hdrColor);
+    const RenderImageDesc &depthDesc =
+        resources.description(resourceHandles_.mainDepth);
+    const bool multisampled = resourceHandles_.hdrMsaaColor.valid();
 
     VkAttachmentDescription color{};
-    color.format = targets_->hdrFormat();
-    color.samples = multisampled ? targets_->samples()
+    color.format = hdrDesc.format;
+    color.samples = multisampled ? depthDesc.samples
                                  : VK_SAMPLE_COUNT_1_BIT;
     color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     color.storeOp = multisampled ? VK_ATTACHMENT_STORE_OP_DONT_CARE
@@ -216,8 +252,8 @@ void MainForwardPass::createRenderPass() {
                             : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkAttachmentDescription depth{};
-    depth.format = targets_->depthFormat();
-    depth.samples = targets_->samples();
+    depth.format = depthDesc.format;
+    depth.samples = depthDesc.samples;
     depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     depth.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -226,7 +262,7 @@ void MainForwardPass::createRenderPass() {
     depth.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
     VkAttachmentDescription resolve{};
-    resolve.format = targets_->hdrFormat();
+    resolve.format = hdrDesc.format;
     resolve.samples = VK_SAMPLE_COUNT_1_BIT;
     resolve.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     resolve.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -284,32 +320,42 @@ void MainForwardPass::createRenderPass() {
                                 &renderPass_));
 }
 
-void MainForwardPass::createFramebuffers() {
-    const bool multisampled =
-        targets_->samples() != VK_SAMPLE_COUNT_1_BIT;
+void MainForwardPass::createFramebuffers(
+    const RenderResourceRegistry &resources) {
+    const bool multisampled = resourceHandles_.hdrMsaaColor.valid();
+    const VkExtent2D extent = resources.extent(resourceHandles_.hdrColor);
     for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT;
          ++frameIndex) {
-        const auto &target = targets_->frame(frameIndex);
         std::array<VkImageView, 3> attachments{};
-        attachments[0] = multisampled ? target.hdrMsaaColor->imageView()
-                                      : target.hdrColor->imageView();
-        attachments[1] = target.depth->imageView();
-        attachments[2] = target.hdrColor->imageView();
+        attachments[0] =
+            multisampled
+                ? resources
+                      .image(resourceHandles_.hdrMsaaColor, frameIndex)
+                      .imageView()
+                : resources.image(resourceHandles_.hdrColor, frameIndex)
+                      .imageView();
+        attachments[1] =
+            resources.image(resourceHandles_.mainDepth, frameIndex)
+                .imageView();
+        attachments[2] =
+            resources.image(resourceHandles_.hdrColor, frameIndex)
+                .imageView();
 
         VkFramebufferCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         info.renderPass = renderPass_;
         info.attachmentCount = multisampled ? 3u : 2u;
         info.pAttachments = attachments.data();
-        info.width = targets_->extent().width;
-        info.height = targets_->extent().height;
+        info.width = extent.width;
+        info.height = extent.height;
         info.layers = 1;
         VK_CHECK(vkCreateFramebuffer(device_->logicalDevice(), &info, nullptr,
                                      &framebuffers_[frameIndex]));
     }
 }
 
-void MainForwardPass::createShadowDescriptors() {
+void MainForwardPass::createShadowDescriptors(
+    const RenderResourceRegistry &resources) {
     VkDescriptorSetLayoutBinding binding{};
     binding.binding = 0;
     binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -330,9 +376,12 @@ void MainForwardPass::createShadowDescriptors() {
             shadowDescriptorSetLayout_,
             {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1}});
         VkDescriptorImageInfo imageInfo{};
-        imageInfo.sampler = targets_->shadowSampler();
+        imageInfo.sampler =
+            resources.sampler(resourceHandles_.shadowSampler);
         imageInfo.imageView =
-            targets_->frame(frameIndex).shadowDepth->imageView();
+            resources
+                .image(resourceHandles_.directionalShadowDepth, frameIndex)
+                .imageView();
         imageInfo.imageLayout =
             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 

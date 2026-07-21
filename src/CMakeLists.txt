@@ -104,7 +104,6 @@ add_library(vkl_engine STATIC
     platform/FileDialogWin32.cpp
     render/FallbackTextures.cpp
     render/DirectionalShadow.cpp
-    render/FrameRenderTargets.cpp
     render/GltfPreparer.cpp
     render/GuiSystem.cpp
     render/MaterialInstance.cpp
@@ -114,6 +113,7 @@ add_library(vkl_engine STATIC
     render/Renderer.cpp
     render/RenderPipeline.cpp
     render/RenderQueue.cpp
+    render/RenderResourceRegistry.cpp
     render/RenderView.cpp
     render/TangentGenerator.cpp
     render/Texture.cpp

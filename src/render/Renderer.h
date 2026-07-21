@@ -5,6 +5,7 @@
 #include "core/FrameSync.h"
 #include "core/SwapChain.h"
 #include "render/RenderPipeline.h"
+#include "render/RenderResourceRegistry.h"
 #include "render/RendererShaderPaths.h"
 
 #include <memory>
@@ -15,7 +16,6 @@ namespace vkr {
 
 class DescriptorAllocator;
 class GuiSystem;
-class FrameRenderTargets;
 class MainForwardPass;
 class ToneMapPass;
 class PipelineCache;
@@ -64,7 +64,8 @@ class Renderer {
     VkDeviceSize                         uniformBufferSize_ = 0;
     VkDescriptorSetLayout globalDescriptorSetLayout_ = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> globalDescriptorSets_;
-    std::unique_ptr<FrameRenderTargets> frameTargets_;
+    std::unique_ptr<RenderResourceRegistry> renderResources_;
+    RendererResourceHandles resourceHandles_{};
     RendererShaderPaths shaderPaths_;
     RenderPipeline pipeline_;
     MainForwardPass *mainForwardPass_ = nullptr;

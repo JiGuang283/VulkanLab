@@ -6,7 +6,6 @@
 #include "core/PipelineConfigBuilder.h"
 #include "core/VulkanCheck.h"
 #include "render/DirectionalShadow.h"
-#include "render/FrameRenderTargets.h"
 #include "render/GpuMaterialData.h"
 #include "render/MaterialInstance.h"
 #include "render/MaterialTemplate.h"
@@ -15,6 +14,7 @@
 #include "render/PipelineKey.h"
 #include "render/RenderFrame.h"
 #include "render/RenderQueue.h"
+#include "render/RenderResourceRegistry.h"
 #include "render/RenderView.h"
 
 #include <glm/glm.hpp>
@@ -23,15 +23,16 @@
 namespace vkr {
 
 DirectionalShadowPass::DirectionalShadowPass(
-    Device &device, FrameRenderTargets &targets,
+    Device &device, const RenderResourceRegistry &resources,
+    RenderImageHandle shadowDepth,
     VkDescriptorSetLayout globalDescriptorSetLayout,
     std::string shadowVertPath, std::string shadowMaskFragPath)
-    : device_(&device), targets_(&targets),
+    : device_(&device), shadowDepth_(shadowDepth),
       globalDescriptorSetLayout_(globalDescriptorSetLayout),
       shadowVertPath_(std::move(shadowVertPath)),
       shadowMaskFragPath_(std::move(shadowMaskFragPath)) {
-    createRenderPass();
-    createFramebuffers();
+    createRenderPass(resources);
+    createFramebuffers(resources);
 }
 
 DirectionalShadowPass::~DirectionalShadowPass() {
@@ -44,7 +45,15 @@ DirectionalShadowPass::~DirectionalShadowPass() {
         vkDestroyRenderPass(device_->logicalDevice(), renderPass_, nullptr);
 }
 
+std::vector<RenderImageUsage>
+DirectionalShadowPass::resourceUsages() const {
+    return {{shadowDepth_, RenderImageAccess::DepthAttachmentWrite,
+             VK_IMAGE_LAYOUT_UNDEFINED,
+             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}};
+}
+
 void DirectionalShadowPass::execute(const RenderFrameContext &frame,
+                                    const RenderResourceRegistry &,
                                     const RenderQueue &queue) {
     VkClearValue clear{};
     clear.depthStencil = {1.0f, 0};
@@ -148,9 +157,10 @@ void DirectionalShadowPass::drawCasters(const RenderFrameContext &frame,
     }
 }
 
-void DirectionalShadowPass::createRenderPass() {
+void DirectionalShadowPass::createRenderPass(
+    const RenderResourceRegistry &resources) {
     VkAttachmentDescription depth{};
-    depth.format = targets_->shadowDepthFormat();
+    depth.format = resources.description(shadowDepth_).format;
     depth.samples = VK_SAMPLE_COUNT_1_BIT;
     depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -197,11 +207,12 @@ void DirectionalShadowPass::createRenderPass() {
                                 &renderPass_));
 }
 
-void DirectionalShadowPass::createFramebuffers() {
+void DirectionalShadowPass::createFramebuffers(
+    const RenderResourceRegistry &resources) {
     for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT;
          ++frameIndex) {
         const VkImageView attachment =
-            targets_->frame(frameIndex).shadowDepth->imageView();
+            resources.image(shadowDepth_, frameIndex).imageView();
         VkFramebufferCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         info.renderPass = renderPass_;

@@ -10,14 +10,16 @@ namespace vkr {
 
 class DescriptorAllocator;
 class Device;
-class FrameRenderTargets;
 class RenderQueue;
+class RenderResourceRegistry;
 class SwapChain;
 struct RenderFrameContext;
 
 class MainForwardPass final : public IRenderPass {
   public:
-    MainForwardPass(Device &device, FrameRenderTargets &targets,
+    MainForwardPass(Device &device,
+                    const RenderResourceRegistry &resources,
+                    RendererResourceHandles resourceHandles,
                     DescriptorAllocator &descriptorAllocator);
     ~MainForwardPass() override;
 
@@ -25,9 +27,12 @@ class MainForwardPass final : public IRenderPass {
     MainForwardPass &operator=(const MainForwardPass &) = delete;
 
     std::string_view name() const override { return "MainForwardPass"; }
+    std::vector<RenderImageUsage> resourceUsages() const override;
     void releaseSwapChainResources() override;
-    void onResize(const SwapChain &swapChain) override;
+    void onResize(const SwapChain &swapChain,
+                  const RenderResourceRegistry &resources) override;
     void execute(const RenderFrameContext &frame,
+                 const RenderResourceRegistry &resources,
                  const RenderQueue &queue) override;
 
     VkRenderPass renderPass() const { return renderPass_; }
@@ -36,16 +41,19 @@ class MainForwardPass final : public IRenderPass {
     }
 
   private:
-    void createRenderPass();
-    void createFramebuffers();
-    void createShadowDescriptors();
+    void createRenderPass(const RenderResourceRegistry &resources);
+    void createFramebuffers(const RenderResourceRegistry &resources);
+    void createShadowDescriptors(const RenderResourceRegistry &resources);
     void destroyFramebuffers();
 
-    void begin(VkCommandBuffer cmd, uint32_t frameIndex);
-    void drawQueue(const RenderFrameContext &frame, const RenderQueue &queue);
+    void begin(VkCommandBuffer cmd, uint32_t frameIndex,
+               const RenderResourceRegistry &resources);
+    void drawQueue(const RenderFrameContext &frame,
+                   const RenderResourceRegistry &resources,
+                   const RenderQueue &queue);
 
     Device *device_ = nullptr;
-    FrameRenderTargets *targets_ = nullptr;
+    RendererResourceHandles resourceHandles_{};
     DescriptorAllocator *descriptorAllocator_ = nullptr;
 
     VkRenderPass renderPass_ = VK_NULL_HANDLE;

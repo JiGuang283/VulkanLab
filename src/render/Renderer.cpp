@@ -6,11 +6,11 @@
 #include "core/SwapChain.h"
 #include "core/VulkanCheck.h"
 #include "render/FrameGpuData.h"
-#include "render/FrameRenderTargets.h"
 #include "render/GuiSystem.h"
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
 #include "render/RenderQueue.h"
+#include "render/RenderResourceRegistry.h"
 #include "render/RenderView.h"
 #include "render/ShaderVariant.h"
 #include "render/pass/DirectionalShadowPass.h"
@@ -33,8 +33,10 @@ Renderer::Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
     createUniformBuffers();
     createGlobalDescriptorSetLayout();
     createGlobalDescriptorSets();
-    frameTargets_ =
-        std::make_unique<FrameRenderTargets>(device, swapChain.extent());
+    renderResources_ = std::make_unique<RenderResourceRegistry>(device);
+    resourceHandles_ =
+        registerDefaultRendererResources(*renderResources_, device);
+    renderResources_->realize(swapChain.extent());
     createRenderPipeline();
 }
 
@@ -63,12 +65,11 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.globalDescriptorSet = globalDescriptorSet(frame.frameIndex);
     renderFrame.globalDescriptorSetLayout = globalDescriptorSetLayout_;
     renderFrame.pipelineCache = &pipelineCache;
-    renderFrame.targets = frameTargets_.get();
     renderFrame.gui = gui;
     renderFrame.shaderVariant = &shaderVariant;
     renderFrame.view = &view;
 
-    pipeline_.execute(renderFrame, queue);
+    pipeline_.execute(renderFrame, *renderResources_, queue);
 }
 
 void Renderer::recreateSwapChain() {
@@ -76,8 +77,9 @@ void Renderer::recreateSwapChain() {
 
     pipeline_.releaseSwapChainResources();
     swapChain_->recreate();
-    frameTargets_->recreateExtentTargets(swapChain_->extent());
-    pipeline_.onResize(*swapChain_);
+    renderResources_->recreateExtentDependent(swapChain_->extent());
+    pipeline_.validateResources(*renderResources_);
+    pipeline_.onResize(*swapChain_, *renderResources_);
 }
 
 VkRenderPass Renderer::renderPass() const {
@@ -147,19 +149,22 @@ void Renderer::createGlobalDescriptorSets() {
 
 void Renderer::createRenderPipeline() {
     pipeline_.addPass(std::make_unique<DirectionalShadowPass>(
-        *device_, *frameTargets_, globalDescriptorSetLayout_,
+        *device_, *renderResources_, resourceHandles_.directionalShadowDepth,
+        globalDescriptorSetLayout_,
         shaderPaths_.shadowVert, shaderPaths_.shadowMaskFrag));
 
     auto mainPass = std::make_unique<MainForwardPass>(
-        *device_, *frameTargets_, *descriptorAllocator_);
+        *device_, *renderResources_, resourceHandles_, *descriptorAllocator_);
     mainForwardPass_ = mainPass.get();
     pipeline_.addPass(std::move(mainPass));
 
     auto toneMapPass = std::make_unique<ToneMapPass>(
-        *device_, *swapChain_, *frameTargets_, *descriptorAllocator_,
+        *device_, *swapChain_, *renderResources_, resourceHandles_.hdrColor,
+        resourceHandles_.hdrSampler, *descriptorAllocator_,
         shaderPaths_.fullscreenVert, shaderPaths_.toneMapFrag);
     toneMapPass_ = toneMapPass.get();
     pipeline_.addPass(std::move(toneMapPass));
+    pipeline_.validateResources(*renderResources_);
 }
 
 VkDescriptorSet Renderer::globalDescriptorSet(uint32_t frameIndex) const {

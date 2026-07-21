@@ -10,14 +10,16 @@
 namespace vkr {
 
 class Device;
-class FrameRenderTargets;
 class RenderQueue;
+class RenderResourceRegistry;
 class SwapChain;
 struct RenderFrameContext;
 
 class DirectionalShadowPass final : public IRenderPass {
   public:
-    DirectionalShadowPass(Device &device, FrameRenderTargets &targets,
+    DirectionalShadowPass(Device &device,
+                          const RenderResourceRegistry &resources,
+                          RenderImageHandle shadowDepth,
                           VkDescriptorSetLayout globalDescriptorSetLayout,
                           std::string shadowVertPath,
                           std::string shadowMaskFragPath);
@@ -29,18 +31,21 @@ class DirectionalShadowPass final : public IRenderPass {
     std::string_view name() const override {
         return "DirectionalShadowPass";
     }
-    void onResize(const SwapChain &) override {}
+    std::vector<RenderImageUsage> resourceUsages() const override;
+    void onResize(const SwapChain &,
+                  const RenderResourceRegistry &) override {}
     void execute(const RenderFrameContext &frame,
+                 const RenderResourceRegistry &resources,
                  const RenderQueue &queue) override;
 
   private:
-    void createRenderPass();
-    void createFramebuffers();
+    void createRenderPass(const RenderResourceRegistry &resources);
+    void createFramebuffers(const RenderResourceRegistry &resources);
     void drawCasters(const RenderFrameContext &frame,
                      const RenderQueue &queue);
 
     Device *device_ = nullptr;
-    FrameRenderTargets *targets_ = nullptr;
+    RenderImageHandle shadowDepth_{};
     VkDescriptorSetLayout globalDescriptorSetLayout_ = VK_NULL_HANDLE;
     std::string shadowVertPath_;
     std::string shadowMaskFragPath_;

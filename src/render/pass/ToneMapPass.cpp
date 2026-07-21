@@ -8,11 +8,11 @@
 #include "core/SwapChain.h"
 #include "core/VulkanCheck.h"
 #include "render/FrameGpuData.h"
-#include "render/FrameRenderTargets.h"
 #include "render/GuiSystem.h"
 #include "render/PipelineCache.h"
 #include "render/PipelineKey.h"
 #include "render/RenderFrame.h"
+#include "render/RenderResourceRegistry.h"
 #include "render/RenderView.h"
 #include "render/ShaderVariant.h"
 
@@ -48,16 +48,19 @@ bool isSrgbFormat(VkFormat format) {
 } // namespace
 
 ToneMapPass::ToneMapPass(Device &device, SwapChain &swapChain,
-                         FrameRenderTargets &targets,
+                         const RenderResourceRegistry &resources,
+                         RenderImageHandle hdrColor,
+                         RenderSamplerHandle hdrSampler,
                          DescriptorAllocator &descriptorAllocator,
                          std::string fullscreenVertPath,
                          std::string toneMapFragPath)
-    : device_(&device), swapChain_(&swapChain), targets_(&targets),
+    : device_(&device), swapChain_(&swapChain), hdrColor_(hdrColor),
+      hdrSampler_(hdrSampler),
       descriptorAllocator_(&descriptorAllocator),
       fullscreenVertPath_(std::move(fullscreenVertPath)),
       toneMapFragPath_(std::move(toneMapFragPath)) {
     createRenderPass();
-    createDescriptors();
+    createDescriptors(resources);
     createFramebuffers();
 }
 
@@ -77,12 +80,20 @@ void ToneMapPass::releaseSwapChainResources() {
     destroyFramebuffers();
 }
 
-void ToneMapPass::onResize(const SwapChain &) {
-    updateDescriptors();
+std::vector<RenderImageUsage> ToneMapPass::resourceUsages() const {
+    return {{hdrColor_, RenderImageAccess::SampledRead,
+             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+}
+
+void ToneMapPass::onResize(const SwapChain &,
+                           const RenderResourceRegistry &resources) {
+    updateDescriptors(resources);
     createFramebuffers();
 }
 
 void ToneMapPass::execute(const RenderFrameContext &frame,
+                          const RenderResourceRegistry &,
                           const RenderQueue &) {
     if (!frame.pipelineCache || !frame.view || !frame.shaderVariant)
         return;
@@ -211,7 +222,8 @@ void ToneMapPass::destroyFramebuffers() {
     framebuffers_.clear();
 }
 
-void ToneMapPass::createDescriptors() {
+void ToneMapPass::createDescriptors(
+    const RenderResourceRegistry &resources) {
     VkDescriptorSetLayoutBinding binding{};
     binding.binding = 0;
     binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -229,15 +241,17 @@ void ToneMapPass::createDescriptors() {
             sourceDescriptorSetLayout_,
             {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1}});
     }
-    updateDescriptors();
+    updateDescriptors(resources);
 }
 
-void ToneMapPass::updateDescriptors() {
+void ToneMapPass::updateDescriptors(
+    const RenderResourceRegistry &resources) {
     for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT;
          ++frameIndex) {
         VkDescriptorImageInfo imageInfo{};
-        imageInfo.sampler = targets_->hdrSampler();
-        imageInfo.imageView = targets_->frame(frameIndex).hdrColor->imageView();
+        imageInfo.sampler = resources.sampler(hdrSampler_);
+        imageInfo.imageView =
+            resources.image(hdrColor_, frameIndex).imageView();
         imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         VkWriteDescriptorSet write{};
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;

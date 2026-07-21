@@ -12,15 +12,17 @@ namespace vkr {
 
 class DescriptorAllocator;
 class Device;
-class FrameRenderTargets;
 class RenderQueue;
+class RenderResourceRegistry;
 class SwapChain;
 struct RenderFrameContext;
 
 class ToneMapPass final : public IRenderPass {
   public:
     ToneMapPass(Device &device, SwapChain &swapChain,
-                FrameRenderTargets &targets,
+                const RenderResourceRegistry &resources,
+                RenderImageHandle hdrColor,
+                RenderSamplerHandle hdrSampler,
                 DescriptorAllocator &descriptorAllocator,
                 std::string fullscreenVertPath,
                 std::string toneMapFragPath);
@@ -30,9 +32,12 @@ class ToneMapPass final : public IRenderPass {
     ToneMapPass &operator=(const ToneMapPass &) = delete;
 
     std::string_view name() const override { return "ToneMapPass"; }
+    std::vector<RenderImageUsage> resourceUsages() const override;
     void releaseSwapChainResources() override;
-    void onResize(const SwapChain &swapChain) override;
+    void onResize(const SwapChain &swapChain,
+                  const RenderResourceRegistry &resources) override;
     void execute(const RenderFrameContext &frame,
+                 const RenderResourceRegistry &resources,
                  const RenderQueue &queue) override;
 
     VkRenderPass renderPass() const { return renderPass_; }
@@ -41,12 +46,13 @@ class ToneMapPass final : public IRenderPass {
     void createRenderPass();
     void createFramebuffers();
     void destroyFramebuffers();
-    void createDescriptors();
-    void updateDescriptors();
+    void createDescriptors(const RenderResourceRegistry &resources);
+    void updateDescriptors(const RenderResourceRegistry &resources);
 
     Device *device_ = nullptr;
     SwapChain *swapChain_ = nullptr;
-    FrameRenderTargets *targets_ = nullptr;
+    RenderImageHandle hdrColor_{};
+    RenderSamplerHandle hdrSampler_{};
     DescriptorAllocator *descriptorAllocator_ = nullptr;
     std::string fullscreenVertPath_;
     std::string toneMapFragPath_;
