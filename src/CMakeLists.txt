@@ -114,6 +114,7 @@ add_library(vkl_engine STATIC
     render/Renderer.cpp
     render/RenderPipeline.cpp
     render/RenderQueue.cpp
+    render/RenderView.cpp
     render/TangentGenerator.cpp
     render/Texture.cpp
     render/TextureData.cpp

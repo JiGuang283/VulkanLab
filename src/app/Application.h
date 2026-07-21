@@ -11,7 +11,6 @@
 #include "render/RenderQueue.h"
 #include "render/RenderSettings.h"
 #include "render/ShaderVariant.h"
-#include "render/DirectionalShadow.h"
 #include "scene/Camera.h"
 #include "scene/Scene.h"
 #include "scene/SceneFactory.h"
@@ -70,9 +69,6 @@ class Application final : public RuntimeControlHost {
 
     void updateInputMode();
     void processCameraInput(float dt);
-    void updateUniforms(uint32_t frameIndex,
-                        const DirectionalShadowFrameData &shadow);
-    DirectionalShadowFrameData directionalShadowFrameData() const;
     void drawGui();
     void handleSwapChainRecreate();
     const ShaderVariant &currentShaderVariant() const;

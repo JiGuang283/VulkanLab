@@ -7,12 +7,13 @@
 #include "core/PipelineConfigBuilder.h"
 #include "core/SwapChain.h"
 #include "core/VulkanCheck.h"
+#include "render/FrameGpuData.h"
 #include "render/FrameRenderTargets.h"
 #include "render/GuiSystem.h"
 #include "render/PipelineCache.h"
 #include "render/PipelineKey.h"
 #include "render/RenderFrame.h"
-#include "render/RenderSettings.h"
+#include "render/RenderView.h"
 #include "render/ShaderVariant.h"
 
 #include <array>
@@ -21,13 +22,6 @@
 namespace vkr {
 
 namespace {
-
-struct ToneMapPushConstants {
-    float exposureEv = 0.0f;
-    uint32_t toneMapper = 0;
-    uint32_t encodeGamma = 0;
-    uint32_t applyExposure = 0;
-};
 
 bool usesPbrToneMapping(ShaderVariantId id) {
     return id == ShaderVariantId::PbrLiteForward ||
@@ -90,7 +84,7 @@ void ToneMapPass::onResize(const SwapChain &) {
 
 void ToneMapPass::execute(const RenderFrameContext &frame,
                           const RenderQueue &) {
-    if (!frame.pipelineCache || !frame.settings || !frame.shaderVariant)
+    if (!frame.pipelineCache || !frame.view || !frame.shaderVariant)
         return;
 
     VkClearValue clear{};
@@ -140,8 +134,8 @@ void ToneMapPass::execute(const RenderFrameContext &frame,
 
     ToneMapPushConstants push{};
     if (usesPbrToneMapping(frame.shaderVariant->id)) {
-        push.exposureEv = frame.settings->exposureEv;
-        push.toneMapper = toneMapperValue(frame.settings->toneMapper);
+        push.exposureEv = frame.view->settings.exposureEv;
+        push.toneMapper = toneMapperValue(frame.view->settings.toneMapper);
         push.applyExposure = 1;
     }
     push.encodeGamma = isSrgbFormat(swapChain_->imageFormat()) ? 0u : 1u;

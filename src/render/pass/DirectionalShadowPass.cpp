@@ -15,7 +15,7 @@
 #include "render/PipelineKey.h"
 #include "render/RenderFrame.h"
 #include "render/RenderQueue.h"
-#include "render/RenderSettings.h"
+#include "render/RenderView.h"
 
 #include <glm/glm.hpp>
 #include <utility>
@@ -69,14 +69,14 @@ void DirectionalShadowPass::execute(const RenderFrameContext &frame,
                             kDirectionalShadowMapSize}};
     vkCmdSetScissor(frame.cmd, 0, 1, &scissor);
 
-    if (frame.shadow && frame.shadow->enabled)
+    if (frame.view && frame.view->directionalShadow.enabled)
         drawCasters(frame, queue);
     vkCmdEndRenderPass(frame.cmd);
 }
 
 void DirectionalShadowPass::drawCasters(const RenderFrameContext &frame,
                                         const RenderQueue &queue) {
-    if (!frame.pipelineCache || !frame.settings)
+    if (!frame.pipelineCache || !frame.view)
         return;
 
     Pipeline *boundPipeline = nullptr;
@@ -123,8 +123,8 @@ void DirectionalShadowPass::drawCasters(const RenderFrameContext &frame,
             vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                               pipeline.handle());
             vkCmdSetDepthBias(frame.cmd,
-                              frame.settings->shadowConstantBias, 0.0f,
-                              frame.settings->shadowSlopeBias);
+                              frame.view->settings.shadowConstantBias, 0.0f,
+                              frame.view->settings.shadowSlopeBias);
             vkCmdBindDescriptorSets(frame.cmd,
                                     VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     pipeline.layout(), 0, 1,

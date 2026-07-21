@@ -21,14 +21,12 @@ class ToneMapPass;
 class PipelineCache;
 class RenderQueue;
 struct ShaderVariant;
-struct DirectionalShadowFrameData;
-struct RenderSettings;
+struct RenderView;
 
 class Renderer {
   public:
     Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
              DescriptorAllocator &descriptorAllocator,
-             VkDeviceSize uniformBufferSize,
              RendererShaderPaths shaderPaths);
     ~Renderer();
 
@@ -38,8 +36,7 @@ class Renderer {
     void renderFrame(const FrameSync::FrameContext &frame,
                      const RenderQueue &queue, PipelineCache &pipelineCache,
                      GuiSystem *gui, const ShaderVariant &shaderVariant,
-                     const RenderSettings &settings,
-                     const DirectionalShadowFrameData &shadow);
+                     const RenderView &view);
 
     // ---- 交换链重建 ----
     void recreateSwapChain();
@@ -51,8 +48,6 @@ class Renderer {
     }
 
     // ---- per-frame UBO 访问器 ----
-    void *mappedUniformBuffer(uint32_t frameIndex) const;
-
   private:
     void createUniformBuffers();
     void createGlobalDescriptorSetLayout();

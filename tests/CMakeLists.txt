@@ -21,6 +21,7 @@ add_executable(VulkanLabCpuTests
     ImageComparatorTests.cpp
     ManagedProcessWin32Tests.cpp
     DirectionalShadowTests.cpp
+    RenderViewTests.cpp
 )
 target_link_libraries(VulkanLabCpuTests PRIVATE
     vkl_build_options

@@ -8,8 +8,7 @@ namespace vkr {
 class GuiSystem;
 class FrameRenderTargets;
 class PipelineCache;
-struct DirectionalShadowFrameData;
-struct RenderSettings;
+struct RenderView;
 struct ShaderVariant;
 
 struct RenderFrameContext {
@@ -23,8 +22,7 @@ struct RenderFrameContext {
     FrameRenderTargets *targets = nullptr;
     GuiSystem      *gui = nullptr;
     const ShaderVariant *shaderVariant = nullptr;
-    const RenderSettings *settings = nullptr;
-    const DirectionalShadowFrameData *shadow = nullptr;
+    const RenderView *view = nullptr;
 };
 
 } // namespace vkr

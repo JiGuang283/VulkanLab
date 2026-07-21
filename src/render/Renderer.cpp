@@ -5,18 +5,19 @@
 #include "core/FrameSync.h"
 #include "core/SwapChain.h"
 #include "core/VulkanCheck.h"
-#include "render/GuiSystem.h"
-#include "render/DirectionalShadow.h"
+#include "render/FrameGpuData.h"
 #include "render/FrameRenderTargets.h"
+#include "render/GuiSystem.h"
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
 #include "render/RenderQueue.h"
-#include "render/RenderSettings.h"
+#include "render/RenderView.h"
 #include "render/ShaderVariant.h"
 #include "render/pass/DirectionalShadowPass.h"
 #include "render/pass/MainForwardPass.h"
 #include "render/pass/ToneMapPass.h"
 
+#include <cstring>
 #include <memory>
 #include <utility>
 
@@ -24,11 +25,10 @@ namespace vkr {
 
 Renderer::Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
                    DescriptorAllocator &descriptorAllocator,
-                   VkDeviceSize uniformBufferSize,
                    RendererShaderPaths shaderPaths)
     : device_(&device), swapChain_(&swapChain), frameSync_(&frameSync),
       descriptorAllocator_(&descriptorAllocator),
-      uniformBufferSize_(uniformBufferSize),
+      uniformBufferSize_(sizeof(GlobalFrameUbo)),
       shaderPaths_(std::move(shaderPaths)) {
     createUniformBuffers();
     createGlobalDescriptorSetLayout();
@@ -51,8 +51,10 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
                            PipelineCache &pipelineCache,
                            GuiSystem *gui,
                            const ShaderVariant &shaderVariant,
-                           const RenderSettings &settings,
-                           const DirectionalShadowFrameData &shadow) {
+                           const RenderView &view) {
+    std::memcpy(uniformBuffers_[frame.frameIndex]->mappedData(),
+                &view.globalUbo, sizeof(view.globalUbo));
+
     RenderFrameContext renderFrame{};
     renderFrame.cmd = frame.cmd;
     renderFrame.frameIndex = frame.frameIndex;
@@ -64,8 +66,7 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.targets = frameTargets_.get();
     renderFrame.gui = gui;
     renderFrame.shaderVariant = &shaderVariant;
-    renderFrame.settings = &settings;
-    renderFrame.shadow = &shadow;
+    renderFrame.view = &view;
 
     pipeline_.execute(renderFrame, queue);
 }
@@ -159,10 +160,6 @@ void Renderer::createRenderPipeline() {
         shaderPaths_.fullscreenVert, shaderPaths_.toneMapFrag);
     toneMapPass_ = toneMapPass.get();
     pipeline_.addPass(std::move(toneMapPass));
-}
-
-void *Renderer::mappedUniformBuffer(uint32_t frameIndex) const {
-    return uniformBuffers_[frameIndex]->mappedData();
 }
 
 VkDescriptorSet Renderer::globalDescriptorSet(uint32_t frameIndex) const {

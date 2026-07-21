@@ -1,5 +1,4 @@
 #include "Application.h"
-#include "UniformData.h"
 
 #include "assets/DerivedAssetPaths.h"
 #include "assets/ContentHash.h"
@@ -27,6 +26,7 @@
 #include "render/MaterialInstance.h"
 #include "render/MaterialTextureSlot.h"
 #include "render/PipelineCache.h"
+#include "render/RenderView.h"
 #include "render/Renderer.h"
 #include "render/RendererShaderPaths.h"
 #include "scene/PreparedSceneData.h"
@@ -71,49 +71,6 @@
 namespace vkr {
 
 namespace {
-
-glm::vec3 normalizeOrFallback(const glm::vec3 &v,
-                              const glm::vec3 &fallback) {
-    const float len2 = glm::dot(v, v);
-    if (len2 <= 1.0e-6f)
-        return glm::normalize(fallback);
-    return glm::normalize(v);
-}
-
-SceneLight makeDefaultSun(const glm::vec3 &direction, const glm::vec3 &color,
-                          float intensity) {
-    SceneLight light{};
-    light.type = LightType::Directional;
-    light.directionWS =
-        normalizeOrFallback(direction, glm::vec3(0.3f, 0.8f, 0.5f));
-    light.color = color;
-    light.intensity = std::max(intensity, 0.0f);
-    return light;
-}
-
-GpuLight makeGpuLight(const SceneLight &light) {
-    GpuLight gpu{};
-    const glm::vec3 direction = normalizeOrFallback(
-        light.directionWS,
-        light.type == LightType::Directional ? glm::vec3(0.3f, 0.8f, 0.5f)
-                                             : glm::vec3(0.0f, -1.0f, 0.0f));
-
-    float innerConeCos = glm::clamp(light.innerConeCos, -1.0f, 1.0f);
-    float outerConeCos = glm::clamp(light.outerConeCos, -1.0f, 1.0f);
-    if (light.type == LightType::Spot && innerConeCos < outerConeCos)
-        std::swap(innerConeCos, outerConeCos);
-
-    gpu.positionRange =
-        glm::vec4(light.positionWS, std::max(light.range, 0.0f));
-    gpu.directionInnerCos = glm::vec4(direction, innerConeCos);
-    gpu.colorIntensity =
-        glm::vec4(glm::max(light.color, glm::vec3(0.0f)),
-                  std::max(light.intensity, 0.0f));
-    gpu.params =
-        glm::vec4(static_cast<float>(static_cast<uint32_t>(light.type)),
-                  outerConeCos, 0.0f, 0.0f);
-    return gpu;
-}
 
 const char *alphaModeName(AlphaMode mode) {
     switch (mode) {
@@ -694,7 +651,6 @@ void Application::init() {
     frameSync_ = std::make_unique<FrameSync>(*device_, *swapChain_);
     renderer_ = std::make_unique<Renderer>(
         *device_, *swapChain_, *frameSync_, *descriptorAllocator_,
-        sizeof(GlobalUBO),
         RendererShaderPaths{
             projectContext_.resolveRuntimePath(kShadowVertexShaderPath)
                 .string(),
@@ -2093,94 +2049,6 @@ void Application::processCameraInput(float dt) {
                    -d.y * config_.mouseSensitivity);
 }
 
-void Application::updateUniforms(
-    uint32_t frameIndex, const DirectionalShadowFrameData &shadow) {
-    GlobalUBO ubo{};
-    ubo.view = camera_.viewMatrix();
-    ubo.proj = camera_.projectionMatrix();
-    ubo.cameraPosWS = glm::vec4(camera_.position(), 1.0f);
-    ubo.ambientColorIntensity =
-        glm::vec4(glm::max(ambientColor_, glm::vec3(0.0f)),
-                  std::max(ambientIntensity_, 0.0f));
-
-    uint32_t directionalCount = 0;
-    uint32_t punctualCount = 0;
-    uint32_t ignoredCount = 0;
-
-    const auto uploadLight = [&](const SceneLight &light) {
-        switch (light.type) {
-        case LightType::Directional:
-            if (directionalCount < kMaxDirectionalLights) {
-                ubo.directionalLights[directionalCount++] =
-                    makeGpuLight(light);
-            } else {
-                ++ignoredCount;
-            }
-            break;
-        case LightType::Point:
-        case LightType::Spot:
-            if (punctualCount < kMaxPunctualLights) {
-                ubo.punctualLights[punctualCount++] = makeGpuLight(light);
-            } else {
-                ++ignoredCount;
-            }
-            break;
-        }
-    };
-
-    const auto *sceneLights =
-        currentScene_ ? &currentScene_->lights() : nullptr;
-    if (sceneLights && !sceneLights->empty()) {
-        for (const auto &light : *sceneLights)
-            uploadLight(light);
-    } else {
-        uploadLight(makeDefaultSun(defaultSunDirection_, defaultSunColor_,
-                                   defaultSunIntensity_));
-    }
-
-    ubo.lightCounts =
-        glm::vec4(static_cast<float>(directionalCount),
-                  static_cast<float>(punctualCount), 0.0f, 0.0f);
-    ubo.directionalShadowViewProj = shadow.lightViewProjection;
-    ubo.shadowParams =
-        glm::vec4(shadow.enabled ? 1.0f : 0.0f,
-                  renderSettings_.shadowReceiverBias, shadow.texelSize, 0.0f);
-    lastUploadedDirectionalLights_ = directionalCount;
-    lastUploadedPunctualLights_ = punctualCount;
-    if (ignoredCount != lastIgnoredLights_) {
-        if (ignoredCount > 0) {
-            VKR_LOG_WARN("Lighting",
-                         "Ignored {} scene lights beyond GPU light limits.",
-                         ignoredCount);
-        }
-        lastIgnoredLights_ = ignoredCount;
-    }
-    std::memcpy(renderer_->mappedUniformBuffer(frameIndex), &ubo, sizeof(ubo));
-}
-
-DirectionalShadowFrameData Application::directionalShadowFrameData() const {
-    if (!currentScene_)
-        return {};
-
-    const SceneLight *directional = nullptr;
-    SceneLight fallbackSun{};
-    const auto &lights = currentScene_->lights();
-    if (lights.empty()) {
-        fallbackSun = makeDefaultSun(defaultSunDirection_, defaultSunColor_,
-                                     defaultSunIntensity_);
-        directional = &fallbackSun;
-    } else {
-        for (const SceneLight &light : lights) {
-            if (light.type == LightType::Directional) {
-                directional = &light;
-                break;
-            }
-        }
-    }
-    return buildDirectionalShadowFrameData(
-        currentScene_->bounds(), directional, renderSettings_.shadowsEnabled);
-}
-
 void Application::refreshSceneRegistry(const std::string &selectSceneId) {
     std::string currentId;
     std::string selectedId = selectSceneId;
@@ -3326,9 +3194,32 @@ void Application::mainLoop() {
             captureSelection = captureService_->prepareFrame(*swapChain_);
         }
 
-        const DirectionalShadowFrameData shadow =
-            directionalShadowFrameData();
-        updateUniforms(ctx->frameIndex, shadow);
+        RenderViewInput viewInput{};
+        viewInput.view = camera_.viewMatrix();
+        viewInput.projection = camera_.projectionMatrix();
+        viewInput.cameraPosition = camera_.position();
+        viewInput.ambientColor = ambientColor_;
+        viewInput.ambientIntensity = ambientIntensity_;
+        viewInput.defaultSun = {defaultSunDirection_, defaultSunColor_,
+                                defaultSunIntensity_};
+        viewInput.settings = renderSettings_;
+        if (currentScene_) {
+            viewInput.sceneBounds = currentScene_->bounds();
+            viewInput.sceneLights = &currentScene_->lights();
+        }
+        const RenderView renderView = buildRenderView(viewInput);
+        lastUploadedDirectionalLights_ =
+            renderView.lightStats.directionalLights;
+        lastUploadedPunctualLights_ = renderView.lightStats.punctualLights;
+        if (renderView.lightStats.ignoredLights != lastIgnoredLights_) {
+            if (renderView.lightStats.ignoredLights > 0) {
+                VKR_LOG_WARN(
+                    "Lighting",
+                    "Ignored {} scene lights beyond GPU light limits.",
+                    renderView.lightStats.ignoredLights);
+            }
+            lastIgnoredLights_ = renderView.lightStats.ignoredLights;
+        }
         renderQueue_.clear();
         if (currentScene_)
             currentScene_->collectRenderCommands(renderQueue_);
@@ -3341,7 +3232,7 @@ void Application::mainLoop() {
             frameGui = nullptr;
         }
         renderer_->renderFrame(*ctx, renderQueue_, *pipelineCache_, frameGui,
-                               currentShaderVariant(), renderSettings_, shadow);
+                               currentShaderVariant(), renderView);
         if (captureSelection) {
             captureService_->recordCopy(ctx->cmd,
                                         swapChain_->image(ctx->imageIndex));
