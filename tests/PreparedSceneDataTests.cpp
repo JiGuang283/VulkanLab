@@ -37,6 +37,7 @@ void runDirectionalShadowTests();
 void runRenderViewTests();
 void runRenderResourceRegistryTests();
 void runPipelineKeyTests();
+void runShaderContractTests();
 
 namespace {
 
@@ -192,6 +193,7 @@ int main(int argc, char **argv) {
         runRenderViewTests();
         runRenderResourceRegistryTests();
         runPipelineKeyTests();
+        runShaderContractTests();
         std::cout << "VulkanLab CPU tests passed\n";
         return 0;
     } catch (const std::exception &error) {

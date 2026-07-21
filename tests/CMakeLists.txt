@@ -24,6 +24,7 @@ add_executable(VulkanLabCpuTests
     RenderViewTests.cpp
     RenderResourceRegistryTests.cpp
     PipelineKeyTests.cpp
+    ShaderContractTests.cpp
 )
 target_link_libraries(VulkanLabCpuTests PRIVATE
     vkl_build_options
@@ -33,6 +34,11 @@ target_link_libraries(VulkanLabCpuTests PRIVATE
     vkl_control
     vkl_engine
     vkl_render_test_core
+    VulkanLab::SpirvReflect
+)
+add_dependencies(VulkanLabCpuTests VulkanLabShaders)
+target_compile_definitions(VulkanLabCpuTests PRIVATE
+    VKL_TEST_SHADER_ROOT="$<TARGET_FILE_DIR:VulkanLab>/shader"
 )
 add_test(NAME VulkanLabCpuTests COMMAND VulkanLabCpuTests)
 set_tests_properties(VulkanLabCpuTests PROPERTIES LABELS "unit")

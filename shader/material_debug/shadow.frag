@@ -1,26 +1,7 @@
 #version 450
 
-const int MAX_DIRECTIONAL_LIGHTS = 1;
-const int MAX_PUNCTUAL_LIGHTS = 8;
-
-struct GpuLight {
-    vec4 positionRange;
-    vec4 directionInnerCos;
-    vec4 colorIntensity;
-    vec4 params;
-};
-
-layout(set = 0, binding = 0) uniform UniformBufferObject {
-    mat4 view;
-    mat4 proj;
-    vec4 cameraPosWS;
-    vec4 ambientColorIntensity;
-    vec4 lightCounts;
-    GpuLight directionalLights[MAX_DIRECTIONAL_LIGHTS];
-    GpuLight punctualLights[MAX_PUNCTUAL_LIGHTS];
-    mat4 directionalShadowViewProj;
-    vec4 shadowParams;
-} ubo;
+#extension GL_GOOGLE_include_directive : require
+#include "include/global_frame.glsl"
 
 layout(location = 0) in vec3 fragPositionWS;
 layout(set = 2, binding = 0) uniform sampler2DShadow directionalShadowMap;

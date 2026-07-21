@@ -1,17 +1,8 @@
 #version 450
 
-layout(set = 0, binding = 0) uniform UniformBufferObject{
-    mat4 view;
-    mat4 proj;
-} ubo;
-
-layout(push_constant) uniform PushConstants {
-    mat4 model;
-    vec4 baseColorFactor;
-    vec4 emissiveMetallic;
-    vec4 roughnessAlpha;
-    vec4 reserved;
-} push;
+#extension GL_GOOGLE_include_directive : require
+#include "include/global_frame.glsl"
+#include "include/material_push.glsl"
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;

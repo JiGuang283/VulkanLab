@@ -1,30 +1,10 @@
 #version 450
 
+#extension GL_GOOGLE_include_directive : require
+#include "include/global_frame.glsl"
+#include "include/material_push.glsl"
+
 const float PI = 3.14159265359;
-const int LIGHT_TYPE_DIRECTIONAL = 0;
-const int LIGHT_TYPE_POINT = 1;
-const int LIGHT_TYPE_SPOT = 2;
-const int MAX_DIRECTIONAL_LIGHTS = 1;
-const int MAX_PUNCTUAL_LIGHTS = 8;
-
-struct GpuLight {
-    vec4 positionRange;
-    vec4 directionInnerCos;
-    vec4 colorIntensity;
-    vec4 params;
-};
-
-layout(set = 0, binding = 0) uniform UniformBufferObject {
-    mat4 view;
-    mat4 proj;
-    vec4 cameraPosWS;
-    vec4 ambientColorIntensity;
-    vec4 lightCounts;
-    GpuLight directionalLights[MAX_DIRECTIONAL_LIGHTS];
-    GpuLight punctualLights[MAX_PUNCTUAL_LIGHTS];
-    mat4 directionalShadowViewProj;
-    vec4 shadowParams;
-} ubo;
 
 layout(location = 0) in vec3 fragPositionWS;
 layout(location = 1) in vec3 fragNormalWS;
@@ -37,14 +17,6 @@ layout(set = 1, binding = 2) uniform sampler2D metallicRoughnessTexture;
 layout(set = 1, binding = 3) uniform sampler2D occlusionTexture;
 layout(set = 1, binding = 4) uniform sampler2D emissiveTexture;
 layout(set = 2, binding = 0) uniform sampler2DShadow directionalShadowMap;
-
-layout(push_constant) uniform PushConstants {
-    mat4 model;
-    vec4 baseColorFactor;
-    vec4 emissiveMetallic;
-    vec4 roughnessAlpha;
-    vec4 reserved;
-} push;
 
 layout(location = 0) out vec4 outColor;
 

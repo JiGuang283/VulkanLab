@@ -1,12 +1,7 @@
 #version 450
 
-layout(push_constant) uniform PushConstants {
-    mat4 model;
-    vec4 baseColorFactor;
-    vec4 emissiveMetallic;
-    vec4 roughnessAlpha;
-    vec4 reserved;
-} push;
+#extension GL_GOOGLE_include_directive : require
+#include "include/material_push.glsl"
 
 layout(location = 0) out vec4 outColor;
 

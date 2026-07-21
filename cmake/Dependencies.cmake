@@ -52,6 +52,21 @@ if(MSVC)
 endif()
 
 find_package(Vulkan REQUIRED)
+
+add_library(vkl_spirv_reflect STATIC
+    "${PROJECT_SOURCE_DIR}/external/spirv-reflect/spirv_reflect.c"
+)
+add_library(VulkanLab::SpirvReflect ALIAS vkl_spirv_reflect)
+target_compile_features(vkl_spirv_reflect PRIVATE c_std_99)
+target_compile_definitions(vkl_spirv_reflect
+    PUBLIC SPIRV_REFLECT_USE_SYSTEM_SPIRV_H
+)
+target_include_directories(vkl_spirv_reflect SYSTEM PUBLIC
+    "${PROJECT_SOURCE_DIR}/external/spirv-reflect"
+    "${PROJECT_SOURCE_DIR}/external/spirv-reflect/include"
+)
+target_link_libraries(vkl_spirv_reflect PUBLIC Vulkan::Vulkan)
+
 find_path(GLM_INCLUDE_DIR glm/glm.hpp
     HINTS "$ENV{VULKAN_SDK}/Include"
     REQUIRED

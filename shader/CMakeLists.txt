@@ -1,4 +1,10 @@
 find_program(GLSLC glslc HINTS "$ENV{VULKAN_SDK}/Bin" REQUIRED)
+find_program(SPIRV_VAL spirv-val HINTS "$ENV{VULKAN_SDK}/Bin" REQUIRED)
+
+set(VKL_SHADER_INCLUDES
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/global_frame.glsl"
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/material_push.glsl"
+)
 
 set(VKL_SHADER_SOURCES
     legacy/forward.vert
@@ -41,8 +47,11 @@ foreach(SHADER_SOURCE IN LISTS VKL_SHADER_SOURCES)
         OUTPUT "${SHADER_GENERATED_OUTPUT}"
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "${VKL_GENERATED_SHADER_ROOT}/${SHADER_SUBDIRECTORY}"
-        COMMAND ${GLSLC} "${SHADER_INPUT}" -o "${SHADER_GENERATED_OUTPUT}"
-        DEPENDS "${SHADER_INPUT}"
+        COMMAND ${GLSLC} -I "${CMAKE_CURRENT_SOURCE_DIR}"
+            "${SHADER_INPUT}" -o "${SHADER_GENERATED_OUTPUT}"
+        COMMAND ${SPIRV_VAL} --target-env vulkan1.0
+            "${SHADER_GENERATED_OUTPUT}"
+        DEPENDS "${SHADER_INPUT}" ${VKL_SHADER_INCLUDES}
         COMMENT "Compiling shader ${SHADER_SOURCE}"
         VERBATIM
     )
