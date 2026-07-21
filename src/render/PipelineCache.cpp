@@ -12,16 +12,17 @@ void PipelineCache::clear() {
     pipelines_.clear();
 }
 
-Pipeline &PipelineCache::getOrCreate(const PipelineKey &key,
-                                     const PipelineConfig &config) {
+Pipeline &PipelineCache::getOrCreate(VkRenderPass renderPass,
+                                     PipelineConfig config) {
+    PipelineKey key{renderPass, std::move(config)};
     auto it = pipelines_.find(key);
     if (it != pipelines_.end())
         return *it->second;
 
     auto pipeline =
-        std::make_unique<Pipeline>(*device_, key.renderPass, config);
+        std::make_unique<Pipeline>(*device_, key.renderPass, key.config);
     auto *result = pipeline.get();
-    pipelines_.emplace(key, std::move(pipeline));
+    pipelines_.emplace(std::move(key), std::move(pipeline));
     return *result;
 }
 

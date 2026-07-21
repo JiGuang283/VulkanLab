@@ -21,8 +21,7 @@ class PipelineCache {
 
     void clear();
 
-    Pipeline &getOrCreate(const PipelineKey &key,
-                          const PipelineConfig &config);
+    Pipeline &getOrCreate(VkRenderPass renderPass, PipelineConfig config);
 
   private:
     Device *device_ = nullptr;

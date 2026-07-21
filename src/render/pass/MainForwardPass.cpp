@@ -20,6 +20,7 @@
 #include <array>
 #include <glm/glm.hpp>
 #include <stdexcept>
+#include <utility>
 
 namespace vkr {
 
@@ -169,20 +170,8 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
             pipelineConfig.descriptorLayouts.push_back(
                 shadowDescriptorSetLayout_);
 
-            PipelineKey key{};
-            key.materialTemplate = &materialTemplate;
-            key.pass = PassId::MainForward;
-            key.shaderVariant = frame.shaderVariant
-                                    ? frame.shaderVariant->id
-                                    : ShaderVariantId::LegacyForward;
-            key.queue = queueType;
-            key.cullMode = cullMode;
-            key.renderPass = renderPass_;
-            key.samples =
-                resources.description(resourceHandles_.mainDepth).samples;
-
-            Pipeline &pipeline =
-                frame.pipelineCache->getOrCreate(key, pipelineConfig);
+            Pipeline &pipeline = frame.pipelineCache->getOrCreate(
+                renderPass_, std::move(pipelineConfig));
             if (boundPipeline != &pipeline) {
                 vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                   pipeline.handle());

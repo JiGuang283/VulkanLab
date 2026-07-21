@@ -119,15 +119,8 @@ void DirectionalShadowPass::drawCasters(const RenderFrameContext &frame,
             builder.descriptorLayout(materialTemplate.descriptorSetLayout());
         PipelineConfig config = builder.build();
 
-        PipelineKey key{};
-        key.materialTemplate = &materialTemplate;
-        key.pass = PassId::DirectionalShadow;
-        key.cullMode = cullMode;
-        key.renderPass = renderPass_;
-        key.samples = VK_SAMPLE_COUNT_1_BIT;
-        key.alphaMasked = alphaMasked;
-
-        Pipeline &pipeline = frame.pipelineCache->getOrCreate(key, config);
+        Pipeline &pipeline = frame.pipelineCache->getOrCreate(
+            renderPass_, std::move(config));
         if (boundPipeline != &pipeline) {
             vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                               pipeline.handle());

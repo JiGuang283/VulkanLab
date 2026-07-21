@@ -131,11 +131,8 @@ void ToneMapPass::execute(const RenderFrameContext &frame,
                            sizeof(ToneMapPushConstants)})
             .build();
 
-    PipelineKey key{};
-    key.pass = PassId::ToneMap;
-    key.renderPass = renderPass_;
-    key.samples = VK_SAMPLE_COUNT_1_BIT;
-    Pipeline &pipeline = frame.pipelineCache->getOrCreate(key, config);
+    Pipeline &pipeline =
+        frame.pipelineCache->getOrCreate(renderPass_, std::move(config));
     vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                       pipeline.handle());
     const VkDescriptorSet sourceSet =

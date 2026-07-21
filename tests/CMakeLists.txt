@@ -23,6 +23,7 @@ add_executable(VulkanLabCpuTests
     DirectionalShadowTests.cpp
     RenderViewTests.cpp
     RenderResourceRegistryTests.cpp
+    PipelineKeyTests.cpp
 )
 target_link_libraries(VulkanLabCpuTests PRIVATE
     vkl_build_options
