@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-21
-> Verified against: current working tree based on `a154f52`
+> Verified against: `16c61c8`
 
 ## 帧图与 Pass 顺序
 
@@ -17,9 +17,11 @@ ToneMapPass + ImGui
         -> swapchain / capture
 ```
 
-`FrameRenderTargets` 按 `MAX_FRAMES_IN_FLIGHT` 分配资源。每个 frame slot 有一张单采样 HDR resolve image、一张 depth image、一张 2048x2048 shadow depth image；设备支持 MSAA 时还会有一张多采样 HDR color image。HDR 优先使用 `R16G16B16A16_SFLOAT`，不满足 color attachment 与 sampled 要求时回退到 `R32G32B32A32_SFLOAT`。HDR sample count 取 color/depth format 和设备能力的交集，Shadow 与 ToneMap 固定为 1x。
+`RenderResourceRegistry` 使用稳定的类型化 handle 管理内部 render target 和 sampler。资源描述明确指定 fixed/swapchain-relative extent、single/per-frame multiplicity、format、sample count、usage 与 aspect。当前注册 HDR resolve、可选 HDR MSAA、main depth、2048x2048 directional shadow depth，以及 HDR/shadow sampler。每个 per-frame image 按 `MAX_FRAMES_IN_FLIGHT` 分配；HDR 优先使用 `R16G16B16A16_SFLOAT`，不满足 color attachment 与 sampled 要求时回退到 `R32G32B32A32_SFLOAT`。HDR sample count 取 color/depth format 和设备能力的交集，Shadow 与 ToneMap 固定为 1x。
 
-`RenderPipeline` 按 Shadow、Forward、ToneMap 顺序记录到同一个 frame command buffer。Pass 间通过 render-pass final/initial layout 和明确 dependency 完成 shadow-write 到 fragment-read、HDR-write 到 fragment-read 的同步。
+每个 Pass 通过 `resourceUsages()` 声明 attachment write、sampled read、required/final layout。`RenderPipeline` 在初始化和 resize 后验证 handle、usage flag、sample/aspect、read-before-write 与相邻 layout 契约。Registry 不插入 barrier、不推导 lifetime、不重排 Pass；`RenderPipeline` 仍按 Shadow、Forward、ToneMap 顺序记录到同一个 frame command buffer，实际同步由 render-pass final/initial layout 和明确 dependency 完成。
+
+Application 每帧只组装 `RenderViewInput`。纯函数 `buildRenderView()` 负责默认 Sun 规则、灯光截断与 GPU 打包、阴影矩阵计算，输出不可变 `RenderView`。Renderer 接收该对象并上传其中的 `GlobalFrameUbo`；Pass 通过 `RenderFrameContext::view` 读取同一份 settings 和 shadow 数据。
 
 ## RenderQueue 与 Forward
 
@@ -39,7 +41,7 @@ MainForwardPass 清空 HDR color/depth，先画 Opaque/Mask，再画 Transparent
 
 ## 方向光阴影
 
-Application 从实际上传的第一盏 Directional light 生成 `DirectionalShadowFrameData`。场景没有显式灯光时使用默认 Sun；场景有灯光但没有 Directional light 时不生成阴影。无有效 bounds、无有效光方向或关闭 Shadows 时，ShadowPass 仍清除目标，但 Forward shader 不采样阴影贡献。
+`buildRenderView()` 从实际上传的第一盏 Directional light 生成 `DirectionalShadowFrameData`。场景没有显式灯光时使用默认 Sun；场景有灯光但没有 Directional light 时不生成阴影。无有效 bounds、无有效光方向或关闭 Shadows 时，ShadowPass 仍清除目标，但 Forward shader 不采样阴影贡献。
 
 阴影相机使用场景 AABB 的 8 个角点拟合：light view 看向 bounds center，XY 增加 5% padding、Z 增加 10% padding，并将 XY center 对齐到 shadow texel。投影使用 Vulkan `[0,1]` 深度的正交 ZO 矩阵。
 
@@ -69,7 +71,7 @@ ToneMapPass 最终 layout 为 `PRESENT_SRC_KHR`。异步截图继续复制最终
 
 MaterialTemplate 保存基础 PipelineConfig 和材质 descriptor layout。MaterialInstance 保存材质参数及 BaseColor、Normal、MetallicRoughness、Occlusion、Emissive 五个纹理槽。缺失槽由 fallback texture 填充，因此 Materials 面板中的 Bound 只表示 descriptor 已绑定。
 
-PipelineConfig 支持零或多个 color blend attachment、零 vertex binding、可选 fragment shader、topology、subpass 和 depth bias。PipelineCache key 包含 pass、ShaderVariant、queue、cull mode、alpha-masked 状态、render pass、subpass 和 sample count，避免 Shadow、Forward 与 ToneMap pipeline 错误复用。
+PipelineConfig 支持零或多个 color blend attachment、零 vertex binding、可选 fragment shader、topology、subpass 和 depth bias。`PipelineCache::getOrCreate()` 只接收 render pass 与完整 `PipelineConfig`，由 cache 内部规范化并生成 key。Key 覆盖 shader 路径、vertex layout、topology、raster/depth/blend/MSAA 状态、descriptor layouts、push ranges、render pass 和 subpass；不再包含 pass、材质指针、ShaderVariant、queue 或 alpha-masked 等语义标签。Pipeline 创建直接使用 key 内保存的 config，因此不存在手工 key 与实际 Vulkan 状态分叉。
 
 Forward descriptor 约定为：
 
@@ -82,7 +84,9 @@ ToneMap 使用独立的 pass-local source texture descriptor layout，不复用�
 
 ## Shader Variant
 
-`shader/CMakeLists.txt` 是 shader source list 的唯一所有者。GLSL 编译到 `generated/<Config>/shader/` 后 stage 到 runtime `shader/`；开发运行和 Cook package 使用相同 SPIR-V。Cook 除 variant 路径外，还显式包含 Shadow 与 ToneMap 的内部 shader。
+`shader/CMakeLists.txt` 是 shader source list 的唯一所有者。GLSL 通过共享 include 中的完整 `GlobalFrameUbo`、`GpuLight` 和 128-byte material push block 固定 ABI；ToneMap 保留独立的 16-byte push block。CMake 为 `glslc` 配置 include 路径和依赖，每个产物必须先通过 `spirv-val`，再从 `generated/<Config>/shader/` stage 到 runtime `shader/`。开发运行和 Cook package 使用相同 SPIR-V；Cook 除 variant 路径外，还显式包含 Shadow 与 ToneMap 的内部 shader。
+
+测试目标静态链接固定版本的 SPIRV-Reflect，遍历全部 variant、Shadow opaque/MASK 与 ToneMap program，校验 stage、descriptor、UBO/push size 和 member offset、vertex location/format、跨阶段 varying 及 fragment output。反射不进入 VulkanLab 运行时，也不自动生成 DescriptorSetLayout；生产布局仍由显式 C++ 代码创建。
 
 当前 variant 包含 Legacy、两个 PBR-lite、BaseColor/Normal/Roughness/Metallic/Occlusion/Emissive/Alpha/Transmission 调试视图，以及 `Debug Shadow`。PBR-lite 使用 baseColor、metallicRoughness、AO 和 emissive；NormalMapped 额外使用 tangent/TBN 与 normal scale。Transmission 当前仍是 alpha 与 Fresnel 轮廓近似，不采样场景颜色。
 
@@ -93,6 +97,12 @@ ToneMap 使用独立的 pass-local source texture descriptor layout，不复用�
 SceneLight 支持 Directional、Point 和 Spot。GlobalUBO 最多上传 1 个 directional light 和 8 个 punctual lights；Point 与 Spot 共用 punctual 配额。当前 glTF loader 不解析 `KHR_lights_punctual`。环境项由 ambient color/intensity 提供，AO 只影响 ambient。
 
 当前只支持一张方向光 shadow map；没有 CSM、Point/Spot shadow、IBL、skybox、deferred rendering、bloom 或 auto exposure。
+
+## GPU Pass 计时
+
+Renderer 持有一个 `GpuPassProfiler` 和 timestamp query pool。每个 frame slot 为 `DirectionalShadow`、`MainForward`、`ToneMap + UI` 分配 begin/end query；ToneMap 区间包含同一 render pass 内的 ImGui draw。总时间从第一个 Pass begin 到最后一个 Pass end 计算。
+
+`FrameSync::beginFrame()` 已等待对应 slot 的 fence 后，Profiler 才使用不带 `WAIT_BIT` 的 `vkGetQueryPoolResults()` 读取旧结果，然后在新 command buffer 中 reset 该 slot。计时不会增加 queue/device idle 或额外 fence wait。换算使用设备 `timestampPeriod`，并按 graphics queue 的 `timestampValidBits` 处理计数器回绕；不支持 timestamp 的设备返回 `available=false`，渲染继续运行。结果显示在 `Stats -> GPU Pass Timings`，并由 `render.status.gpuTimings` 返回。
 
 ## Swapchain 截图
 
@@ -106,7 +116,7 @@ resize 时 Renderer 等待 device idle，然后按以下顺序处理：
 
 1. 逆序调用 pass 的 `releaseSwapChainResources()`，先释放持有 swapchain/HDR image view 的 framebuffer 和 descriptor 引用。
 2. 重建 SwapChain。
-3. 重建 extent-dependent HDR color、MSAA color 和 depth targets；固定 2048 的 shadow map 不重建。
+3. 由 Registry 重建 extent-dependent HDR color、MSAA color 和 depth targets；fixed 2048 的 shadow map 不重建。
 4. 调用 pass `onResize()` 重建 framebuffer 和 HDR source descriptor。
 5. 清空 PipelineCache，更新 GuiSystem、FrameSync 与相机 aspect ratio。
 

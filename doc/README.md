@@ -1,8 +1,8 @@
 # VulkanLab 文档
 
 > Status: Current
-> Last verified: 2026-07-20
-> Verified against: `4bcabe9`
+> Last verified: 2026-07-21
+> Verified against: `16c61c8`
 
 本目录按文档有效性分为 Current、Active 和 Archived 三种状态。只有 `guides/` 与 `architecture/` 中标记为 Current 的文档可以作为当前实现依据；源码始终是最终事实来源。
 

@@ -1,8 +1,8 @@
 # 资源加载
 
 > Status: Current
-> Last verified: 2026-07-19
-> Verified against: `a51297c`
+> Last verified: 2026-07-21
+> Verified against: `16c61c8`
 
 ## 项目、Catalog 与导入
 
@@ -123,6 +123,8 @@ SceneGpuBuilder 每帧以默认 `32 MiB` 和 `2 ms` 软预算推进：fallback�
 取消或 GPU build 失败会停止记录新资源，提交已经记录的命令，并逐帧轮询在途 fence。相关 fence 完成后才销毁半成品；正常取消路径不使用 device idle。程序退出和显式 teardown 可以 drain。
 
 DescriptorAllocator 创建支持单独释放 set 的 pool。MaterialInstance 析构会归还 descriptor set，因此失败、取消和反复重载不会持续耗尽 pool 容量。
+
+`RenderResourceRegistry` 不管理这里的 Scene Texture/Mesh，也不参与上传或 residency。它只拥有 Renderer 内部的 HDR、depth、shadow render target 和 sampler；Scene 资源仍由 SceneGpuBuilder、Texture/Mesh 与上传队列按上述生命周期管理。
 
 ## 发布与失败语义
 

@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-21
-> Verified against: current working tree based on `a154f52`
+> Verified against: `16c61c8`
 
 VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Application` 为组合根，场景、渲染提交、GPU 资源和调试控制之间保持显式所有权，不使用全局引擎服务定位器。
 
@@ -10,16 +10,16 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 
 | 目录 | 职责 |
 |---|---|
-| `src/app/` | 应用生命周期、场景注册与切换、相机、ImGui 面板、全局 UBO 和命令执行。 |
+| `src/app/` | 应用生命周期、场景注册与切换、相机、ImGui 面板、RenderView 输入和命令执行。 |
 | `src/assets/` | ProjectContext、Scene Catalog/编辑事务、RuntimePackage、ArtifactIndex/依赖校验、cache prune、资产工具进程监督、manifest 和 KTX2 cache 读取。 |
 | `src/control/` | Windows Named Pipe 服务、运行时命令队列和 JSON 协议。 |
 | `src/core/` | Vulkan instance/device、SwapChain、FrameSync、Buffer/Image、Descriptor、Pipeline、VMA、同步与增量上传。 |
-| `src/render/` | Mesh、Texture、材质、纯 CPU glTF prepare、RenderQueue、PipelineCache、Renderer 和 Shader variant。 |
-| `src/render/pass/` | RenderPipeline 中的具体 pass；当前只有 `MainForwardPass`。 |
+| `src/render/` | Mesh、Texture、材质、纯 CPU glTF prepare、RenderView、RenderQueue、RenderResourceRegistry、PipelineCache、Renderer、GPU profiler 和 Shader variant。 |
+| `src/render/pass/` | RenderPipeline 中的具体 pass；当前为 DirectionalShadow、MainForward 和 ToneMap。 |
 | `src/scene/` | Scene、SceneObject、SceneLight、Camera、prepared data、加载任务、GPU builder、SceneFactory 和内建场景。 |
 | `src/window/` | GLFW 窗口和输入状态。 |
 | `src/platform/` | Win32 原生文件选择等平台适配。 |
-| `src/diagnostics/` | 场景加载耗时、资源上传量和 VMA 快照数据结构。 |
+| `src/diagnostics/` | 场景加载耗时、资源上传量、VMA 快照、截图与自动化诊断。 |
 | `tools/` | 独立资产、Runtime Control 和视觉回归程序；不拥有渲染器内部对象。 |
 
 ## 启动与所有权
@@ -34,7 +34,7 @@ Cooked package 中 `projectRoot == runtimeRoot == package root`，cache 固定�
 2. Window 和 InputManager。
 3. VulkanContext、Device 和 DescriptorAllocator。
 4. SwapChain 和 FrameSync。
-5. Renderer、全局 UBO、RenderPipeline、MainForwardPass 和开发模式 CaptureService。
+5. Renderer、全局 UBO、类型化 render resource registry、三段 RenderPipeline、GPU timestamp profiler 和开发模式 CaptureService。
 6. PipelineCache、SceneLoadManager worker、ArtifactIndex 和初始 Scene/admission；只有 OnDemand 创建 AssetImportManager supervisor。
 7. GuiSystem。
 8. 可选的 Runtime Control 命令队列和 Named Pipe 线程。
@@ -66,9 +66,9 @@ CaptureService 的主线程部分创建 readback buffer、记录 image copy 并�
 3. 应用待切换场景，更新计时、输入模式、相机和 Scene tick。
 4. 轮询场景导入 future，构建 Scenes、Loading 和最近一次 LoadStats 等 ImGui 界面。
 5. `FrameSync::beginFrame()` 获取 frame index、swapchain image 和 command buffer。
-6. Application 选择第一盏方向光、按场景 bounds 拟合阴影矩阵，并把相机、环境光、SceneLight 和阴影参数写入当前帧 GlobalUBO。
+6. Application 组装 `RenderViewInput`；纯函数 `buildRenderView()` 完成默认 Sun、灯光截断/GPU 打包和阴影拟合，生成不可变 `RenderView`。
 7. Scene 生成 RenderCommand，RenderQueue 分别排序 opaque 与 transparent 命令。
-8. Renderer 组装 RenderFrameContext，RenderPipeline 依次执行 DirectionalShadowPass、输出线性 HDR 的 MainForwardPass，以及 ToneMapPass；ImGui 在 tone mapping 后绘制。
+8. Renderer 上传 `RenderView::globalUbo`、读取已完成 frame slot 的 timestamp，并组装 RenderFrameContext；RenderPipeline 依次执行 DirectionalShadowPass、输出线性 HDR 的 MainForwardPass，以及 ToneMapPass；ImGui 在 tone mapping 后绘制，每个 Pass 由 timestamp query 包围。
 9. 若有截图任务，在同一个 frame command buffer 中把最终 swapchain image 复制到 readback buffer，然后恢复 present layout。
 10. `FrameSync::endFrame()` 提交和 present；需要时重建 SwapChain 相关资源。后续帧推进 completed submission serial，并把已完成截图交给 CPU worker。
 

@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-21
-> Verified against: current working tree based on `a154f52`
+> Verified against: `16c61c8`
 
 Runtime Control 通过 Windows Named Pipe 控制已经运行的 VulkanLab。它面向本机开发、诊断和自动化，可以查询状态、加载场景、设置相机和 Shader、等待渲染稳定、异步截图并安全退出程序。`scene.list.entries[]` 同时返回稳定 scene ID、Catalog profile ID 和该 profile 的纹理限制。
 
@@ -105,11 +105,14 @@ cd build\windows-msvc-debug\Debug
 
 - 当前 scene、scene generation 和最新 load operation；
 - submitted/completed frame serial 与累计 presented frame 数；
+- 最近一个已完成 frame 的 `gpuTimings`，包含 available、frameSerial、DirectionalShadow/MainForward/ToneMap + UI 分项与 totalMs；
 - 待上传 texture/mesh、in-flight upload batch；
 - capture queue 计数和 capture capability；
 - GUI 可见性、窗口最小化、swapchain recreate 和 rendering 状态。
 
 `render.wait` 不是服务端阻塞命令。控制工具反复请求 `render.status` 和必要的 `load.status`，要求同一 generation 已完成加载、pending upload 为 0、窗口可渲染，并观察指定数量的新 presented frames。默认等待 8 帧、超时 30 秒；超时返回 `render_wait_timeout`，持续最小化时返回 `window_not_rendering`。
+
+GPU timing 在对应 frame slot 的正常 fence 已完成后读取，不使用 query `WAIT_BIT`，也不增加 queue/device idle。不支持 graphics timestamp 的设备返回 `available=false`；启动后的最初两个 frame 也可能暂时没有已完成结果。
 
 ### 异步截图
 

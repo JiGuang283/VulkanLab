@@ -1,20 +1,20 @@
 # 构建与运行
 
 > Status: Current
-> Last verified: 2026-07-20
-> Verified against: `4bcabe9`
+> Last verified: 2026-07-21
+> Verified against: `16c61c8`
 
 ## 环境要求
 
 - Windows 10/11 和支持 Vulkan 的显卡驱动。
 - Visual Studio 2022 C++ 工具链。
 - CMake 3.22 或更高版本。
-- Vulkan SDK。CMake 需要能找到 Vulkan、`glslc` 和 SDK 中的 GLM 头文件。
+- Vulkan SDK。CMake 需要能找到 Vulkan、`glslc`、`spirv-val` 和 SDK 中的 GLM 头文件。
 - 仓库内 `external/` 依赖完整，尤其是 `glfw/lib-vc2022`、ImGui、stb、VMA 和 glTF 头文件。
-- 阶段三使用 KTX-Software v4.4.2 submodule。首次克隆或更新后必须递归初始化：
+- 运行时使用 KTX-Software v4.4.2，shader contract tests 使用固定提交的 SPIRV-Reflect；两者都是 submodule。首次克隆或更新后必须递归初始化：
 
 ```powershell
-git submodule update --init --recursive external/ktx
+git submodule update --init --recursive
 ```
 
 如果模型资产由 Git LFS 管理，还需要先安装 Git LFS 并在仓库根目录执行 `git lfs pull`。KTX2 派生缓存本身不提交到 Git LFS 或普通 Git。
@@ -47,11 +47,13 @@ cmake --build build --config Release
 
 构建会生成 Git revision/dirty、configuration、compiler、Vulkan SDK 和 `glslc` 版本信息。启用 Runtime Control 后可通过 `VulkanLabCtl.exe --json info` 查看。确定性窗口、fixed delta、无 GUI 和诊断输出配置见 [诊断与自动化启动配置](diagnostics.md)。
 
-CMake 将 `shader/` 下显式登记的 15 个 GLSL 源增量编译到 `build-*/generated/<Config>/shader/`，再把对应 SPIR-V stage 到可执行文件旁的 `shader/`。源码树不保存 SPIR-V，也没有独立的 `compile.bat`；普通 C++ rebuild 不会重新调用 `glslc`，修改一个 Shader 只更新对应产物。需要单独构建 Shader 时使用：
+CMake 将 `shader/` 下显式登记的 20 个 GLSL 源增量编译到 `build-*/generated/<Config>/shader/`，每个产物通过 `spirv-val` 后再 stage 到可执行文件旁的 `shader/`。共享 ABI include 会作为依赖触发相关 shader 重编译。源码树不保存 SPIR-V，也没有独立的 `compile.bat`；普通 C++ rebuild 不会重新调用 `glslc`，修改一个 Shader 只更新对应产物。需要单独构建 Shader 时使用：
 
 ```powershell
 cmake --build build-debug --config Debug --target VulkanLabShaders
 ```
+
+启用 `BUILD_TESTING` 时，`VulkanLabCpuTests` 会静态链接 SPIRV-Reflect 并读取上述实际 SPIR-V，校验 shader stage、descriptor、共享 UBO/push ABI、vertex input、varying 和 fragment output。SPIRV-Reflect 不链接进 `VulkanLab.exe`。
 
 开发构建只把 executable、运行时工具、`vulkanlab_project.json` locator 和生成的 SPIR-V 放入输出目录，不复制完整 `models/` 或 `textures/`。开发场景直接通过 ProjectContext 从源码项目读取源资产；Release 交付使用后文的 `cook` 命令生成经过校验的最小闭包。Windows 构建还会生成运行时控制工具。
 
