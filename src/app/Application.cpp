@@ -52,6 +52,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -71,6 +72,26 @@
 namespace vkr {
 
 namespace {
+
+glm::vec3 normalizedSunDirectionOrDefault(const glm::vec3 &direction) {
+    const float lengthSquared = glm::dot(direction, direction);
+    if (!std::isfinite(lengthSquared) || lengthSquared <= 1.0e-8f)
+        return glm::normalize(glm::vec3(0.3f, 0.8f, 0.5f));
+    return direction / std::sqrt(lengthSquared);
+}
+
+void sunAnglesFromDirection(const glm::vec3 &direction, float &azimuth,
+                            float &elevation) {
+    const glm::vec3 normalized = normalizedSunDirectionOrDefault(direction);
+    azimuth = std::atan2(normalized.y, normalized.x);
+    elevation = std::asin(std::clamp(normalized.z, -1.0f, 1.0f));
+}
+
+glm::vec3 sunDirectionFromAngles(float azimuth, float elevation) {
+    const float horizontalLength = std::cos(elevation);
+    return {horizontalLength * std::cos(azimuth),
+            horizontalLength * std::sin(azimuth), std::sin(elevation)};
+}
 
 const char *alphaModeName(AlphaMode mode) {
     switch (mode) {
@@ -2860,8 +2881,22 @@ void Application::drawGui() {
         ImGui::Text("Ignored: %u", lastIgnoredLights_);
     if (sceneLightCount == 0) {
         ImGui::Separator();
-        ImGui::DragFloat3("Sun Direction", &defaultSunDirection_.x, 0.01f,
-                          -1.0f, 1.0f);
+        float sunAzimuth = 0.0f;
+        float sunElevation = 0.0f;
+        sunAnglesFromDirection(defaultSunDirection_, sunAzimuth,
+                               sunElevation);
+        constexpr ImGuiSliderFlags angleFlags =
+            ImGuiSliderFlags_AlwaysClamp;
+        bool sunDirectionChanged = ImGui::SliderAngle(
+            "Sun Azimuth", &sunAzimuth, -180.0f, 180.0f, "%.1f deg",
+            angleFlags);
+        sunDirectionChanged |= ImGui::SliderAngle(
+            "Sun Elevation", &sunElevation, -89.0f, 89.0f, "%.1f deg",
+            angleFlags);
+        if (sunDirectionChanged) {
+            defaultSunDirection_ =
+                sunDirectionFromAngles(sunAzimuth, sunElevation);
+        }
         ImGui::ColorEdit3("Sun Color", &defaultSunColor_.x);
         ImGui::DragFloat("Sun Intensity", &defaultSunIntensity_, 0.05f, 0.0f,
                          20.0f);
@@ -2930,6 +2965,10 @@ void Application::drawGui() {
     const auto cameraPos = camera_.position();
     ImGui::Text("Position: (%.2f, %.2f, %.2f)", cameraPos.x, cameraPos.y,
                 cameraPos.z);
+    constexpr ImGuiSliderFlags moveSpeedFlags =
+        ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp;
+    ImGui::SliderFloat("Move Speed", &config_.moveSpeed, 0.1f, 100.0f,
+                       "%.2f", moveSpeedFlags);
     float nearPlane = camera_.nearPlane();
     float farPlane = camera_.farPlane();
     bool  clipChanged = false;
