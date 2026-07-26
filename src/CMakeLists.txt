@@ -36,6 +36,7 @@ add_library(vkl_asset_core STATIC
     assets/CacheMutationLock.cpp
     assets/ContentHash.cpp
     assets/DerivedAssetPaths.cpp
+    assets/DerivedEnvironmentManifest.cpp
     assets/DerivedTextureManifest.cpp
     assets/ProjectContext.cpp
     assets/RuntimePackage.cpp
@@ -57,7 +58,9 @@ target_link_libraries(vkl_asset_core
 add_library(vkl_asset_runtime STATIC
     assets/AssetImportManager.cpp
     assets/AssetLoadCoordinator.cpp
+    assets/DerivedEnvironmentCache.cpp
     assets/DerivedTextureCache.cpp
+    assets/EnvironmentLoadManager.cpp
 )
 add_library(VulkanLab::AssetRuntime ALIAS vkl_asset_runtime)
 target_include_directories(vkl_asset_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -112,6 +115,7 @@ add_library(vkl_engine STATIC
     diagnostics/CaptureTypes.cpp
     platform/FileDialogWin32.cpp
     render/FallbackTextures.cpp
+    render/EnvironmentGpuBuilder.cpp
     render/DirectionalShadow.cpp
     render/GpuPassProfiler.cpp
     render/GltfPreparer.cpp
@@ -130,6 +134,7 @@ add_library(vkl_engine STATIC
     render/TextureData.cpp
     render/pass/MainForwardPass.cpp
     render/pass/DirectionalShadowPass.cpp
+    render/pass/SkyboxPass.cpp
     render/pass/ToneMapPass.cpp
     scene/BuiltinScenes.cpp
     scene/Camera.cpp

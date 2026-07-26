@@ -6,6 +6,7 @@
 #include "assets/ArtifactStatus.h"
 #include "assets/AssetLoadCoordinator.h"
 #include "assets/AssetImportManager.h"
+#include "assets/EnvironmentLoadManager.h"
 #include "assets/SceneImportService.h"
 #include "assets/SceneCatalogEditor.h"
 #include "control/NamedPipeServerWin32.h"
@@ -24,6 +25,7 @@
 #include "diagnostics/CaptureService.h"
 #include "render/GuiSystem.h"
 #include "render/DirectionalShadow.h"
+#include "render/EnvironmentGpuBuilder.h"
 #include "render/MaterialInstance.h"
 #include "render/MaterialTextureSlot.h"
 #include "render/PipelineCache.h"
@@ -68,6 +70,7 @@
 #include <utility>
 
 #include <glm/glm.hpp>
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace vkr {
@@ -203,6 +206,8 @@ ControlJson assetImportTaskToJson(
     const AssetImportState state = task->state.load();
     ControlJson result = {
         {"taskId", task->id},
+        {"assetKind", assetImportKindName(task->kind)},
+        {"assetId", task->sceneId},
         {"sceneId", task->sceneId},
         {"profileId", task->profileId},
         {"state", assetImportStateName(state)},
@@ -354,6 +359,39 @@ ControlJson sceneLoadTaskToJson(
     }
     if (finalized)
         result["loadStats"] = sceneLoadStatsToJson(task->stats);
+    return result;
+}
+
+ControlJson environmentLoadTaskToJson(
+    const std::shared_ptr<EnvironmentLoadTask> &task) {
+    if (!task)
+        return nullptr;
+    const EnvironmentLoadState state = task->state.load();
+    ControlJson result = {
+        {"taskId", task->id},
+        {"generation", task->generation},
+        {"environmentId", task->environmentId},
+        {"environment", task->displayName},
+        {"profileId", task->profileId},
+        {"state", environmentLoadStateName(state)},
+        {"phase",
+         state == EnvironmentLoadState::PreparingCpu
+             ? "preparing"
+             : (state == EnvironmentLoadState::Uploading ||
+                        state == EnvironmentLoadState::WaitingForGpu ||
+                        state == EnvironmentLoadState::ReadyToPublish
+                    ? "uploading"
+                    : (isTerminalEnvironmentLoadState(state) ? "complete"
+                                                              : "queued"))},
+        {"terminal", isTerminalEnvironmentLoadState(state)},
+        {"progress",
+         {{"imagesUploaded", task->uploadedImages.load()},
+          {"imagesTotal", task->totalImages}}}};
+    {
+        std::lock_guard<std::mutex> lock(task->mutex);
+        if (!task->error.empty())
+            result["error"] = task->error;
+    }
     return result;
 }
 
@@ -541,6 +579,15 @@ struct EditorUiState {
     size_t selectedMaterialIndex = 0;
     uint64_t materialSceneGeneration =
         std::numeric_limits<uint64_t>::max();
+    int selectedEnvironmentIndex = 0;
+    std::optional<std::filesystem::path> environmentImportSource;
+    std::array<char, 192> environmentDisplayName{};
+    std::array<char, 128> environmentId{};
+    std::vector<std::string> environmentProfileIds;
+    int environmentProfileIndex = 0;
+    bool requestEnvironmentImportModal = false;
+    std::string environmentStatus;
+    std::string environmentError;
 };
 
 namespace {
@@ -627,6 +674,11 @@ Application::~Application() {
     }
     if (assetImportManager_)
         assetImportManager_->shutdown();
+    if (environmentGpuBuilder_)
+        environmentGpuBuilder_->cancel();
+    environmentGpuBuilder_.reset();
+    if (environmentLoadManager_)
+        environmentLoadManager_->shutdown();
     if (sceneGpuBuilder_)
         sceneGpuBuilder_->cancel();
     sceneGpuBuilder_.reset();
@@ -701,11 +753,13 @@ void Application::init() {
     const ShaderProgram &shadowMask = shaderRegistry_.program("shadow.mask");
     const ShaderProgram &toneMap =
         shaderRegistry_.program("postprocess.tonemap");
+    const ShaderProgram &skybox = shaderRegistry_.program("skybox");
     renderer_ = std::make_unique<Renderer>(
         *device_, *swapChain_, *frameSync_, *descriptorAllocator_,
         RendererShaderPaths{
             shadowOpaque.vertSpvPath, shadowMask.fragSpvPath,
-            toneMap.vertSpvPath, toneMap.fragSpvPath});
+            toneMap.vertSpvPath, toneMap.fragSpvPath,
+            skybox.fragSpvPath});
     if (!projectContext_.cookedPackage) {
         captureService_ = std::make_unique<CaptureService>(
             *device_, projectContext_.captureRoot);
@@ -725,6 +779,8 @@ void Application::init() {
                                  static_cast<int>(sceneRegistry_.size()) - 1);
     pipelineCache_ = std::make_unique<PipelineCache>(*device_);
     sceneLoadManager_ = std::make_unique<SceneLoadManager>();
+    environmentLoadManager_ =
+        std::make_unique<EnvironmentLoadManager>();
     if (config_.assetImportMode == AssetImportMode::OnDemand) {
         assetImportManager_ = std::make_unique<AssetImportManager>(
             AssetImportManagerOptions{
@@ -745,6 +801,16 @@ void Application::init() {
         config_.assetImportMode == AssetImportMode::CookedOnly;
     reloadArtifactIndex();
     refreshAllArtifactStatuses();
+    if (catalog_.defaultEnvironment &&
+        catalog_.findEnvironment(*catalog_.defaultEnvironment)) {
+        try {
+            setEnvironment(*catalog_.defaultEnvironment);
+        } catch (const std::exception &error) {
+            VKR_LOG_WARN("Environment",
+                         "Could not queue default environment '{}': {}",
+                         *catalog_.defaultEnvironment, error.what());
+        }
+    }
     sceneAssetOperations_->selectedSceneIndex = start;
     if (sceneRegistry_[start].builtin)
         loadScene(start);
@@ -999,6 +1065,125 @@ bool Application::cancelSceneLoad(uint64_t taskId) {
     return sceneLoadManager_ && sceneLoadManager_->cancel(taskId);
 }
 
+bool Application::cancelEnvironmentLoad(uint64_t taskId) {
+    if (environmentGpuBuilder_ &&
+        environmentGpuBuilder_->task()->id == taskId) {
+        environmentGpuBuilder_->cancel();
+        return true;
+    }
+    return environmentLoadManager_ &&
+           environmentLoadManager_->cancel(taskId);
+}
+
+uint64_t Application::setEnvironment(const std::string &id) {
+    if (asciiEqualsIgnoreCase(id, "None") || id.empty()) {
+        if (latestEnvironmentLoadTask_ &&
+            !isTerminalEnvironmentLoadState(
+                latestEnvironmentLoadTask_->state.load())) {
+            cancelEnvironmentLoad(latestEnvironmentLoadTask_->id);
+        }
+        if (environmentGpuBuilder_)
+            environmentGpuBuilder_->cancel();
+        selectedEnvironmentId_.clear();
+        renderer_->clearEnvironment();
+        VKR_LOG_INFO("Environment", "Environment cleared");
+        return 0;
+    }
+    if (!device_->environmentIblSupported()) {
+        throw RuntimeCommandError(
+            "environment_unsupported",
+            "The selected Vulkan device does not support the required "
+            "RGBA16F cubemap and RG16F filtering features.");
+    }
+    const CatalogEnvironment *environment = findEnvironmentByName(id);
+    if (!environment) {
+        throw RuntimeCommandError(
+            "unknown_environment",
+            "Unknown environment '" + id + "'.");
+    }
+    const EnvironmentProfile &profile =
+        catalog_.environmentProfile(environment->environmentProfile);
+    (void)profile;
+    const std::filesystem::path source =
+        projectContext_.resolveProjectPath(environment->source);
+    if (!projectContext_.cookedPackage) {
+        const ArtifactStatus status = inspectEnvironmentArtifacts(
+            {std::filesystem::u8path(
+                 config_.derivedTextureCachePath),
+             source, catalog_.projectId, environment->id,
+             environment->environmentProfile});
+        if (!status.ready()) {
+            throw RuntimeCommandError(
+                "environment_artifacts_unavailable",
+                "Environment artifacts are " +
+                    std::string(artifactStateName(status.state)) +
+                    ": " + status.reason +
+                    ". Build them with VulkanLabAssetTool "
+                    "environment-cache build.");
+        }
+    }
+
+    if (environmentGpuBuilder_)
+        environmentGpuBuilder_->cancel();
+    selectedEnvironmentId_ = environment->id;
+    latestEnvironmentLoadTask_ =
+        environmentLoadManager_->request(
+            {std::filesystem::u8path(
+                 config_.derivedTextureCachePath),
+             source, catalog_.projectId, environment->id,
+             environment->displayName,
+             environment->environmentProfile,
+             !projectContext_.cookedPackage});
+    VKR_LOG_INFO("Environment",
+                 "Queued environment load task {} for {}",
+                 latestEnvironmentLoadTask_->id,
+                 environment->displayName);
+    return latestEnvironmentLoadTask_->id;
+}
+
+uint64_t Application::reloadCurrentEnvironment() {
+    if (selectedEnvironmentId_.empty())
+        return 0;
+    return setEnvironment(selectedEnvironmentId_);
+}
+
+void Application::updateEnvironmentLoading() {
+    if (environmentGpuBuilder_) {
+        environmentGpuBuilder_->pump();
+        const auto task = environmentGpuBuilder_->task();
+        if (environmentGpuBuilder_->ready()) {
+            renderer_->publishEnvironment(
+                environmentGpuBuilder_->takeResources());
+            environmentGpuBuilder_.reset();
+            task->state = EnvironmentLoadState::Completed;
+            if (artifactIndex_) {
+                artifactIndex_->touchEnvironment(
+                    task->environmentId, task->profileId);
+                persistArtifactIndex();
+            }
+            VKR_LOG_INFO("Environment",
+                         "Published environment '{}' from task {}",
+                         task->displayName, task->id);
+        } else if (environmentGpuBuilder_->finished()) {
+            environmentGpuBuilder_.reset();
+        }
+    }
+
+    if (environmentGpuBuilder_ || !latestEnvironmentLoadTask_)
+        return;
+    if (latestEnvironmentLoadTask_->state.load() ==
+        EnvironmentLoadState::ReadyForUpload) {
+        auto prepared = environmentLoadManager_->takePrepared(
+            latestEnvironmentLoadTask_->id);
+        if (prepared) {
+            environmentGpuBuilder_ =
+                std::make_unique<EnvironmentGpuBuilder>(
+                    *device_, latestEnvironmentLoadTask_,
+                    std::move(prepared));
+        }
+    }
+}
+
 void Application::updateSceneLoading() {
     if (sceneGpuBuilder_) {
         sceneGpuBuilder_->pump();
@@ -1022,7 +1207,6 @@ void Application::updateSceneLoading() {
             finalizeSceneLoad(task, false);
         }
     }
-
     if (sceneGpuBuilder_ || !latestSceneLoadTask_)
         return;
 
@@ -1127,6 +1311,11 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
         glm::clamp(next.shadowConstantBias, 0.0f, 10.0f);
     next.shadowSlopeBias = glm::clamp(next.shadowSlopeBias, 0.0f, 10.0f);
     next.exposureEv = glm::clamp(next.exposureEv, -10.0f, 10.0f);
+    next.environmentIntensity =
+        glm::clamp(next.environmentIntensity, 0.0f, 100.0f);
+    next.environmentRotationRadians =
+        std::remainder(next.environmentRotationRadians,
+                       glm::two_pi<float>());
     renderSettings_ = next;
 }
 
@@ -1136,6 +1325,17 @@ int Application::findSceneIndexByName(const std::string &name) const {
             return i;
     }
     return -1;
+}
+
+const CatalogEnvironment *
+Application::findEnvironmentByName(const std::string &name) const {
+    for (const CatalogEnvironment &environment : catalog_.environments) {
+        if (asciiEqualsIgnoreCase(environment.id, name) ||
+            asciiEqualsIgnoreCase(environment.displayName, name)) {
+            return &environment;
+        }
+    }
+    return nullptr;
 }
 
 std::string
@@ -1329,6 +1529,31 @@ void Application::updateAssetImports() {
             }
         }
         const AssetImportState state = task->state.load();
+        if (task->kind == AssetImportKind::Environment) {
+            if (state == AssetImportState::Completed) {
+                reloadArtifactIndex();
+                editorUi_->environmentStatus =
+                    "Built environment artifacts for " + task->sceneId;
+                editorUi_->environmentError.clear();
+                if (selectedEnvironmentId_ == task->sceneId) {
+                    try {
+                        setEnvironment(task->sceneId);
+                    } catch (const std::exception &error) {
+                        editorUi_->environmentError = error.what();
+                    }
+                }
+            } else if (state == AssetImportState::Failed) {
+                std::lock_guard<std::mutex> lock(task->mutex);
+                editorUi_->environmentError =
+                    task->error.empty()
+                        ? "Environment bake failed"
+                        : task->error;
+            } else if (state == AssetImportState::Cancelled) {
+                editorUi_->environmentStatus =
+                    "Environment bake cancelled";
+            }
+            continue;
+        }
         if (state == AssetImportState::Completed) {
             reloadArtifactIndex();
             if (artifactIndex_) {
@@ -1379,6 +1604,10 @@ void Application::updateAssetImports() {
 }
 
 bool Application::cancelLoadOperation(uint64_t taskId) {
+    if ((taskId & EnvironmentLoadManager::kTaskIdMask) != 0 &&
+        (taskId & AssetImportManager::kTaskIdMask) == 0) {
+        return cancelEnvironmentLoad(taskId);
+    }
     if ((taskId & AssetImportManager::kTaskIdMask) == 0)
         return cancelSceneLoad(taskId);
     const auto linked = sceneAssetOperations_->importToLoadTask.find(taskId);
@@ -1411,7 +1640,7 @@ ControlJson Application::runtimeSystemInfo() {
     ControlJson capabilities = {"async_scene_load", "load_status",
                                 "load_cancel", "asset_catalog",
                                 "camera_control", "render_status",
-                                "render_settings"};
+                                "render_settings", "environment"};
     if (assetImportManager_) {
         capabilities.push_back("asset_import");
         capabilities.push_back("asset_cancel");
@@ -1563,9 +1792,30 @@ Application::runtimeLoadStatus(std::optional<uint64_t> requestedTaskId) {
         const auto activeImport =
             assetImportManager_ ? assetImportManager_->activeTask()
                                 : std::shared_ptr<AssetImportTask>{};
-        taskId = activeImport ? activeImport->id
-                              : (latestSceneLoadTask_ ? latestSceneLoadTask_->id
-                                                      : 0);
+        const bool environmentActive =
+            latestEnvironmentLoadTask_ &&
+            !isTerminalEnvironmentLoadState(
+                latestEnvironmentLoadTask_->state.load());
+        taskId =
+            activeImport
+                ? activeImport->id
+                : (environmentActive
+                       ? latestEnvironmentLoadTask_->id
+                       : (latestSceneLoadTask_
+                              ? latestSceneLoadTask_->id
+                              : (latestEnvironmentLoadTask_
+                                     ? latestEnvironmentLoadTask_->id
+                                     : 0)));
+    }
+    if ((taskId & EnvironmentLoadManager::kTaskIdMask) != 0 &&
+        (taskId & AssetImportManager::kTaskIdMask) == 0) {
+        const auto task = environmentLoadManager_
+                              ? environmentLoadManager_->task(taskId)
+                              : nullptr;
+        if (!task)
+            throw RuntimeCommandError("load_not_found",
+                                      "Load task was not found.");
+        return environmentLoadTaskToJson(task);
     }
     if ((taskId & AssetImportManager::kTaskIdMask) != 0) {
         if (!assetImportManager_)
@@ -1599,8 +1849,13 @@ Application::runtimeLoadCancel(std::optional<uint64_t> requestedTaskId) {
         assetImportManager_ ? assetImportManager_->activeTask()
                             : std::shared_ptr<AssetImportTask>{};
     const uint64_t taskId = requestedTaskId.value_or(
-        activeImport ? activeImport->id
-                     : (latestSceneLoadTask_ ? latestSceneLoadTask_->id : 0));
+        activeImport
+            ? activeImport->id
+            : (latestEnvironmentLoadTask_ &&
+                       !isTerminalEnvironmentLoadState(
+                           latestEnvironmentLoadTask_->state.load())
+                   ? latestEnvironmentLoadTask_->id
+                   : (latestSceneLoadTask_ ? latestSceneLoadTask_->id : 0)));
     if (taskId == 0 || !cancelLoadOperation(taskId))
         throw RuntimeCommandError("load_not_cancellable",
                                   "Load task cannot be cancelled.");
@@ -1847,6 +2102,14 @@ ControlJson Application::runtimeRenderStatus() {
         inFlightUploadBatches =
             sceneGpuBuilder_->inFlightUploadBatches();
     }
+    if (environmentGpuBuilder_) {
+        const auto task = environmentGpuBuilder_->task();
+        const uint64_t uploaded = task->uploadedImages.load();
+        pendingUploads +=
+            task->totalImages > uploaded
+                ? task->totalImages - uploaded
+                : 0;
+    }
 
     ControlJson captureQueue = {{"total", 0},
                                 {"active", 0},
@@ -1931,6 +2194,18 @@ ControlJson Application::runtimeRenderStatus() {
         {"scene", std::move(scene)},
         {"sceneGeneration", sceneGeneration_},
         {"loadTask", std::move(loadTask)},
+        {"environment",
+         {{"selectedId",
+           selectedEnvironmentId_.empty()
+               ? ControlJson(nullptr)
+               : ControlJson(selectedEnvironmentId_)},
+          {"publishedId",
+           renderer_->environmentReady()
+               ? ControlJson(renderer_->currentEnvironmentId())
+               : ControlJson(nullptr)},
+          {"ready", renderer_->environmentReady()},
+          {"loadTask",
+           environmentLoadTaskToJson(latestEnvironmentLoadTask_)}}},
         {"frameSerial", frameSync_->lastSubmittedSerial()},
         {"completedSubmissionSerial",
          frameSync_->completedSubmissionSerial()},
@@ -1968,6 +2243,12 @@ ControlJson Application::runtimeRenderSettingsGet() {
             {"shadowSlopeBias", renderSettings_.shadowSlopeBias},
             {"exposureEv", renderSettings_.exposureEv},
             {"toneMapper", toneMapperName(renderSettings_.toneMapper)},
+            {"iblEnabled", renderSettings_.iblEnabled},
+            {"skyboxEnabled", renderSettings_.skyboxEnabled},
+            {"environmentIntensity",
+             renderSettings_.environmentIntensity},
+            {"environmentRotationRadians",
+             renderSettings_.environmentRotationRadians},
             {"toneMappingPolicy", "pbr_only"}};
 }
 
@@ -1975,6 +2256,73 @@ ControlJson Application::runtimeRenderSettingsSet(
     const RenderSettingsPatch &patch) {
     applyRenderSettings(patch);
     return runtimeRenderSettingsGet();
+}
+
+ControlJson Application::runtimeEnvironmentList() {
+    ControlJson entries = ControlJson::array();
+    entries.push_back({{"id", nullptr},
+                       {"name", "None"},
+                       {"profileId", nullptr},
+                       {"ready", true}});
+    for (const CatalogEnvironment &environment : catalog_.environments) {
+        ArtifactStatus status;
+        if (projectContext_.cookedPackage) {
+            status.state = ArtifactState::Ready;
+            status.reason = "packaged";
+        } else {
+            status = inspectEnvironmentArtifacts(
+                {std::filesystem::u8path(
+                     config_.derivedTextureCachePath),
+                 projectContext_.resolveProjectPath(environment.source),
+                 catalog_.projectId, environment.id,
+                 environment.environmentProfile});
+        }
+        entries.push_back(
+            {{"id", environment.id},
+             {"name", environment.displayName},
+             {"profileId", environment.environmentProfile},
+             {"ready", status.ready()},
+             {"artifactState", artifactStateName(status.state)},
+             {"reason", status.reason}});
+    }
+    return {{"supported", device_->environmentIblSupported()},
+            {"entries", std::move(entries)}};
+}
+
+ControlJson Application::runtimeEnvironmentCurrent() {
+    return {
+        {"selectedId",
+         selectedEnvironmentId_.empty()
+             ? ControlJson(nullptr)
+             : ControlJson(selectedEnvironmentId_)},
+        {"publishedId",
+         renderer_->environmentReady()
+             ? ControlJson(renderer_->currentEnvironmentId())
+             : ControlJson(nullptr)},
+        {"ready", renderer_->environmentReady()},
+        {"task", environmentLoadTaskToJson(
+                     latestEnvironmentLoadTask_)}};
+}
+
+ControlJson
+Application::runtimeEnvironmentSet(const std::string &name) {
+    const uint64_t taskId = setEnvironment(name);
+    ControlJson result = runtimeEnvironmentCurrent();
+    result["taskId"] =
+        taskId == 0 ? ControlJson(nullptr) : ControlJson(taskId);
+    return result;
+}
+
+ControlJson Application::runtimeEnvironmentReload() {
+    if (selectedEnvironmentId_.empty()) {
+        throw RuntimeCommandError(
+            "no_current_environment",
+            "No environment is currently selected.");
+    }
+    const uint64_t taskId = reloadCurrentEnvironment();
+    ControlJson result = runtimeEnvironmentCurrent();
+    result["taskId"] = taskId;
+    return result;
 }
 
 ControlJson Application::runtimeCaptureScreenshot(const std::string &path,
@@ -2583,6 +2931,304 @@ void Application::drawAssetsPanel() {
         }
     }
 
+    ImGui::SeparatorText("Environments");
+    EditorUiState &environmentUi = *editorUi_;
+    environmentUi.selectedEnvironmentIndex = std::clamp(
+        environmentUi.selectedEnvironmentIndex, 0,
+        static_cast<int>(catalog_.environments.size()));
+    const char *selectedEnvironmentName =
+        environmentUi.selectedEnvironmentIndex == 0
+            ? "None"
+            : catalog_
+                  .environments[environmentUi.selectedEnvironmentIndex - 1]
+                  .displayName.c_str();
+    if (ImGui::BeginCombo("Environment Asset",
+                          selectedEnvironmentName)) {
+        const bool noneSelected =
+            environmentUi.selectedEnvironmentIndex == 0;
+        if (ImGui::Selectable("None", noneSelected))
+            environmentUi.selectedEnvironmentIndex = 0;
+        for (int index = 0;
+             index < static_cast<int>(catalog_.environments.size());
+             ++index) {
+            const bool selectedItem =
+                environmentUi.selectedEnvironmentIndex == index + 1;
+            if (ImGui::Selectable(
+                    catalog_.environments[index].displayName.c_str(),
+                    selectedItem)) {
+                environmentUi.selectedEnvironmentIndex = index + 1;
+            }
+            if (selectedItem)
+                ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+
+    std::optional<ArtifactStatus> environmentStatus;
+    const CatalogEnvironment *selectedEnvironment = nullptr;
+    if (environmentUi.selectedEnvironmentIndex > 0) {
+        selectedEnvironment =
+            &catalog_.environments[
+                environmentUi.selectedEnvironmentIndex - 1];
+        if (!projectContext_.cookedPackage) {
+            environmentStatus = inspectEnvironmentArtifacts(
+                {std::filesystem::u8path(
+                     config_.derivedTextureCachePath),
+                 projectContext_.resolveProjectPath(
+                     selectedEnvironment->source),
+                 catalog_.projectId, selectedEnvironment->id,
+                 selectedEnvironment->environmentProfile});
+        }
+        ImGui::Text("Profile: %s",
+                    selectedEnvironment->environmentProfile.c_str());
+        ImGui::TextWrapped(
+            "Source: %s",
+            selectedEnvironment->source.generic_string().c_str());
+        if (environmentStatus) {
+            ImGui::Text("Artifacts: %s",
+                        artifactStateName(environmentStatus->state));
+            ImGui::TextWrapped("%s",
+                               environmentStatus->reason.c_str());
+            if (environmentStatus->entryCount > 0) {
+                ImGui::Text(
+                    "Blobs: %llu (%.2f MiB)",
+                    static_cast<unsigned long long>(
+                        environmentStatus->entryCount),
+                    bytesToMiB(environmentStatus->blobBytes));
+            }
+        }
+    }
+
+    const bool canEditEnvironments =
+        projectContext_.catalogWritable &&
+        config_.assetImportMode == AssetImportMode::OnDemand;
+    ImGui::BeginDisabled(!canEditEnvironments);
+    if (ImGui::Button("Import HDR")) {
+        try {
+            const auto source =
+                openHdrFileDialog(window_->nativeHandle());
+            if (source) {
+                environmentUi.environmentImportSource = *source;
+                const std::string displayName =
+                    source->stem().string();
+                const std::string environmentId =
+                    SceneImportService::suggestSceneId(displayName);
+                std::snprintf(
+                    environmentUi.environmentDisplayName.data(),
+                    environmentUi.environmentDisplayName.size(), "%s",
+                    displayName.c_str());
+                std::snprintf(
+                    environmentUi.environmentId.data(),
+                    environmentUi.environmentId.size(), "%s",
+                    environmentId.c_str());
+                environmentUi.environmentProfileIds.clear();
+                for (const auto &profile :
+                     catalog_.environmentProfiles) {
+                    environmentUi.environmentProfileIds.push_back(
+                        profile.first);
+                }
+                std::sort(
+                    environmentUi.environmentProfileIds.begin(),
+                    environmentUi.environmentProfileIds.end());
+                environmentUi.environmentProfileIndex = 0;
+                environmentUi.requestEnvironmentImportModal = true;
+                environmentUi.environmentError.clear();
+            }
+        } catch (const std::exception &error) {
+            environmentUi.environmentError = error.what();
+        }
+    }
+    ImGui::EndDisabled();
+
+    if (selectedEnvironment) {
+        ImGui::SameLine();
+        const bool canBuild =
+            assetImportManager_ && !projectContext_.cookedPackage;
+        ImGui::BeginDisabled(!canBuild);
+        const bool rebuild =
+            environmentStatus && environmentStatus->ready();
+        if (ImGui::Button(rebuild ? "Rebuild" : "Build")) {
+            try {
+                assetImportManager_->request(
+                    {selectedEnvironment->id,
+                     selectedEnvironment->environmentProfile,
+                     ImportReason::ManualReimport, rebuild,
+                     AssetImportKind::Environment});
+                environmentUi.environmentStatus =
+                    "Queued environment bake for " +
+                    selectedEnvironment->displayName;
+                environmentUi.environmentError.clear();
+            } catch (const std::exception &error) {
+                environmentUi.environmentError = error.what();
+            }
+        }
+        ImGui::EndDisabled();
+        if (canEditEnvironments) {
+            ImGui::SameLine();
+            if (ImGui::Button("Remove Environment"))
+                ImGui::OpenPopup("Remove Environment");
+        }
+        if (ImGui::BeginPopupModal(
+                "Remove Environment", nullptr,
+                ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextWrapped(
+                "Remove '%s' from the Catalog? Source and derived "
+                "artifacts will be retained.",
+                selectedEnvironment->displayName.c_str());
+            if (ImGui::Button("Remove")) {
+                try {
+                    const std::string removedId =
+                        selectedEnvironment->id;
+                    if (selectedEnvironmentId_ == removedId)
+                        setEnvironment("None");
+                    SceneCatalogEditor::removeEnvironment(
+                        projectContext_, removedId);
+                    environmentUi.selectedEnvironmentIndex = 0;
+                    environmentUi.environmentStatus =
+                        "Removed " + removedId + " from Catalog";
+                    refreshSceneRegistry();
+                } catch (const std::exception &error) {
+                    environmentUi.environmentError = error.what();
+                }
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel"))
+                ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
+    }
+
+    if (environmentUi.requestEnvironmentImportModal) {
+        ImGui::OpenPopup("Import HDR Environment");
+        environmentUi.requestEnvironmentImportModal = false;
+    }
+    if (ImGui::BeginPopupModal(
+            "Import HDR Environment", nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (environmentUi.environmentImportSource) {
+            ImGui::TextWrapped(
+                "Source: %s",
+                environmentUi.environmentImportSource->string().c_str());
+        }
+        ImGui::InputText(
+            "Name", environmentUi.environmentDisplayName.data(),
+            environmentUi.environmentDisplayName.size());
+        ImGui::InputText("Environment ID",
+                         environmentUi.environmentId.data(),
+                         environmentUi.environmentId.size());
+        if (!environmentUi.environmentProfileIds.empty()) {
+            const char *profile =
+                environmentUi
+                    .environmentProfileIds[
+                        environmentUi.environmentProfileIndex]
+                    .c_str();
+            if (ImGui::BeginCombo("IBL Profile", profile)) {
+                for (int index = 0;
+                     index < static_cast<int>(
+                                 environmentUi
+                                     .environmentProfileIds.size());
+                     ++index) {
+                    const bool selectedProfile =
+                        environmentUi.environmentProfileIndex ==
+                        index;
+                    if (ImGui::Selectable(
+                            environmentUi.environmentProfileIds[index]
+                                .c_str(),
+                            selectedProfile)) {
+                        environmentUi.environmentProfileIndex = index;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+        }
+        const bool validEnvironmentImport =
+            environmentUi.environmentImportSource &&
+            environmentUi.environmentDisplayName[0] != '\0' &&
+            isStableAssetId(environmentUi.environmentId.data()) &&
+            !environmentUi.environmentProfileIds.empty();
+        ImGui::BeginDisabled(!validEnvironmentImport);
+        if (ImGui::Button("Import")) {
+            try {
+                const std::string id =
+                    environmentUi.environmentId.data();
+                const std::filesystem::path relative =
+                    std::filesystem::path("assets/environments") /
+                    id /
+                    environmentUi.environmentImportSource->filename();
+                const std::filesystem::path destination =
+                    (projectContext_.projectRoot / relative)
+                        .lexically_normal();
+                if (!pathIsWithin(projectContext_.projectRoot,
+                                  destination)) {
+                    throw std::runtime_error(
+                        "Environment destination escapes project root.");
+                }
+                if (catalog_.findEnvironment(id)) {
+                    throw std::runtime_error(
+                        "Environment ID already exists in the Catalog.");
+                }
+                if (std::filesystem::exists(destination)) {
+                    throw std::runtime_error(
+                        "Environment destination already exists: " +
+                        destination.string());
+                }
+                std::filesystem::create_directories(
+                    destination.parent_path());
+                std::filesystem::copy_file(
+                    *environmentUi.environmentImportSource, destination,
+                    std::filesystem::copy_options::none);
+                CatalogEnvironment environment;
+                environment.id = id;
+                environment.displayName =
+                    environmentUi.environmentDisplayName.data();
+                environment.source = relative;
+                environment.environmentProfile =
+                    environmentUi.environmentProfileIds[
+                        environmentUi.environmentProfileIndex];
+                try {
+                    SceneCatalogEditor::addEnvironment(
+                        projectContext_, environment);
+                } catch (...) {
+                    std::error_code ignored;
+                    std::filesystem::remove(destination, ignored);
+                    throw;
+                }
+                refreshSceneRegistry();
+                for (int index = 0;
+                     index < static_cast<int>(
+                                 catalog_.environments.size());
+                     ++index) {
+                    if (catalog_.environments[index].id == id) {
+                        environmentUi.selectedEnvironmentIndex =
+                            index + 1;
+                        break;
+                    }
+                }
+                environmentUi.environmentStatus =
+                    "Imported " + environment.displayName +
+                    "; build derived IBL artifacts next.";
+                environmentUi.environmentImportSource.reset();
+                ImGui::CloseCurrentPopup();
+            } catch (const std::exception &error) {
+                environmentUi.environmentError = error.what();
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            environmentUi.environmentImportSource.reset();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    if (!environmentUi.environmentStatus.empty())
+        ImGui::TextWrapped("%s",
+                           environmentUi.environmentStatus.c_str());
+    if (!environmentUi.environmentError.empty())
+        ImGui::TextWrapped("Error: %s",
+                           environmentUi.environmentError.c_str());
+
     const auto active = assetImportManager_
                             ? assetImportManager_->activeTask()
                             : std::shared_ptr<AssetImportTask>{};
@@ -2602,8 +3248,11 @@ void Application::drawAssetsPanel() {
         ImGui::Text("Task: %llu  %s",
                     static_cast<unsigned long long>(active->id),
                     assetImportStateName(active->state.load()));
-        ImGui::Text("Scene/Profile: %s / %s", active->sceneId.c_str(),
-                    active->profileId.c_str());
+        ImGui::Text("%s/Profile: %s / %s",
+                    active->kind == AssetImportKind::Environment
+                        ? "Environment"
+                        : "Scene",
+                    active->sceneId.c_str(), active->profileId.c_str());
         ImGui::ProgressBar(std::clamp(fraction, 0.0f, 1.0f));
         ImGui::Text("Artifacts: %llu/%llu  encoded %llu  reused %llu  failed %llu",
                     static_cast<unsigned long long>(completed),
@@ -2641,7 +3290,8 @@ void Application::drawAssetsPanel() {
     for (size_t i = 0; i < visible; ++i) {
         const auto &task = history[i];
         ImGui::PushID(static_cast<int>(i));
-        if (ImGui::TreeNode("Import", "%s / %s  [%s]##%llu",
+        if (ImGui::TreeNode("Import", "%s: %s / %s  [%s]##%llu",
+                            assetImportKindName(task->kind),
                             task->sceneId.c_str(), task->profileId.c_str(),
                             assetImportStateName(task->state.load()),
                             static_cast<unsigned long long>(task->id))) {
@@ -2934,6 +3584,100 @@ void Application::drawLightingPanel() {
     ImGui::Text("Shadow Map: %ux%u", kDirectionalShadowMapSize,
                 kDirectionalShadowMapSize);
     ImGui::EndDisabled();
+    ImGui::Separator();
+
+    const CatalogEnvironment *selectedEnvironment =
+        selectedEnvironmentId_.empty()
+            ? nullptr
+            : catalog_.findEnvironment(selectedEnvironmentId_);
+    const char *environmentLabel =
+        selectedEnvironment ? selectedEnvironment->displayName.c_str()
+                            : "None";
+    ImGui::BeginDisabled(!device_->environmentIblSupported());
+    if (ImGui::BeginCombo("Environment", environmentLabel)) {
+        const bool noneSelected = selectedEnvironment == nullptr;
+        if (ImGui::Selectable("None", noneSelected)) {
+            try {
+                setEnvironment("None");
+                editorUi_->environmentError.clear();
+            } catch (const std::exception &error) {
+                editorUi_->environmentError = error.what();
+            }
+        }
+        if (noneSelected)
+            ImGui::SetItemDefaultFocus();
+        for (const CatalogEnvironment &environment :
+             catalog_.environments) {
+            const bool selected =
+                selectedEnvironmentId_ == environment.id;
+            if (ImGui::Selectable(environment.displayName.c_str(),
+                                  selected)) {
+                try {
+                    setEnvironment(environment.id);
+                    editorUi_->environmentError.clear();
+                } catch (const std::exception &error) {
+                    editorUi_->environmentError = error.what();
+                }
+            }
+            if (selected)
+                ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    bool iblEnabled = renderSettings_.iblEnabled;
+    if (ImGui::Checkbox("Image-Based Lighting", &iblEnabled)) {
+        RenderSettingsPatch patch;
+        patch.iblEnabled = iblEnabled;
+        applyRenderSettings(patch);
+    }
+    bool skyboxEnabled = renderSettings_.skyboxEnabled;
+    if (ImGui::Checkbox("Skybox", &skyboxEnabled)) {
+        RenderSettingsPatch patch;
+        patch.skyboxEnabled = skyboxEnabled;
+        applyRenderSettings(patch);
+    }
+    float environmentIntensity =
+        renderSettings_.environmentIntensity;
+    if (ImGui::DragFloat("Environment Intensity",
+                         &environmentIntensity, 0.02f, 0.0f, 100.0f)) {
+        RenderSettingsPatch patch;
+        patch.environmentIntensity = environmentIntensity;
+        applyRenderSettings(patch);
+    }
+    float environmentRotation =
+        renderSettings_.environmentRotationRadians;
+    if (ImGui::SliderAngle("Environment Rotation",
+                           &environmentRotation, -180.0f, 180.0f,
+                           "%.1f deg",
+                           ImGuiSliderFlags_AlwaysClamp)) {
+        RenderSettingsPatch patch;
+        patch.environmentRotationRadians = environmentRotation;
+        applyRenderSettings(patch);
+    }
+    ImGui::EndDisabled();
+    if (!device_->environmentIblSupported()) {
+        ImGui::TextDisabled(
+            "IBL unsupported: RGBA16F cube/RG16F linear filtering required.");
+    } else if (latestEnvironmentLoadTask_ &&
+               !isTerminalEnvironmentLoadState(
+                   latestEnvironmentLoadTask_->state.load())) {
+        ImGui::Text(
+            "Environment: %s (%u/%u)",
+            environmentLoadStateName(
+                latestEnvironmentLoadTask_->state.load()),
+            latestEnvironmentLoadTask_->uploadedImages.load(),
+            latestEnvironmentLoadTask_->totalImages);
+        if (ImGui::Button("Cancel Environment Load")) {
+            cancelEnvironmentLoad(latestEnvironmentLoadTask_->id);
+        }
+    } else {
+        ImGui::Text("Environment ready: %s",
+                    renderer_->environmentReady() ? "Yes" : "No");
+    }
+    if (!editorUi_->environmentError.empty()) {
+        ImGui::TextWrapped("Environment error: %s",
+                           editorUi_->environmentError.c_str());
+    }
     ImGui::Separator();
     ImGui::ColorEdit3("Ambient Color", &ambientColor_.x);
     ImGui::DragFloat("Ambient Intensity", &ambientIntensity_, 0.01f, 0.0f,
@@ -3552,6 +4296,7 @@ void Application::mainLoop() {
             pendingSceneIndex_ = -1;
         }
         updateSceneLoading();
+        updateEnvironmentLoading();
 
         // 2. 时间
         const auto now = std::chrono::high_resolution_clock::now();
@@ -3622,6 +4367,9 @@ void Application::mainLoop() {
         viewInput.defaultSun = {defaultSunDirection_, defaultSunColor_,
                                 defaultSunIntensity_};
         viewInput.settings = renderSettings_;
+        viewInput.environmentReady = renderer_->environmentReady();
+        viewInput.maxSpecularLod =
+            renderer_->currentEnvironmentMaxSpecularLod();
         if (currentScene_) {
             viewInput.sceneBounds = currentScene_->bounds();
             viewInput.sceneLights = &currentScene_->lights();

@@ -3,6 +3,7 @@
 #include "assets/ArtifactIndex.h"
 #include "assets/ArtifactStatus.h"
 #include "assets/ContentHash.h"
+#include "assets/DerivedEnvironmentManifest.h"
 #include "assets/DerivedTextureManifest.h"
 #include "assets/RuntimePackage.h"
 #include "assets/SceneCatalog.h"
@@ -107,6 +108,7 @@ Json cameraJson(const CameraPose &camera) {
 void saveCookedCatalog(const std::filesystem::path &path,
                        const SceneCatalog &catalog,
                        const std::vector<const CatalogScene *> &scenes,
+                       const std::vector<const CatalogEnvironment *> &environments,
                        const ImportProfile &profile) {
     Json sceneArray = Json::array();
     for (const CatalogScene *scene : scenes) {
@@ -123,7 +125,31 @@ void saveCookedCatalog(const std::filesystem::path &path,
             item["camera"] = cameraJson(*scene->camera);
         sceneArray.push_back(std::move(item));
     }
-    const Json root = {
+    Json environmentArray = Json::array();
+    Json environmentProfiles = Json::object();
+    for (const auto &entry : catalog.environmentProfiles) {
+        const EnvironmentProfile &environmentProfile = entry.second;
+        environmentProfiles[environmentProfile.id] = {
+            {"radianceSize", environmentProfile.radianceSize},
+            {"irradianceSize", environmentProfile.irradianceSize},
+            {"prefilteredSize", environmentProfile.prefilteredSize},
+            {"brdfLutSize", environmentProfile.brdfLutSize},
+            {"diffuseSamples", environmentProfile.diffuseSamples},
+            {"specularSamples", environmentProfile.specularSamples},
+            {"brdfSamples", environmentProfile.brdfSamples}};
+    }
+    for (const CatalogEnvironment *environment : environments) {
+        environmentArray.push_back(
+            {{"id", environment->id},
+             {"displayName", environment->displayName},
+             {"source", generic(environment->source)},
+             {"environmentProfile",
+              environment->environmentProfile},
+             // Cooked packages intentionally omit source HDR files. The
+             // runtime consumes only the packaged KTX2 manifest and blobs.
+             {"optional", true}});
+    }
+    Json root = {
         {"schemaVersion", SceneCatalog::kSchemaVersion},
         {"projectId", catalog.projectId},
         {"defaultImportProfile", profile.id},
@@ -132,7 +158,17 @@ void saveCookedCatalog(const std::filesystem::path &path,
            {{"textureLimit", profile.textureLimit},
             {"textureEncoder", profile.textureEncoder},
             {"qualityPreset", profile.qualityPreset}}}}},
-        {"scenes", std::move(sceneArray)}};
+        {"scenes", std::move(sceneArray)},
+        {"environmentProfiles", std::move(environmentProfiles)},
+        {"environments", std::move(environmentArray)}};
+    if (catalog.defaultEnvironment &&
+        std::any_of(environments.begin(), environments.end(),
+                    [&](const CatalogEnvironment *environment) {
+                        return environment->id ==
+                               *catalog.defaultEnvironment;
+                    })) {
+        root["defaultEnvironment"] = *catalog.defaultEnvironment;
+    }
     std::filesystem::create_directories(path.parent_path());
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     if (!output)
@@ -161,6 +197,32 @@ selectScenes(const SceneCatalog &catalog,
                                     *selectedIds.begin());
     if (result.empty())
         throw std::invalid_argument("cook selected no scenes");
+    return result;
+}
+
+std::vector<const CatalogEnvironment *> selectEnvironments(
+    const SceneCatalog &catalog,
+    const std::vector<std::string> &requested) {
+    std::unordered_set<std::string> selectedIds(requested.begin(),
+                                                requested.end());
+    if (selectedIds.size() != requested.size()) {
+        throw std::invalid_argument(
+            "cook environment IDs must be unique");
+    }
+    std::vector<const CatalogEnvironment *> result;
+    for (const CatalogEnvironment &environment :
+         catalog.environments) {
+        const bool selected =
+            requested.empty() ||
+            selectedIds.erase(environment.id) > 0;
+        if (selected)
+            result.push_back(&environment);
+    }
+    if (!selectedIds.empty()) {
+        throw std::invalid_argument(
+            "unknown cook environment ID: " +
+            *selectedIds.begin());
+    }
     return result;
 }
 
@@ -272,6 +334,8 @@ CookPackageReport buildCookPackage(const CookPackageOptions &options) {
     const ImportProfile &profile = catalog.profile(options.profileId);
     const std::vector<const CatalogScene *> scenes =
         selectScenes(catalog, options.sceneIds);
+    const std::vector<const CatalogEnvironment *> environments =
+        selectEnvironments(catalog, options.environmentIds);
     const std::filesystem::path staging = uniqueSibling(output, ".staging");
     std::filesystem::create_directories(output.parent_path());
     std::filesystem::create_directories(staging);
@@ -340,8 +404,56 @@ CookPackageReport buildCookPackage(const CookPackageOptions &options) {
             ++report.manifestCount;
         }
 
+        for (const CatalogEnvironment *environment : environments) {
+            const std::filesystem::path source =
+                projectRoot / environment->source;
+            const ArtifactStatus status = inspectEnvironmentArtifacts(
+                {cacheRoot, source, catalog.projectId, environment->id,
+                 environment->environmentProfile});
+            if (!status.ready()) {
+                throw std::runtime_error(
+                    "environment artifacts are not Ready for '" +
+                    environment->id + "': " + status.reason);
+            }
+            DerivedEnvironmentManifest manifest;
+            std::string error;
+            const std::filesystem::path sourceManifest =
+                derivedEnvironmentManifestPath(
+                    cacheRoot, environment->id,
+                    environment->environmentProfile);
+            if (!loadDerivedEnvironmentManifest(
+                    sourceManifest, manifest, error)) {
+                throw std::runtime_error(
+                    "could not load environment manifest: " +
+                    error);
+            }
+            for (DerivedEnvironmentImage &image : manifest.images) {
+                const std::filesystem::path sourceBlob =
+                    cacheRoot / image.blob;
+                const std::filesystem::path cookedBlob =
+                    staging / "runtime_assets" / image.blob;
+                if (copiedBlobs.insert(image.blob).second) {
+                    copyFile(sourceBlob, cookedBlob);
+                    ++report.blobCount;
+                }
+            }
+            manifest.source = {};
+            const std::filesystem::path cookedManifest =
+                derivedEnvironmentManifestPath(
+                    staging / "runtime_assets", environment->id,
+                    environment->environmentProfile);
+            if (!saveDerivedEnvironmentManifest(
+                    cookedManifest, manifest, error)) {
+                throw std::runtime_error(
+                    "could not write cooked environment manifest: " +
+                    error);
+            }
+            ++report.environmentCount;
+            ++report.manifestCount;
+        }
+
         saveCookedCatalog(staging / "assets/catalog.json", catalog, scenes,
-                          profile);
+                          environments, profile);
         const SceneCatalog cookedCatalog = SceneCatalog::load(
             staging / "assets/catalog.json", staging);
         ArtifactIndex index = ArtifactIndex::rebuild(

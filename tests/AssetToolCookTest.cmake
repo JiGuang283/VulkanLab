@@ -19,14 +19,23 @@ set(project "${TEST_ROOT}/project")
 set(cache "${TEST_ROOT}/cache")
 set(package "${TEST_ROOT}/package")
 file(MAKE_DIRECTORY
-    "${project}/assets" "${project}/models" "${project}/textures")
+    "${project}/assets" "${project}/assets/environments"
+    "${project}/models" "${project}/textures")
 file(COPY "${SOURCE_DIR}/models/viking_room.obj"
      DESTINATION "${project}/models")
 file(COPY "${SOURCE_DIR}/textures/viking_room.png"
      DESTINATION "${project}/textures")
+execute_process(
+    COMMAND powershell -NoProfile -Command
+        "[IO.File]::WriteAllBytes('${project}/assets/environments/test.hdr',[Convert]::FromBase64String('Iz9SQURJQU5DRQpGT1JNQVQ9MzItYml0X3JsZV9yZ2JlCgotWSAyICtYIDQKQEBAgUBAQIFAQECBQEBAgUBAQIFAQECBQEBAgUBAQIE='))"
+    RESULT_VARIABLE hdr_fixture_result
+)
+if(NOT hdr_fixture_result EQUAL 0)
+    message(FATAL_ERROR "could not create HDR cook fixture")
+endif()
 file(WRITE "${project}/assets/catalog.json" [=[
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "projectId": "cook-test",
   "defaultImportProfile": "desktop-512",
   "importProfiles": {
@@ -36,6 +45,23 @@ file(WRITE "${project}/assets/catalog.json" [=[
       "qualityPreset": "development"
     }
   },
+  "environmentProfiles": {
+    "tiny-ibl": {
+      "radianceSize": 4,
+      "irradianceSize": 2,
+      "prefilteredSize": 4,
+      "brdfLutSize": 4,
+      "diffuseSamples": 8,
+      "specularSamples": 8,
+      "brdfSamples": 8
+    }
+  },
+  "environments": [{
+    "id": "studio",
+    "displayName": "Studio",
+    "source": "assets/environments/test.hdr",
+    "environmentProfile": "tiny-ibl"
+  }],
   "scenes": [
     {
       "id": "viking-room",
@@ -114,6 +140,22 @@ if(NOT build_result EQUAL 0)
 endif()
 
 execute_process(
+    COMMAND "${TOOL}" environment-cache build
+        --project "${project}"
+        --environment-id studio
+        --profile tiny-ibl
+        --cache-root "${cache}"
+        --workers 1
+    RESULT_VARIABLE environment_build_result
+    OUTPUT_VARIABLE environment_build_output
+    ERROR_VARIABLE environment_build_error
+)
+if(NOT environment_build_result EQUAL 0)
+    message(FATAL_ERROR
+        "could not build environment cook fixture (${environment_build_result})\n${environment_build_output}\n${environment_build_error}")
+endif()
+
+execute_process(
     COMMAND "${TOOL}" cook
         --project "${project}"
         --cache-root "${cache}"
@@ -152,14 +194,17 @@ foreach(required
         "textures/viking_room.png"
         "runtime_assets/artifact_index.json"
         "runtime_assets/manifests/tiny-scene/desktop-512.json"
+        "runtime_assets/manifests/environments/studio/tiny-ibl.json"
         "package_manifest.json")
     if(NOT EXISTS "${package}/${required}")
         message(FATAL_ERROR "cooked package is missing ${required}")
     endif()
 endforeach()
 if(EXISTS "${package}/models/unused.png" OR
+   EXISTS "${package}/assets/environments/test.hdr" OR
    EXISTS "${package}/shader/debug")
-    message(FATAL_ERROR "cooked package contains an unused source asset")
+    message(FATAL_ERROR
+        "cooked package contains an unused source asset or source HDR")
 endif()
 foreach(unexpected
         "VulkanLabRenderTest.exe"

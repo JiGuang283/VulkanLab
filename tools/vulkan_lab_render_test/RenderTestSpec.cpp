@@ -93,16 +93,28 @@ float optionalFiniteFloat(const nlohmann::json &object, const char *key,
 }
 
 void parseRenderSettings(const nlohmann::json &document,
+                         uint32_t schemaVersion,
                          RenderSettings &settings) {
     const auto found = document.find("renderSettings");
     if (found == document.end())
         return;
     requireObject(*found, "renderSettings");
-    rejectUnknownKeys(*found,
-                      {"shadowsEnabled", "shadowReceiverBias",
-                       "shadowConstantBias", "shadowSlopeBias",
-                       "exposureEv", "toneMapper"},
-                      "renderSettings");
+    if (schemaVersion >= 3) {
+        rejectUnknownKeys(
+            *found,
+            {"shadowsEnabled", "shadowReceiverBias",
+             "shadowConstantBias", "shadowSlopeBias", "exposureEv",
+             "toneMapper", "iblEnabled", "skyboxEnabled",
+             "environmentIntensity",
+             "environmentRotationRadians"},
+            "renderSettings");
+    } else {
+        rejectUnknownKeys(*found,
+                          {"shadowsEnabled", "shadowReceiverBias",
+                           "shadowConstantBias", "shadowSlopeBias",
+                           "exposureEv", "toneMapper"},
+                          "renderSettings");
+    }
 
     const auto shadows = found->find("shadowsEnabled");
     if (shadows != found->end()) {
@@ -121,6 +133,28 @@ void parseRenderSettings(const nlohmann::json &document,
         *found, "shadowSlopeBias", settings.shadowSlopeBias, 0.0f, 10.0f);
     settings.exposureEv = optionalFiniteFloat(
         *found, "exposureEv", settings.exposureEv, -10.0f, 10.0f);
+    if (schemaVersion >= 3) {
+        const auto ibl = found->find("iblEnabled");
+        if (ibl != found->end()) {
+            if (!ibl->is_boolean())
+                throw std::invalid_argument(
+                    "field 'iblEnabled' must be a boolean");
+            settings.iblEnabled = ibl->get<bool>();
+        }
+        const auto skybox = found->find("skyboxEnabled");
+        if (skybox != found->end()) {
+            if (!skybox->is_boolean())
+                throw std::invalid_argument(
+                    "field 'skyboxEnabled' must be a boolean");
+            settings.skyboxEnabled = skybox->get<bool>();
+        }
+        settings.environmentIntensity = optionalFiniteFloat(
+            *found, "environmentIntensity",
+            settings.environmentIntensity, 0.0f, 100.0f);
+        settings.environmentRotationRadians = optionalFiniteFloat(
+            *found, "environmentRotationRadians",
+            settings.environmentRotationRadians, -1000.0f, 1000.0f);
+    }
 
     const auto toneMapper = found->find("toneMapper");
     if (toneMapper != found->end()) {
@@ -275,7 +309,7 @@ RenderTestSpec parseRenderTestSpec(const nlohmann::json &document,
     requireObject(document, "render test spec");
     rejectUnknownKeys(document,
                       {"schemaVersion", "name", "sceneId", "profileId",
-                       "shader", "camera", "viewport", "fixedDelta",
+                       "shader", "environmentId", "camera", "viewport", "fixedDelta",
                        "stableFrames", "includeGui", "mode", "thresholds",
                        "golden", "renderSettings"},
                       "render test spec");
@@ -284,7 +318,7 @@ RenderTestSpec parseRenderTestSpec(const nlohmann::json &document,
     spec.sourcePath = std::filesystem::absolute(sourcePath).lexically_normal();
     const uint32_t schemaVersion =
         requiredUint32(document, "schemaVersion", 1, UINT32_MAX);
-    if (schemaVersion != 1 &&
+    if (schemaVersion != 1 && schemaVersion != 2 &&
         schemaVersion != RenderTestSpec::kSchemaVersion)
         throw std::invalid_argument("unsupported render test schemaVersion");
     if (schemaVersion == 1 && document.contains("renderSettings"))
@@ -297,6 +331,23 @@ RenderTestSpec parseRenderTestSpec(const nlohmann::json &document,
         throw std::invalid_argument(
             "sceneId and profileId must be stable lowercase asset IDs");
     spec.shader = requiredString(document, "shader", 256);
+    const auto environment = document.find("environmentId");
+    if (environment != document.end()) {
+        if (schemaVersion < 3) {
+            throw std::invalid_argument(
+                "environmentId requires render test schemaVersion 3");
+        }
+        if (!environment->is_string()) {
+            throw std::invalid_argument(
+                "field 'environmentId' must be a string");
+        }
+        const std::string id = environment->get<std::string>();
+        if (!isStableAssetId(id)) {
+            throw std::invalid_argument(
+                "environmentId must be a stable lowercase asset ID");
+        }
+        spec.environmentId = id;
+    }
 
     const nlohmann::json &camera = required(document, "camera");
     requireObject(camera, "camera");
@@ -323,7 +374,7 @@ RenderTestSpec parseRenderTestSpec(const nlohmann::json &document,
     if (!includeGui.is_boolean())
         throw std::invalid_argument("field 'includeGui' must be a boolean");
     spec.includeGui = includeGui.get<bool>();
-    parseRenderSettings(document, spec.renderSettings);
+    parseRenderSettings(document, schemaVersion, spec.renderSettings);
 
     const std::string mode = requiredString(document, "mode", 16);
     if (mode == "smoke")
@@ -425,7 +476,13 @@ nlohmann::json renderTestSpecToJson(const RenderTestSpec &spec) {
           {"shadowConstantBias", spec.renderSettings.shadowConstantBias},
           {"shadowSlopeBias", spec.renderSettings.shadowSlopeBias},
           {"exposureEv", spec.renderSettings.exposureEv},
-          {"toneMapper", toneMapperName(spec.renderSettings.toneMapper)}}},
+          {"toneMapper", toneMapperName(spec.renderSettings.toneMapper)},
+          {"iblEnabled", spec.renderSettings.iblEnabled},
+          {"skyboxEnabled", spec.renderSettings.skyboxEnabled},
+          {"environmentIntensity",
+           spec.renderSettings.environmentIntensity},
+          {"environmentRotationRadians",
+           spec.renderSettings.environmentRotationRadians}}},
         {"mode", renderTestModeName(spec.mode)},
         {"thresholds",
          {{"minimumNonBlackRatio",
@@ -443,6 +500,8 @@ nlohmann::json renderTestSpecToJson(const RenderTestSpec &spec) {
             {"maximumBadPixelRatio",
              spec.golden->thresholds.maximumBadPixelRatio}};
     }
+    if (spec.environmentId)
+        result["environmentId"] = *spec.environmentId;
     return result;
 }
 

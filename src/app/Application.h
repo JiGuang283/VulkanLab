@@ -42,6 +42,9 @@ class NamedPipeServerWin32;
 class SceneLoadManager;
 class SceneGpuBuilder;
 struct SceneLoadTask;
+class EnvironmentLoadManager;
+class EnvironmentGpuBuilder;
+struct EnvironmentLoadTask;
 struct SceneImportUiState;
 struct SceneAssetOperationState;
 struct EditorUiState;
@@ -77,6 +80,7 @@ class Application final : public RuntimeControlHost {
     void applySceneCameraDefaults();
     void processRuntimeCommand();
     void updateSceneLoading();
+    void updateEnvironmentLoading();
     void updateAssetImports();
     void drawScenePanel();
     void drawSceneLoadingPanel();
@@ -104,12 +108,17 @@ class Application final : public RuntimeControlHost {
                                    bool forceReimport = false);
     bool cancelSceneLoad(uint64_t taskId);
     bool cancelLoadOperation(uint64_t taskId);
+    bool cancelEnvironmentLoad(uint64_t taskId);
     void finalizeSceneLoad(const std::shared_ptr<SceneLoadTask> &task,
                            bool success);
     uint64_t setTextureLimit(uint32_t limit);
     void setShaderVariant(const std::string &id);
+    uint64_t setEnvironment(const std::string &id);
+    uint64_t reloadCurrentEnvironment();
     void applyRenderSettings(const RenderSettingsPatch &patch);
     int findSceneIndexByName(const std::string &name) const;
+    const CatalogEnvironment *
+    findEnvironmentByName(const std::string &name) const;
     std::string profileIdForTextureLimit(const SceneEntry &entry) const;
     void refreshArtifactStatus(int sceneIndex, bool admission = false);
     void refreshAllArtifactStatuses();
@@ -141,6 +150,10 @@ class Application final : public RuntimeControlHost {
     ControlJson runtimeRenderSettingsGet() override;
     ControlJson
     runtimeRenderSettingsSet(const RenderSettingsPatch &patch) override;
+    ControlJson runtimeEnvironmentList() override;
+    ControlJson runtimeEnvironmentCurrent() override;
+    ControlJson runtimeEnvironmentSet(const std::string &name) override;
+    ControlJson runtimeEnvironmentReload() override;
     ControlJson runtimeCaptureScreenshot(const std::string &path,
                                          bool includeGui) override;
     ControlJson runtimeCaptureStatus(uint64_t taskId) override;
@@ -184,6 +197,10 @@ class Application final : public RuntimeControlHost {
     std::unique_ptr<SceneLoadManager> sceneLoadManager_;
     std::unique_ptr<SceneGpuBuilder> sceneGpuBuilder_;
     std::shared_ptr<SceneLoadTask> latestSceneLoadTask_;
+    std::unique_ptr<EnvironmentLoadManager> environmentLoadManager_;
+    std::unique_ptr<EnvironmentGpuBuilder> environmentGpuBuilder_;
+    std::shared_ptr<EnvironmentLoadTask> latestEnvironmentLoadTask_;
+    std::string selectedEnvironmentId_;
     uint64_t lastFinalizedTaskId_ = 0;
     std::unique_ptr<AssetImportManager> assetImportManager_;
     std::unique_ptr<ArtifactIndex> artifactIndex_;

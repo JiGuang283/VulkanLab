@@ -125,6 +125,8 @@ void checkGlobalUbo(const SpvReflectDescriptorBinding &binding,
     static const std::vector<MemberLayout> members = {
         {"view", offsetof(vkr::GlobalFrameUbo, view)},
         {"proj", offsetof(vkr::GlobalFrameUbo, proj)},
+        {"inverseViewProjection",
+         offsetof(vkr::GlobalFrameUbo, inverseViewProjection)},
         {"cameraPosWS", offsetof(vkr::GlobalFrameUbo, cameraPosWS)},
         {"ambientColorIntensity",
          offsetof(vkr::GlobalFrameUbo, ambientColorIntensity)},
@@ -135,6 +137,8 @@ void checkGlobalUbo(const SpvReflectDescriptorBinding &binding,
         {"directionalShadowViewProj",
          offsetof(vkr::GlobalFrameUbo, directionalShadowViewProj)},
         {"shadowParams", offsetof(vkr::GlobalFrameUbo, shadowParams)},
+        {"environmentParams",
+         offsetof(vkr::GlobalFrameUbo, environmentParams)},
     };
     checkBlockLayout(binding.block, sizeof(vkr::GlobalFrameUbo), members,
                      "GlobalFrameUbo", path);
@@ -147,8 +151,7 @@ void checkPushConstant(const SpvReflectShaderModule &module,
         module, spvReflectEnumeratePushConstantBlocks, "push constants", path);
     if (blocks.empty()) {
         const bool allowed =
-            (contract == vkr::ShaderProgramContract::Fullscreen &&
-             module.shader_stage == SPV_REFLECT_SHADER_STAGE_VERTEX_BIT) ||
+            contract == vkr::ShaderProgramContract::Fullscreen ||
             (contract == vkr::ShaderProgramContract::MainForward &&
              module.shader_stage == SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT);
         requireShader(allowed,
@@ -192,7 +195,9 @@ void checkDescriptors(const ReflectedModule &reflected,
         reflected.path());
     const bool toneMap =
         contract == vkr::ShaderProgramContract::Fullscreen &&
-        module.shader_stage == SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT;
+        module.shader_stage == SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT &&
+        reflected.path().find("postprocess/tonemap.frag") !=
+            std::string::npos;
     const VkShaderStageFlags stage =
         static_cast<VkShaderStageFlags>(module.shader_stage);
 
@@ -224,12 +229,13 @@ void checkDescriptors(const ReflectedModule &reflected,
                         SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
                     stage == VK_SHADER_STAGE_FRAGMENT_BIT,
                 "material descriptor contract mismatch in " + reflected.path());
-        } else if (binding->set == 2 && binding->binding == 0) {
+        } else if (binding->set == 2 && binding->binding < 5) {
             requireShader(
                 binding->descriptor_type ==
                         SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
                     stage == VK_SHADER_STAGE_FRAGMENT_BIT,
-                "shadow descriptor contract mismatch in " + reflected.path());
+                "lighting descriptor contract mismatch in " +
+                    reflected.path());
         } else {
             throw std::runtime_error(
                 "shader contract: unexpected set=" +

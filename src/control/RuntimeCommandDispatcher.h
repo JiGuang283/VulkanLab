@@ -62,6 +62,11 @@ class RuntimeControlHost {
     virtual ControlJson runtimeRenderSettingsGet() = 0;
     virtual ControlJson
     runtimeRenderSettingsSet(const RenderSettingsPatch &patch) = 0;
+    virtual ControlJson runtimeEnvironmentList() = 0;
+    virtual ControlJson runtimeEnvironmentCurrent() = 0;
+    virtual ControlJson
+    runtimeEnvironmentSet(const std::string &name) = 0;
+    virtual ControlJson runtimeEnvironmentReload() = 0;
     virtual ControlJson runtimeCaptureScreenshot(const std::string &path,
                                                  bool includeGui) = 0;
     virtual ControlJson runtimeCaptureStatus(uint64_t taskId) = 0;

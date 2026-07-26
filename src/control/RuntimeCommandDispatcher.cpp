@@ -125,6 +125,12 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         command, "shadowSlopeBias", 0.0f, 10.0f);
     patch.exposureEv =
         optionalFiniteFloat(command, "exposureEv", -10.0f, 10.0f);
+    patch.iblEnabled = optionalBoolValue(command, "iblEnabled");
+    patch.skyboxEnabled = optionalBoolValue(command, "skyboxEnabled");
+    patch.environmentIntensity = optionalFiniteFloat(
+        command, "environmentIntensity", 0.0f, 100.0f);
+    patch.environmentRotationRadians = optionalFiniteFloat(
+        command, "environmentRotationRadians", -1000.0f, 1000.0f);
     if (const auto toneMapper = optionalString(command, "toneMapper")) {
         patch.toneMapper = toneMapperFromName(*toneMapper);
         if (!patch.toneMapper) {
@@ -135,7 +141,9 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
     }
     if (!patch.shadowsEnabled && !patch.shadowReceiverBias &&
         !patch.shadowConstantBias && !patch.shadowSlopeBias &&
-        !patch.exposureEv && !patch.toneMapper) {
+        !patch.exposureEv && !patch.toneMapper && !patch.iblEnabled &&
+        !patch.skyboxEnabled && !patch.environmentIntensity &&
+        !patch.environmentRotationRadians) {
         throw RuntimeCommandError(
             "invalid_params",
             "render_settings.set requires at least one setting.");
@@ -262,6 +270,15 @@ RuntimeDispatchResult RuntimeCommandDispatcher::dispatch(
         } else if (command.method == "render_settings.set") {
             result = host.runtimeRenderSettingsSet(
                 renderSettingsPatch(command));
+        } else if (command.method == "environment.list") {
+            result = host.runtimeEnvironmentList();
+        } else if (command.method == "environment.current") {
+            result = host.runtimeEnvironmentCurrent();
+        } else if (command.method == "environment.set") {
+            result = host.runtimeEnvironmentSet(
+                requiredString(command, "name"));
+        } else if (command.method == "environment.reload") {
+            result = host.runtimeEnvironmentReload();
         } else if (command.method == "capture.screenshot") {
             result = host.runtimeCaptureScreenshot(
                 requiredString(command, "path"),

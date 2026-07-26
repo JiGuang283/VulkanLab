@@ -19,6 +19,7 @@
 namespace vkr {
 
 enum class ImportReason { SceneLoad, SceneRegistration, ManualReimport };
+enum class AssetImportKind { SceneTextures, Environment };
 enum class AssetImportState {
     Queued,
     Scanning,
@@ -31,6 +32,7 @@ enum class AssetImportState {
 };
 
 const char *assetImportStateName(AssetImportState state);
+const char *assetImportKindName(AssetImportKind kind);
 bool isTerminalAssetImportState(AssetImportState state);
 
 struct AssetImportRequest {
@@ -38,6 +40,7 @@ struct AssetImportRequest {
     std::string profileId;
     ImportReason reason = ImportReason::SceneLoad;
     bool force = false;
+    AssetImportKind kind = AssetImportKind::SceneTextures;
 };
 
 struct AssetImportTask {
@@ -46,6 +49,7 @@ struct AssetImportTask {
     std::string profileId;
     ImportReason reason = ImportReason::SceneLoad;
     bool force = false;
+    AssetImportKind kind = AssetImportKind::SceneTextures;
     std::atomic<AssetImportState> state{AssetImportState::Queued};
     std::shared_ptr<std::atomic_bool> cancellation =
         std::make_shared<std::atomic_bool>(false);

@@ -135,7 +135,30 @@ class FakeRuntimeHost final : public vkr::RuntimeControlHost {
             arguments["exposureEv"] = *patch.exposureEv;
         if (patch.toneMapper)
             arguments["toneMapper"] = vkr::toneMapperName(*patch.toneMapper);
+        if (patch.iblEnabled)
+            arguments["iblEnabled"] = *patch.iblEnabled;
+        if (patch.skyboxEnabled)
+            arguments["skyboxEnabled"] = *patch.skyboxEnabled;
+        if (patch.environmentIntensity)
+            arguments["environmentIntensity"] =
+                *patch.environmentIntensity;
+        if (patch.environmentRotationRadians)
+            arguments["environmentRotationRadians"] =
+                *patch.environmentRotationRadians;
         return reply("render_settings.set", std::move(arguments));
+    }
+    vkr::ControlJson runtimeEnvironmentList() override {
+        return reply("environment.list");
+    }
+    vkr::ControlJson runtimeEnvironmentCurrent() override {
+        return reply("environment.current");
+    }
+    vkr::ControlJson
+    runtimeEnvironmentSet(const std::string &name) override {
+        return reply("environment.set", {{"name", name}});
+    }
+    vkr::ControlJson runtimeEnvironmentReload() override {
+        return reply("environment.reload");
     }
     vkr::ControlJson runtimeCaptureScreenshot(const std::string &path,
                                               bool includeGui) override {
@@ -206,6 +229,11 @@ void testAllProtocolMethods() {
         {"shader.current", {}, result("shader.current")},
         {"shader.set", {{"name", "PBR"}},
          result("shader.set", {{"name", "PBR"}})},
+        {"environment.list", {}, result("environment.list")},
+        {"environment.current", {}, result("environment.current")},
+        {"environment.set", {{"name", "studio"}},
+         result("environment.set", {{"name", "studio"}})},
+        {"environment.reload", {}, result("environment.reload")},
         {"camera.get", {}, result("camera.get")},
         {"camera.set",
          {{"position", {1.0, 2.0, 3.0}},
@@ -226,14 +254,22 @@ void testAllProtocolMethods() {
           {"shadowConstantBias", 1.5},
           {"shadowSlopeBias", 2.0},
           {"exposureEv", -1.0},
-          {"toneMapper", "reinhard"}},
+          {"toneMapper", "reinhard"},
+          {"iblEnabled", true},
+          {"skyboxEnabled", true},
+          {"environmentIntensity", 1.5},
+          {"environmentRotationRadians", 0.5}},
          result("render_settings.set",
                 {{"shadowsEnabled", false},
                  {"shadowReceiverBias", 0.002f},
                  {"shadowConstantBias", 1.5f},
                  {"shadowSlopeBias", 2.0f},
                  {"exposureEv", -1.0f},
-                 {"toneMapper", "reinhard"}})},
+                 {"toneMapper", "reinhard"},
+                 {"iblEnabled", true},
+                 {"skyboxEnabled", true},
+                 {"environmentIntensity", 1.5f},
+                 {"environmentRotationRadians", 0.5f}})},
         {"capture.screenshot", {{"path", "suite/frame.png"}},
          result("capture.screenshot",
                 {{"path", "suite/frame.png"}, {"includeGui", false}})},
@@ -300,6 +336,8 @@ void testValidationAndErrorMapping() {
                  "Unknown method 'missing.method'.");
     requireError("shader.set", {{"name", "host-error"}},
                  "shader_not_found", "host rejected shader");
+    requireError("environment.set", {}, "invalid_params",
+                 "Parameter 'name' must be a string.");
     requireError(
         "camera.set",
         {{"position", {1.0, 2.0}}, {"yaw", 0.0}, {"pitch", 0.0}},
@@ -338,6 +376,10 @@ void testValidationAndErrorMapping() {
     requireError("render_settings.set", {{"exposureEv", 11.0}},
                  "invalid_params",
                  "Parameter 'exposureEv' is outside the supported range.");
+    requireError(
+        "render_settings.set", {{"environmentIntensity", -0.1}},
+        "invalid_params",
+        "Parameter 'environmentIntensity' is outside the supported range.");
     requireError("capture.status", {}, "invalid_params",
                  "Parameter 'taskId' must be an unsigned integer.");
     requireError("capture.cancel", {{"taskId", -1}}, "invalid_params",

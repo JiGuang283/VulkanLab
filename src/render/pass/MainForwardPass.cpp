@@ -1,6 +1,5 @@
 #include "MainForwardPass.h"
 
-#include "core/DescriptorAllocator.h"
 #include "core/Device.h"
 #include "core/GpuDebugUtils.h"
 #include "core/Image.h"
@@ -44,22 +43,16 @@ float alphaModeToShaderValue(AlphaMode mode) {
 MainForwardPass::MainForwardPass(Device &device,
                                  const RenderResourceRegistry &resources,
                                  RendererResourceHandles resourceHandles,
-                                 DescriptorAllocator &descriptorAllocator)
+                                 VkDescriptorSetLayout
+                                     lightingDescriptorSetLayout)
     : device_(&device), resourceHandles_(resourceHandles),
-      descriptorAllocator_(&descriptorAllocator) {
+      lightingDescriptorSetLayout_(lightingDescriptorSetLayout) {
     createRenderPass(resources);
     createFramebuffers(resources);
-    createShadowDescriptors(resources);
 }
 
 MainForwardPass::~MainForwardPass() {
     destroyFramebuffers();
-    for (VkDescriptorSet set : shadowDescriptorSets_)
-        descriptorAllocator_->free(set);
-    if (shadowDescriptorSetLayout_ != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(device_->logicalDevice(),
-                                     shadowDescriptorSetLayout_, nullptr);
-    }
     if (renderPass_ != VK_NULL_HANDLE)
         vkDestroyRenderPass(device_->logicalDevice(), renderPass_, nullptr);
 }
@@ -76,18 +69,23 @@ std::vector<RenderImageUsage> MainForwardPass::resourceUsages() const {
          VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}};
     if (resourceHandles_.hdrMsaaColor.valid()) {
         usages.push_back({resourceHandles_.hdrMsaaColor,
-                          RenderImageAccess::ColorAttachmentWrite,
-                          VK_IMAGE_LAYOUT_UNDEFINED,
+                          RenderImageAccess::ColorAttachmentReadWrite,
+                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
     }
     usages.push_back({resourceHandles_.mainDepth,
                       RenderImageAccess::DepthAttachmentWrite,
                       VK_IMAGE_LAYOUT_UNDEFINED,
                       VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL});
-    usages.push_back({resourceHandles_.hdrColor,
-                      RenderImageAccess::ColorAttachmentWrite,
-                      VK_IMAGE_LAYOUT_UNDEFINED,
-                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    usages.push_back(
+        {resourceHandles_.hdrColor,
+         resourceHandles_.hdrMsaaColor.valid()
+             ? RenderImageAccess::ColorAttachmentWrite
+             : RenderImageAccess::ColorAttachmentReadWrite,
+         resourceHandles_.hdrMsaaColor.valid()
+             ? VK_IMAGE_LAYOUT_UNDEFINED
+             : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
     return usages;
 }
 
@@ -173,7 +171,7 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                 pipelineConfig.descriptorLayouts.begin(),
                 frame.globalDescriptorSetLayout);
             pipelineConfig.descriptorLayouts.push_back(
-                shadowDescriptorSetLayout_);
+                lightingDescriptorSetLayout_);
 
             Pipeline &pipeline = frame.pipelineCache->getOrCreate(
                 renderPass_, std::move(pipelineConfig));
@@ -184,11 +182,10 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                     frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                     pipeline.layout(), 0, 1, &frame.globalDescriptorSet, 0,
                     nullptr);
-                const VkDescriptorSet shadowSet =
-                    shadowDescriptorSets_.at(frame.frameIndex);
                 vkCmdBindDescriptorSets(
                     frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    pipeline.layout(), 2, 1, &shadowSet, 0, nullptr);
+                    pipeline.layout(), 2, 1,
+                    &frame.lightingDescriptorSet, 0, nullptr);
                 boundPipeline = &pipeline;
             }
 
@@ -235,12 +232,12 @@ void MainForwardPass::createRenderPass(
     color.format = hdrDesc.format;
     color.samples = multisampled ? depthDesc.samples
                                  : VK_SAMPLE_COUNT_1_BIT;
-    color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
     color.storeOp = multisampled ? VK_ATTACHMENT_STORE_OP_DONT_CARE
                                  : VK_ATTACHMENT_STORE_OP_STORE;
     color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    color.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     color.finalLayout = multisampled
                             ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
                             : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -282,12 +279,16 @@ void MainForwardPass::createRenderPass(
     std::array<VkSubpassDependency, 2> dependencies{};
     dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
     dependencies[0].dstSubpass = 0;
-    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependencies[0].srcStageMask =
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     dependencies[0].dstStageMask =
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+    dependencies[0].srcAccessMask =
+        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependencies[0].dstAccessMask =
+                                    VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                    VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                                     VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
@@ -352,54 +353,6 @@ void MainForwardPass::createFramebuffers(
             VK_OBJECT_TYPE_FRAMEBUFFER, framebuffers_[frameIndex],
             "Pass/MainForward/Framebuffer/Frame" +
                 std::to_string(frameIndex));
-    }
-}
-
-void MainForwardPass::createShadowDescriptors(
-    const RenderResourceRegistry &resources) {
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    VkDescriptorSetLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &binding;
-    VK_CHECK(vkCreateDescriptorSetLayout(device_->logicalDevice(), &layoutInfo,
-                                         nullptr,
-                                         &shadowDescriptorSetLayout_));
-    device_->debugUtils().setObjectName(
-        VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, shadowDescriptorSetLayout_,
-        "Pass/MainForward/ShadowDescriptorSetLayout");
-
-    for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT;
-         ++frameIndex) {
-        shadowDescriptorSets_[frameIndex] = descriptorAllocator_->allocate(
-            shadowDescriptorSetLayout_,
-            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1}},
-            "Pass/MainForward/ShadowDescriptorSet/Frame" +
-                std::to_string(frameIndex));
-        VkDescriptorImageInfo imageInfo{};
-        imageInfo.sampler =
-            resources.sampler(resourceHandles_.shadowSampler);
-        imageInfo.imageView =
-            resources
-                .image(resourceHandles_.directionalShadowDepth, frameIndex)
-                .imageView();
-        imageInfo.imageLayout =
-            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = shadowDescriptorSets_[frameIndex];
-        write.dstBinding = 0;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &imageInfo;
-        vkUpdateDescriptorSets(device_->logicalDevice(), 1, &write, 0,
-                               nullptr);
     }
 }
 

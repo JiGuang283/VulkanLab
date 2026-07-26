@@ -120,6 +120,16 @@ const char *assetImportStateName(AssetImportState state) {
     return "Unknown";
 }
 
+const char *assetImportKindName(AssetImportKind kind) {
+    switch (kind) {
+    case AssetImportKind::SceneTextures:
+        return "SceneTextures";
+    case AssetImportKind::Environment:
+        return "Environment";
+    }
+    return "Unknown";
+}
+
 bool isTerminalAssetImportState(AssetImportState state) {
     return state == AssetImportState::Completed ||
            state == AssetImportState::Failed ||
@@ -149,6 +159,7 @@ AssetImportManager::request(const AssetImportRequest &request) {
         const auto &existing = pair.second;
         if (existing->sceneId == request.sceneId &&
             existing->profileId == request.profileId &&
+            existing->kind == request.kind &&
             !isTerminalAssetImportState(existing->state.load())) {
             return existing;
         }
@@ -160,8 +171,13 @@ AssetImportManager::request(const AssetImportRequest &request) {
     task->profileId = request.profileId;
     task->reason = request.reason;
     task->force = request.force;
-    task->logPath = options_.cacheRoot / "logs" /
-                    ("import-" + std::to_string(task->id) + ".log");
+    task->kind = request.kind;
+    task->logPath =
+        options_.cacheRoot / "logs" /
+        ((request.kind == AssetImportKind::Environment
+              ? "environment-"
+              : "import-") +
+         std::to_string(task->id) + ".log");
     tasks_.emplace(task->id, task);
     historyIds_.push_back(task->id);
     pending_.push_back(task);
@@ -259,6 +275,9 @@ void AssetImportManager::applyEvent(
     } else if (type == "publishing") {
         task->state = AssetImportState::Publishing;
     } else if (type == "completed") {
+        task->completedArtifacts =
+            unsignedValue(event, "completed",
+                          task->totalArtifacts.load());
         task->encodedArtifacts = unsignedValue(event, "encoded");
         task->reusedArtifacts = unsignedValue(event, "reused");
         task->failedArtifacts = unsignedValue(event, "failed");
@@ -297,8 +316,9 @@ void AssetImportManager::workerLoop() {
         std::ofstream log(task->logPath,
                           std::ios::binary | std::ios::trunc);
         std::mutex logMutex;
-        const AssetImportRequest request{task->sceneId, task->profileId,
-                                         task->reason, task->force};
+        const AssetImportRequest request{
+            task->sceneId, task->profileId, task->reason,
+            task->force, task->kind};
         AssetImportExecutionResult execution;
         try {
             execution = executor_(
@@ -380,13 +400,25 @@ AssetImportExecutionResult runAssetImportProcess(
     const AssetImportEventCallback &eventCallback,
     const AssetImportLogCallback &logCallback) {
     const std::filesystem::path tool = resolveAssetTool(options.assetToolPath);
-    std::vector<std::wstring> arguments{
-        L"import", L"scene", L"--project", options.projectRoot.wstring(),
-        L"--scene-id", std::filesystem::path(request.sceneId).wstring(),
-        L"--profile", std::filesystem::path(request.profileId).wstring(),
-        L"--cache-root", options.cacheRoot.wstring(), L"--progress",
-        L"ndjson", L"--memory-budget-mib",
-        std::to_wstring(options.memoryBudgetMiB)};
+    std::vector<std::wstring> arguments;
+    if (request.kind == AssetImportKind::Environment) {
+        arguments = {
+            L"environment-cache", L"build", L"--project",
+            options.projectRoot.wstring(), L"--environment-id",
+            std::filesystem::path(request.sceneId).wstring(), L"--profile",
+            std::filesystem::path(request.profileId).wstring(),
+            L"--cache-root", options.cacheRoot.wstring(), L"--progress",
+            L"ndjson"};
+    } else {
+        arguments = {
+            L"import", L"scene", L"--project",
+            options.projectRoot.wstring(), L"--scene-id",
+            std::filesystem::path(request.sceneId).wstring(), L"--profile",
+            std::filesystem::path(request.profileId).wstring(),
+            L"--cache-root", options.cacheRoot.wstring(), L"--progress",
+            L"ndjson", L"--memory-budget-mib",
+            std::to_wstring(options.memoryBudgetMiB)};
+    }
     if (options.workers != 0) {
         arguments.push_back(L"--workers");
         arguments.push_back(std::to_wstring(options.workers));

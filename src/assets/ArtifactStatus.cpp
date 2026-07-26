@@ -1,5 +1,6 @@
 #include "ArtifactStatus.h"
 
+#include "DerivedEnvironmentManifest.h"
 #include "DerivedTextureManifest.h"
 #include "SceneCatalog.h"
 
@@ -126,6 +127,66 @@ ArtifactStatus inspectTextureArtifacts(const ArtifactStatusRequest &request) {
             return makeStatus(ArtifactState::Invalid,
                               "could not read derived blob size: " +
                                   entry.blob,
+                              manifestPath);
+        }
+        result.blobBytes += bytes;
+    }
+    return result;
+}
+
+ArtifactStatus inspectEnvironmentArtifacts(
+    const EnvironmentArtifactStatusRequest &request) {
+    const std::filesystem::path manifestPath =
+        derivedEnvironmentManifestPath(request.cacheRoot,
+                                       request.environmentId,
+                                       request.profileId);
+    DerivedEnvironmentManifest manifest;
+    std::string error;
+    if (!loadDerivedEnvironmentManifest(manifestPath, manifest, error)) {
+        return makeStatus(
+            error == "manifest not found" ? ArtifactState::Missing
+                                          : ArtifactState::Invalid,
+            error, manifestPath);
+    }
+    if (manifest.projectId != request.projectId ||
+        manifest.environmentId != request.environmentId ||
+        manifest.profileId != request.profileId) {
+        return makeStatus(ArtifactState::Invalid,
+                          "environment manifest identity mismatch",
+                          manifestPath);
+    }
+    if (!manifest.source.path.empty() &&
+        !stampMatches(manifest.source, request.sourcePath)) {
+        return makeStatus(ArtifactState::Stale,
+                          "environment source changed", manifestPath);
+    }
+
+    ArtifactStatus result =
+        makeStatus(ArtifactState::Ready, "ready", manifestPath);
+    result.entryCount = manifest.images.size();
+    for (const DerivedEnvironmentImage &image : manifest.images) {
+        const std::filesystem::path blob =
+            (request.cacheRoot / image.blob).lexically_normal();
+        if (!pathIsWithin(request.cacheRoot, blob) ||
+            !std::filesystem::is_regular_file(blob)) {
+            return makeStatus(ArtifactState::Invalid,
+                              "derived environment blob is missing: " +
+                                  image.blob,
+                              manifestPath);
+        }
+        if (!hasKtx2Identifier(blob)) {
+            return makeStatus(ArtifactState::Invalid,
+                              "derived environment blob has an invalid KTX2 "
+                              "header: " +
+                                  image.blob,
+                              manifestPath);
+        }
+        std::error_code sizeError;
+        const uint64_t bytes = std::filesystem::file_size(blob, sizeError);
+        if (sizeError || (image.bytes != 0 && image.bytes != bytes)) {
+            return makeStatus(ArtifactState::Invalid,
+                              "derived environment blob size mismatch: " +
+                                  image.blob,
                               manifestPath);
         }
         result.blobBytes += bytes;

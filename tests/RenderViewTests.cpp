@@ -88,10 +88,32 @@ void testGpuLightLimits() {
                 "ignored light count is incorrect");
 }
 
+void testEnvironmentFrameDataRequiresReadyResources() {
+    vkr::RenderViewInput input{};
+    input.settings.iblEnabled = true;
+    input.settings.environmentIntensity = 2.5f;
+    input.settings.environmentRotationRadians = 0.75f;
+    input.maxSpecularLod = 8.0f;
+
+    vkr::RenderView view = vkr::buildRenderView(input);
+    requireView(view.globalUbo.environmentParams.x == 0.0f,
+                "IBL was enabled before environment resources were ready");
+
+    input.environmentReady = true;
+    view = vkr::buildRenderView(input);
+    requireView(
+        view.globalUbo.environmentParams ==
+            glm::vec4(1.0f, 2.5f, 0.75f, 8.0f),
+        "environment settings were not packed into the frame UBO");
+    requireView(view.globalUbo.inverseViewProjection == glm::mat4(1.0f),
+                "inverse view-projection was not packed");
+}
+
 } // namespace
 
 void runRenderViewTests() {
     testDefaultSunAndFrameData();
     testSceneWithoutDirectionalLightDisablesShadow();
     testGpuLightLimits();
+    testEnvironmentFrameDataRequiresReadyResources();
 }

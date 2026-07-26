@@ -40,6 +40,10 @@ struct RenderSettings {
     float      shadowSlopeBias = 1.75f;
     float      exposureEv = 0.0f;
     ToneMapper toneMapper = ToneMapper::Aces;
+    bool iblEnabled = false;
+    bool skyboxEnabled = false;
+    float environmentIntensity = 1.0f;
+    float environmentRotationRadians = 0.0f;
 };
 
 struct RenderSettingsPatch {
@@ -49,6 +53,10 @@ struct RenderSettingsPatch {
     std::optional<float>      shadowSlopeBias;
     std::optional<float>      exposureEv;
     std::optional<ToneMapper> toneMapper;
+    std::optional<bool> iblEnabled;
+    std::optional<bool> skyboxEnabled;
+    std::optional<float> environmentIntensity;
+    std::optional<float> environmentRotationRadians;
 };
 
 inline void applyRenderSettingsPatch(RenderSettings &settings,
@@ -65,6 +73,16 @@ inline void applyRenderSettingsPatch(RenderSettings &settings,
         settings.exposureEv = *patch.exposureEv;
     if (patch.toneMapper)
         settings.toneMapper = *patch.toneMapper;
+    if (patch.iblEnabled)
+        settings.iblEnabled = *patch.iblEnabled;
+    if (patch.skyboxEnabled)
+        settings.skyboxEnabled = *patch.skyboxEnabled;
+    if (patch.environmentIntensity)
+        settings.environmentIntensity = *patch.environmentIntensity;
+    if (patch.environmentRotationRadians) {
+        settings.environmentRotationRadians =
+            *patch.environmentRotationRadians;
+    }
 }
 
 } // namespace vkr

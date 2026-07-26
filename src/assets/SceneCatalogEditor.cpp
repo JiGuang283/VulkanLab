@@ -79,6 +79,16 @@ Json *findScene(Json &root, const std::string &sceneId) {
     return nullptr;
 }
 
+Json *findEnvironment(Json &root, const std::string &environmentId) {
+    if (!root.contains("environments"))
+        return nullptr;
+    for (Json &environment : root.at("environments")) {
+        if (environment.value("id", std::string{}) == environmentId)
+            return &environment;
+    }
+    return nullptr;
+}
+
 } // namespace
 
 void SceneCatalogEditor::saveCamera(const ProjectContext &project,
@@ -111,6 +121,78 @@ void SceneCatalogEditor::removeScene(const ProjectContext &project,
         if (scenes.size() == before)
             throw std::runtime_error("Scene is not present in Catalog: " +
                                      sceneId);
+    });
+}
+
+void SceneCatalogEditor::addEnvironment(
+    const ProjectContext &project,
+    const CatalogEnvironment &environment) {
+    if (!isStableAssetId(environment.id))
+        throw std::invalid_argument("Invalid environment ID");
+    if (environment.displayName.empty() || environment.source.empty() ||
+        environment.source.is_absolute())
+        throw std::invalid_argument("Invalid environment catalog entry");
+    editCatalog(project, [&](Json &root) {
+        if (root.value("schemaVersion", 0u) <
+            SceneCatalog::kSchemaVersion) {
+            root["schemaVersion"] = SceneCatalog::kSchemaVersion;
+            root["environmentProfiles"] = {
+                {"ibl_desktop_v1",
+                 {{"radianceSize", 512},
+                  {"irradianceSize", 32},
+                  {"prefilteredSize", 256},
+                  {"brdfLutSize", 256},
+                  {"diffuseSamples", 1024},
+                  {"specularSamples", 512},
+                  {"brdfSamples", 1024}}}};
+            root["environments"] = Json::array();
+        }
+        if (!root.contains("environments"))
+            root["environments"] = Json::array();
+        if (findEnvironment(root, environment.id))
+            throw std::runtime_error(
+                "Environment is already present in Catalog: " +
+                environment.id);
+        for (const Json &candidate : root.at("environments")) {
+            if (candidate.value("displayName", std::string{}) ==
+                environment.displayName) {
+                throw std::runtime_error(
+                    "Environment display name is already in use");
+            }
+        }
+        root["environments"].push_back(
+            {{"id", environment.id},
+             {"displayName", environment.displayName},
+             {"source", environment.source.generic_string()},
+             {"environmentProfile", environment.environmentProfile},
+             {"optional", environment.optional}});
+    });
+}
+
+void SceneCatalogEditor::removeEnvironment(
+    const ProjectContext &project, const std::string &environmentId) {
+    editCatalog(project, [&](Json &root) {
+        if (!root.contains("environments"))
+            throw std::runtime_error(
+                "Environment is not present in Catalog: " +
+                environmentId);
+        Json &environments = root.at("environments");
+        const auto before = environments.size();
+        for (auto it = environments.begin(); it != environments.end(); ++it) {
+            if (it->value("id", std::string{}) == environmentId) {
+                environments.erase(it);
+                break;
+            }
+        }
+        if (environments.size() == before) {
+            throw std::runtime_error(
+                "Environment is not present in Catalog: " +
+                environmentId);
+        }
+        if (root.value("defaultEnvironment", std::string{}) ==
+            environmentId) {
+            root.erase("defaultEnvironment");
+        }
     });
 }
 

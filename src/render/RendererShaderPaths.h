@@ -9,6 +9,7 @@ struct RendererShaderPaths {
     std::string shadowMaskFrag;
     std::string fullscreenVert;
     std::string toneMapFrag;
+    std::string skyboxFrag;
 };
 
 } // namespace vkr

@@ -57,6 +57,8 @@ RenderView buildRenderView(const RenderViewInput &input) {
     result.settings = input.settings;
     result.globalUbo.view = input.view;
     result.globalUbo.proj = input.projection;
+    result.globalUbo.inverseViewProjection =
+        glm::inverse(input.projection * input.view);
     result.globalUbo.cameraPosWS = glm::vec4(input.cameraPosition, 1.0f);
     result.globalUbo.ambientColorIntensity =
         glm::vec4(glm::max(input.ambientColor, glm::vec3(0.0f)),
@@ -114,6 +116,13 @@ RenderView buildRenderView(const RenderViewInput &input) {
         glm::vec4(result.directionalShadow.enabled ? 1.0f : 0.0f,
                   input.settings.shadowReceiverBias,
                   result.directionalShadow.texelSize, 0.0f);
+    result.globalUbo.environmentParams =
+        glm::vec4(input.settings.iblEnabled && input.environmentReady
+                      ? 1.0f
+                      : 0.0f,
+                  std::max(input.settings.environmentIntensity, 0.0f),
+                  input.settings.environmentRotationRadians,
+                  std::max(input.maxSpecularLod, 0.0f));
     return result;
 }
 

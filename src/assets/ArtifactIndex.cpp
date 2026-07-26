@@ -1,6 +1,7 @@
 #include "ArtifactIndex.h"
 
 #include "ContentHash.h"
+#include "DerivedEnvironmentManifest.h"
 #include "DerivedTextureManifest.h"
 
 #include <json.hpp>
@@ -116,7 +117,9 @@ Json recordToJson(const ArtifactIndexRecord &record) {
     Json blobs = Json::array();
     for (const auto &blob : record.blobs)
         blobs.push_back(blobToJson(blob));
-    return {{"sceneId", record.sceneId},
+    return {{"assetKind", artifactKindName(record.assetKind)},
+            {"assetId", record.assetId},
+            {"sceneId", record.sceneId},
             {"profileId", record.profileId},
             {"textureLimit", record.textureLimit},
             {"state", stateName(record.state)},
@@ -141,7 +144,20 @@ Json recordToJson(const ArtifactIndexRecord &record) {
 
 ArtifactIndexRecord recordFromJson(const Json &json) {
     ArtifactIndexRecord record;
-    record.sceneId = json.at("sceneId").get<std::string>();
+    const std::string kind =
+        json.value("assetKind", std::string("Scene"));
+    record.assetKind =
+        kind == "Environment" ? ArtifactKind::Environment
+                              : ArtifactKind::Scene;
+    record.sceneId = json.value("sceneId", std::string{});
+    record.assetId = json.value(
+        "assetId", record.assetKind == ArtifactKind::Scene
+                       ? record.sceneId
+                       : std::string{});
+    if (record.assetId.empty())
+        throw std::runtime_error("ArtifactIndex record has no asset ID");
+    if (record.assetKind == ArtifactKind::Scene && record.sceneId.empty())
+        record.sceneId = record.assetId;
     record.profileId = json.at("profileId").get<std::string>();
     record.textureLimit = json.at("textureLimit").get<uint32_t>();
     record.state = stateFromName(json.value("state", "Invalid"));
@@ -207,9 +223,19 @@ void mergeTelemetry(ArtifactIndexRecord &target,
 
 } // namespace
 
+const char *artifactKindName(ArtifactKind kind) {
+    return kind == ArtifactKind::Environment ? "Environment" : "Scene";
+}
+
+std::string artifactIndexKey(ArtifactKind kind, const std::string &assetId,
+                             const std::string &profileId) {
+    return std::string(artifactKindName(kind)) + '\n' + assetId + '\n' +
+           profileId;
+}
+
 std::string artifactIndexKey(const std::string &sceneId,
                              const std::string &profileId) {
-    return sceneId + '\n' + profileId;
+    return artifactIndexKey(ArtifactKind::Scene, sceneId, profileId);
 }
 
 ArtifactIndex::ArtifactIndex(std::filesystem::path cacheRoot,
@@ -233,16 +259,25 @@ ArtifactIndex ArtifactIndex::loadOrRebuild(
             throw std::runtime_error("index not found");
         Json root;
         input >> root;
-        if (root.value("schemaVersion", 0u) != kSchemaVersion ||
+        const uint32_t schema = root.value("schemaVersion", 0u);
+        if ((schema != kSchemaVersion &&
+             schema != kLegacySchemaVersion) ||
             root.value("projectId", std::string{}) != catalog.projectId)
             throw std::runtime_error("index schema or project mismatch");
         for (const Json &item : root.at("records")) {
             ArtifactIndexRecord record = recordFromJson(item);
-            if (!catalog.findScene(record.sceneId) ||
-                catalog.importProfiles.count(record.profileId) == 0)
-                continue;
+            if (record.assetKind == ArtifactKind::Scene) {
+                if (!catalog.findScene(record.assetId) ||
+                    catalog.importProfiles.count(record.profileId) == 0)
+                    continue;
+            } else {
+                if (!catalog.findEnvironment(record.assetId) ||
+                    catalog.environmentProfiles.count(record.profileId) == 0)
+                    continue;
+            }
             index.records_.emplace(
-                artifactIndexKey(record.sceneId, record.profileId),
+                artifactIndexKey(record.assetKind, record.assetId,
+                                 record.profileId),
                 std::move(record));
         }
         if (rebuilt)
@@ -276,6 +311,14 @@ ArtifactIndex ArtifactIndex::rebuild(const std::filesystem::path &cacheRoot,
                 index.refreshRecord(scene, profile.second);
         }
     }
+    for (const CatalogEnvironment &environment : catalog.environments) {
+        for (const auto &profile : catalog.environmentProfiles) {
+            const auto manifest = derivedEnvironmentManifestPath(
+                index.cacheRoot_, environment.id, profile.first);
+            if (std::filesystem::is_regular_file(manifest))
+                index.refreshEnvironmentRecord(environment, profile.second);
+        }
+    }
     return index;
 }
 
@@ -286,6 +329,8 @@ void ArtifactIndex::refreshRecord(const CatalogScene &scene,
     const bool sameManifest = existing != records_.end() &&
                               existing->second.manifestSize != 0;
     ArtifactIndexRecord record;
+    record.assetKind = ArtifactKind::Scene;
+    record.assetId = scene.id;
     record.sceneId = scene.id;
     record.profileId = profile.id;
     record.textureLimit = profile.textureLimit;
@@ -372,6 +417,75 @@ void ArtifactIndex::refreshRecord(const CatalogScene &scene,
     dirtyKeys_.insert(key);
 }
 
+void ArtifactIndex::refreshEnvironmentRecord(
+    const CatalogEnvironment &environment,
+    const EnvironmentProfile &profile) {
+    const std::string key = artifactIndexKey(
+        ArtifactKind::Environment, environment.id, profile.id);
+    const auto existing = records_.find(key);
+    ArtifactIndexRecord record;
+    record.assetKind = ArtifactKind::Environment;
+    record.assetId = environment.id;
+    record.profileId = profile.id;
+    const std::filesystem::path sourcePath =
+        (projectRoot_ / environment.source).lexically_normal();
+    const std::filesystem::path manifestPath =
+        derivedEnvironmentManifestPath(cacheRoot_, environment.id, profile.id);
+    record.manifestPath = relativeGeneric(cacheRoot_, manifestPath);
+    const DerivedFileStamp manifestStamp = fileStamp(manifestPath);
+    record.manifestSize = manifestStamp.size;
+    record.manifestWriteTime = manifestStamp.writeTime;
+
+    const ArtifactStatus inspected = inspectEnvironmentArtifacts(
+        {cacheRoot_, sourcePath, projectId_, environment.id, profile.id});
+    record.state = inspected.state;
+    record.reason = inspected.reason;
+    DerivedEnvironmentManifest manifest;
+    std::string loadError;
+    if (!loadDerivedEnvironmentManifest(manifestPath, manifest, loadError)) {
+        records_[key] = std::move(record);
+        dirtyKeys_.insert(key);
+        return;
+    }
+    record.manifestSchema = manifest.schemaVersion;
+    record.qualityPreset = "ibl";
+    record.encoderSettings = manifest.algorithmVersion;
+    record.dependencies.push_back(
+        {relativeGeneric(projectRoot_, sourcePath), manifest.source.size,
+         manifest.source.writeTime, manifest.source.sha256});
+    for (const DerivedEnvironmentImage &image : manifest.images) {
+        std::error_code sizeError;
+        const uint64_t bytes =
+            std::filesystem::file_size(cacheRoot_ / image.blob, sizeError);
+        record.blobs.push_back(
+            {image.blob, sizeError ? uint64_t{0} : bytes});
+    }
+    std::sort(record.blobs.begin(), record.blobs.end(),
+              [](const auto &left, const auto &right) {
+                  return left.path < right.path;
+              });
+    if (record.state == ArtifactState::Ready) {
+        const bool unchanged =
+            existing != records_.end() &&
+            existing->second.manifestSize == record.manifestSize &&
+            existing->second.manifestWriteTime == record.manifestWriteTime;
+        record.lastSuccessfulImportUnixMs =
+            unchanged ? existing->second.lastSuccessfulImportUnixMs
+                      : unixTimeMs();
+    }
+    if (existing != records_.end()) {
+        record.lastAccessUnixMs = existing->second.lastAccessUnixMs;
+        record.lastSuccessfulImportTaskId =
+            existing->second.lastSuccessfulImportTaskId;
+        record.failureCode = existing->second.failureCode;
+        record.failureMessage = existing->second.failureMessage;
+        record.failureLogPath = existing->second.failureLogPath;
+        record.lastFailureUnixMs = existing->second.lastFailureUnixMs;
+    }
+    records_[key] = std::move(record);
+    dirtyKeys_.insert(key);
+}
+
 void ArtifactIndex::refresh(const SceneCatalog &catalog,
                             const std::string &sceneId,
                             const std::string &profileId) {
@@ -379,6 +493,19 @@ void ArtifactIndex::refresh(const SceneCatalog &catalog,
     if (!scene || scene->type != "gltf")
         throw std::runtime_error("Cannot index unknown glTF scene: " + sceneId);
     refreshRecord(*scene, catalog.profile(profileId));
+}
+
+void ArtifactIndex::refreshEnvironment(
+    const SceneCatalog &catalog, const std::string &environmentId,
+    const std::string &profileId) {
+    const CatalogEnvironment *environment =
+        catalog.findEnvironment(environmentId);
+    if (!environment) {
+        throw std::runtime_error("Cannot index unknown environment: " +
+                                 environmentId);
+    }
+    refreshEnvironmentRecord(
+        *environment, catalog.environmentProfile(profileId));
 }
 
 ArtifactStatus ArtifactIndex::query(const ArtifactStatusRequest &request,
@@ -467,6 +594,8 @@ void ArtifactIndex::recordFailure(const std::string &sceneId,
                                   const std::filesystem::path &logPath) {
     ArtifactIndexRecord &record =
         records_[artifactIndexKey(sceneId, profileId)];
+    record.assetKind = ArtifactKind::Scene;
+    record.assetId = sceneId;
     record.sceneId = sceneId;
     record.profileId = profileId;
     record.failureCode = code;
@@ -494,6 +623,17 @@ void ArtifactIndex::touch(const std::string &sceneId,
     if (found != records_.end()) {
         found->second.lastAccessUnixMs = unixTimeMs();
         dirtyKeys_.insert(artifactIndexKey(sceneId, profileId));
+    }
+}
+
+void ArtifactIndex::touchEnvironment(
+    const std::string &environmentId, const std::string &profileId) {
+    const std::string key = artifactIndexKey(
+        ArtifactKind::Environment, environmentId, profileId);
+    const auto found = records_.find(key);
+    if (found != records_.end()) {
+        found->second.lastAccessUnixMs = unixTimeMs();
+        dirtyKeys_.insert(key);
     }
 }
 
@@ -556,7 +696,7 @@ void ArtifactIndex::save() {
                 existingRoot.value("projectId", std::string{}) == projectId_) {
                 for (const Json &item : existingRoot.at("records")) {
                     ArtifactIndexRecord record = recordFromJson(item);
-                    merged[artifactIndexKey(record.sceneId,
+                    merged[artifactIndexKey(record.assetKind, record.assetId,
                                             record.profileId)] =
                         std::move(record);
                 }
@@ -574,8 +714,12 @@ void ArtifactIndex::save() {
                 continue;
             }
             const std::filesystem::path manifest =
-                derivedManifestPath(cacheRoot_, found->second.sceneId,
-                                    found->second.profileId);
+                found->second.assetKind == ArtifactKind::Environment
+                    ? derivedEnvironmentManifestPath(
+                          cacheRoot_, found->second.assetId,
+                          found->second.profileId)
+                    : derivedManifestPath(cacheRoot_, found->second.assetId,
+                                          found->second.profileId);
             const DerivedFileStamp current = fileStamp(manifest);
             const bool localIsCurrent =
                 found->second.manifestSize == current.size &&
@@ -600,8 +744,10 @@ void ArtifactIndex::save() {
         ordered.push_back(&pair.second);
     std::sort(ordered.begin(), ordered.end(), [](const auto *left,
                                                  const auto *right) {
-        return artifactIndexKey(left->sceneId, left->profileId) <
-               artifactIndexKey(right->sceneId, right->profileId);
+        return artifactIndexKey(left->assetKind, left->assetId,
+                                left->profileId) <
+               artifactIndexKey(right->assetKind, right->assetId,
+                                right->profileId);
     });
     for (const auto *record : ordered)
         records.push_back(recordToJson(*record));

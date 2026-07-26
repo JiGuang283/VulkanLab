@@ -42,6 +42,7 @@ void runShaderRegistryTests();
 void runShaderContractTests();
 void runGpuPassProfilerTests();
 void runGpuDebugUtilsTests();
+void runEnvironmentCacheTests();
 
 namespace {
 
@@ -202,6 +203,7 @@ int main(int argc, char **argv) {
         runShaderContractTests();
         runGpuPassProfilerTests();
         runGpuDebugUtilsTests();
+        runEnvironmentCacheTests();
         std::cout << "VulkanLab CPU tests passed\n";
         return 0;
     } catch (const std::exception &error) {

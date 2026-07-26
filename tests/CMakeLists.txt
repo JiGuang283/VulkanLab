@@ -29,6 +29,7 @@ add_executable(VulkanLabCpuTests
     ShaderContractTests.cpp
     GpuPassProfilerTests.cpp
     GpuDebugUtilsTests.cpp
+    EnvironmentCacheTests.cpp
 )
 target_link_libraries(VulkanLabCpuTests PRIVATE
     vkl_build_options
@@ -114,6 +115,21 @@ if(WIN32)
         VulkanLabRenderSmokeVikingPbrShadow viking_pbr_shadow_smoke.json)
     vulkanlab_add_visual_test(
         VulkanLabRenderSmokeVikingDebugShadow viking_debug_shadow_smoke.json)
+    add_test(
+        NAME VulkanLabRenderSmokeEnvironmentIbl
+        COMMAND ${CMAKE_COMMAND}
+            "-DASSET_TOOL=$<TARGET_FILE:VulkanLabAssetTool>"
+            "-DRENDER_TEST=$<TARGET_FILE:VulkanLabRenderTest>"
+            "-DRUNTIME=$<TARGET_FILE:VulkanLab>"
+            "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
+            "-DTEST_ROOT=${PROJECT_BINARY_DIR}/environment_ibl_visual_test"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/EnvironmentIblVisualTest.cmake"
+    )
+    set_tests_properties(VulkanLabRenderSmokeEnvironmentIbl PROPERTIES
+        LABELS "asset;gpu;visual"
+        RESOURCE_LOCK VulkanLabGpu
+        TIMEOUT 660
+    )
 
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/render/goldens/viking-legacy.png"
        AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/render/goldens/viking-legacy.json")

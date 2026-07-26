@@ -74,6 +74,18 @@
       "fragment": "material_debug/shadow.frag"
     },
     {
+      "id": "debug.ibl-diffuse",
+      "contract": "main-forward",
+      "vertex": "pbr_lite/forward.vert",
+      "fragment": "material_debug/ibl_diffuse.frag"
+    },
+    {
+      "id": "debug.ibl-specular",
+      "contract": "main-forward",
+      "vertex": "pbr_lite/forward.vert",
+      "fragment": "material_debug/ibl_specular.frag"
+    },
+    {
       "id": "shadow.opaque",
       "contract": "shadow-depth",
       "vertex": "shadow/depth.vert"
@@ -89,6 +101,12 @@
       "contract": "fullscreen",
       "vertex": "postprocess/fullscreen.vert",
       "fragment": "postprocess/tonemap.frag"
+    },
+    {
+      "id": "skybox",
+      "contract": "fullscreen",
+      "vertex": "postprocess/fullscreen.vert",
+      "fragment": "skybox/skybox.frag"
     }
   ],
   "variants": [
@@ -199,6 +217,24 @@
       "toneMapping": "pass-through",
       "default": false,
       "order": 180
+    },
+    {
+      "id": "debug-ibl-diffuse",
+      "displayName": "Debug IBL Diffuse",
+      "program": "debug.ibl-diffuse",
+      "category": "debug",
+      "toneMapping": "configurable",
+      "default": false,
+      "order": 190
+    },
+    {
+      "id": "debug-ibl-specular",
+      "displayName": "Debug IBL Specular",
+      "program": "debug.ibl-specular",
+      "category": "debug",
+      "toneMapping": "configurable",
+      "default": false,
+      "order": 200
     }
   ]
 }

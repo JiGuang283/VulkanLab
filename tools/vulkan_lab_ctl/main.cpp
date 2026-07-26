@@ -50,6 +50,8 @@ void printUsage() {
         << "  VulkanLabCtl [--json] texture-limit set <full|512|1024|2048>\n"
         << "  VulkanLabCtl [--json] shader list|current\n"
         << "  VulkanLabCtl [--json] shader set <name>\n"
+        << "  VulkanLabCtl [--json] environment list|current|reload\n"
+        << "  VulkanLabCtl [--json] [--no-wait] environment set <name|None>\n"
         << "  VulkanLabCtl [--json] camera get\n"
         << "  VulkanLabCtl [--json] camera set --position X,Y,Z --yaw Y --pitch P\n"
         << "  VulkanLabCtl [--json] window resize <width> <height>\n"
@@ -58,7 +60,9 @@ void printUsage() {
         << "  VulkanLabCtl [--json] render-settings set "
            "[--shadows on|off] [--receiver-bias N] "
            "[--constant-bias N] [--slope-bias N] "
-           "[--exposure N] [--tone-mapper passthrough|reinhard|aces]\n"
+           "[--exposure N] [--tone-mapper passthrough|reinhard|aces] "
+           "[--ibl on|off] [--skybox on|off] "
+           "[--environment-intensity N] [--environment-rotation-deg N]\n"
         << "  VulkanLabCtl [--json] render wait [--stable-frames N] "
            "[--timeout-ms N]\n"
         << "  VulkanLabCtl [--json] capture screenshot <relative.png> "
@@ -149,6 +153,10 @@ ParsedCommand parseCommand(int argc, char **argv) {
     std::optional<std::string> slopeBias;
     std::optional<std::string> exposure;
     std::optional<std::string> toneMapper;
+    std::optional<std::string> ibl;
+    std::optional<std::string> skybox;
+    std::optional<std::string> environmentIntensity;
+    std::optional<std::string> environmentRotationDegrees;
     for (int i = 1; i < argc; ++i) {
         const std::string argument = argv[i];
         if (argument == "--pipe") {
@@ -169,7 +177,11 @@ ParsedCommand parseCommand(int argc, char **argv) {
                  argument == "--constant-bias" ||
                  argument == "--slope-bias" ||
                  argument == "--exposure" ||
-                 argument == "--tone-mapper") {
+                 argument == "--tone-mapper" ||
+                 argument == "--ibl" ||
+                 argument == "--skybox" ||
+                 argument == "--environment-intensity" ||
+                 argument == "--environment-rotation-deg") {
             if (++i >= argc)
                 throw std::invalid_argument(argument + " requires a value");
             if (argument == "--position")
@@ -192,8 +204,16 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 slopeBias = argv[i];
             else if (argument == "--exposure")
                 exposure = argv[i];
-            else
+            else if (argument == "--tone-mapper")
                 toneMapper = argv[i];
+            else if (argument == "--ibl")
+                ibl = argv[i];
+            else if (argument == "--skybox")
+                skybox = argv[i];
+            else if (argument == "--environment-intensity")
+                environmentIntensity = argv[i];
+            else
+                environmentRotationDegrees = argv[i];
         }
         else if (argument == "--no-wait")
             waitForLoad = false;
@@ -291,6 +311,19 @@ ParsedCommand parseCommand(int argc, char **argv) {
                args[1] == "set") {
         parsed.method = "shader.set";
         parsed.params = {{"name", args[2]}};
+    } else if (args.size() == 2 && args[0] == "environment" &&
+               args[1] == "list") {
+        parsed.method = "environment.list";
+    } else if (args.size() == 2 && args[0] == "environment" &&
+               args[1] == "current") {
+        parsed.method = "environment.current";
+    } else if (args.size() == 2 && args[0] == "environment" &&
+               args[1] == "reload") {
+        parsed.method = "environment.reload";
+    } else if (args.size() == 3 && args[0] == "environment" &&
+               args[1] == "set") {
+        parsed.method = "environment.set";
+        parsed.params = {{"name", args[2]}};
     } else if (args == std::vector<std::string>{"camera", "get"}) {
         parsed.method = "camera.get";
     } else if (args == std::vector<std::string>{"camera", "set"}) {
@@ -346,6 +379,24 @@ ParsedCommand parseCommand(int argc, char **argv) {
                     "--tone-mapper must be passthrough, reinhard, or aces");
             }
             parsed.params["toneMapper"] = *toneMapper;
+        }
+        if (ibl)
+            parsed.params["iblEnabled"] = parseOnOff(*ibl, "--ibl");
+        if (skybox) {
+            parsed.params["skyboxEnabled"] =
+                parseOnOff(*skybox, "--skybox");
+        }
+        if (environmentIntensity) {
+            parsed.params["environmentIntensity"] = parseFiniteFloat(
+                *environmentIntensity, "--environment-intensity");
+        }
+        if (environmentRotationDegrees) {
+            constexpr float kDegreesToRadians =
+                3.14159265358979323846f / 180.0f;
+            parsed.params["environmentRotationRadians"] =
+                parseFiniteFloat(*environmentRotationDegrees,
+                                 "--environment-rotation-deg") *
+                kDegreesToRadians;
         }
         if (parsed.params.empty())
             throw std::invalid_argument(
@@ -510,6 +561,19 @@ void printHuman(const std::string &method, const Json &result) {
     } else if (method == "shader.list") {
         for (const auto &name : result.at("shaders"))
             std::cout << name.get<std::string>() << '\n';
+    } else if (method == "environment.list") {
+        for (const auto &entry : result.at("entries")) {
+            std::cout
+                << entry.at("name").get<std::string>() << " ["
+                << (entry.value("ready", false) ? "Ready" : "Unavailable")
+                << "]\n";
+        }
+    } else if (method == "environment.current") {
+        std::cout
+            << (result.at("publishedId").is_null()
+                    ? std::string("<none>")
+                    : result.at("publishedId").get<std::string>())
+            << (result.value("ready", false) ? " [Ready]" : "") << '\n';
     } else if (method == "scene.current" || method == "shader.current") {
         std::cout << (result.at("name").is_null()
                           ? std::string("<none>")
@@ -573,6 +637,15 @@ void printHuman(const std::string &method, const Json &result) {
                   << " MiB\n";
     } else if (method == "shader.set") {
         std::cout << result.at("shader").get<std::string>() << '\n';
+    } else if (method == "environment.set" ||
+               method == "environment.reload") {
+        if (result.contains("taskId") &&
+            !result.at("taskId").is_null()) {
+            std::cout << "environment task "
+                      << result.at("taskId").get<uint64_t>() << '\n';
+        } else {
+            std::cout << "environment: none\n";
+        }
     } else if (method == "camera.get" || method == "camera.set") {
         const auto &position = result.at("position");
         std::cout << std::fixed << std::setprecision(3) << "position: "
@@ -636,7 +709,17 @@ void printHuman(const std::string &method, const Json &result) {
                   << result.at("shadowSlopeBias").get<float>()
                   << "\nexposure: " << result.at("exposureEv").get<float>()
                   << " EV, tone mapper: "
-                  << result.at("toneMapper").get<std::string>() << '\n';
+                  << result.at("toneMapper").get<std::string>()
+                  << "\nIBL/skybox: "
+                  << (result.at("iblEnabled").get<bool>() ? "on" : "off")
+                  << "/"
+                  << (result.at("skyboxEnabled").get<bool>() ? "on"
+                                                              : "off")
+                  << ", environment intensity: "
+                  << result.at("environmentIntensity").get<float>()
+                  << ", rotation: "
+                  << result.at("environmentRotationRadians").get<float>()
+                  << " rad\n";
     } else if (method == "capture.screenshot" ||
                method == "capture.status" ||
                method == "capture.cancel") {
@@ -677,7 +760,9 @@ int main(int argc, char **argv) {
         const bool startsLoad = command.method == "scene.load" ||
                                 command.method == "scene.reload" ||
                                 command.method == "texture_limit.set" ||
-                                command.method == "asset.import";
+                                command.method == "asset.import" ||
+                                command.method == "environment.set" ||
+                                command.method == "environment.reload";
         if (response.value("ok", false) && command.waitForLoad &&
             startsLoad) {
             const auto taskId = loadTaskId(response.at("result"));

@@ -19,6 +19,14 @@ struct ArtifactStatusRequest {
     uint32_t textureLimit = 0;
 };
 
+struct EnvironmentArtifactStatusRequest {
+    std::filesystem::path cacheRoot;
+    std::filesystem::path sourcePath;
+    std::string projectId;
+    std::string environmentId;
+    std::string profileId;
+};
+
 struct ArtifactStatus {
     ArtifactState state = ArtifactState::Missing;
     std::string reason;
@@ -30,5 +38,7 @@ struct ArtifactStatus {
 };
 
 ArtifactStatus inspectTextureArtifacts(const ArtifactStatusRequest &request);
+ArtifactStatus inspectEnvironmentArtifacts(
+    const EnvironmentArtifactStatusRequest &request);
 
 } // namespace vkr

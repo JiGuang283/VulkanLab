@@ -73,8 +73,7 @@ VkSampleCountFlagBits chooseSamples(Device &device, VkFormat hdrFormat,
     const VkResult hdrResult = vkGetPhysicalDeviceImageFormatProperties(
         device.physicalDevice(), hdrFormat, VK_IMAGE_TYPE_2D,
         VK_IMAGE_TILING_OPTIMAL,
-        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-            VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
         0, &hdrProperties);
     const VkResult depthResult = vkGetPhysicalDeviceImageFormatProperties(
         device.physicalDevice(), depthFormat, VK_IMAGE_TYPE_2D,
@@ -92,6 +91,7 @@ VkSampleCountFlagBits chooseSamples(Device &device, VkFormat hdrFormat,
 VkImageUsageFlags requiredUsage(RenderImageAccess access) {
     switch (access) {
     case RenderImageAccess::ColorAttachmentWrite:
+    case RenderImageAccess::ColorAttachmentReadWrite:
         return VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     case RenderImageAccess::DepthAttachmentWrite:
         return VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
@@ -299,8 +299,7 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
             {"HDR MSAA Color", RenderExtentPolicy::Swapchain, {},
              RenderResourceMultiplicity::PerFrame, hdrFormat, samples,
              VK_IMAGE_TILING_OPTIMAL,
-             VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT |
-                 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
              VK_IMAGE_ASPECT_COLOR_BIT});
     }
@@ -360,7 +359,9 @@ void validateRenderResourceContracts(
                                          " without the required usage flag");
             }
 
-            if (use.access == RenderImageAccess::SampledRead) {
+            if (use.access == RenderImageAccess::SampledRead ||
+                use.access ==
+                    RenderImageAccess::ColorAttachmentReadWrite) {
                 if (written.count(use.image.index) == 0) {
                     throw std::runtime_error(pass.passName + " reads " +
                                              desc.name + " before a writer");
@@ -372,6 +373,10 @@ void validateRenderResourceContracts(
                     throw std::runtime_error(pass.passName + " reads " +
                                              desc.name +
                                              " with an incompatible layout");
+                }
+                if (use.access ==
+                    RenderImageAccess::ColorAttachmentReadWrite) {
+                    written.insert(use.image.index);
                 }
             } else {
                 written.insert(use.image.index);

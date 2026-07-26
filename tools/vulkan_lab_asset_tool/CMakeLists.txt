@@ -1,5 +1,6 @@
 add_library(vkl_asset_tool_core STATIC
     CookPackageBuilder.cpp
+    EnvironmentCacheBuilder.cpp
     ProcessRunner.cpp
     TextureCacheBuilder.cpp
     TextureCachePipeline.cpp
@@ -18,7 +19,7 @@ target_link_libraries(vkl_asset_tool_core
         vkl_json
         vkl_image_codecs
         vkl_gltf_parser
-        ktx_read
+        ktx
         bcrypt
 )
 
@@ -28,6 +29,7 @@ target_link_libraries(VulkanLabAssetTool PRIVATE
     vkl_build_options
     vkl_asset_core
     vkl_asset_tool_core
+    vkl_json
 )
 
 if(TARGET ktxtools)

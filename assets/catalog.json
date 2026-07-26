@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "projectId": "vulkan-lab",
   "defaultImportProfile": "desktop_2048",
   "importProfiles": {
@@ -24,6 +24,18 @@
       "qualityPreset": "development"
     }
   },
+  "environmentProfiles": {
+    "ibl_desktop_v1": {
+      "radianceSize": 512,
+      "irradianceSize": 32,
+      "prefilteredSize": 256,
+      "brdfLutSize": 256,
+      "diffuseSamples": 1024,
+      "specularSamples": 512,
+      "brdfSamples": 1024
+    }
+  },
+  "environments": [],
   "scenes": [
     {
       "id": "viking-room",

@@ -18,11 +18,14 @@ struct RenderFrameContext {
     VkExtent2D      extent{};
     VkDescriptorSet globalDescriptorSet = VK_NULL_HANDLE;
     VkDescriptorSetLayout globalDescriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSet lightingDescriptorSet = VK_NULL_HANDLE;
+    VkDescriptorSetLayout lightingDescriptorSetLayout = VK_NULL_HANDLE;
     PipelineCache  *pipelineCache = nullptr;
     const GpuDebugUtils *debugUtils = nullptr;
     GuiSystem      *gui = nullptr;
     const ShaderVariant *shaderVariant = nullptr;
     const RenderView *view = nullptr;
+    bool environmentReady = false;
 };
 
 } // namespace vkr

@@ -8,7 +8,6 @@
 
 namespace vkr {
 
-class DescriptorAllocator;
 class Device;
 class RenderQueue;
 class RenderResourceRegistry;
@@ -20,7 +19,7 @@ class MainForwardPass final : public IRenderPass {
     MainForwardPass(Device &device,
                     const RenderResourceRegistry &resources,
                     RendererResourceHandles resourceHandles,
-                    DescriptorAllocator &descriptorAllocator);
+                    VkDescriptorSetLayout lightingDescriptorSetLayout);
     ~MainForwardPass() override;
 
     MainForwardPass(const MainForwardPass &) = delete;
@@ -36,14 +35,9 @@ class MainForwardPass final : public IRenderPass {
                  const RenderQueue &queue) override;
 
     VkRenderPass renderPass() const { return renderPass_; }
-    VkDescriptorSetLayout shadowDescriptorSetLayout() const {
-        return shadowDescriptorSetLayout_;
-    }
-
   private:
     void createRenderPass(const RenderResourceRegistry &resources);
     void createFramebuffers(const RenderResourceRegistry &resources);
-    void createShadowDescriptors(const RenderResourceRegistry &resources);
     void destroyFramebuffers();
 
     void begin(VkCommandBuffer cmd, uint32_t frameIndex,
@@ -54,12 +48,10 @@ class MainForwardPass final : public IRenderPass {
 
     Device *device_ = nullptr;
     RendererResourceHandles resourceHandles_{};
-    DescriptorAllocator *descriptorAllocator_ = nullptr;
+    VkDescriptorSetLayout lightingDescriptorSetLayout_ = VK_NULL_HANDLE;
 
     VkRenderPass renderPass_ = VK_NULL_HANDLE;
     std::array<VkFramebuffer, MAX_FRAMES_IN_FLIGHT> framebuffers_{};
-    VkDescriptorSetLayout shadowDescriptorSetLayout_ = VK_NULL_HANDLE;
-    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> shadowDescriptorSets_{};
 };
 
 } // namespace vkr

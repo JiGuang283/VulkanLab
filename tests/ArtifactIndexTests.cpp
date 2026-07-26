@@ -1,5 +1,6 @@
 #include "assets/ArtifactIndex.h"
 #include "assets/ContentHash.h"
+#include "assets/DerivedEnvironmentManifest.h"
 #include "assets/DerivedTextureManifest.h"
 
 #include <array>
@@ -24,6 +25,7 @@ class TemporaryIndexProject {
                                    .time_since_epoch()
                                    .count()));
         std::filesystem::create_directories(root / "models/textures");
+        std::filesystem::create_directories(root / "assets/environments");
         std::filesystem::create_directories(root / "cache/blobs");
     }
     ~TemporaryIndexProject() {
@@ -61,6 +63,17 @@ vkr::SceneCatalog makeCatalog() {
     catalog.scenes.push_back(
         {"scene-b", "Scene B", "gltf", {}, "models/b.gltf",
          "desktop_512"});
+    return catalog;
+}
+
+vkr::SceneCatalog makeCatalogWithEnvironment() {
+    vkr::SceneCatalog catalog = makeCatalog();
+    catalog.environmentProfiles.emplace(
+        "tiny_ibl",
+        vkr::EnvironmentProfile{"tiny_ibl", 4, 2, 4, 4, 8, 8, 8});
+    catalog.environments.push_back(
+        {"studio", "Studio", "assets/environments/studio.hdr",
+         "tiny_ibl", false});
     return catalog;
 }
 
@@ -110,6 +123,61 @@ vkr::ArtifactStatusRequest requestFor(const TemporaryIndexProject &temporary,
                                       const std::string &sceneFile) {
     return {temporary.root / "cache", temporary.root / "models" / sceneFile,
             "index-test", sceneId, "desktop_512", 512};
+}
+
+void publishEnvironmentArtifacts(
+    const TemporaryIndexProject &temporary) {
+    const std::filesystem::path source =
+        temporary.root / "assets/environments/studio.hdr";
+    writeBytes(source, "environment");
+
+    vkr::DerivedEnvironmentManifest manifest;
+    manifest.projectId = "index-test";
+    manifest.environmentId = "studio";
+    manifest.profileId = "tiny_ibl";
+    manifest.sourcePath = "assets/environments/studio.hdr";
+    manifest.sourceSha256 = vkr::sha256File(source);
+    manifest.diffuseSamples = 8;
+    manifest.specularSamples = 8;
+    manifest.brdfSamples = 8;
+    manifest.source = vkr::fileStamp(source, manifest.sourceSha256);
+    manifest.source.path = manifest.sourcePath;
+
+    const std::array<vkr::EnvironmentMapKind, 4> kinds{
+        vkr::EnvironmentMapKind::Radiance,
+        vkr::EnvironmentMapKind::Irradiance,
+        vkr::EnvironmentMapKind::PrefilteredSpecular,
+        vkr::EnvironmentMapKind::BrdfLut};
+    for (const vkr::EnvironmentMapKind kind : kinds) {
+        const std::string name =
+            std::string(vkr::environmentMapKindName(kind)) + ".ktx2";
+        const std::filesystem::path blob =
+            temporary.root / "cache/blobs" / name;
+        writeKtx(blob);
+        const bool lut = kind == vkr::EnvironmentMapKind::BrdfLut;
+        const bool fullMips =
+            kind == vkr::EnvironmentMapKind::Radiance ||
+            kind == vkr::EnvironmentMapKind::PrefilteredSpecular;
+        const uint32_t size =
+            lut ? 4u
+                : (kind == vkr::EnvironmentMapKind::Irradiance ? 2u : 4u);
+        manifest.images.push_back(
+            {kind,
+             lut ? "rg16f" : "rgba16f",
+             size,
+             size,
+             fullMips ? 3u : 1u,
+             lut ? 1u : 6u,
+             name,
+             (std::filesystem::path("blobs") / name).generic_string(),
+             std::filesystem::file_size(blob)});
+    }
+    std::string error;
+    requireIndex(vkr::saveDerivedEnvironmentManifest(
+                     vkr::derivedEnvironmentManifestPath(
+                         temporary.root / "cache", "studio", "tiny_ibl"),
+                     manifest, error),
+                 "could not publish environment ArtifactIndex manifest");
 }
 
 void testRebuildAndChangeDetection() {
@@ -210,6 +278,41 @@ void testIncrementalSaveMergesWriters() {
         "stale telemetry writer replaced a newly published index record");
 }
 
+void testEnvironmentRecordAndLegacyIndexCompatibility() {
+    TemporaryIndexProject temporary;
+    const vkr::SceneCatalog catalog = makeCatalogWithEnvironment();
+    publishEnvironmentArtifacts(temporary);
+
+    bool rebuilt = false;
+    vkr::ArtifactIndex index = vkr::ArtifactIndex::loadOrRebuild(
+        temporary.root / "cache", temporary.root, catalog, &rebuilt);
+    const std::string environmentKey = vkr::artifactIndexKey(
+        vkr::ArtifactKind::Environment, "studio", "tiny_ibl");
+    const auto environment = index.records().find(environmentKey);
+    requireIndex(
+        rebuilt && environment != index.records().end() &&
+            environment->second.assetKind ==
+                vkr::ArtifactKind::Environment &&
+            environment->second.assetId == "studio" &&
+            environment->second.state == vkr::ArtifactState::Ready &&
+            environment->second.blobs.size() == 4,
+        "environment artifacts were not represented in ArtifactIndex v2");
+
+    writeBytes(
+        temporary.root / "cache/artifact_index.json",
+        R"({"schemaVersion":1,"projectId":"index-test","records":[{"sceneId":"scene-a","profileId":"desktop_512","textureLimit":512,"state":"Missing","manifestPath":"legacy.json","dependencies":[],"blobs":[]}]})");
+    rebuilt = true;
+    index = vkr::ArtifactIndex::loadOrRebuild(
+        temporary.root / "cache", temporary.root, catalog, &rebuilt);
+    const auto legacy = index.records().find(
+        vkr::artifactIndexKey("scene-a", "desktop_512"));
+    requireIndex(
+        !rebuilt && legacy != index.records().end() &&
+            legacy->second.assetKind == vkr::ArtifactKind::Scene &&
+            legacy->second.assetId == "scene-a",
+        "ArtifactIndex schema v1 record was not interpreted as a scene");
+}
+
 } // namespace
 
 void runArtifactIndexTests() {
@@ -219,4 +322,5 @@ void runArtifactIndexTests() {
         "shared SHA-256 implementation returned the wrong digest");
     testRebuildAndChangeDetection();
     testIncrementalSaveMergesWriters();
+    testEnvironmentRecordAndLegacyIndexCompatibility();
 }

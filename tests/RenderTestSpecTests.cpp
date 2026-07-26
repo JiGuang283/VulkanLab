@@ -99,12 +99,41 @@ void testSchemaV2RenderSettings() {
 
     const Json serialized =
         vkr::render_test::renderTestSpecToJson(spec);
-    requireSpec(serialized["schemaVersion"] == 2 &&
+    requireSpec(serialized["schemaVersion"] == 3 &&
                     serialized["renderSettings"]["toneMapper"] ==
                         "reinhard" &&
                     serialized["renderSettings"]["shadowsEnabled"] ==
                         false,
                 "schema v2 render settings were not serialized");
+}
+
+void testSchemaV3Environment() {
+    Json document = validSpec();
+    document["schemaVersion"] = 3;
+    document["environmentId"] = "studio-hdr";
+    document["renderSettings"] = {
+        {"iblEnabled", true},
+        {"skyboxEnabled", true},
+        {"environmentIntensity", 1.5f},
+        {"environmentRotationRadians", 0.75f}};
+    const auto source =
+        std::filesystem::temp_directory_path() / "render-tests" /
+        "environment-v3.json";
+    const auto spec =
+        vkr::render_test::parseRenderTestSpec(document, source);
+    requireSpec(
+        spec.environmentId == std::optional<std::string>("studio-hdr") &&
+            spec.renderSettings.iblEnabled &&
+            spec.renderSettings.skyboxEnabled &&
+            std::abs(spec.renderSettings.environmentIntensity - 1.5f) <
+                0.0001f,
+        "schema v3 environment fields changed during parsing");
+    const Json serialized =
+        vkr::render_test::renderTestSpecToJson(spec);
+    requireSpec(serialized["schemaVersion"] == 3 &&
+                    serialized["environmentId"] == "studio-hdr" &&
+                    serialized["renderSettings"]["iblEnabled"] == true,
+                "schema v3 environment fields were not serialized");
 }
 
 void testValidGoldenSpecAndResolvedPaths() {
@@ -167,6 +196,15 @@ void testStrictValidation() {
             vkr::render_test::parseRenderTestSpec(badSettings, source);
         },
         "unknown tone mapper was accepted");
+
+    Json environmentInV2 = validSpec();
+    environmentInV2["schemaVersion"] = 2;
+    environmentInV2["environmentId"] = "studio-hdr";
+    requireInvalidSpec(
+        [&] {
+            vkr::render_test::parseRenderTestSpec(environmentInV2, source);
+        },
+        "schema v2 accepted environmentId");
 
     Json badCamera = validSpec();
     badCamera["camera"]["yaw"] =
@@ -239,6 +277,7 @@ void testGoldenPathConfinement() {
 void runRenderTestSpecTests() {
     testValidSmokeSpec();
     testSchemaV2RenderSettings();
+    testSchemaV3Environment();
     testValidGoldenSpecAndResolvedPaths();
     testStrictValidation();
     testGoldenPathConfinement();

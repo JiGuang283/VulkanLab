@@ -40,6 +40,7 @@ Texture::Texture(Device &device, UploadRecorder &upload, const std::string &path
             VK_FILTER_LINEAR, VK_FILTER_LINEAR,
             VK_SAMPLER_MIPMAP_MODE_LINEAR,
             VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            VK_SAMPLER_ADDRESS_MODE_REPEAT,
             VK_SAMPLER_ADDRESS_MODE_REPEAT);
         createFromPixels(upload, pixelOwner.get(), static_cast<uint32_t>(w),
                          static_cast<uint32_t>(h),
@@ -64,8 +65,10 @@ Texture::Texture(Device &device, UploadRecorder &upload,
     }
     try {
         createSamplerFrom(info.minFilter, info.magFilter, info.mipmapMode,
-                          info.wrapU, info.wrapV);
-        if (info.mipLevels && info.mipLevelCount > 0) {
+                          info.wrapU, info.wrapV, info.wrapW);
+        if (info.subresources && info.subresourceCount > 0) {
+            createFromSubresources(upload, info);
+        } else if (info.mipLevels && info.mipLevelCount > 0) {
             createFromMipChain(upload, info);
         } else {
             createFromPixels(upload, info.pixels, info.width, info.height,
@@ -117,6 +120,8 @@ void Texture::createFromPixels(UploadRecorder &upload, const void *pixels,
                                                           uploadHeight)))) +
                         1)
                      : 1u;
+    arrayLayers_ = 1;
+    format_ = format;
 
     ScopedLoadTimer uploadTimer(loadStats ? &loadStats->textureUploadMs
                                           : nullptr);
@@ -192,6 +197,8 @@ void Texture::createFromMipChain(UploadRecorder &upload,
                                           : nullptr);
     const StagedSlice staged = upload.stageBytes(info.pixels, info.dataSize);
     mipLevels_ = info.mipLevelCount;
+    arrayLayers_ = 1;
+    format_ = info.format;
     image_ = std::make_unique<Image>(
         *device_, static_cast<int>(info.width), static_cast<int>(info.height),
         mipLevels_, VK_SAMPLE_COUNT_1_BIT, info.format,
@@ -219,17 +226,119 @@ void Texture::createFromMipChain(UploadRecorder &upload,
     }
 }
 
+void Texture::createFromSubresources(UploadRecorder &upload,
+                                     const TextureCreateInfo &info) {
+    if (info.dataSize == 0 || !info.subresources ||
+        info.subresourceCount == 0 || info.arrayLayers == 0) {
+        throw std::runtime_error(
+            "TextureCreateInfo: invalid subresource payload");
+    }
+
+    uint32_t maxMipLevel = 0;
+    for (uint32_t index = 0; index < info.subresourceCount; ++index) {
+        const TextureSubresourceInfo &subresource = info.subresources[index];
+        if (subresource.width == 0 || subresource.height == 0 ||
+            subresource.size == 0 ||
+            subresource.arrayLayer >= info.arrayLayers ||
+            subresource.offset > info.dataSize ||
+            subresource.size > info.dataSize - subresource.offset) {
+            throw std::runtime_error(
+                "TextureCreateInfo: invalid image subresource");
+        }
+        maxMipLevel = std::max(maxMipLevel, subresource.mipLevel);
+    }
+
+    mipLevels_ = maxMipLevel + 1;
+    std::vector<bool> seen(
+        static_cast<size_t>(mipLevels_) * info.arrayLayers, false);
+    for (uint32_t index = 0; index < info.subresourceCount; ++index) {
+        const TextureSubresourceInfo &subresource = info.subresources[index];
+        const size_t flatIndex =
+            static_cast<size_t>(subresource.arrayLayer) * mipLevels_ +
+            subresource.mipLevel;
+        if (seen[flatIndex]) {
+            throw std::runtime_error(
+                "TextureCreateInfo: duplicate image subresource");
+        }
+        seen[flatIndex] = true;
+        const uint32_t expectedWidth =
+            std::max(1u, info.width >> subresource.mipLevel);
+        const uint32_t expectedHeight =
+            std::max(1u, info.height >> subresource.mipLevel);
+        if (subresource.width != expectedWidth ||
+            subresource.height != expectedHeight) {
+            throw std::runtime_error(
+                "TextureCreateInfo: subresource extent mismatch");
+        }
+    }
+    if (std::find(seen.begin(), seen.end(), false) != seen.end()) {
+        throw std::runtime_error(
+            "TextureCreateInfo: incomplete image subresource set");
+    }
+    if (info.viewType == VK_IMAGE_VIEW_TYPE_CUBE &&
+        (info.arrayLayers != 6 ||
+         !(info.imageFlags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT))) {
+        throw std::runtime_error(
+            "TextureCreateInfo: cube view requires six cube-compatible layers");
+    }
+
+    ResourceLoadStats *loadStats = upload.stats();
+    ScopedLoadTimer uploadTimer(loadStats ? &loadStats->textureUploadMs
+                                          : nullptr);
+    const StagedSlice staged = upload.stageBytes(info.pixels, info.dataSize);
+    arrayLayers_ = info.arrayLayers;
+    format_ = info.format;
+
+    ImageCreateInfo imageInfo{};
+    imageInfo.width = info.width;
+    imageInfo.height = info.height;
+    imageInfo.mipLevels = mipLevels_;
+    imageInfo.arrayLayers = arrayLayers_;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.format = info.format;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage =
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.memoryProperties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    imageInfo.flags = info.imageFlags;
+    imageInfo.debugName = debugName_ + "/Image";
+    image_ = std::make_unique<Image>(*device_, imageInfo);
+    image_->createView(info.format, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels_,
+                       info.viewType, arrayLayers_);
+
+    VkCommandBuffer commandBuffer = upload.commandBuffer();
+    transitionImageLayout(commandBuffer, image_->handle(), info.format,
+                          VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevels_,
+                          arrayLayers_);
+    copySubresourcesToImage(commandBuffer, staged.buffer, staged.offset,
+                            image_->handle(), info.subresources,
+                            info.subresourceCount);
+    transitionImageLayout(commandBuffer, image_->handle(), info.format,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, mipLevels_,
+                          arrayLayers_);
+
+    if (loadStats) {
+        ++loadStats->gpuTextureCount;
+        ++loadStats->prebuiltMipTextureCount;
+        loadStats->textureUploadBytes += info.dataSize;
+        loadStats->textureGpuBytesEstimated += info.dataSize;
+    }
+}
+
 void Texture::createSamplerFrom(VkFilter minFilter, VkFilter magFilter,
                                 VkSamplerMipmapMode  mipmapMode,
                                 VkSamplerAddressMode wrapU,
-                                VkSamplerAddressMode wrapV) {
+                                VkSamplerAddressMode wrapV,
+                                VkSamplerAddressMode wrapW) {
     VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     samplerInfo.magFilter = magFilter;
     samplerInfo.minFilter = minFilter;
     samplerInfo.addressModeU = wrapU;
     samplerInfo.addressModeV = wrapV;
-    samplerInfo.addressModeW = wrapU; // 2D 贴图，用 U 兜底
+    samplerInfo.addressModeW = wrapW;
     samplerInfo.anisotropyEnable = VK_TRUE;
 
     VkPhysicalDeviceProperties properties{};
@@ -254,7 +363,8 @@ void Texture::createSamplerFrom(VkFilter minFilter, VkFilter magFilter,
 void Texture::transitionImageLayout(VkCommandBuffer cmd, VkImage image,
                                     VkFormat format, VkImageLayout oldLayout,
                                     VkImageLayout newLayout,
-                                    uint32_t      mipLevels) {
+                                    uint32_t mipLevels,
+                                    uint32_t arrayLayers) {
     VkImageMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier.oldLayout = oldLayout;
@@ -276,7 +386,7 @@ void Texture::transitionImageLayout(VkCommandBuffer cmd, VkImage image,
     barrier.subresourceRange.baseMipLevel = 0;
     barrier.subresourceRange.levelCount = mipLevels;
     barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
+    barrier.subresourceRange.layerCount = arrayLayers;
 
     VkPipelineStageFlags sourceStage;
     VkPipelineStageFlags destinationStage;
@@ -347,6 +457,32 @@ void Texture::copyMipChainToImage(
         region.imageSubresource.layerCount = 1;
         region.imageOffset = {0, 0, 0};
         region.imageExtent = {levels[level].width, levels[level].height, 1};
+        regions.push_back(region);
+    }
+    vkCmdCopyBufferToImage(cmd, buffer, image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           static_cast<uint32_t>(regions.size()),
+                           regions.data());
+}
+
+void Texture::copySubresourcesToImage(
+    VkCommandBuffer cmd, VkBuffer buffer, VkDeviceSize bufferOffset,
+    VkImage image, const TextureSubresourceInfo *subresources,
+    uint32_t subresourceCount) {
+    std::vector<VkBufferImageCopy> regions;
+    regions.reserve(subresourceCount);
+    for (uint32_t index = 0; index < subresourceCount; ++index) {
+        const TextureSubresourceInfo &subresource = subresources[index];
+        VkBufferImageCopy region{};
+        region.bufferOffset = bufferOffset + subresource.offset;
+        region.bufferRowLength = 0;
+        region.bufferImageHeight = 0;
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.mipLevel = subresource.mipLevel;
+        region.imageSubresource.baseArrayLayer = subresource.arrayLayer;
+        region.imageSubresource.layerCount = 1;
+        region.imageOffset = {0, 0, 0};
+        region.imageExtent = {subresource.width, subresource.height, 1};
         regions.push_back(region);
     }
     vkCmdCopyBufferToImage(cmd, buffer, image,

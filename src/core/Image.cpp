@@ -3,6 +3,7 @@
 #include "GpuDebugUtils.h"
 #include "VulkanCheck.h"
 
+#include <stdexcept>
 #include <utility>
 
 namespace vkr {
@@ -11,22 +12,34 @@ Image::Image(Device &device, uint32_t width, uint32_t height,
              uint32_t mipLevels, VkSampleCountFlagBits samples, VkFormat format,
              VkImageTiling tiling, VkImageUsageFlags usage,
              VkMemoryPropertyFlags memProps, std::string debugName)
-    : device_(&device), debugName_(std::move(debugName)) {
+    : Image(device,
+            ImageCreateInfo{width, height, mipLevels, 1, samples, format,
+                            tiling, usage, memProps, 0,
+                            std::move(debugName)}) {}
+
+Image::Image(Device &device, const ImageCreateInfo &info)
+    : device_(&device), debugName_(info.debugName) {
+    if (info.width == 0 || info.height == 0 || info.mipLevels == 0 ||
+        info.arrayLayers == 0 || info.format == VK_FORMAT_UNDEFINED ||
+        info.usage == 0) {
+        throw std::invalid_argument("invalid image create info");
+    }
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.flags = info.flags;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.extent = {width, height, 1};
-    imageInfo.mipLevels = mipLevels;
-    imageInfo.arrayLayers = 1;
-    imageInfo.format = format;
-    imageInfo.tiling = tiling;
+    imageInfo.extent = {info.width, info.height, 1};
+    imageInfo.mipLevels = info.mipLevels;
+    imageInfo.arrayLayers = info.arrayLayers;
+    imageInfo.format = info.format;
+    imageInfo.tiling = info.tiling;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageInfo.usage = usage;
-    imageInfo.samples = samples;
+    imageInfo.usage = info.usage;
+    imageInfo.samples = info.samples;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     VmaAllocationCreateInfo allocCI{};
-    allocCI.requiredFlags = memProps;
+    allocCI.requiredFlags = info.memoryProperties;
 
     VK_CHECK(vmaCreateImage(device.allocator(), &imageInfo, &allocCI, &image_,
                             &allocation_, nullptr));
@@ -69,7 +82,8 @@ Image &Image::operator=(Image &&other) noexcept {
 }
 
 void Image::createView(VkFormat format, VkImageAspectFlags aspectFlags,
-                       uint32_t mipLevels) {
+                       uint32_t mipLevels, VkImageViewType viewType,
+                       uint32_t arrayLayers) {
     if (view_ != VK_NULL_HANDLE) {
         vkDestroyImageView(device_->logicalDevice(), view_, nullptr);
         view_ = VK_NULL_HANDLE;
@@ -78,13 +92,13 @@ void Image::createView(VkFormat format, VkImageAspectFlags aspectFlags,
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = image_;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.viewType = viewType;
     viewInfo.format = format;
     viewInfo.subresourceRange.aspectMask = aspectFlags;
     viewInfo.subresourceRange.baseMipLevel = 0;
     viewInfo.subresourceRange.levelCount = mipLevels;
     viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
+    viewInfo.subresourceRange.layerCount = arrayLayers;
 
     VK_CHECK(vkCreateImageView(device_->logicalDevice(), &viewInfo, nullptr,
                                &view_));

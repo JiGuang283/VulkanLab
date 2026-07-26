@@ -80,6 +80,7 @@ struct RenderSamplerDesc {
 
 enum class RenderImageAccess {
     ColorAttachmentWrite,
+    ColorAttachmentReadWrite,
     DepthAttachmentWrite,
     SampledRead,
 };

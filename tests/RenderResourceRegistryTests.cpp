@@ -37,12 +37,16 @@ void testValidExplicitPassContract() {
          {{{0}, vkr::RenderImageAccess::DepthAttachmentWrite,
            VK_IMAGE_LAYOUT_UNDEFINED,
            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}}},
+        {"Skybox",
+         {{{1}, vkr::RenderImageAccess::ColorAttachmentWrite,
+           VK_IMAGE_LAYOUT_UNDEFINED,
+           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}}},
         {"Forward",
          {{{0}, vkr::RenderImageAccess::SampledRead,
            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
-          {{1}, vkr::RenderImageAccess::ColorAttachmentWrite,
-           VK_IMAGE_LAYOUT_UNDEFINED,
+          {{1}, vkr::RenderImageAccess::ColorAttachmentReadWrite,
+           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}}},
         {"ToneMap",
          {{{1}, vkr::RenderImageAccess::SampledRead,
@@ -50,6 +54,20 @@ void testValidExplicitPassContract() {
            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}}},
     };
     vkr::validateRenderResourceContracts(testDescriptions(), passes);
+}
+
+void testAttachmentReadBeforeWriteFails() {
+    const std::vector<vkr::RenderPassResourceUsage> passes = {
+        {"Forward",
+         {{{1}, vkr::RenderImageAccess::ColorAttachmentReadWrite,
+           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}}},
+    };
+    requireContractFailure(
+        [&] {
+            vkr::validateRenderResourceContracts(testDescriptions(), passes);
+        },
+        "attachment read-before-write render contract was accepted");
 }
 
 void testReadBeforeWriteFails() {
@@ -107,6 +125,7 @@ void testMissingUsageFlagFails() {
 void runRenderResourceRegistryTests() {
     testValidExplicitPassContract();
     testReadBeforeWriteFails();
+    testAttachmentReadBeforeWriteFails();
     testLayoutMismatchFails();
     testMissingUsageFlagFails();
 }

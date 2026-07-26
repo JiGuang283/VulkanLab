@@ -107,6 +107,13 @@ void testCatalogLoadAndProjectResolution() {
                    "catalog scene was not loaded");
     requireCatalog(catalog.profile("desktop_1024").textureLimit == 1024,
                    "catalog profile was not loaded");
+    requireCatalog(
+        catalog.environmentProfiles.size() == 1 &&
+            catalog.environmentProfile("ibl_desktop_v1").radianceSize ==
+                512 &&
+            catalog.environments.empty() &&
+            !catalog.defaultEnvironment,
+        "schema v1 catalog did not receive the compatible environment profile");
     requireCatalog(catalog.scenes[0].camera.has_value() &&
                        catalog.scenes[0].camera->position ==
                            glm::vec3(1.0f, 2.0f, 3.0f) &&
@@ -117,6 +124,63 @@ void testCatalogLoadAndProjectResolution() {
         vkr::DerivedAssetPaths::defaultCacheRoot(catalog.projectId)
                 .filename() == "catalog-test",
         "shared cache root omitted project ID");
+}
+
+void testEnvironmentCatalogV2() {
+    CatalogFixture fixture;
+    std::filesystem::create_directories(
+        fixture.root / "assets/environments");
+    std::ofstream(fixture.root / "assets/environments/studio.hdr",
+                  std::ios::binary)
+        << "fixture";
+    fixture.write(R"({
+      "schemaVersion":2,
+      "projectId":"catalog-test",
+      "defaultImportProfile":"desktop_1024",
+      "importProfiles":{"desktop_1024":{"textureLimit":1024}},
+      "environmentProfiles":{
+        "tiny_ibl":{
+          "radianceSize":64,
+          "irradianceSize":8,
+          "prefilteredSize":32,
+          "brdfLutSize":16,
+          "diffuseSamples":32,
+          "specularSamples":16,
+          "brdfSamples":64
+        }
+      },
+      "defaultEnvironment":"studio",
+      "environments":[{
+        "id":"studio",
+        "displayName":"Studio",
+        "source":"assets/environments/studio.hdr",
+        "environmentProfile":"tiny_ibl"
+      }],
+      "scenes":[
+        {"id":"scene","displayName":"Scene","source":"models/scene.glb"}
+      ]
+    })");
+    const vkr::SceneCatalog catalog =
+        vkr::SceneCatalog::load(fixture.root / "assets/catalog.json",
+                                fixture.root);
+    const vkr::CatalogEnvironment *environment =
+        catalog.findEnvironment("studio");
+    const vkr::EnvironmentProfile &profile =
+        catalog.environmentProfile("tiny_ibl");
+    requireCatalog(
+        catalog.schemaVersion == 2 && environment &&
+            environment->displayName == "Studio" &&
+            environment->environmentProfile == "tiny_ibl" &&
+            catalog.defaultEnvironment &&
+            *catalog.defaultEnvironment == "studio" &&
+            profile.radianceSize == 64 &&
+            profile.irradianceSize == 8 &&
+            profile.prefilteredSize == 32 &&
+            profile.brdfLutSize == 16 &&
+            profile.diffuseSamples == 32 &&
+            profile.specularSamples == 16 &&
+            profile.brdfSamples == 64,
+        "schema v2 environment catalog fields did not load");
 }
 
 void testDeveloperLocatorAndAncestorDiscovery() {
@@ -212,6 +276,7 @@ void testCatalogRejectsDuplicateDisplayName() {
 
 void runSceneCatalogTests() {
     testCatalogLoadAndProjectResolution();
+    testEnvironmentCatalogV2();
     testDeveloperLocatorAndAncestorDiscovery();
     testCatalogRejectsEscapingSource();
     testCatalogRejectsDuplicateDisplayName();

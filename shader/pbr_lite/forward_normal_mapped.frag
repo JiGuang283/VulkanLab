@@ -3,6 +3,7 @@
 #extension GL_GOOGLE_include_directive : require
 #include "include/global_frame.glsl"
 #include "include/material_push.glsl"
+#include "include/ibl.glsl"
 
 const float PI = 3.14159265359;
 
@@ -248,9 +249,9 @@ void main()
     vec3 direct = evaluateDirectLighting(n, v, fragPositionWS, albedo,
                                          roughness, metallic);
 
-    vec3 ambient = ubo.ambientColorIntensity.rgb *
-                   ubo.ambientColorIntensity.a * albedo * occlusion;
-    vec3 color = applyTransmissionApprox(ambient + direct + emissive, n, v,
+    vec3 indirect = evaluateIndirectLighting(
+        n, v, albedo, roughness, metallic, occlusion);
+    vec3 color = applyTransmissionApprox(indirect + direct + emissive, n, v,
                                          roughness);
     outColor = vec4(color, materialAlpha(baseColor.a));
 }

@@ -116,7 +116,7 @@ void testProjectManifestPreservesPublicVariants() {
         std::filesystem::absolute(VKL_TEST_SHADER_ROOT).lexically_normal();
     const vkr::ShaderRegistry registry =
         vkr::ShaderRegistry::load(shaderRoot / "manifest.json");
-    static constexpr std::array<std::string_view, 12> expectedIds = {
+    static constexpr std::array<std::string_view, 14> expectedIds = {
         "legacy-forward",
         "pbr-lite-forward",
         "pbr-lite-normal-mapped",
@@ -129,6 +129,8 @@ void testProjectManifestPreservesPublicVariants() {
         "debug-alpha",
         "debug-transmission",
         "debug-shadow",
+        "debug-ibl-diffuse",
+        "debug-ibl-specular",
     };
     requireRegistry(registry.variants().size() == expectedIds.size(),
                     "project shader variant count changed");
@@ -145,7 +147,8 @@ void testProjectManifestPreservesPublicVariants() {
         "project default shader must use configurable tone mapping");
     requireRegistry(registry.findProgram("shadow.opaque") != nullptr &&
                         registry.findProgram("shadow.mask") != nullptr &&
-                        registry.findProgram("postprocess.tonemap") != nullptr,
+                        registry.findProgram("postprocess.tonemap") != nullptr &&
+                        registry.findProgram("skybox") != nullptr,
                     "required internal shader program is missing");
 }
 

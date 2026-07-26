@@ -29,6 +29,8 @@ struct RenderViewInput {
     float ambientIntensity = 0.08f;
     DefaultSunSettings defaultSun{};
     RenderSettings settings{};
+    bool environmentReady = false;
+    float maxSpecularLod = 0.0f;
 };
 
 struct RenderViewLightStats {

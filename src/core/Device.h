@@ -33,6 +33,9 @@ class Device {
     TextureTranscodeTarget textureTranscodeTarget() const {
         return textureTranscodeTarget_;
     }
+    bool environmentIblSupported() const {
+        return environmentIblSupported_;
+    }
 
     SwapChainSupportDetails querySwapChainSupport() const;
 
@@ -61,6 +64,7 @@ class Device {
     VkSampleCountFlagBits msaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
     TextureTranscodeTarget textureTranscodeTarget_ =
         TextureTranscodeTarget::Rgba8;
+    bool environmentIblSupported_ = false;
     VmaAllocator          allocator_ = VK_NULL_HANDLE;
     std::unique_ptr<GpuDebugUtils> debugUtils_;
 };

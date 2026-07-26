@@ -529,7 +529,14 @@ class RunnerSession {
         const std::string sceneName =
             sceneEntry->value("name", std::string{});
         Json load = invoke("scene.load", {{"name", sceneName}});
-        waitForLoad(load);
+        waitForLoad(load, "sceneLoad");
+
+        Json environmentLoad = invoke(
+            "environment.set",
+            {{"name", spec_->environmentId
+                          ? *spec_->environmentId
+                          : std::string("None")}});
+        waitForLoad(environmentLoad, "environmentLoad");
 
         invoke("shader.set", {{"name", spec_->shader}});
         invoke("camera.set",
@@ -547,7 +554,15 @@ class RunnerSession {
                  spec_->renderSettings.shadowSlopeBias},
                 {"exposureEv", spec_->renderSettings.exposureEv},
                 {"toneMapper",
-                 toneMapperName(spec_->renderSettings.toneMapper)}});
+                 toneMapperName(spec_->renderSettings.toneMapper)},
+                {"iblEnabled", spec_->renderSettings.iblEnabled},
+                {"skyboxEnabled", spec_->renderSettings.skyboxEnabled},
+                {"environmentIntensity",
+                 spec_->renderSettings.environmentIntensity},
+                {"environmentRotationRadians",
+                 spec_->renderSettings.environmentRotationRadians}});
+        report_["runtime"]["environment"] =
+            invoke("environment.current");
         info = invoke("system.info");
         report_["runtime"]["infoAfterSetup"] = info;
         if (info.value("shader", std::string{}) != spec_->shader)
@@ -606,7 +621,8 @@ class RunnerSession {
                             "Timed out waiting for Runtime Control startup.");
     }
 
-    void waitForLoad(Json status) {
+    void waitForLoad(Json status,
+                     const char *reportField = "sceneLoad") {
         const std::optional<uint64_t> taskId = operationTaskId(status);
         if (!taskId)
             return;
@@ -623,7 +639,7 @@ class RunnerSession {
                         "Scene load ended in state " + state + ": " +
                             status.value("error", std::string{}));
                 }
-                report_["sceneLoad"] = status;
+                report_[reportField] = status;
                 return;
             }
             if (Clock::now() >= deadline)
@@ -671,15 +687,25 @@ class RunnerSession {
                 status.value("pendingUpload", uint64_t{0}) == 0 &&
                 !minimized &&
                 !status.value("swapchainRecreatePending", false);
+            bool environmentMatches = true;
+            if (spec_->environmentId) {
+                const Json environment =
+                    status.value("environment", Json::object());
+                environmentMatches =
+                    environment.value("ready", false) &&
+                    environment.value("publishedId", std::string{}) ==
+                        *spec_->environmentId;
+            }
+            const bool fullyReady = ready && environmentMatches;
             if (!generation || *generation != currentGeneration ||
-                presented < lastPresented || !ready) {
+                presented < lastPresented || !fullyReady) {
                 stableFrames = 0;
             } else {
                 stableFrames += presented - lastPresented;
             }
             generation = currentGeneration;
             lastPresented = presented;
-            if (ready && stableFrames >= spec_->stableFrames) {
+            if (fullyReady && stableFrames >= spec_->stableFrames) {
                 report_["renderReady"] = status;
                 report_["renderReady"]["stableFrames"] = stableFrames;
                 report_["renderReady"]["stableFrameTarget"] =

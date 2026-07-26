@@ -13,6 +13,9 @@
 namespace vkr {
 
 enum class ArtifactValidationMode { Fast, Admission };
+enum class ArtifactKind { Scene, Environment };
+
+const char *artifactKindName(ArtifactKind kind);
 
 struct ArtifactIndexDependency {
     std::string path;
@@ -27,6 +30,8 @@ struct ArtifactIndexBlob {
 };
 
 struct ArtifactIndexRecord {
+    ArtifactKind assetKind = ArtifactKind::Scene;
+    std::string assetId;
     std::string sceneId;
     std::string profileId;
     uint32_t textureLimit = 0;
@@ -62,7 +67,8 @@ struct ArtifactIndexUsage {
 
 class ArtifactIndex {
   public:
-    static constexpr uint32_t kSchemaVersion = 1;
+    static constexpr uint32_t kLegacySchemaVersion = 1;
+    static constexpr uint32_t kSchemaVersion = 2;
 
     static ArtifactIndex loadOrRebuild(
         const std::filesystem::path &cacheRoot,
@@ -77,6 +83,9 @@ class ArtifactIndex {
                          ArtifactValidationMode mode);
     void refresh(const SceneCatalog &catalog, const std::string &sceneId,
                  const std::string &profileId);
+    void refreshEnvironment(const SceneCatalog &catalog,
+                            const std::string &environmentId,
+                            const std::string &profileId);
     void recordFailure(const std::string &sceneId,
                        const std::string &profileId,
                        const std::string &code,
@@ -85,6 +94,8 @@ class ArtifactIndex {
     void recordImportSuccess(const std::string &sceneId,
                              const std::string &profileId, uint64_t taskId);
     void touch(const std::string &sceneId, const std::string &profileId);
+    void touchEnvironment(const std::string &environmentId,
+                          const std::string &profileId);
     ArtifactIndexUsage usage() const;
     void save();
 
@@ -98,6 +109,9 @@ class ArtifactIndex {
                   std::filesystem::path projectRoot, std::string projectId);
     void refreshRecord(const CatalogScene &scene,
                        const ImportProfile &profile);
+    void refreshEnvironmentRecord(
+        const CatalogEnvironment &environment,
+        const EnvironmentProfile &profile);
 
     std::filesystem::path cacheRoot_;
     std::filesystem::path projectRoot_;
@@ -109,6 +123,8 @@ class ArtifactIndex {
 };
 
 std::string artifactIndexKey(const std::string &sceneId,
+                             const std::string &profileId);
+std::string artifactIndexKey(ArtifactKind kind, const std::string &assetId,
                              const std::string &profileId);
 
 } // namespace vkr

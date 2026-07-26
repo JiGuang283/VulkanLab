@@ -1,5 +1,6 @@
 #include "TextureCacheBuilder.h"
 #include "CookPackageBuilder.h"
+#include "EnvironmentCacheBuilder.h"
 
 #include "assets/DerivedAssetPaths.h"
 #include "assets/CacheMutationLock.h"
@@ -8,9 +9,14 @@
 #include "assets/ProjectContext.h"
 #include "assets/RuntimePackage.h"
 #include "assets/SceneCatalog.h"
+#include "assets/SceneCatalogEditor.h"
 #include "assets/SceneImportService.h"
 
+#include <json.hpp>
+
 #include <atomic>
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
@@ -66,17 +72,23 @@ void printUsage(std::ostream &output) {
         << "  VulkanLabAssetTool texture-cache migrate "
            "--legacy-cache-root <path> [options]\n\n"
         << "  VulkanLabAssetTool catalog add --source <path> [options]\n\n"
+        << "  VulkanLabAssetTool catalog add-environment --source <file.hdr> "
+           "[options]\n"
+        << "  VulkanLabAssetTool environment-cache build "
+           "--environment-id <id> [--profile <id>] [options]\n\n"
         << "  VulkanLabAssetTool cache index rebuild [options]\n"
         << "  VulkanLabAssetTool cache prune [--older-than-days <n>] "
            "[--execute] [options]\n\n"
         << "  VulkanLabAssetTool cook --platform windows-x64 "
-           "--profile <id> --output <path> [options]\n\n"
+           "--profile <id> --output <path> "
+           "[--environment-id <id>]... [options]\n\n"
         << "  VulkanLabAssetTool package verify --path <package-root>\n\n"
         << "Options:\n"
         << "  --project <path>     Source project root (otherwise use "
            "locator)\n"
         << "  --scene <path>       Legacy alias; match a Catalog source path\n"
         << "  --scene-id <id>      Stable Catalog scene ID\n"
+        << "  --environment-id <id> Stable Catalog environment ID\n"
         << "  --profile <id>       Import profile (default: scene profile)\n"
         << "  --texture-limit <n>  Override profile limit: 0/512/1024/2048\n"
         << "  --cache-root <path>  Override the shared derived cache root\n"
@@ -138,6 +150,27 @@ uint32_t parseNonnegativeUint32(const std::string &value,
     return static_cast<uint32_t>(parsed);
 }
 
+std::string stableIdFromStem(std::string value) {
+    std::string result;
+    bool pendingSeparator = false;
+    for (unsigned char byte : value) {
+        if (std::isalnum(byte)) {
+            if (pendingSeparator && !result.empty())
+                result.push_back('-');
+            result.push_back(
+                static_cast<char>(std::tolower(byte)));
+            pendingSeparator = false;
+        } else {
+            pendingSeparator = true;
+        }
+    }
+    if (result.empty() || !std::isalpha(
+                              static_cast<unsigned char>(result.front()))) {
+        result = "environment-" + result;
+    }
+    return result;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -149,6 +182,223 @@ int main(int argc, char **argv) {
         if (argc < 3) {
             printUsage(std::cerr);
             return 2;
+        }
+
+        if (std::string(argv[1]) == "catalog" &&
+            std::string(argv[2]) == "add-environment") {
+            std::optional<std::filesystem::path> explicitProject;
+            std::filesystem::path source;
+            std::string environmentId;
+            std::string displayName;
+            std::string profileId = "ibl_desktop_v1";
+            for (int i = 3; i < argc; ++i) {
+                const std::string argument = argv[i];
+                if (argument == "--project") {
+                    explicitProject = requireValue(i, argc, argv, argument);
+                } else if (argument == "--source") {
+                    source = requireValue(i, argc, argv, argument);
+                } else if (argument == "--environment-id") {
+                    environmentId =
+                        requireValue(i, argc, argv, argument);
+                } else if (argument == "--display-name") {
+                    displayName = requireValue(i, argc, argv, argument);
+                } else if (argument == "--profile") {
+                    profileId = requireValue(i, argc, argv, argument);
+                } else {
+                    throw std::invalid_argument("unknown option: " +
+                                                argument);
+                }
+            }
+            if (source.empty())
+                throw std::invalid_argument("--source is required");
+            source = std::filesystem::absolute(source).lexically_normal();
+            std::string sourceExtension = source.extension().string();
+            std::transform(sourceExtension.begin(), sourceExtension.end(),
+                           sourceExtension.begin(), [](char value) {
+                               return static_cast<char>(std::tolower(
+                                   static_cast<unsigned char>(value)));
+                           });
+            if (!std::filesystem::is_regular_file(source) ||
+                sourceExtension != ".hdr") {
+                throw std::invalid_argument(
+                    "--source must name an existing .hdr file");
+            }
+            if (environmentId.empty())
+                environmentId =
+                    stableIdFromStem(source.stem().string());
+            if (!vkr::isStableAssetId(environmentId))
+                throw std::invalid_argument(
+                    "--environment-id is not a stable lowercase ID");
+            if (displayName.empty())
+                displayName = source.stem().string();
+
+            vkr::ProjectContext project =
+                vkr::ProjectContextResolver::resolve(explicitProject);
+            const vkr::SceneCatalog catalog = vkr::SceneCatalog::load(
+                project.catalogPath, project.projectRoot);
+            (void)catalog.environmentProfile(profileId);
+            const std::filesystem::path relative =
+                std::filesystem::path("assets/environments") /
+                environmentId / source.filename();
+            const std::filesystem::path destination =
+                (project.projectRoot / relative).lexically_normal();
+            if (!vkr::pathIsWithin(project.projectRoot, destination))
+                throw std::runtime_error(
+                    "environment destination escapes the project");
+            if (catalog.findEnvironment(environmentId)) {
+                throw std::runtime_error(
+                    "environment ID already exists in the Catalog");
+            }
+            if (std::filesystem::exists(destination)) {
+                throw std::runtime_error(
+                    "environment destination already exists: " +
+                    destination.string());
+            }
+            std::filesystem::create_directories(destination.parent_path());
+            std::error_code copyError;
+            std::filesystem::copy_file(
+                source, destination,
+                std::filesystem::copy_options::none,
+                copyError);
+            if (copyError)
+                throw std::runtime_error(
+                    "could not copy environment: " +
+                    copyError.message());
+            try {
+                vkr::CatalogEnvironment environment;
+                environment.id = environmentId;
+                environment.displayName = displayName;
+                environment.source = relative;
+                environment.environmentProfile = profileId;
+                vkr::SceneCatalogEditor::addEnvironment(project,
+                                                        environment);
+            } catch (...) {
+                std::error_code ignored;
+                std::filesystem::remove(destination, ignored);
+                throw;
+            }
+            std::cout << "Environment imported\n"
+                      << "  id: " << environmentId << "\n"
+                      << "  name: " << displayName << "\n"
+                      << "  source: " << relative.generic_string() << '\n';
+            return EXIT_SUCCESS;
+        }
+
+        if (std::string(argv[1]) == "environment-cache" &&
+            std::string(argv[2]) == "build") {
+            std::optional<std::filesystem::path> explicitProject;
+            std::filesystem::path cacheRoot;
+            std::string environmentId;
+            std::string profileId;
+            bool force = false;
+            bool progressNdjson = false;
+            uint32_t workers = 0;
+            for (int i = 3; i < argc; ++i) {
+                const std::string argument = argv[i];
+                if (argument == "--project") {
+                    explicitProject = requireValue(i, argc, argv, argument);
+                } else if (argument == "--cache-root") {
+                    cacheRoot = requireValue(i, argc, argv, argument);
+                } else if (argument == "--environment-id") {
+                    environmentId =
+                        requireValue(i, argc, argv, argument);
+                } else if (argument == "--profile") {
+                    profileId = requireValue(i, argc, argv, argument);
+                } else if (argument == "--force") {
+                    force = true;
+                } else if (argument == "--workers") {
+                    workers = parsePositiveUint32(
+                        requireValue(i, argc, argv, argument), argument);
+                } else if (argument == "--progress-json") {
+                    progressNdjson = true;
+                } else if (argument == "--progress") {
+                    const std::string mode =
+                        requireValue(i, argc, argv, argument);
+                    if (mode != "ndjson") {
+                        throw std::invalid_argument(
+                            "--progress currently accepts only ndjson");
+                    }
+                    progressNdjson = true;
+                } else {
+                    throw std::invalid_argument("unknown option: " +
+                                                argument);
+                }
+            }
+            if (environmentId.empty())
+                throw std::invalid_argument(
+                    "--environment-id is required");
+            vkr::ProjectContext project =
+                vkr::ProjectContextResolver::resolve(explicitProject);
+            const vkr::SceneCatalog catalog = vkr::SceneCatalog::load(
+                project.catalogPath, project.projectRoot);
+            const vkr::CatalogEnvironment *environment =
+                catalog.findEnvironment(environmentId);
+            if (!environment)
+                throw std::invalid_argument(
+                    "unknown Catalog environment: " + environmentId);
+            if (profileId.empty())
+                profileId = environment->environmentProfile;
+            if (cacheRoot.empty()) {
+                cacheRoot = vkr::DerivedAssetPaths::defaultCacheRoot(
+                    catalog.projectId);
+            }
+            std::atomic_bool cancelRequested{false};
+            ConsoleCancellationHandler cancellationHandler(cancelRequested);
+            vkr::CacheMutationLock mutationLock(cacheRoot,
+                                                &cancelRequested);
+            vkr::assettool::EnvironmentCacheBuildOptions options;
+            options.source =
+                project.projectRoot / environment->source;
+            options.sourceProjectPath = environment->source;
+            options.cacheRoot = cacheRoot;
+            options.projectId = catalog.projectId;
+            options.environmentId = environment->id;
+            options.profile = catalog.environmentProfile(profileId);
+            options.force = force;
+            options.maxWorkers = workers;
+            options.cancelRequested = &cancelRequested;
+            if (progressNdjson) {
+                std::cout
+                    << nlohmann::json(
+                           {{"event", "started"},
+                            {"protocolVersion", 1},
+                            {"assetKind", "Environment"},
+                            {"total", 4},
+                            {"workers", workers}})
+                           .dump()
+                    << '\n'
+                    << std::flush;
+            }
+            const auto report =
+                vkr::assettool::buildEnvironmentCache(options);
+            bool rebuilt = false;
+            vkr::ArtifactIndex index = vkr::ArtifactIndex::loadOrRebuild(
+                cacheRoot, project.projectRoot, catalog, &rebuilt);
+            index.refreshEnvironment(catalog, environmentId, profileId);
+            index.save();
+            if (progressNdjson) {
+                std::cout
+                    << nlohmann::json(
+                           {{"event", "completed"},
+                            {"assetKind", "Environment"},
+                            {"completed", 4},
+                            {"encoded", report.generatedBlobs},
+                            {"reused", report.reusedBlobs},
+                            {"failed", 0},
+                            {"manifest",
+                             report.manifestPath.generic_string()}})
+                           .dump()
+                    << '\n'
+                    << std::flush;
+            } else {
+                std::cout
+                    << "Environment cache built\n"
+                    << "  manifest: " << report.manifestPath.string()
+                    << "\n  generated blobs: " << report.generatedBlobs
+                    << "\n  reused blobs: " << report.reusedBlobs
+                    << "\n  blob bytes: " << report.blobBytes << '\n';
+            }
+            return EXIT_SUCCESS;
         }
 
         if (std::string(argv[1]) == "catalog" &&
@@ -344,6 +594,9 @@ int main(int argc, char **argv) {
                 } else if (argument == "--scene-id") {
                     cook.sceneIds.push_back(
                         requireValue(i, argc, argv, argument));
+                } else if (argument == "--environment-id") {
+                    cook.environmentIds.push_back(
+                        requireValue(i, argc, argv, argument));
                 } else if (argument == "--build-missing") {
                     buildMissing = true;
                 } else if (argument == "--ktx-tool") {
@@ -417,6 +670,44 @@ int main(int argc, char **argv) {
                     if (buildResult != 0)
                         return buildResult;
                 }
+                std::unordered_set<std::string> requestedEnvironments(
+                    cook.environmentIds.begin(),
+                    cook.environmentIds.end());
+                for (const vkr::CatalogEnvironment &environment :
+                     catalog.environments) {
+                    const bool selected =
+                        cook.environmentIds.empty() ||
+                        requestedEnvironments.count(environment.id) > 0;
+                    if (!selected)
+                        continue;
+                    const std::filesystem::path source =
+                        project.projectRoot / environment.source;
+                    const vkr::ArtifactStatus status =
+                        vkr::inspectEnvironmentArtifacts(
+                            {cook.cacheRoot, source, catalog.projectId,
+                             environment.id,
+                             environment.environmentProfile});
+                    if (status.ready())
+                        continue;
+                    vkr::assettool::EnvironmentCacheBuildOptions
+                        environmentBuild;
+                    environmentBuild.source = source;
+                    environmentBuild.sourceProjectPath =
+                        environment.source;
+                    environmentBuild.cacheRoot = cook.cacheRoot;
+                    environmentBuild.projectId = catalog.projectId;
+                    environmentBuild.environmentId = environment.id;
+                    environmentBuild.profile =
+                        catalog.environmentProfile(
+                            environment.environmentProfile);
+                    environmentBuild.maxWorkers = build.maxWorkers;
+                    environmentBuild.cancelRequested =
+                        &cancelRequested;
+                    vkr::CacheMutationLock environmentLock(
+                        cook.cacheRoot, &cancelRequested);
+                    vkr::assettool::buildEnvironmentCache(
+                        environmentBuild);
+                }
             }
 
             vkr::CacheMutationLock cookLock(cook.cacheRoot,
@@ -426,7 +717,8 @@ int main(int argc, char **argv) {
             std::cout << "Cook complete\n"
                       << "  output: " << report.outputDirectory.string()
                       << "\n  scenes: " << report.sceneCount
-                      << "\n  texture manifests: " << report.manifestCount
+                      << "\n  environments: " << report.environmentCount
+                      << "\n  manifests: " << report.manifestCount
                       << "\n  unique blobs: " << report.blobCount
                       << "\n  package files: " << report.fileCount
                       << "\n  package bytes: " << report.totalBytes << '\n';

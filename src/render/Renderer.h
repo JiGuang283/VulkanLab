@@ -10,12 +10,16 @@
 #include "render/RendererShaderPaths.h"
 
 #include <memory>
+#include <array>
+#include <deque>
+#include <string>
 #include <vector>
 #include <vulkan/vulkan.h>
 
 namespace vkr {
 
 class DescriptorAllocator;
+struct EnvironmentGpuResources;
 class GuiSystem;
 class MainForwardPass;
 class ToneMapPass;
@@ -48,12 +52,34 @@ class Renderer {
     VkDescriptorSetLayout globalDescriptorSetLayout() const {
         return globalDescriptorSetLayout_;
     }
+    VkDescriptorSetLayout lightingDescriptorSetLayout() const {
+        return lightingDescriptorSetLayout_;
+    }
+    void publishEnvironment(
+        std::shared_ptr<EnvironmentGpuResources> environment);
+    void clearEnvironment();
+    bool environmentReady() const;
+    std::string currentEnvironmentId() const;
+    float currentEnvironmentMaxSpecularLod() const;
 
     // ---- per-frame UBO 访问器 ----
   private:
+    struct LightingDescriptorGeneration {
+        std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> sets{};
+        std::shared_ptr<EnvironmentGpuResources> environment;
+        uint64_t retireAfterSerial = 0;
+    };
+
     void createUniformBuffers();
     void createGlobalDescriptorSetLayout();
     void createGlobalDescriptorSets();
+    void createLightingDescriptorSetLayout();
+    void createFallbackEnvironment();
+    void createLightingGeneration(
+        std::shared_ptr<EnvironmentGpuResources> environment);
+    void collectRetiredLightingGenerations();
+    void freeLightingGeneration(
+        LightingDescriptorGeneration &generation);
     void createRenderPipeline();
     VkDescriptorSet globalDescriptorSet(uint32_t frameIndex) const;
 
@@ -66,6 +92,11 @@ class Renderer {
     VkDeviceSize                         uniformBufferSize_ = 0;
     VkDescriptorSetLayout globalDescriptorSetLayout_ = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> globalDescriptorSets_;
+    VkDescriptorSetLayout lightingDescriptorSetLayout_ = VK_NULL_HANDLE;
+    std::shared_ptr<EnvironmentGpuResources> fallbackEnvironment_;
+    std::unique_ptr<LightingDescriptorGeneration>
+        currentLightingGeneration_;
+    std::deque<LightingDescriptorGeneration> retiredLightingGenerations_;
     std::unique_ptr<RenderResourceRegistry> renderResources_;
     RendererResourceHandles resourceHandles_{};
     RendererShaderPaths shaderPaths_;

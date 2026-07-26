@@ -15,10 +15,12 @@ struct CookPackageOptions {
     std::string platform = "windows-x64";
     std::string profileId;
     std::vector<std::string> sceneIds;
+    std::vector<std::string> environmentIds;
 };
 
 struct CookPackageReport {
     uint64_t sceneCount = 0;
+    uint64_t environmentCount = 0;
     uint64_t manifestCount = 0;
     uint64_t blobCount = 0;
     uint64_t fileCount = 0;

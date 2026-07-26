@@ -158,6 +158,36 @@ void Device::pickPhysicalDevice() {
     } else {
         VKR_LOG_WARN("Device", "BC7 unavailable; derived textures use RGBA8");
     }
+
+    const auto supportsFilteredSampled = [&](VkFormat format,
+                                             VkImageCreateFlags flags) {
+        VkFormatProperties properties{};
+        vkGetPhysicalDeviceFormatProperties(physicalDevice_, format,
+                                            &properties);
+        const VkFormatFeatureFlags formatRequired =
+            VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+            VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+        if ((properties.optimalTilingFeatures & formatRequired) !=
+            formatRequired) {
+            return false;
+        }
+        VkImageFormatProperties imageProperties{};
+        return vkGetPhysicalDeviceImageFormatProperties(
+                   physicalDevice_, format, VK_IMAGE_TYPE_2D,
+                   VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_SAMPLED_BIT |
+                                                VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                   flags, &imageProperties) == VK_SUCCESS;
+    };
+    environmentIblSupported_ =
+        supportsFilteredSampled(VK_FORMAT_R16G16B16A16_SFLOAT,
+                                VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT) &&
+        supportsFilteredSampled(VK_FORMAT_R16G16_SFLOAT, 0);
+    if (environmentIblSupported_) {
+        VKR_LOG_INFO("Device", "Floating-point IBL textures are supported");
+    } else {
+        VKR_LOG_WARN("Device",
+                     "Floating-point IBL textures unavailable; IBL disabled");
+    }
 }
 void Device::createLogicalDevice() {
     QueueFamilyIndices indices = findQueueFamilies(physicalDevice_);

@@ -39,13 +39,14 @@ struct GoldenSpec {
 };
 
 struct RenderTestSpec {
-    static constexpr uint32_t kSchemaVersion = 2;
+    static constexpr uint32_t kSchemaVersion = 3;
 
     std::filesystem::path sourcePath;
     std::string name;
     std::string sceneId;
     std::string profileId;
     std::string shader;
+    std::optional<std::string> environmentId;
     RenderTestCamera camera;
     std::array<uint32_t, 2> viewport{800, 600};
     double fixedDelta = 1.0 / 60.0;

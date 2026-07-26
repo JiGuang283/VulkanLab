@@ -21,6 +21,7 @@ file(WRITE "${TEST_ROOT}/project/assets/catalog.json" [=[
 ]=])
 file(WRITE "${TEST_ROOT}/source/mesh.bin" "mesh")
 file(WRITE "${TEST_ROOT}/source/textures/deep/base.png" "png")
+file(WRITE "${TEST_ROOT}/source/studio.hdr" "hdr")
 file(WRITE "${TEST_ROOT}/source/scene.gltf" [=[
 {
   "asset": {"version": "2.0"},
@@ -57,6 +58,33 @@ file(READ "${TEST_ROOT}/project/assets/catalog.json" catalog)
 string(FIND "${catalog}" "\"id\": \"cli-imported\"" scene_id_position)
 if(scene_id_position EQUAL -1)
     message(FATAL_ERROR "Catalog does not contain the imported scene")
+endif()
+
+execute_process(
+    COMMAND "${TOOL}" catalog add-environment
+        --project "${TEST_ROOT}/project"
+        --source "${TEST_ROOT}/source/studio.hdr"
+        --display-name "CLI Studio"
+        --environment-id "cli-studio"
+        --profile "ibl_desktop_v1"
+    RESULT_VARIABLE environment_result
+    OUTPUT_VARIABLE environment_output
+    ERROR_VARIABLE environment_error
+)
+if(NOT environment_result EQUAL 0)
+    message(FATAL_ERROR
+        "catalog add-environment failed (${environment_result})\n${environment_output}\n${environment_error}")
+endif()
+if(NOT EXISTS
+   "${TEST_ROOT}/project/assets/environments/cli-studio/studio.hdr")
+    message(FATAL_ERROR "Imported environment source is missing")
+endif()
+file(READ "${TEST_ROOT}/project/assets/catalog.json" catalog)
+string(JSON schema_version GET "${catalog}" schemaVersion)
+string(FIND "${catalog}" "\"id\": \"cli-studio\"" environment_id_position)
+if(NOT schema_version EQUAL 2 OR environment_id_position EQUAL -1)
+    message(FATAL_ERROR
+        "Catalog was not upgraded to schema v2 with the environment")
 endif()
 
 file(REMOVE_RECURSE "${TEST_ROOT}")
