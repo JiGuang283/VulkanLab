@@ -10,14 +10,11 @@ namespace vkr {
 /// Factory that loads the given Viking Room OBJ and shared texture. Applies a
 /// default rotation animation and an overhead camera pose.
 SceneFactory vikingRoomSceneFactory(std::string modelPath,
-                                    std::string texturePath,
-                                    std::string vertShaderPath,
-                                    std::string fragShaderPath);
+                                    std::string texturePath);
 
 /// Generic glTF scene factory.  Loads any .glb/.gltf at `modelPath`.
 ScenePrepareFactory gltfSceneFactory(
-    std::string modelPath, std::string vertShaderPath,
-    std::string fragShaderPath,
+    std::string modelPath,
     std::optional<CameraPose> cameraOverride = std::nullopt);
 
 } // namespace vkr

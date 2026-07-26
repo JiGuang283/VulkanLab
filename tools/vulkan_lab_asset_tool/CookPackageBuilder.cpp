@@ -7,8 +7,7 @@
 #include "assets/RuntimePackage.h"
 #include "assets/SceneCatalog.h"
 #include "assets/SceneImportService.h"
-#include "render/ShaderVariant.h"
-#include "render/RendererShaderPaths.h"
+#include "render/ShaderRegistry.h"
 
 #include <json.hpp>
 
@@ -167,21 +166,18 @@ selectScenes(const SceneCatalog &catalog,
 
 void copyShaders(const std::filesystem::path &runtimeDirectory,
                  const std::filesystem::path &stagingRoot) {
-    std::set<std::string> paths;
-    for (const ShaderVariant &variant : kShaderVariants) {
-        paths.insert(generic(variant.vertSpvPath));
-        paths.insert(generic(variant.fragSpvPath));
-    }
-    for (const std::string_view relative : kRendererShaderPaths)
-        paths.insert(std::string(relative));
-    for (const std::string &relative : paths) {
-        const std::filesystem::path source =
-            (runtimeDirectory / relative).lexically_normal();
+    const std::filesystem::path manifest =
+        (runtimeDirectory / "shader/manifest.json").lexically_normal();
+    const ShaderRegistry registry = ShaderRegistry::load(manifest);
+    for (const std::filesystem::path &source : registry.spirvPaths()) {
         if (!pathIsWithin(runtimeDirectory, source))
             throw std::runtime_error("shader path escapes runtime directory: " +
-                                     relative);
+                                     source.string());
+        const std::filesystem::path relative =
+            source.lexically_relative(runtimeDirectory);
         copyFile(source, stagingRoot / relative);
     }
+    copyFile(manifest, stagingRoot / "shader/manifest.json");
 }
 
 bool pathsOverlap(const std::filesystem::path &left,

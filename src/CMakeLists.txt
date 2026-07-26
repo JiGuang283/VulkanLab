@@ -15,12 +15,19 @@ target_link_libraries(vkl_foundation PUBLIC
     vkl_spdlog
 )
 
-add_library(vkl_shader_catalog INTERFACE)
+add_library(vkl_shader_catalog STATIC
+    render/ShaderRegistry.cpp
+)
 add_library(VulkanLab::ShaderCatalog ALIAS vkl_shader_catalog)
-target_include_directories(vkl_shader_catalog INTERFACE
+target_include_directories(vkl_shader_catalog PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}"
 )
-target_link_libraries(vkl_shader_catalog INTERFACE vkl_build_options)
+target_link_libraries(vkl_shader_catalog
+    PUBLIC
+        vkl_build_options
+    PRIVATE
+        vkl_json
+)
 
 add_library(vkl_asset_core STATIC
     assets/ArtifactCachePruner.cpp

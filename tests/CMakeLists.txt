@@ -24,6 +24,7 @@ add_executable(VulkanLabCpuTests
     RenderViewTests.cpp
     RenderResourceRegistryTests.cpp
     PipelineKeyTests.cpp
+    ShaderRegistryTests.cpp
     ShaderContractTests.cpp
     GpuPassProfilerTests.cpp
 )

@@ -44,10 +44,8 @@ class UploadPumpStatsScope {
     Clock::time_point start_;
 };
 
-PipelineConfig standardPipelineConfig(Device &device,
-                                      const PreparedSceneData &prepared) {
+PipelineConfig standardPipelineConfig(Device &device) {
     return PipelineConfigBuilder{}
-        .shaders(prepared.vertShaderPath, prepared.fragShaderPath)
         .defaultVertexLayout()
         .msaa(device.msaaSamples())
         .pushConstant(
@@ -116,7 +114,7 @@ void SceneGpuBuilder::pump(const Budget &budget) {
         if (phase_ == Phase::Fallbacks) {
             if (!materialTemplate_) {
                 materialTemplate_ = std::make_shared<MaterialTemplate>(
-                    *device_, standardPipelineConfig(*device_, *prepared_));
+                    *device_, standardPipelineConfig(*device_));
             }
             static constexpr std::array<std::array<uint8_t, 4>, 3>
                 fallbackPixels{{{255, 255, 255, 255},

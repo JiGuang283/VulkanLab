@@ -18,8 +18,6 @@ struct Config {
 
     // ---- 资源路径 ----
     std::string texturePath = "textures/viking_room.png";
-    std::string vertShaderPath = "shader/legacy/forward.vert.spv";
-    std::string fragShaderPath = "shader/legacy/forward.frag.spv";
     std::string derivedTextureCachePath;
     std::filesystem::path projectPath;
     std::string assetToolPath;

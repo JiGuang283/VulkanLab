@@ -145,6 +145,7 @@ endif()
 foreach(required
         "VulkanLab.exe"
         "assets/catalog.json"
+        "shader/manifest.json"
         "models/tiny.gltf"
         "models/mesh.bin"
         "models/viking_room.obj"
@@ -186,9 +187,31 @@ if(packaged_images)
 endif()
 file(GLOB_RECURSE packaged_shaders "${package}/*.spv")
 list(LENGTH packaged_shaders shader_count)
-if(NOT shader_count EQUAL 20)
-    message(FATAL_ERROR "expected 20 runtime shaders, found ${shader_count}")
+file(READ "${package}/shader/manifest.json" shader_manifest_json)
+string(JSON shader_program_count LENGTH "${shader_manifest_json}" programs)
+math(EXPR shader_program_last "${shader_program_count} - 1")
+set(expected_shaders)
+foreach(program_index RANGE 0 ${shader_program_last})
+    foreach(stage vertex fragment compute)
+        string(JSON source ERROR_VARIABLE stage_error
+            GET "${shader_manifest_json}"
+            programs ${program_index} ${stage})
+        if(NOT stage_error)
+            list(APPEND expected_shaders "${source}.spv")
+        endif()
+    endforeach()
+endforeach()
+list(REMOVE_DUPLICATES expected_shaders)
+list(LENGTH expected_shaders expected_shader_count)
+if(NOT shader_count EQUAL expected_shader_count)
+    message(FATAL_ERROR
+        "expected ${expected_shader_count} runtime shaders, found ${shader_count}")
 endif()
+foreach(relative IN LISTS expected_shaders)
+    if(NOT EXISTS "${package}/shader/${relative}")
+        message(FATAL_ERROR "cooked package is missing shader/${relative}")
+    endif()
+endforeach()
 
 file(READ "${package}/package_manifest.json" first_manifest)
 string(JSON first_file_count LENGTH "${first_manifest}" files)

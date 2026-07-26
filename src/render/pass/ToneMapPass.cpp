@@ -23,11 +23,6 @@ namespace vkr {
 
 namespace {
 
-bool usesPbrToneMapping(ShaderVariantId id) {
-    return id == ShaderVariantId::PbrLiteForward ||
-           id == ShaderVariantId::PbrLiteNormalMapped;
-}
-
 uint32_t toneMapperValue(ToneMapper toneMapper) {
     switch (toneMapper) {
     case ToneMapper::PassThrough:
@@ -141,7 +136,8 @@ void ToneMapPass::execute(const RenderFrameContext &frame,
                             pipeline.layout(), 0, 1, &sourceSet, 0, nullptr);
 
     ToneMapPushConstants push{};
-    if (usesPbrToneMapping(frame.shaderVariant->id)) {
+    if (frame.shaderVariant->toneMapping ==
+        ShaderToneMappingPolicy::Configurable) {
         push.exposureEv = frame.view->settings.exposureEv;
         push.toneMapper = toneMapperValue(frame.view->settings.toneMapper);
         push.applyExposure = 1;

@@ -37,6 +37,7 @@ void runDirectionalShadowTests();
 void runRenderViewTests();
 void runRenderResourceRegistryTests();
 void runPipelineKeyTests();
+void runShaderRegistryTests();
 void runShaderContractTests();
 void runGpuPassProfilerTests();
 
@@ -194,6 +195,7 @@ int main(int argc, char **argv) {
         runRenderViewTests();
         runRenderResourceRegistryTests();
         runPipelineKeyTests();
+        runShaderRegistryTests();
         runShaderContractTests();
         runGpuPassProfilerTests();
         std::cout << "VulkanLab CPU tests passed\n";

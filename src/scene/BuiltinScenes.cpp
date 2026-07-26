@@ -21,10 +21,8 @@ namespace vkr {
 
 namespace {
 
-PipelineConfig makeStandardConfig(Device &device, const std::string &vp,
-                                  const std::string &fp) {
+PipelineConfig makeStandardConfig(Device &device) {
     return PipelineConfigBuilder{}
-        .shaders(vp, fp)
         .defaultVertexLayout()
         .msaa(device.msaaSamples())
         .pushConstant(
@@ -34,10 +32,8 @@ PipelineConfig makeStandardConfig(Device &device, const std::string &vp,
 
 } // namespace
 
-SceneFactory vikingRoomSceneFactory(std::string model, std::string tex,
-                                    std::string vp, std::string fp) {
-    return [model = std::move(model), tex = std::move(tex),
-            vp = std::move(vp), fp = std::move(fp)](
+SceneFactory vikingRoomSceneFactory(std::string model, std::string tex) {
+    return [model = std::move(model), tex = std::move(tex)](
                Device &device, UploadContext &upload,
                DescriptorAllocator &descriptorAllocator,
                const SceneLoadContext &loadContext)
@@ -45,7 +41,7 @@ SceneFactory vikingRoomSceneFactory(std::string model, std::string tex,
         auto scene = std::make_unique<Scene>();
 
         auto materialTemplate = std::make_shared<MaterialTemplate>(
-            device, makeStandardConfig(device, vp, fp));
+            device, makeStandardConfig(device));
         auto fallbackTextures =
             std::make_shared<FallbackTextures>(device, upload);
         auto texture = std::make_shared<Texture>(device, upload, tex);
@@ -83,11 +79,9 @@ SceneFactory vikingRoomSceneFactory(std::string model, std::string tex,
     };
 }
 
-ScenePrepareFactory gltfSceneFactory(std::string modelPath, std::string vp,
-                                     std::string fp,
+ScenePrepareFactory gltfSceneFactory(std::string modelPath,
                                      std::optional<CameraPose> cameraOverride) {
-    return [modelPath = std::move(modelPath), vp = std::move(vp),
-            fp = std::move(fp), cameraOverride](
+    return [modelPath = std::move(modelPath), cameraOverride](
                const SceneLoadContext &loadContext,
                const CancellationToken &cancellation,
                SceneLoadProgress &progress) -> PreparedSceneData {
@@ -103,8 +97,6 @@ ScenePrepareFactory gltfSceneFactory(std::string modelPath, std::string vp,
         options.requireDerivedTextures =
             loadContext.requireDerivedTextures;
         options.loadStats = loadContext.loadStats;
-        options.vertShaderPath = vp;
-        options.fragShaderPath = fp;
         options.cameraOverride = cameraOverride;
         return GltfPreparer::prepare(modelPath, options, cancellation,
                                      &progress);

@@ -575,6 +575,12 @@ Application::Application(const Config &config, ProjectContext projectContext,
       catalog_(std::move(catalog)) {
     if (config_.derivedTextureCachePath.empty())
         config_.derivedTextureCachePath = projectContext_.cacheRoot.u8string();
+    shaderRegistry_ = ShaderRegistry::load(
+        projectContext_.resolveRuntimePath("shader/manifest.json"));
+    currentShaderVariantId_ = shaderRegistry_.defaultVariant().id;
+    VKR_LOG_INFO("ShaderRegistry", "Loaded {} programs and {} variants; default={}",
+                 shaderRegistry_.programs().size(),
+                 shaderRegistry_.variants().size(), currentShaderVariantId_);
     sceneRegistry_ = buildSceneRegistry(catalog_, projectContext_, config_);
     sceneImportUi_ = std::make_unique<SceneImportUiState>();
     sceneAssetOperations_ = std::make_unique<SceneAssetOperationState>();
@@ -646,14 +652,6 @@ void Application::init() {
     runResourcePoolSelfTest();
 #endif
 
-    shaderVariants_.assign(kShaderVariants.begin(), kShaderVariants.end());
-    for (ShaderVariant &variant : shaderVariants_) {
-        variant.vertSpvPath =
-            projectContext_.resolveRuntimePath(variant.vertSpvPath).string();
-        variant.fragSpvPath =
-            projectContext_.resolveRuntimePath(variant.fragSpvPath).string();
-    }
-
     window_ = std::make_unique<Window>(
         config_.windowWidth, config_.windowHeight, config_.windowTitle,
         config_.diagnostics.windowResizable());
@@ -670,20 +668,16 @@ void Application::init() {
             return window_->framebufferExtent();
         });
     frameSync_ = std::make_unique<FrameSync>(*device_, *swapChain_);
+    const ShaderProgram &shadowOpaque =
+        shaderRegistry_.program("shadow.opaque");
+    const ShaderProgram &shadowMask = shaderRegistry_.program("shadow.mask");
+    const ShaderProgram &toneMap =
+        shaderRegistry_.program("postprocess.tonemap");
     renderer_ = std::make_unique<Renderer>(
         *device_, *swapChain_, *frameSync_, *descriptorAllocator_,
         RendererShaderPaths{
-            projectContext_.resolveRuntimePath(kShadowVertexShaderPath)
-                .string(),
-            projectContext_
-                .resolveRuntimePath(kShadowMaskFragmentShaderPath)
-                .string(),
-            projectContext_
-                .resolveRuntimePath(kFullscreenVertexShaderPath)
-                .string(),
-            projectContext_
-                .resolveRuntimePath(kToneMapFragmentShaderPath)
-                .string()});
+            shadowOpaque.vertSpvPath, shadowMask.fragSpvPath,
+            toneMap.vertSpvPath, toneMap.fragSpvPath});
     if (!projectContext_.cookedPackage) {
         captureService_ = std::make_unique<CaptureService>(
             *device_, projectContext_.captureRoot);
@@ -1083,14 +1077,15 @@ void Application::finalizeSceneLoad(
     task->finalized = true;
 }
 
-void Application::setShaderVariant(int index) {
-    if (index < 0 || index >= static_cast<int>(shaderVariants_.size()))
-        throw RuntimeCommandError("invalid_shader", "Invalid shader index.");
-    if (currentShaderVariantIndex_ == index)
+void Application::setShaderVariant(const std::string &id) {
+    const ShaderVariant *variant = shaderRegistry_.findVariant(id);
+    if (!variant || variant->id != id)
+        throw RuntimeCommandError("invalid_shader", "Invalid shader ID.");
+    if (currentShaderVariantId_ == variant->id)
         return;
-    currentShaderVariantIndex_ = index;
+    currentShaderVariantId_ = variant->id;
     VKR_LOG_INFO("Renderer", "Shader variant switched to {}",
-                 shaderVariants_[index].displayName);
+                 variant->displayName);
 }
 
 void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
@@ -1108,14 +1103,6 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
 int Application::findSceneIndexByName(const std::string &name) const {
     for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
         if (asciiEqualsIgnoreCase(sceneRegistry_[i].name, name))
-            return i;
-    }
-    return -1;
-}
-
-int Application::findShaderVariantIndexByName(const std::string &name) const {
-    for (int i = 0; i < static_cast<int>(shaderVariants_.size()); ++i) {
-        if (asciiEqualsIgnoreCase(shaderVariants_[i].displayName, name))
             return i;
     }
     return -1;
@@ -1401,8 +1388,7 @@ ControlJson Application::runtimeSystemInfo() {
     }
     if (captureService_ && swapChain_->captureSupported())
         capabilities.push_back("capture");
-    const ShaderVariant *shader =
-        shaderVariants_.empty() ? nullptr : &currentShaderVariant();
+    const ShaderVariant *shader = &currentShaderVariant();
     return {
         {"application", "VulkanLab"},
         {"protocolVersion", control::kProtocolVersion},
@@ -1444,15 +1430,15 @@ ControlJson Application::runtimeSystemInfo() {
         {"cacheRoot", sceneLoadContext_.derivedTextureCachePath},
         {"captureRoot", projectContext_.captureRoot.u8string()},
         {"textureLimit", sceneLoadContext_.maxTextureSize},
-        {"shader", shader ? ControlJson(shader->displayName)
-                           : ControlJson(nullptr)},
+        {"shader", shader->displayName},
         {"shaderInfo",
-         shader ? ControlJson{{"name", shader->displayName},
-                              {"vertexSha256",
-                               sha256File(shader->vertSpvPath)},
-                              {"fragmentSha256",
-                               sha256File(shader->fragSpvPath)}}
-                : ControlJson(nullptr)},
+         {{"id", shader->id},
+          {"name", shader->displayName},
+          {"category", shader->category},
+          {"toneMapping",
+           shaderToneMappingPolicyName(shader->toneMapping)},
+          {"vertexSha256", sha256File(shader->vertSpvPath)},
+          {"fragmentSha256", sha256File(shader->fragSpvPath)}}},
         {"loadTask", sceneLoadTaskToJson(latestSceneLoadTask_)}};
 }
 
@@ -1731,30 +1717,41 @@ ControlJson Application::runtimeAssetCacheInfo() {
 
 ControlJson Application::runtimeShaderList() {
     ControlJson shaders = ControlJson::array();
-    for (const auto &variant : shaderVariants_)
+    ControlJson entries = ControlJson::array();
+    for (const auto &variant : shaderRegistry_.variants()) {
         shaders.push_back(variant.displayName);
-    return {{"shaders", std::move(shaders)}};
+        entries.push_back(
+            {{"id", variant.id},
+             {"name", variant.displayName},
+             {"category", variant.category},
+             {"toneMapping",
+              shaderToneMappingPolicyName(variant.toneMapping)},
+             {"default", variant.isDefault}});
+    }
+    return {{"shaders", std::move(shaders)},
+            {"entries", std::move(entries)}};
 }
 
 ControlJson Application::runtimeShaderCurrent() {
-    return {{"name", shaderVariants_.empty()
-                         ? ControlJson(nullptr)
-                         : ControlJson(currentShaderVariant().displayName)}};
+    const ShaderVariant &variant = currentShaderVariant();
+    return {{"id", variant.id}, {"name", variant.displayName}};
 }
 
 ControlJson Application::runtimeShaderSet(const std::string &name) {
-    const int index = findShaderVariantIndexByName(name);
-    if (index < 0) {
+    const ShaderVariant *variant = shaderRegistry_.findVariant(name);
+    if (!variant) {
         ControlJson candidates = ControlJson::array();
-        for (const auto &variant : shaderVariants_)
-            candidates.push_back(variant.displayName);
+        for (const auto &candidate : shaderRegistry_.variants()) {
+            candidates.push_back(
+                {{"id", candidate.id}, {"name", candidate.displayName}});
+        }
         throw RuntimeCommandError(
             "shader_not_found",
             "Unknown shader '" + name + "'. Available shaders: " +
                 candidates.dump());
     }
-    setShaderVariant(index);
-    return {{"shader", shaderVariants_[index].displayName}};
+    setShaderVariant(variant->id);
+    return {{"id", variant->id}, {"shader", variant->displayName}};
 }
 
 ControlJson Application::runtimeCameraGet() {
@@ -2734,16 +2731,16 @@ void Application::drawCapturePanel() {
 
 void Application::drawGui() {
     ImGui::Begin("Renderer");
-    if (!shaderVariants_.empty()) {
-        const char *current =
-            shaderVariants_[currentShaderVariantIndex_].displayName;
+    const auto &shaderVariants = shaderRegistry_.variants();
+    if (!shaderVariants.empty()) {
+        const ShaderVariant &currentVariant = currentShaderVariant();
+        const char *current = currentVariant.displayName.c_str();
         if (ImGui::BeginCombo("Shader", current)) {
-            for (int i = 0; i < static_cast<int>(shaderVariants_.size());
-                 ++i) {
-                const bool selected = (i == currentShaderVariantIndex_);
-                if (ImGui::Selectable(shaderVariants_[i].displayName,
-                                      selected))
-                    setShaderVariant(i);
+            for (const ShaderVariant &variant : shaderVariants) {
+                const bool selected =
+                    variant.id == currentShaderVariantId_;
+                if (ImGui::Selectable(variant.displayName.c_str(), selected))
+                    setShaderVariant(variant.id);
                 if (selected)
                     ImGui::SetItemDefaultFocus();
             }
@@ -3160,11 +3157,9 @@ void Application::handleSwapChainRecreate() {
 }
 
 const ShaderVariant &Application::currentShaderVariant() const {
-    if (shaderVariants_.empty())
-        return defaultShaderVariant();
-    const int index = std::clamp(currentShaderVariantIndex_, 0,
-                                 static_cast<int>(shaderVariants_.size()) - 1);
-    return shaderVariants_[index];
+    const ShaderVariant *variant =
+        shaderRegistry_.findVariant(currentShaderVariantId_);
+    return variant ? *variant : shaderRegistry_.defaultVariant();
 }
 
 void Application::mainLoop() {

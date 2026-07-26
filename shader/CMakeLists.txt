@@ -1,33 +1,68 @@
 find_program(GLSLC glslc HINTS "$ENV{VULKAN_SDK}/Bin" REQUIRED)
 find_program(SPIRV_VAL spirv-val HINTS "$ENV{VULKAN_SDK}/Bin" REQUIRED)
 
-set(VKL_SHADER_INCLUDES
-    "${CMAKE_CURRENT_SOURCE_DIR}/include/global_frame.glsl"
-    "${CMAKE_CURRENT_SOURCE_DIR}/include/material_push.glsl"
+file(GLOB_RECURSE VKL_SHADER_INCLUDES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/*.glsl"
 )
 
-set(VKL_SHADER_SOURCES
-    legacy/forward.vert
-    legacy/forward.frag
-    pbr_lite/forward.vert
-    pbr_lite/forward.frag
-    pbr_lite/forward_normal_mapped.vert
-    pbr_lite/forward_normal_mapped.frag
-    material_debug/material.vert
-    material_debug/base_color.frag
-    material_debug/normal.frag
-    material_debug/roughness.frag
-    material_debug/metallic.frag
-    material_debug/occlusion.frag
-    material_debug/emissive.frag
-    material_debug/alpha.frag
-    material_debug/transmission.frag
-    material_debug/shadow.frag
-    shadow/depth.vert
-    shadow/depth_mask.frag
-    postprocess/fullscreen.vert
-    postprocess/tonemap.frag
-)
+set(VKL_SHADER_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/manifest.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${VKL_SHADER_MANIFEST}")
+file(READ "${VKL_SHADER_MANIFEST}" VKL_SHADER_MANIFEST_JSON)
+string(JSON VKL_SHADER_SCHEMA_VERSION ERROR_VARIABLE VKL_SHADER_JSON_ERROR
+    GET "${VKL_SHADER_MANIFEST_JSON}" schemaVersion)
+if(VKL_SHADER_JSON_ERROR OR NOT VKL_SHADER_SCHEMA_VERSION EQUAL 1)
+    message(FATAL_ERROR
+        "shader/manifest.json has an unsupported or missing schemaVersion")
+endif()
+string(JSON VKL_SHADER_PROGRAM_COUNT ERROR_VARIABLE VKL_SHADER_JSON_ERROR
+    LENGTH "${VKL_SHADER_MANIFEST_JSON}" programs)
+if(VKL_SHADER_JSON_ERROR OR VKL_SHADER_PROGRAM_COUNT LESS 1)
+    message(FATAL_ERROR
+        "shader/manifest.json must contain at least one program")
+endif()
+
+set(VKL_SHADER_SOURCES)
+math(EXPR VKL_SHADER_PROGRAM_LAST "${VKL_SHADER_PROGRAM_COUNT} - 1")
+foreach(PROGRAM_INDEX RANGE 0 ${VKL_SHADER_PROGRAM_LAST})
+    foreach(STAGE_NAME vertex fragment compute)
+        string(JSON SHADER_SOURCE ERROR_VARIABLE STAGE_ERROR
+            GET "${VKL_SHADER_MANIFEST_JSON}"
+            programs ${PROGRAM_INDEX} ${STAGE_NAME})
+        if(NOT STAGE_ERROR)
+            if(IS_ABSOLUTE "${SHADER_SOURCE}" OR
+               SHADER_SOURCE MATCHES "(^|/)\\.\\.(/|$)")
+                message(FATAL_ERROR
+                    "Shader source path must stay inside shader/: ${SHADER_SOURCE}")
+            endif()
+            cmake_path(NORMAL_PATH SHADER_SOURCE
+                OUTPUT_VARIABLE NORMALIZED_SHADER_SOURCE)
+            if(NOT SHADER_SOURCE STREQUAL NORMALIZED_SHADER_SOURCE OR
+               SHADER_SOURCE MATCHES "\\\\")
+                message(FATAL_ERROR
+                    "Shader source path must be normalized with '/' separators: ${SHADER_SOURCE}")
+            endif()
+            if(STAGE_NAME STREQUAL "vertex")
+                set(EXPECTED_SHADER_EXTENSION ".vert")
+            elseif(STAGE_NAME STREQUAL "fragment")
+                set(EXPECTED_SHADER_EXTENSION ".frag")
+            else()
+                set(EXPECTED_SHADER_EXTENSION ".comp")
+            endif()
+            get_filename_component(SHADER_EXTENSION "${SHADER_SOURCE}" EXT)
+            if(NOT SHADER_EXTENSION STREQUAL EXPECTED_SHADER_EXTENSION)
+                message(FATAL_ERROR
+                    "Shader ${STAGE_NAME} stage must use ${EXPECTED_SHADER_EXTENSION}: ${SHADER_SOURCE}")
+            endif()
+            if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${SHADER_SOURCE}")
+                message(FATAL_ERROR
+                    "Shader source from manifest is missing: ${SHADER_SOURCE}")
+            endif()
+            list(APPEND VKL_SHADER_SOURCES "${SHADER_SOURCE}")
+        endif()
+    endforeach()
+endforeach()
+list(REMOVE_DUPLICATES VKL_SHADER_SOURCES)
 
 set(VKL_GENERATED_SHADER_ROOT
     "${PROJECT_BINARY_DIR}/generated/$<CONFIG>/shader")
@@ -69,5 +104,21 @@ foreach(SHADER_SOURCE IN LISTS VKL_SHADER_SOURCES)
     )
     list(APPEND VKL_RUNTIME_SHADER_OUTPUTS "${SHADER_RUNTIME_OUTPUT}")
 endforeach()
+
+set(VKL_RUNTIME_SHADER_MANIFEST
+    "${VKL_RUNTIME_SHADER_ROOT}/manifest.json")
+add_custom_command(
+    OUTPUT "${VKL_RUNTIME_SHADER_MANIFEST}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${VKL_RUNTIME_SHADER_ROOT}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${VKL_SHADER_MANIFEST}"
+        "${VKL_RUNTIME_SHADER_MANIFEST}"
+    COMMAND ${CMAKE_COMMAND} -E touch "${VKL_RUNTIME_SHADER_MANIFEST}"
+    DEPENDS "${VKL_SHADER_MANIFEST}"
+    COMMENT "Staging shader manifest"
+    VERBATIM
+)
+list(APPEND VKL_RUNTIME_SHADER_OUTPUTS "${VKL_RUNTIME_SHADER_MANIFEST}")
 
 add_custom_target(VulkanLabShaders DEPENDS ${VKL_RUNTIME_SHADER_OUTPUTS})

@@ -32,11 +32,7 @@ buildSceneRegistry(const SceneCatalog &catalog,
             entry.sourcePath = model.string();
             entry.factory = vikingRoomSceneFactory(
                 model.string(),
-                projectContext.resolveProjectPath(config.texturePath).string(),
-                projectContext.resolveRuntimePath(config.vertShaderPath)
-                    .string(),
-                projectContext.resolveRuntimePath(config.fragShaderPath)
-                    .string());
+                projectContext.resolveProjectPath(config.texturePath).string());
             entries.push_back(std::move(entry));
             continue;
         }
@@ -49,13 +45,8 @@ buildSceneRegistry(const SceneCatalog &catalog,
             entry.unavailableReason = "Source file is missing: " +
                                       source.string();
         } else {
-            entry.prepareFactory = gltfSceneFactory(
-                source.string(),
-                projectContext.resolveRuntimePath(config.vertShaderPath)
-                    .string(),
-                projectContext.resolveRuntimePath(config.fragShaderPath)
-                    .string(),
-                scene.camera);
+            entry.prepareFactory =
+                gltfSceneFactory(source.string(), scene.camera);
         }
         entries.push_back(std::move(entry));
     }

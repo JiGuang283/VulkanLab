@@ -352,8 +352,6 @@ PreparedSceneData GltfPreparer::prepare(
     const tg3_model *gltf = model.get();
     PreparedSceneData prepared;
     prepared.sourcePath = path;
-    prepared.vertShaderPath = options.vertShaderPath;
-    prepared.fragShaderPath = options.fragShaderPath;
     prepared.initialCamera = options.cameraOverride;
 
     if (progress) {

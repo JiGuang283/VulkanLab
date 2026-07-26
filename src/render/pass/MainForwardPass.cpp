@@ -133,7 +133,7 @@ void MainForwardPass::begin(VkCommandBuffer cmd, uint32_t frameIndex,
 void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                                 const RenderResourceRegistry &resources,
                                 const RenderQueue &queue) {
-    if (!frame.pipelineCache)
+    if (!frame.pipelineCache || !frame.shaderVariant)
         return;
 
     const auto drawCommands = [&](const std::vector<RenderCommand> &commands,
@@ -158,12 +158,10 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
             pipelineConfig.cullMode = cullMode;
             pipelineConfig.msaaSamples =
                 resources.description(resourceHandles_.mainDepth).samples;
-            if (frame.shaderVariant) {
-                pipelineConfig.vertShaderPath =
-                    frame.shaderVariant->vertSpvPath;
-                pipelineConfig.fragShaderPath =
-                    frame.shaderVariant->fragSpvPath;
-            }
+            pipelineConfig.vertShaderPath =
+                frame.shaderVariant->vertSpvPath;
+            pipelineConfig.fragShaderPath =
+                frame.shaderVariant->fragSpvPath;
             pipelineConfig.descriptorLayouts.insert(
                 pipelineConfig.descriptorLayouts.begin(),
                 frame.globalDescriptorSetLayout);

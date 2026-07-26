@@ -64,8 +64,6 @@ struct PreparedObject {
 
 struct PreparedSceneData {
     std::string sourcePath;
-    std::string vertShaderPath;
-    std::string fragShaderPath;
     std::vector<PreparedTexture>  textures;
     std::vector<PreparedMaterial> materials;
     std::vector<PreparedMesh>     meshes;

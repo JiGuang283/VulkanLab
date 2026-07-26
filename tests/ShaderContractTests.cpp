@@ -1,7 +1,6 @@
 #include "render/FrameGpuData.h"
 #include "render/GpuMaterialData.h"
-#include "render/RendererShaderPaths.h"
-#include "render/ShaderVariant.h"
+#include "render/ShaderRegistry.h"
 #include "render/Vertex.h"
 
 #include <spirv_reflect.h>
@@ -71,24 +70,6 @@ class ReflectedModule {
     SpvReflectShaderModule module_{};
     bool initialized_ = false;
 };
-
-std::filesystem::path shaderFile(std::string_view runtimePath) {
-    constexpr std::string_view prefix = "shader/";
-    requireShader(runtimePath.substr(0, prefix.size()) == prefix,
-                  "runtime shader path is outside shader/: " +
-                      std::string(runtimePath));
-    return std::filesystem::path(VKL_TEST_SHADER_ROOT) /
-           std::filesystem::path(runtimePath.substr(prefix.size()));
-}
-
-SpvReflectShaderStageFlagBits expectedStage(std::string_view path) {
-    if (path.find(".vert.spv") != std::string_view::npos)
-        return SPV_REFLECT_SHADER_STAGE_VERTEX_BIT;
-    if (path.find(".frag.spv") != std::string_view::npos)
-        return SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT;
-    throw std::runtime_error("shader contract: unknown stage for " +
-                             std::string(path));
-}
 
 template <typename Variable, typename Enumerate>
 std::vector<Variable *> enumerateVariables(const SpvReflectShaderModule &module,
@@ -160,21 +141,24 @@ void checkGlobalUbo(const SpvReflectDescriptorBinding &binding,
 }
 
 void checkPushConstant(const SpvReflectShaderModule &module,
+                       vkr::ShaderProgramContract contract,
                        std::string_view path) {
     const auto blocks = enumerateVariables<SpvReflectBlockVariable>(
         module, spvReflectEnumeratePushConstantBlocks, "push constants", path);
     if (blocks.empty()) {
-        requireShader(path.find("material_debug/shadow.frag.spv") !=
-                              std::string_view::npos ||
-                          path.find("postprocess/fullscreen.vert.spv") !=
-                              std::string_view::npos,
+        const bool allowed =
+            (contract == vkr::ShaderProgramContract::Fullscreen &&
+             module.shader_stage == SPV_REFLECT_SHADER_STAGE_VERTEX_BIT) ||
+            (contract == vkr::ShaderProgramContract::MainForward &&
+             module.shader_stage == SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT);
+        requireShader(allowed,
                       "missing push constant in " + std::string(path));
         return;
     }
     requireShader(blocks.size() == 1,
                   "multiple push constant blocks in " + std::string(path));
 
-    if (path.find("postprocess/tonemap.frag.spv") != std::string_view::npos) {
+    if (contract == vkr::ShaderProgramContract::Fullscreen) {
         static const std::vector<MemberLayout> toneMapMembers = {
             {"exposureEv", offsetof(vkr::ToneMapPushConstants, exposureEv)},
             {"toneMapper", offsetof(vkr::ToneMapPushConstants, toneMapper)},
@@ -198,13 +182,17 @@ void checkPushConstant(const SpvReflectShaderModule &module,
                      "GpuPushBlock", path);
 }
 
-void checkDescriptors(const ReflectedModule &reflected) {
+void checkDescriptors(const ReflectedModule &reflected,
+                      vkr::ShaderProgramContract contract) {
+    if (contract == vkr::ShaderProgramContract::Compute)
+        return;
     const auto &module = reflected.module();
     const auto bindings = enumerateVariables<SpvReflectDescriptorBinding>(
         module, spvReflectEnumerateDescriptorBindings, "descriptor bindings",
         reflected.path());
-    const bool toneMap = reflected.path().find("postprocess/tonemap.frag.spv") !=
-                         std::string::npos;
+    const bool toneMap =
+        contract == vkr::ShaderProgramContract::Fullscreen &&
+        module.shader_stage == SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT;
     const VkShaderStageFlags stage =
         static_cast<VkShaderStageFlags>(module.shader_stage);
 
@@ -251,7 +239,10 @@ void checkDescriptors(const ReflectedModule &reflected) {
     }
 }
 
-void checkVertexInputs(const ReflectedModule &reflected) {
+void checkVertexInputs(const ReflectedModule &reflected,
+                       vkr::ShaderProgramContract contract) {
+    if (contract == vkr::ShaderProgramContract::Compute)
+        return;
     if (reflected.module().shader_stage != SPV_REFLECT_SHADER_STAGE_VERTEX_BIT)
         return;
     const auto inputs = enumerateVariables<SpvReflectInterfaceVariable>(
@@ -276,8 +267,7 @@ void checkVertexInputs(const ReflectedModule &reflected) {
                           reflected.path());
     }
     const bool fullscreen =
-        reflected.path().find("postprocess/fullscreen.vert.spv") !=
-        std::string::npos;
+        contract == vkr::ShaderProgramContract::Fullscreen;
     requireShader(fullscreen ? userInputCount == 0 : userInputCount > 0,
                   "fullscreen/geometry vertex input convention mismatch in " +
                       reflected.path());
@@ -326,12 +316,15 @@ void checkProgramInterface(const ReflectedModule &vertex,
     }
 }
 
-void checkFragmentOutputs(const ReflectedModule &reflected) {
+void checkFragmentOutputs(const ReflectedModule &reflected,
+                          vkr::ShaderProgramContract contract) {
+    if (contract == vkr::ShaderProgramContract::Compute)
+        return;
     if (reflected.module().shader_stage != SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT)
         return;
     const InterfaceMap outputs = userInterface(reflected, false);
     const bool depthOnly =
-        reflected.path().find("shadow/depth_mask.frag.spv") != std::string::npos;
+        contract == vkr::ShaderProgramContract::ShadowDepth;
     if (depthOnly) {
         requireShader(outputs.empty(),
                       "depth-only fragment shader writes a color output");
@@ -345,38 +338,63 @@ void checkFragmentOutputs(const ReflectedModule &reflected) {
 }
 
 void testShaderContracts() {
-    using Program = std::pair<std::string, std::string>;
-    std::vector<Program> programs;
-    for (const auto &variant : vkr::kShaderVariants)
-        programs.emplace_back(variant.vertSpvPath, variant.fragSpvPath);
-    programs.emplace_back(std::string(vkr::kShadowVertexShaderPath), "");
-    programs.emplace_back(std::string(vkr::kShadowVertexShaderPath),
-                          std::string(vkr::kShadowMaskFragmentShaderPath));
-    programs.emplace_back(std::string(vkr::kFullscreenVertexShaderPath),
-                          std::string(vkr::kToneMapFragmentShaderPath));
-
+    const std::filesystem::path shaderRoot =
+        std::filesystem::absolute(VKL_TEST_SHADER_ROOT).lexically_normal();
+    const vkr::ShaderRegistry registry =
+        vkr::ShaderRegistry::load(shaderRoot / "manifest.json");
     std::map<std::string, std::unique_ptr<ReflectedModule>> modules;
-    for (const auto &[vertexPath, fragmentPath] : programs) {
-        for (const std::string *path : {&vertexPath, &fragmentPath}) {
-            if (path->empty() || modules.find(*path) != modules.end())
-                continue;
-            auto reflected =
-                std::make_unique<ReflectedModule>(*path, shaderFile(*path));
-            requireShader(reflected->module().shader_stage == expectedStage(*path),
-                          "stage mismatch in " + *path);
-            checkDescriptors(*reflected);
-            checkPushConstant(reflected->module(), reflected->path());
-            checkVertexInputs(*reflected);
-            checkFragmentOutputs(*reflected);
-            modules.emplace(*path, std::move(reflected));
+    std::map<std::string, vkr::ShaderProgramContract> moduleContracts;
+    const auto reflect =
+        [&](const std::string &absolutePath, const std::string &sourcePath,
+            SpvReflectShaderStageFlagBits expectedStage,
+            vkr::ShaderProgramContract contract) -> ReflectedModule & {
+        const auto existing = modules.find(absolutePath);
+        if (existing != modules.end()) {
+            requireShader(moduleContracts.at(absolutePath) == contract,
+                          "a shader module is shared across incompatible "
+                          "contracts: " +
+                              sourcePath);
+            return *existing->second;
         }
-    }
+        const std::string runtimePath = "shader/" + sourcePath + ".spv";
+        auto reflected = std::make_unique<ReflectedModule>(
+            runtimePath, std::filesystem::path(absolutePath));
+        requireShader(reflected->module().shader_stage == expectedStage,
+                      "stage mismatch in " + runtimePath);
+        checkDescriptors(*reflected, contract);
+        if (contract != vkr::ShaderProgramContract::Compute) {
+            checkPushConstant(reflected->module(), contract,
+                              reflected->path());
+        }
+        checkVertexInputs(*reflected, contract);
+        checkFragmentOutputs(*reflected, contract);
+        ReflectedModule &result = *reflected;
+        modules.emplace(absolutePath, std::move(reflected));
+        moduleContracts.emplace(absolutePath, contract);
+        return result;
+    };
 
-    for (const auto &[vertexPath, fragmentPath] : programs) {
-        const auto &vertex = *modules.at(vertexPath);
-        const ReflectedModule *fragment =
-            fragmentPath.empty() ? nullptr : modules.at(fragmentPath).get();
-        checkProgramInterface(vertex, fragment);
+    for (const vkr::ShaderProgram &program : registry.programs()) {
+        ReflectedModule *vertex = nullptr;
+        ReflectedModule *fragment = nullptr;
+        if (!program.vertSpvPath.empty()) {
+            vertex = &reflect(program.vertSpvPath, program.vertexSourcePath,
+                              SPV_REFLECT_SHADER_STAGE_VERTEX_BIT,
+                              program.contract);
+        }
+        if (!program.fragSpvPath.empty()) {
+            fragment = &reflect(program.fragSpvPath,
+                                program.fragmentSourcePath,
+                                SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT,
+                                program.contract);
+        }
+        if (!program.computeSpvPath.empty()) {
+            (void)reflect(program.computeSpvPath, program.computeSourcePath,
+                          SPV_REFLECT_SHADER_STAGE_COMPUTE_BIT,
+                          program.contract);
+        }
+        if (vertex)
+            checkProgramInterface(*vertex, fragment);
     }
 }
 

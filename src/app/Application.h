@@ -10,6 +10,7 @@
 #include "diagnostics/SceneLoadStats.h"
 #include "render/RenderQueue.h"
 #include "render/RenderSettings.h"
+#include "render/ShaderRegistry.h"
 #include "render/ShaderVariant.h"
 #include "scene/Camera.h"
 #include "scene/Scene.h"
@@ -98,10 +99,9 @@ class Application final : public RuntimeControlHost {
     void finalizeSceneLoad(const std::shared_ptr<SceneLoadTask> &task,
                            bool success);
     uint64_t setTextureLimit(uint32_t limit);
-    void setShaderVariant(int index);
+    void setShaderVariant(const std::string &id);
     void applyRenderSettings(const RenderSettingsPatch &patch);
     int findSceneIndexByName(const std::string &name) const;
-    int findShaderVariantIndexByName(const std::string &name) const;
     std::string profileIdForTextureLimit(const SceneEntry &entry) const;
     void refreshArtifactStatus(int sceneIndex, bool admission = false);
     void refreshAllArtifactStatuses();
@@ -161,8 +161,8 @@ class Application final : public RuntimeControlHost {
     std::unique_ptr<GuiSystem>           gui_;
     std::unique_ptr<CaptureService>      captureService_;
     RenderQueue                          renderQueue_;
-    std::vector<ShaderVariant>           shaderVariants_;
-    int                                  currentShaderVariantIndex_ = 0;
+    ShaderRegistry                       shaderRegistry_;
+    std::string                          currentShaderVariantId_;
 
     // 场景切换
     std::vector<SceneEntry> sceneRegistry_;
