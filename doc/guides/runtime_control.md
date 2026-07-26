@@ -1,8 +1,8 @@
 # VulkanLab Runtime Control 使用说明
 
 > Status: Current
-> Last verified: 2026-07-21
-> Verified against: `16c61c8`
+> Last verified: 2026-07-26
+> Verified against: `bfb50ef`
 
 Runtime Control 通过 Windows Named Pipe 控制已经运行的 VulkanLab。它面向本机开发、诊断和自动化，可以查询状态、加载场景、设置相机和 Shader、等待渲染稳定、异步截图并安全退出程序。`scene.list.entries[]` 同时返回稳定 scene ID、Catalog profile ID 和该 profile 的纹理限制。
 
@@ -169,7 +169,7 @@ Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模�
 
 `render-settings set` 支持部分更新，并要求至少提供一个选项。`--shadows` 接受 `on/off`，`--tone-mapper` 接受 `aces`、`reinhard` 或 `passthrough`。Receiver bias 范围为 `[0, 0.05]`，constant/slope bias 为 `[0, 10]`，exposure 为 `[-10, 10]` EV。
 
-Tone Mapper 和 Exposure 只影响两个 PBR-lite variant。Legacy 与所有 Debug variant 强制 PassThrough；阴影只影响 PBR-lite 的第一盏方向光，但 `Debug Shadow` 可显示最终 visibility。UI 的 Renderer/Lighting 面板与 Runtime Control 修改同一个 `RenderSettings` 对象。
+Tone Mapper 和 Exposure 只影响两个 PBR-lite variant。Legacy 与所有 Debug variant 强制 PassThrough；阴影只影响 PBR-lite 的第一盏方向光，但 `Debug Shadow` 可显示最终 visibility。UI 的 `Render -> Pipeline/Lighting` 与 Runtime Control 修改同一个 `RenderSettings` 对象。
 
 ### 派生资产
 

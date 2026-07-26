@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-26
-> Verified against: `c1bcb14`
+> Verified against: `bfb50ef`
 
 ## 项目、Catalog 与导入
 
@@ -10,7 +10,7 @@
 
 开发模式下 Catalog scene、glTF/GLB、外部 buffer/image 以及 Viking Room 的 OBJ/PNG 从 `projectRoot` 读取，SPIR-V 和 sibling 工具从 executable 所在的 `runtimeRoot` 读取。Cooked package 中 `projectRoot` 与 `runtimeRoot` 都是 package root，`cacheRoot` 固定为包内 `runtime_assets`。
 
-Scenes 面板的 `Import Scene...` 通过 Win32 `IFileOpenDialog` 选择 `.gltf/.glb`。可测试的 `SceneImportService` 在 worker 中执行以下事务：
+`VulkanLab -> Scene -> Scenes` 的 `Import Scene...` 通过 Win32 `IFileOpenDialog` 选择 `.gltf/.glb`。可测试的 `SceneImportService` 在 worker 中执行以下事务：
 
 1. 解析 glTF JSON（GLB 只读取 JSON chunk），收集本地 buffer/image URI。
 2. 接受 data URI，拒绝远程 scheme、绝对路径、缺失文件、路径逃逸和 symlink 逃逸。
@@ -100,7 +100,7 @@ AssetImportManager 拥有一个 supervisor thread、任务队列和最多 64 条
 
 资产 task 使用最高位为 1 的 operation ID，与 SceneLoadManager 的低位 task ID 隔离。`AssetLoadCoordinator` 为每次 scene 请求分配 generation：import 完成后可以保留有效缓存，但只有全局最新 generation 的 consumer 能继续提交 CPU prepare。import 失败或取消保留当前 Scene，不自动回退；显式 `Load Source Fallback` 使用不会命中 manifest 的专用 profile ID。
 
-Stage A 的文件导入事务完成 Catalog 注册后会立即提交派生资产 import。勾选 `Load scene after import` 时，同一个 operation 连续覆盖 Catalog registration 后的 KTX2 import、CPU prepare、GPU upload 和 Scene publish。Scenes 面板只承担选择/命令，Assets 面板显示 artifact 状态、真实编码进度、worker、日志、错误和历史。
+Stage A 的文件导入事务完成 Catalog 注册后会立即提交派生资产 import。勾选 `Load scene after import` 时，同一个 operation 连续覆盖 Catalog registration 后的 KTX2 import、CPU prepare、GPU upload 和 Scene publish。`Scene -> Scenes` 只承担选择/命令和活跃场景加载详情，`Scene -> Assets` 显示 artifact 状态、真实编码进度、worker、日志、错误和历史。
 
 ## 增量 GPU Build
 
@@ -129,7 +129,7 @@ DescriptorAllocator 创建支持单独释放 set 的 pool。MaterialInstance 析
 ## 发布与失败语义
 
 - CPU prepare 期间继续渲染当前 Scene。
-- 开始 GPU build 后旧 Scene 已释放，期间渲染空场景和 ImGui Loading 面板。
+- 开始 GPU build 后旧 Scene 已释放，期间渲染空场景；统一窗口顶部和 `Scene -> Scenes` 显示加载进度。
 - 只有最新 generation 且所有 upload fence 完成的任务可以发布。
 - CPU prepare 失败时保留当前 Scene；旧 Scene 已释放后的 GPU build 失败会保留可操作的空场景。
 - 同步 Viking Room 切换会先取消后台任务，旧 generation 不能在稍后覆盖同步场景。
@@ -137,7 +137,7 @@ DescriptorAllocator 创建支持单独释放 set 的 pool。MaterialInstance 析
 
 ## LoadStats
 
-日志、`Stats -> Last Scene Load` 和 Runtime Control JSON 会记录：
+日志、`VulkanLab -> Diagnostics -> Load Stats` 和 Runtime Control JSON 会记录：
 
 - taskId、generation、最终状态、worker queue、CPU prepare、GPU build 和总 wall time。
 - glTF parse、图片读取/解码/缩放、材质、mesh CPU、hierarchy 和 command recording 耗时。

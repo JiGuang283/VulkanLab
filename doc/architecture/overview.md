@@ -1,8 +1,8 @@
 # 系统架构概览
 
 > Status: Current
-> Last verified: 2026-07-21
-> Verified against: `16c61c8`
+> Last verified: 2026-07-26
+> Verified against: `bfb50ef`
 
 VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Application` 为组合根，场景、渲染提交、GPU 资源和调试控制之间保持显式所有权，不使用全局引擎服务定位器。
 
@@ -10,7 +10,7 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 
 | 目录 | 职责 |
 |---|---|
-| `src/app/` | 应用生命周期、场景注册与切换、相机、ImGui 面板、RenderView 输入和命令执行。 |
+| `src/app/` | 应用生命周期、场景注册与切换、相机、统一 ImGui 工作区、RenderView 输入和命令执行。 |
 | `src/assets/` | ProjectContext、Scene Catalog/编辑事务、RuntimePackage、ArtifactIndex/依赖校验、cache prune、资产工具进程监督、manifest 和 KTX2 cache 读取。 |
 | `src/control/` | Windows Named Pipe 服务、运行时命令队列和 JSON 协议。 |
 | `src/core/` | Vulkan instance/device、SwapChain、FrameSync、Buffer/Image、Descriptor、Pipeline、VMA、同步与增量上传。 |
@@ -41,13 +41,24 @@ Cooked package 中 `projectRoot == runtimeRoot == package root`，cache 固定�
 
 这些对象由 `Application` 持有，并通过成员声明与显式停止逻辑按相反方向销毁。Vulkan 资源的创建、使用、场景替换和销毁都发生在主线程。
 
+## UI 所有权
+
+`Application::drawGui()` 是唯一创建顶层 ImGui 窗口的入口。它构建一个
+`VulkanLab` 工作区，并把 Scene、Render、Materials 和 Diagnostics 页面分派
+给内容函数；这些函数不再各自调用顶层 `Begin/End`。`EditorUiState` 只保存
+材质筛选和选中 index 等纯 UI 状态，不持有 Scene、Device、Vulkan handle 或
+异步任务。窗口位置和尺寸继续由 ImGui ini 管理，页面控件直接复用 Application
+已有的场景、相机、灯光和渲染设置。
+
+具体页面入口见 [编辑器 UI 工作区](../guides/editor_ui.md)。
+
 ## 线程模型
 
 主线程拥有 GLFW、ImGui、DescriptorAllocator 和全部 Vulkan/VMA 对象。它每帧轮询 upload fence、按预算记录上传命令，并在资源全部可用后发布 Scene。
 
 SceneLoadManager 持有一个长期 worker。worker 只执行 glTF 文件读取、解析、图片解码/缩放、顶点转换、tangent、bounds 和 hierarchy，输出不包含 Vulkan handle 的 `PreparedSceneData`。它通过 atomic 进度/取消标记和受 mutex 保护的结果与主线程通信。
 
-Scenes 面板的文件对话框在主线程打开；选定文件后的依赖 preflight 和 `SceneImportService` 事务由独立 `std::async` worker 执行。该 worker 可以读取/复制源文件并原子更新源码项目 Catalog，但不能访问 GLFW、ImGui 或 Vulkan。Application 只轮询 future 和进度；退出时先请求取消并等待导入 worker 收束。
+`VulkanLab -> Scene -> Scenes` 的文件对话框在主线程打开；选定文件后的依赖 preflight 和 `SceneImportService` 事务由独立 `std::async` worker 执行。该 worker 可以读取/复制源文件并原子更新源码项目 Catalog，但不能访问 GLFW、ImGui 或 Vulkan。Application 只轮询 future 和进度；退出时先请求取消并等待导入 worker 收束。
 
 AssetImportManager 持有一个 supervisor thread，串行监督资产工具进程；每个工具内部再按 worker/内存预算并行启动 `ktx.exe`。supervisor 只读取 NDJSON、日志和进程状态，不解析 glTF、不访问 Application Scene，也不创建 Vulkan 对象。Windows Job Object 拥有完整子进程树，取消和退出会终止工具及其编码子进程。主线程轮询任务状态，并由 `AssetLoadCoordinator` 保证只有最新 operation generation 可以从 import 接续到 scene load。
 
@@ -64,7 +75,7 @@ CaptureService 的主线程部分创建 readback buffer、记录 image copy 并�
 1. 轮询窗口和输入，收割 asset import 结果，执行一条待处理控制命令。
 2. 轮询 worker 结果与 upload fence，在软预算内推进 SceneGpuBuilder。
 3. 应用待切换场景，更新计时、输入模式、相机和 Scene tick。
-4. 轮询场景导入 future，构建 Scenes、Loading 和最近一次 LoadStats 等 ImGui 界面。
+4. 轮询场景导入 future，构建唯一的 `VulkanLab` 工具窗口；Scene、Render、Materials 和 Diagnostics 页面只读取或修改 Application 已有状态。
 5. `FrameSync::beginFrame()` 获取 frame index、swapchain image 和 command buffer。
 6. Application 组装 `RenderViewInput`；纯函数 `buildRenderView()` 完成默认 Sun、灯光截断/GPU 打包和阴影拟合，生成不可变 `RenderView`。
 7. Scene 生成 RenderCommand，RenderQueue 分别排序 opaque 与 transparent 命令。

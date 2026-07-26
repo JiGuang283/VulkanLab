@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-26
-> Verified against: `c1bcb14`
+> Verified against: `bfb50ef`
 
 ## 帧图与 Pass 顺序
 
@@ -52,7 +52,7 @@ DirectionalShadowPass 的 caster 规则为：
 - BLEND 与 transmission 不投射阴影。
 - `doubleSided` 继续控制 back cull 或 no cull。
 
-PBR-lite Forward 与 PBR-lite NormalMapped 使用 comparison sampler 和 3x3 PCF。阴影只乘到第一盏 Directional light 的 direct contribution；ambient、emissive、Point 和 Spot lighting 不受影响。透明材质可以接收阴影。Raster constant/slope bias 与 shader receiver bias 均可通过 Lighting 面板或 Runtime Control 调节。
+PBR-lite Forward 与 PBR-lite NormalMapped 使用 comparison sampler 和 3x3 PCF。阴影只乘到第一盏 Directional light 的 direct contribution；ambient、emissive、Point 和 Spot lighting 不受影响。透明材质可以接收阴影。Raster constant/slope bias 与 shader receiver bias 均可通过 `VulkanLab -> Render -> Lighting` 或 Runtime Control 调节。
 
 `Debug Shadow` 输出最终 visibility 灰度，用于检查投影范围、bias 和 PCF；它和其他 Debug variant 一样不经过 tone mapping。
 
@@ -69,7 +69,7 @@ ToneMapPass 最终 layout 为 `PRESENT_SRC_KHR`。异步截图继续复制最终
 
 ## Pipeline、材质与 Descriptor
 
-MaterialTemplate 保存基础 PipelineConfig 和材质 descriptor layout。MaterialInstance 保存材质参数及 BaseColor、Normal、MetallicRoughness、Occlusion、Emissive 五个纹理槽。缺失槽由 fallback texture 填充，因此 Materials 面板中的 Bound 只表示 descriptor 已绑定。
+MaterialTemplate 保存基础 PipelineConfig 和材质 descriptor layout。MaterialInstance 保存材质参数及 BaseColor、Normal、MetallicRoughness、Occlusion、Emissive 五个纹理槽。缺失槽由 fallback texture 填充，因此 `VulkanLab -> Materials` 中的 Bound 只表示 descriptor 已绑定。
 
 PipelineConfig 支持零或多个 color blend attachment、零 vertex binding、可选 fragment shader、topology、subpass 和 depth bias。`PipelineCache::getOrCreate()` 只接收 render pass 与完整 `PipelineConfig`，由 cache 内部规范化并生成 key。Key 覆盖 shader 路径、vertex layout、topology、raster/depth/blend/MSAA 状态、descriptor layouts、push ranges、render pass 和 subpass；不再包含 pass、材质指针、ShaderVariant、queue 或 alpha-masked 等语义标签。Pipeline 创建直接使用 key 内保存的 config，因此不存在手工 key 与实际 Vulkan 状态分叉。
 
@@ -106,11 +106,11 @@ SceneLight 支持 Directional、Point 和 Spot。GlobalUBO 最多上传 1 个 di
 
 Renderer 持有一个 `GpuPassProfiler` 和 timestamp query pool。每个 frame slot 为 `DirectionalShadow`、`MainForward`、`ToneMap + UI` 分配 begin/end query；ToneMap 区间包含同一 render pass 内的 ImGui draw。总时间从第一个 Pass begin 到最后一个 Pass end 计算。
 
-`FrameSync::beginFrame()` 已等待对应 slot 的 fence 后，Profiler 才使用不带 `WAIT_BIT` 的 `vkGetQueryPoolResults()` 读取旧结果，然后在新 command buffer 中 reset 该 slot。计时不会增加 queue/device idle 或额外 fence wait。换算使用设备 `timestampPeriod`，并按 graphics queue 的 `timestampValidBits` 处理计数器回绕；不支持 timestamp 的设备返回 `available=false`，渲染继续运行。结果显示在 `Stats -> GPU Pass Timings`，并由 `render.status.gpuTimings` 返回。
+`FrameSync::beginFrame()` 已等待对应 slot 的 fence 后，Profiler 才使用不带 `WAIT_BIT` 的 `vkGetQueryPoolResults()` 读取旧结果，然后在新 command buffer 中 reset 该 slot。计时不会增加 queue/device idle 或额外 fence wait。换算使用设备 `timestampPeriod`，并按 graphics queue 的 `timestampValidBits` 处理计数器回绕；不支持 timestamp 的设备返回 `available=false`，渲染继续运行。结果显示在 `VulkanLab -> Diagnostics -> Performance`，并由 `render.status.gpuTimings` 返回。
 
 ## Swapchain 截图
 
-开发运行时提供异步 PNG 截图，入口为 Capture 面板、F12 或 Runtime Control v3。ToneMapPass 结束后，截图在同一个 frame command buffer 中执行 `PRESENT -> TRANSFER_SRC`、image-to-buffer copy 和 `TRANSFER_SRC -> PRESENT`。
+开发运行时提供异步 PNG 截图，入口为 `VulkanLab -> Diagnostics -> Capture`、F12 或 Runtime Control v3。ToneMapPass 结束后，截图在同一个 frame command buffer 中执行 `PRESENT -> TRANSFER_SRC`、image-to-buffer copy 和 `TRANSFER_SRC -> PRESENT`。
 
 FrameSync 使用单调 submission serial 和正常 frame fence 管理 readback 生命周期。CPU worker 只处理 RGBA bytes、PNG 和 SHA-256，不访问 Vulkan、GLFW、ImGui 或 Scene。截图路径不调用 `vkQueueWaitIdle()` 或 `vkDeviceWaitIdle()`。
 

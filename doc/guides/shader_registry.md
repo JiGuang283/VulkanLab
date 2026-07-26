@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-26
-> Verified against: `c1bcb14`
+> Verified against: `bfb50ef`
 
 Shader 注册的唯一权威来源是
 [`shader/manifest.json`](../../shader/manifest.json)。运行时不会扫描目录或根据
@@ -18,7 +18,7 @@ contract tests 都读取同一份 Manifest。
 - `vertex` / `fragment`：graphics program 的 GLSL 源路径。
 - `compute`：compute program 的 GLSL 源路径，不能与 graphics stage 混用。
 
-`variants` 描述 Renderer 面板可选择的 Main Forward program：
+`variants` 描述 `VulkanLab -> Render -> Pipeline` 可选择的 Main Forward program：
 
 - `id`：Runtime Control 和内部状态使用的稳定 ID。
 - `displayName`：ImGui 和兼容接口显示的名称。

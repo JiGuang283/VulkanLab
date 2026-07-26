@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-26
-> Verified against: `c1bcb14`
+> Verified against: `bfb50ef`
 
 ## 环境要求
 
@@ -143,9 +143,9 @@ Runtime Control 默认关闭。需要从另一个终端控制运行中的渲染�
 
 场景由源码项目的 `assets/catalog.json` 注册，新增可选 glTF 不需要修改或重新编译 `main.cpp`。`Viking Room` 使用内建 factory；其余条目由项目相对 `source` 创建 glTF prepare factory。可选源文件缺失时仍显示为 `Unavailable`，但不阻止启动。
 
-Scenes 面板提供搜索、单击选择、双击/`Load`、`Reimport`、显式 source fallback、保存当前相机和从 Catalog 移除条目。`Import Scene...` 选择 `.glb/.gltf` 后确认名称、稳定 scene ID、profile、Copy/Reference 和是否自动加载。`.gltf` 的本地 `.bin` 与图片依赖会一起复制到 `models/imported/<scene-id>/`；远程、缺失或逃逸依赖不会写入 Catalog。Catalog 注册成功后会自动提交 KTX2 import，勾选自动加载时再连续执行 CPU prepare 和 GPU upload。
+`VulkanLab -> Scene -> Scenes` 提供搜索、单击选择、双击/`Load`、`Reimport`、显式 source fallback、保存当前相机和从 Catalog 移除条目。`Import Scene...` 选择 `.glb/.gltf` 后确认名称、稳定 scene ID、profile、Copy/Reference 和是否自动加载。`.gltf` 的本地 `.bin` 与图片依赖会一起复制到 `models/imported/<scene-id>/`；远程、缺失或逃逸依赖不会写入 Catalog。Catalog 注册成功后会自动提交 KTX2 import，勾选自动加载时再连续执行 CPU prepare 和 GPU upload。
 
-`Assets` 面板显示当前项目、Catalog、cache root、运行模式、索引 Ready 记录数、cache/unreferenced blob 用量、选中 scene/profile 的 `Ready/Missing/Stale/Invalid/Importing` 状态、最近失败，以及资产任务的真实纹理进度、encoded/reused/failed、worker、耗时、日志和最近历史。长任务不会停留在 modal 中，面板不会逐帧扫描全部 manifest。
+`VulkanLab -> Scene -> Assets` 显示当前项目、Catalog、cache root、运行模式、索引 Ready 记录数、cache/unreferenced blob 用量、选中 scene/profile 的 `Ready/Missing/Stale/Invalid/Importing` 状态、最近失败，以及资产任务的真实纹理进度、encoded/reused/failed、worker、耗时、日志和最近历史。长任务不会停留在 modal 中，页面不会逐帧扫描全部 manifest。
 
 同一导入事务也可通过 CLI 自动执行：
 
@@ -245,7 +245,7 @@ cd build-debug\Debug
 
 cache hit 时，worker 读取预生成 mip chain，并优先转码为 BC7；设备不支持 BC7 时转为 RGBA32。场景加载前的 admission 会检查 manifest 身份、source stamp、blob 存在性和 KTX2 header。OnDemand 下的 Missing/Stale/Invalid 会先异步重建，失败时保留当前 Scene；只有用户显式选择 source fallback 才走 stb decode、CPU resize 和 GPU mip blit。ReadOnly/CookedOnly 不会静默启动编码器。
 
-可在日志、`Stats -> Last Scene Load` 或 Runtime Control 的加载统计中检查 cache lookup/hit/miss/invalid、KTX2 读取与转码耗时、BC7/RGBA32 数量、prebuilt mip 数量和实际上传字节。首次验证建议先加载 1024 profile，再与无缓存加载结果比较。
+可在日志、`VulkanLab -> Diagnostics -> Load Stats` 或 Runtime Control 的加载统计中检查 cache lookup/hit/miss/invalid、KTX2 读取与转码耗时、BC7/RGBA32 数量、prebuilt mip 数量和实际上传字节。首次验证建议先加载 1024 profile，再与无缓存加载结果比较。
 
 ## Cook 与独立运行包
 
@@ -305,8 +305,8 @@ Stage F gate 的当前 Release/Main Sponza 1024 基线是总加载约 `1.36 s`�
 
 ## 运行注意事项
 
-- 开发模式的 glTF 纹理尺寸默认限制为 `2048`，可在 Renderer 面板切换为 `Full`、`2048`、`1024` 或 `512`。切换会创建新的场景加载任务；CookedOnly 控件禁用。
-- 开发模式下，KTX2 编码由 `AssetImportManager` 监督的独立 `VulkanLabAssetTool` 进程执行；glTF prepare 在 SceneLoadManager worker 执行；GPU 创建和上传由主线程按帧推进。CookedOnly 不创建 AssetImportManager。资产与场景加载分别显示在 `Assets` 和 `Loading` 面板。
-- GPU build 前会释放旧 Scene 以控制大场景切换时的显存峰值，因此该阶段可能只显示 ImGui 和空场景。
+- 开发模式的 glTF 纹理尺寸默认限制为 `2048`，可在 `VulkanLab -> Render -> Pipeline` 切换为 `Full`、`2048`、`1024` 或 `512`。切换会创建新的场景加载任务；CookedOnly 控件禁用。
+- 开发模式下，KTX2 编码由 `AssetImportManager` 监督的独立 `VulkanLabAssetTool` 进程执行；glTF prepare 在 SceneLoadManager worker 执行；GPU 创建和上传由主线程按帧推进。CookedOnly 不创建 AssetImportManager。资产导入显示在 `Scene -> Assets`，场景加载显示在窗口顶部及 `Scene -> Scenes`。
+- GPU build 前会释放旧 Scene 以控制大场景切换时的显存峰值，因此该阶段可能只显示统一工具窗口和空场景。活跃任务的紧凑进度位于窗口顶部，详细进度位于 `Scene -> Scenes`。
 - `Full` 对 Main Sponza 仍是高风险选项。开发模式的 KTX2 缓存只覆盖已经显式生成且精确匹配的 profile；未命中时仍可能回退 RGBA8。
-- 日志写入运行目录下的 `logs/VulkanLab.log`。加载统计也显示在 ImGui 的 `Stats -> Last Scene Load`。
+- 日志写入运行目录下的 `logs/VulkanLab.log`。加载统计也显示在 `VulkanLab -> Diagnostics -> Load Stats`。
