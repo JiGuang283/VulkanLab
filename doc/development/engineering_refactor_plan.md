@@ -1,8 +1,8 @@
 # VulkanLab 工程结构与构建系统重构计划
 
 > Status: Active
-> Last verified: 2026-07-21
-> Verified against: `d6f17cf`
+> Last verified: 2026-07-26
+> Verified against: `c1bcb14`
 
 > Progress: target-based CMake、build-tree Shader、ProjectContext、RuntimeCommandDispatcher、Presets 和 BuildInfo 已由归档的 M0-M7 执行切片完成。Editor Panels、SceneWorkflowController 等剩余范围仍未实施。
 
@@ -166,7 +166,7 @@ project libraries <- test executables
 
 `vkl_engine` 第一版可以包含 `core/render/scene/window/platform`，避免过早为每个目录创建相互循环的小库。只有 profiler 或编译数据证明需要更细拆分时，才继续分割。
 
-`vkl_foundation` 只包含跨进程需要的轻量基础能力，例如 Log 和生成的 BuildInfo，不得反向依赖 Vulkan runtime。`vkl_shader_catalog` 只暴露 `ShaderVariantId`、显示名和运行时相对路径；CookPackageBuilder 与 Renderer 共同使用它，AssetTool 不应为了枚举 Shader 而链接 `vkl_engine`。
+`vkl_foundation` 只包含跨进程需要的轻量基础能力，例如 Log 和生成的 BuildInfo，不得反向依赖 Vulkan runtime。`vkl_shader_catalog` 解析 Manifest 并暴露稳定 program/variant ID、显示名、策略和运行时路径；CookPackageBuilder 与 Renderer 共同使用它，AssetTool 不应为了枚举 Shader 而链接 `vkl_engine`。
 
 ### Data-Only Types
 
@@ -333,11 +333,11 @@ Shader 输出改为 config 隔离的 build tree：
 
 ### Verification
 
-- clean build 生成 15 个 SPIR-V，并复制到 Debug/Release runtime 对应路径。
+- clean build 生成 Manifest 引用并去重后的全部 SPIR-V，并复制到 Debug/Release runtime 对应路径。
 - no-op build 不调用 glslc。
 - 修改一个 fragment shader 只重建对应 SPIR-V 和必要 staging。
-- `kShaderVariants` 引用的每个文件存在；不存在未引用的 runtime SPIR-V。
-- Cook package 仍包含 15 个实际使用的 SPIR-V，package verify 通过。
+- Shader Manifest 引用的每个文件存在；不存在未引用的 runtime SPIR-V。
+- Cook package 只包含 Manifest 实际引用的 SPIR-V，package verify 通过。
 - Shader SHA-256 与 Stage 0 基线一致；如果 glslc 版本不同，记录工具版本并先比较反射接口和画面。
 
 ### Acceptance
@@ -605,7 +605,7 @@ Presets 完成后切换为 preset 命令。附加检查：
 ### Invariants
 
 - 代表 Shader SPIR-V hash 不变。
-- `kShaderVariants` 数量、display name 和路径不变。
+- 迁移时 selectable variants 的数量、display name、顺序和路径不变。
 - Catalog、package 和 cache schema version 不变。
 - Main Sponza 资源数量、cache hit、上传量和画面不因结构重构变化。
 - 没有新增 validation error、queue wait 或常驻 staging。

@@ -1,8 +1,8 @@
 # 渲染流程
 
 > Status: Current
-> Last verified: 2026-07-21
-> Verified against: `16c61c8`
+> Last verified: 2026-07-26
+> Verified against: `c1bcb14`
 
 ## 帧图与 Pass 顺序
 
@@ -84,11 +84,15 @@ ToneMap 使用独立的 pass-local source texture descriptor layout，不复用�
 
 ## Shader Variant
 
-`shader/CMakeLists.txt` 是 shader source list 的唯一所有者。GLSL 通过共享 include 中的完整 `GlobalFrameUbo`、`GpuLight` 和 128-byte material push block 固定 ABI；ToneMap 保留独立的 16-byte push block。CMake 为 `glslc` 配置 include 路径和依赖，每个产物必须先通过 `spirv-val`，再从 `generated/<Config>/shader/` stage 到 runtime `shader/`。开发运行和 Cook package 使用相同 SPIR-V；Cook 除 variant 路径外，还显式包含 Shadow 与 ToneMap 的内部 shader。
+`shader/manifest.json` 是 Shader program 和 selectable variant 的唯一权威清单。CMake 在配置阶段读取 Manifest、去重所有 stage 源文件，并为 `glslc` 配置 include 路径和依赖；每个产物必须先通过 `spirv-val`，再从 `generated/<Config>/shader/` stage 到 runtime `shader/`。Manifest 本身也进入开发 runtime 和 Cook package。
 
-测试目标静态链接固定版本的 SPIRV-Reflect，遍历全部 variant、Shadow opaque/MASK 与 ToneMap program，校验 stage、descriptor、UBO/push size 和 member offset、vertex location/format、跨阶段 varying 及 fragment output。反射不进入 VulkanLab 运行时，也不自动生成 DescriptorSetLayout；生产布局仍由显式 C++ 代码创建。
+Application 在创建 Window/Vulkan 前加载 `ShaderRegistry`。当前选择使用稳定 variant ID，UI 使用 display name；ToneMap 是否可配置由 variant metadata 决定。Shadow 与 ToneMap 通过稳定 program ID 查询，不再维护 C++ 路径常量。MaterialTemplate 的基础 PipelineConfig 不携带默认 Shader，MainForwardPass 在创建 pipeline 前必须写入当前 variant 路径。
 
-当前 variant 包含 Legacy、两个 PBR-lite、BaseColor/Normal/Roughness/Metallic/Occlusion/Emissive/Alpha/Transmission 调试视图，以及 `Debug Shadow`。PBR-lite 使用 baseColor、metallicRoughness、AO 和 emissive；NormalMapped 额外使用 tangent/TBN 与 normal scale。Transmission 当前仍是 alpha 与 Fresnel 轮廓近似，不采样场景颜色。
+测试目标静态链接固定版本的 SPIRV-Reflect，按 Manifest program contract 遍历全部 Forward、Shadow 与 ToneMap program，校验 stage、descriptor、UBO/push size 和 member offset、vertex location/format、跨阶段 varying及 fragment output。反射不进入 VulkanLab 运行时，也不自动生成 DescriptorSetLayout；生产布局仍由显式 C++ 代码创建。
+
+当前 variant 包含 Legacy、两个 PBR-lite、BaseColor/Normal/Roughness/Metallic/Occlusion/Emissive/Alpha/Transmission 调试视图，以及 `Debug Shadow`。启动默认使用 `PBR-lite NormalMapped`；Legacy 保留为显式基线和兼容性检查。PBR-lite 使用 baseColor、metallicRoughness、AO 和 emissive；NormalMapped 额外使用 tangent/TBN 与 normal scale。Transmission 当前仍是 alpha 与 Fresnel 轮廓近似，不采样场景颜色。
+
+新增兼容 Main Forward ABI 的 variant 只需增加 GLSL 和 Manifest 条目；构建、运行时 UI、Cook 和 contract tests 会自动包含它。当前不支持目录扫描、热重载或第三方 Shader 插件，具体流程见 [Shader Registry](../guides/shader_registry.md)。
 
 顶点布局固定为 position、normal、UV0、tangent、UV1 和 vertex color，location 为 0 到 5。AO 可选择 UV0/UV1；其他纹理当前使用 UV0。
 

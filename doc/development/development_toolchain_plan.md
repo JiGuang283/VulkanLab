@@ -1,8 +1,8 @@
 # VulkanLab 开发诊断与自动化工具链计划
 
 > Status: Active
-> Last verified: 2026-07-21
-> Verified against: `d6f17cf`
+> Last verified: 2026-07-26
+> Verified against: `c1bcb14`
 
 > Progress: Stage 0-1 已完成。当前入口是 Stage 2：RenderDoc Labels And Validation Profiles；已完成切片保留为设计背景，当前操作以 guides/architecture 为准。
 
@@ -437,7 +437,7 @@ GLSL
 
 - 固定版本接入 SPIRV-Reflect。
 - 第一版只做 contract test，不自动生成生产 DescriptorSetLayout，避免反射结果直接改变运行时 ABI。
-- 新增 `ShaderContractTests`，对 `kShaderVariants` 全量检查：
+- `ShaderContractTests` 读取 Shader Manifest，对全部 programs 检查：
   - SPIR-V 文件存在且 stage 正确
   - vertex input location/format 与 `Vertex` layout 一致
   - set 0 global binding 和 stage visibility

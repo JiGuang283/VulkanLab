@@ -1,8 +1,8 @@
 # 资源加载
 
 > Status: Current
-> Last verified: 2026-07-21
-> Verified against: `16c61c8`
+> Last verified: 2026-07-26
+> Verified against: `c1bcb14`
 
 ## 项目、Catalog 与导入
 
@@ -154,7 +154,7 @@ VMA 快照在 SceneGpuBuilder 和 staging 销毁后采集，不把临时 staging
 
 `CookPackageBuilder` 建立以下引用闭包：
 
-1. `VulkanLab.exe`、可选 `VulkanLabCtl.exe` 和 `kShaderVariants` 实际引用的唯一 SPIR-V。
+1. `VulkanLab.exe`、可选 `VulkanLabCtl.exe`、Shader Manifest 及其 programs 实际引用的唯一 SPIR-V。
 2. 只含选中场景和单一 profile 的 cooked Catalog。
 3. 选中的 builtin scene 明确需要的 OBJ/PNG；当前为 Viking Room。
 4. glTF/GLB 主文件；外部 `.gltf` 只复制 buffer URI，不复制源图片。

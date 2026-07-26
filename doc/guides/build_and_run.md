@@ -1,8 +1,8 @@
 # 构建与运行
 
 > Status: Current
-> Last verified: 2026-07-21
-> Verified against: `16c61c8`
+> Last verified: 2026-07-26
+> Verified against: `c1bcb14`
 
 ## 环境要求
 
@@ -280,7 +280,8 @@ dist/main-sponza/
   VulkanLabCtl.exe
   package_manifest.json
   assets/catalog.json
-  shader/...                         # 仅 kShaderVariants 使用的 SPIR-V
+  shader/manifest.json               # Shader program/variant 权威清单
+  shader/...                         # Manifest 实际引用的唯一 SPIR-V
   models/...                         # glTF/GLB 与必要 buffer，不含源图片
   runtime_assets/artifact_index.json
   runtime_assets/manifests/...
