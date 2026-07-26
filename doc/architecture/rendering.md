@@ -2,15 +2,17 @@
 
 > Status: Current
 > Last verified: 2026-07-26
-> Verified against: `bfb50ef`
+> Verified against: `9092755`
 
 ## 帧图与 Pass 顺序
 
-Renderer 当前采用显式的三段 Forward 帧图，不依赖 RHI 或 RenderGraph：
+Renderer 当前采用显式的四段 Forward 帧图，不依赖 RHI 或 RenderGraph：
 
 ```text
 DirectionalShadowPass
         -> shadow depth
+SkyboxPass
+        -> clear / linear HDR background
 MainForwardPass
         -> linear HDR color
 ToneMapPass + ImGui
@@ -19,7 +21,7 @@ ToneMapPass + ImGui
 
 `RenderResourceRegistry` 使用稳定的类型化 handle 管理内部 render target 和 sampler。资源描述明确指定 fixed/swapchain-relative extent、single/per-frame multiplicity、format、sample count、usage 与 aspect。当前注册 HDR resolve、可选 HDR MSAA、main depth、2048x2048 directional shadow depth，以及 HDR/shadow sampler。每个 per-frame image 按 `MAX_FRAMES_IN_FLIGHT` 分配；HDR 优先使用 `R16G16B16A16_SFLOAT`，不满足 color attachment 与 sampled 要求时回退到 `R32G32B32A32_SFLOAT`。HDR sample count 取 color/depth format 和设备能力的交集，Shadow 与 ToneMap 固定为 1x。
 
-每个 Pass 通过 `resourceUsages()` 声明 attachment write、sampled read、required/final layout。`RenderPipeline` 在初始化和 resize 后验证 handle、usage flag、sample/aspect、read-before-write 与相邻 layout 契约。Registry 不插入 barrier、不推导 lifetime、不重排 Pass；`RenderPipeline` 仍按 Shadow、Forward、ToneMap 顺序记录到同一个 frame command buffer，实际同步由 render-pass final/initial layout 和明确 dependency 完成。
+每个 Pass 通过 `resourceUsages()` 声明 attachment write、attachment read/write、sampled read、required/final layout。`RenderPipeline` 在初始化和 resize 后验证 handle、usage flag、sample/aspect、read-before-write 与相邻 layout 契约。Registry 不插入 barrier、不推导 lifetime、不重排 Pass；`RenderPipeline` 仍按 Shadow、Skybox、Forward、ToneMap 顺序记录到同一个 frame command buffer，实际同步由 render-pass final/initial layout 和明确 dependency 完成。
 
 Application 每帧只组装 `RenderViewInput`。纯函数 `buildRenderView()` 负责默认 Sun 规则、灯光截断与 GPU 打包、阴影矩阵计算，输出不可变 `RenderView`。Renderer 接收该对象并上传其中的 `GlobalFrameUbo`；Pass 通过 `RenderFrameContext::view` 读取同一份 settings 和 shadow 数据。
 
@@ -30,7 +32,7 @@ Application 每帧只组装 `RenderViewInput`。纯函数 `buildRenderView()` �
 - Opaque 使用 MaterialTemplate、MaterialInstance、Mesh 地址排序，减少 pipeline、descriptor 和 vertex/index buffer 切换。
 - Transparent 使用对象 world translation 到相机的距离从远到近排序。这是对象级近似，没有使用 mesh bounds，也不是 order-independent transparency。
 
-MainForwardPass 清空 HDR color/depth，先画 Opaque/Mask，再画 Transparent。它不再写 swapchain，也不再绘制 ImGui。
+SkyboxPass 负责清空 HDR color，并在启用时绘制环境背景。MainForwardPass 使用 `LOAD` 保留该颜色，只清空 depth，然后先画 Opaque/Mask，再画 Transparent。它不再写 swapchain，也不再绘制 ImGui。MSAA HDR color 不使用 transient allocation，因为其内容必须跨 Skybox 与 MainForward 两个 render pass 保留。
 
 | 队列 | Blending | Depth test | Depth write |
 |---|---:|---:|---:|
@@ -54,18 +56,37 @@ DirectionalShadowPass 的 caster 规则为：
 
 PBR-lite Forward 与 PBR-lite NormalMapped 使用 comparison sampler 和 3x3 PCF。阴影只乘到第一盏 Directional light 的 direct contribution；ambient、emissive、Point 和 Spot lighting 不受影响。透明材质可以接收阴影。Raster constant/slope bias 与 shader receiver bias 均可通过 `VulkanLab -> Render -> Lighting` 或 Runtime Control 调节。
 
-`Debug Shadow` 输出最终 visibility 灰度，用于检查投影范围、bias 和 PCF；它和其他 Debug variant 一样不经过 tone mapping。
+`Debug Shadow` 输出最终 visibility 灰度，用于检查投影范围、bias 和 PCF；它使用 PassThrough tone mapping。
 
 ## HDR 与 Tone Mapping
 
 MainForwardPass 输出线性 HDR；MSAA 开启时 resolve 到单采样 HDR image，并转换为 `SHADER_READ_ONLY_OPTIMAL`。ToneMapPass 使用无 vertex buffer 的 fullscreen triangle 采样当前 frame slot 的 HDR image。
 
 - PBR-lite 两个 variant 先应用 `color *= exp2(exposureEv)`，再按设置执行 ACES fitted、Reinhard 或 PassThrough。
-- Legacy 和所有 Debug variant 强制 PassThrough，以维持基线和材质通道语义。
+- Legacy 和材质通道/Shadow Debug variant 强制 PassThrough，以维持基线和材质通道语义；两个 Debug IBL variant 使用可配置 tone mapping，因为其输出是线性 HDR。
 - sRGB swapchain 由硬件进行线性到 sRGB 编码；非 sRGB UNORM swapchain 由 ToneMap shader 显式 gamma encode。
 - ImGui 在 fullscreen draw 之后写入同一个 ToneMap render pass，因此 UI 不受曝光和 tone mapping 影响。
 
 ToneMapPass 最终 layout 为 `PRESENT_SRC_KHR`。异步截图继续复制最终 swapchain image，因此捕获结果包含 tone mapping，并可按请求包含或排除 ImGui。
+
+## IBL 与 Skybox
+
+环境资源只从离线派生 KTX2 加载，Renderer 不在运行时执行 equirectangular 转 cube、卷积或 BRDF integration。一个已发布的 `EnvironmentGpuResources` 包含 Radiance、Irradiance、Prefiltered Specular 和 BRDF LUT。切换环境时创建新的 Lighting descriptor generation；新资源完整就绪前继续使用旧 generation，旧资源按 frame submission serial 延迟销毁。
+
+`RenderSettings` 中的 `iblEnabled`、`skyboxEnabled`、`environmentIntensity` 和 `environmentRotationRadians` 默认分别为 false、false、1 和 0。选择 Environment 不自动打开 IBL/Skybox。环境旋转统一作用于 diffuse lookup、reflection vector 和 Skybox，因此光照方向与可见背景保持一致。
+
+两个 PBR-lite variant 使用 metallic-roughness split-sum IBL：
+
+```text
+F0       = mix(0.04, albedo, metallic)
+diffuse  = irradiance(N) * albedo * (1 - F) * (1 - metallic)
+specular = prefiltered(R, roughnessLOD) * BRDF(NdotV, roughness, F0)
+indirect = (diffuse + specular) * AO * environmentIntensity
+```
+
+Irradiance bake 已除以 π，因此 shader 不再次除 π。AO 只乘 IBL/constant ambient 间接项，不影响 Directional、Point、Spot 或 emissive。IBL 关闭、环境未就绪或设备不支持所需 float format 时，shader 精确保留原 constant ambient 路径。
+
+SkyboxPass 使用 fullscreen triangle、inverse view-projection 和 Radiance LOD 0 输出线性 HDR。它不写 depth；MainForward 的不透明几何覆盖背景，透明/transmission 材质在已有 Skybox 上执行现有 alpha blending。`Debug IBL Diffuse` 与 `Debug IBL Specular` 分别隔离两条间接光路径。
 
 ## Pipeline、材质与 Descriptor
 
@@ -77,10 +98,15 @@ Forward descriptor 约定为：
 
 - `set=0, binding=0`：每帧 GlobalUBO，包含相机、光源和 directional shadow 数据。
 - `set=1, binding=0..4`：五个材质纹理槽。
-- `set=2, binding=0`：当前 frame slot 的 comparison shadow map。
+- `set=2`：统一 Lighting descriptor。
+  - binding 0：当前 frame slot 的 comparison shadow map。
+  - binding 1：Irradiance cubemap。
+  - binding 2：Prefiltered Specular cubemap。
+  - binding 3：BRDF LUT。
+  - binding 4：Radiance cubemap。
 - 128 字节 push constant：model matrix 和材质因子。
 
-ToneMap 使用独立的 pass-local source texture descriptor layout，不复用材质 layout。
+Lighting 的五个 binding 始终绑定真实资源或合法 fallback，不依赖 partially-bound descriptor。ToneMap 使用独立的 pass-local source texture descriptor layout，不复用材质 layout。
 
 ## Shader Variant
 
@@ -88,9 +114,9 @@ ToneMap 使用独立的 pass-local source texture descriptor layout，不复用�
 
 Application 在创建 Window/Vulkan 前加载 `ShaderRegistry`。当前选择使用稳定 variant ID，UI 使用 display name；ToneMap 是否可配置由 variant metadata 决定。Shadow 与 ToneMap 通过稳定 program ID 查询，不再维护 C++ 路径常量。MaterialTemplate 的基础 PipelineConfig 不携带默认 Shader，MainForwardPass 在创建 pipeline 前必须写入当前 variant 路径。
 
-测试目标静态链接固定版本的 SPIRV-Reflect，按 Manifest program contract 遍历全部 Forward、Shadow 与 ToneMap program，校验 stage、descriptor、UBO/push size 和 member offset、vertex location/format、跨阶段 varying及 fragment output。反射不进入 VulkanLab 运行时，也不自动生成 DescriptorSetLayout；生产布局仍由显式 C++ 代码创建。
+测试目标静态链接固定版本的 SPIRV-Reflect，按 Manifest program contract 遍历全部 Forward、Shadow、Skybox 与 ToneMap program，校验 stage、descriptor、UBO/push size 和 member offset、vertex location/format、跨阶段 varying及 fragment output。反射不进入 VulkanLab 运行时，也不自动生成 DescriptorSetLayout；生产布局仍由显式 C++ 代码创建。
 
-当前 variant 包含 Legacy、两个 PBR-lite、BaseColor/Normal/Roughness/Metallic/Occlusion/Emissive/Alpha/Transmission 调试视图，以及 `Debug Shadow`。启动默认使用 `PBR-lite NormalMapped`；Legacy 保留为显式基线和兼容性检查。PBR-lite 使用 baseColor、metallicRoughness、AO 和 emissive；NormalMapped 额外使用 tangent/TBN 与 normal scale。Transmission 当前仍是 alpha 与 Fresnel 轮廓近似，不采样场景颜色。
+当前 variant 包含 Legacy、两个 PBR-lite、BaseColor/Normal/Roughness/Metallic/Occlusion/Emissive/Alpha/Transmission 调试视图，以及 `Debug Shadow`、`Debug IBL Diffuse` 和 `Debug IBL Specular`。启动默认使用 `PBR-lite NormalMapped`；Legacy 保留为显式基线和兼容性检查。PBR-lite 使用 baseColor、metallicRoughness、AO、emissive 和可选 IBL；NormalMapped 额外使用 tangent/TBN 与 normal scale。Transmission 当前仍是 alpha 与 Fresnel 轮廓近似，不采样场景颜色。
 
 新增兼容 Main Forward ABI 的 variant 只需增加 GLSL 和 Manifest 条目；构建、运行时 UI、Cook 和 contract tests 会自动包含它。当前不支持目录扫描、热重载或第三方 Shader 插件，具体流程见 [Shader Registry](../guides/shader_registry.md)。
 
@@ -98,13 +124,13 @@ Application 在创建 Window/Vulkan 前加载 `ShaderRegistry`。当前选择使
 
 ## 光源
 
-SceneLight 支持 Directional、Point 和 Spot。GlobalUBO 最多上传 1 个 directional light 和 8 个 punctual lights；Point 与 Spot 共用 punctual 配额。当前 glTF loader 不解析 `KHR_lights_punctual`。环境项由 ambient color/intensity 提供，AO 只影响 ambient。
+SceneLight 支持 Directional、Point 和 Spot。GlobalUBO 最多上传 1 个 directional light 和 8 个 punctual lights；Point 与 Spot 共用 punctual 配额。当前 glTF loader 不解析 `KHR_lights_punctual`。没有可用 IBL 时，环境项由 ambient color/intensity 提供；AO 只影响间接项。
 
-当前只支持一张方向光 shadow map；没有 CSM、Point/Spot shadow、IBL、skybox、deferred rendering、bloom 或 auto exposure。
+当前只支持一张全局环境和一张方向光 shadow map；没有 CSM、Point/Spot shadow、local reflection probe、parallax correction、deferred rendering、bloom 或 auto exposure。
 
 ## GPU Pass 计时
 
-Renderer 持有一个 `GpuPassProfiler` 和 timestamp query pool。每个 frame slot 为 `DirectionalShadow`、`MainForward`、`ToneMap + UI` 分配 begin/end query；ToneMap 区间包含同一 render pass 内的 ImGui draw。总时间从第一个 Pass begin 到最后一个 Pass end 计算。
+Renderer 持有一个 `GpuPassProfiler` 和 timestamp query pool。每个 frame slot 为 `DirectionalShadow`、`Skybox`、`MainForward`、`ToneMap + UI` 分配 begin/end query；ToneMap 区间包含同一 render pass 内的 ImGui draw。总时间从第一个 Pass begin 到最后一个 Pass end 计算。
 
 `FrameSync::beginFrame()` 已等待对应 slot 的 fence 后，Profiler 才使用不带 `WAIT_BIT` 的 `vkGetQueryPoolResults()` 读取旧结果，然后在新 command buffer 中 reset 该 slot。计时不会增加 queue/device idle 或额外 fence wait。换算使用设备 `timestampPeriod`，并按 graphics queue 的 `timestampValidBits` 处理计数器回绕；不支持 timestamp 的设备返回 `available=false`，渲染继续运行。结果显示在 `VulkanLab -> Diagnostics -> Performance`，并由 `render.status.gpuTimings` 返回。
 
@@ -118,10 +144,12 @@ FrameSync 使用单调 submission serial 和正常 frame fence 管理 readback �
 
 resize 时 Renderer 等待 device idle，然后按以下顺序处理：
 
-1. 逆序调用 pass 的 `releaseSwapChainResources()`，先释放持有 swapchain/HDR image view 的 framebuffer 和 descriptor 引用。
+1. 逆序调用 pass 的 `releaseSwapChainResources()`，先释放 ToneMap、MainForward 和 Skybox 持有的 swapchain/HDR image view 引用。
 2. 重建 SwapChain。
 3. 由 Registry 重建 extent-dependent HDR color、MSAA color 和 depth targets；fixed 2048 的 shadow map 不重建。
-4. 调用 pass `onResize()` 重建 framebuffer 和 HDR source descriptor。
+4. 调用 pass `onResize()` 重建 Skybox/MainForward framebuffer 和 HDR source descriptor。
 5. 清空 PipelineCache，更新 GuiSystem、FrameSync 与相机 aspect ratio。
 
 窗口最小化导致 framebuffer extent 为 0 时会延迟重建，并以短暂 sleep 保持主循环和 Runtime Control 可响应。
+
+Environment cubemap/LUT 不属于 swapchain-relative Registry，窗口 resize 时不会重建。

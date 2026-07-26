@@ -2,9 +2,9 @@
 
 > Status: Current
 > Last verified: 2026-07-26
-> Verified against: `c9462cd`
+> Verified against: `9092755`
 
-Runtime Control 通过 Windows Named Pipe 控制已经运行的 VulkanLab。它面向本机开发、诊断和自动化，可以查询状态、加载场景、设置相机和 Shader、等待渲染稳定、异步截图并安全退出程序。`scene.list.entries[]` 同时返回稳定 scene ID、Catalog profile ID 和该 profile 的纹理限制。
+Runtime Control 通过 Windows Named Pipe 控制已经运行的 VulkanLab。它面向本机开发、诊断和自动化，可以查询状态、加载场景和环境、设置相机、Shader 与渲染参数、等待渲染稳定、异步截图并安全退出程序。`scene.list.entries[]` 同时返回稳定 scene ID、Catalog profile ID 和该 profile 的纹理限制。
 
 Runtime Control 默认关闭。启用时必须显式传入 `--runtime-control`；Named Pipe 拒绝远程客户端，不开放网络端口。
 
@@ -113,8 +113,9 @@ cd build\windows-msvc-debug\Debug
 
 - 当前 scene、scene generation 和最新 load operation；
 - submitted/completed frame serial 与累计 presented frame 数；
-- 最近一个已完成 frame 的 `gpuTimings`，包含 available、frameSerial、DirectionalShadow/MainForward/ToneMap + UI 分项与 totalMs；
+- 最近一个已完成 frame 的 `gpuTimings`，包含 available、frameSerial、DirectionalShadow/Skybox/MainForward/ToneMap + UI 分项与 totalMs；
 - 待上传 texture/mesh、in-flight upload batch；
+- 当前选择和已发布的 environment，以及环境加载任务；
 - capture queue 计数和 capture capability；
 - GUI 可见性、窗口最小化、swapchain recreate 和 rendering 状态。
 
@@ -161,7 +162,22 @@ GPU timing 在对应 frame slot 的正常 fence 已完成后读取，不使用 q
 
 Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模式修改纹理限制会触发当前 glTF 场景的新加载任务；控制工具默认等待完成。允许值为 `full`、`512`、`1024` 和 `2048`。CookedOnly profile 固定，修改返回 `texture_limit_locked`。
 
-### 阴影、曝光与 Tone Mapping
+### Environment
+
+```powershell
+.\VulkanLabCtl.exe environment list
+.\VulkanLabCtl.exe environment current
+.\VulkanLabCtl.exe environment set "Studio"
+.\VulkanLabCtl.exe environment set None
+.\VulkanLabCtl.exe environment reload
+.\VulkanLabCtl.exe --no-wait environment set "Studio"
+```
+
+`environment list` 返回 `None` 和 Catalog environments，并报告 profile、派生 artifact 状态及设备是否支持 float IBL resources。`environment set` 接受不区分 ASCII 大小写的完整 display name 或稳定 ID；`None` 取消选择并立即回到 fallback resources。选择环境不会自动打开 IBL 或 Skybox。
+
+加载是异步操作。默认客户端拿到 task ID 后通过现有 `load status` 等待 worker KTX2 读取、增量 GPU 上传和 descriptor generation 发布完成；`--no-wait` 只返回初始任务。`load status <task-id>` 与 `load cancel <task-id>` 同时识别 Scene 和 Environment 命名空间。加载失败或取消会保留旧的已发布环境。`environment reload` 要求当前已经选择非 None 环境。
+
+### 阴影、IBL、曝光与 Tone Mapping
 
 ```powershell
 .\VulkanLabCtl.exe render-settings get
@@ -173,11 +189,16 @@ Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模�
 .\VulkanLabCtl.exe render-settings set `
   --exposure 1.0 `
   --tone-mapper aces
+.\VulkanLabCtl.exe render-settings set `
+  --ibl on `
+  --skybox on `
+  --environment-intensity 1.25 `
+  --environment-rotation-deg 90
 ```
 
-`render-settings set` 支持部分更新，并要求至少提供一个选项。`--shadows` 接受 `on/off`，`--tone-mapper` 接受 `aces`、`reinhard` 或 `passthrough`。Receiver bias 范围为 `[0, 0.05]`，constant/slope bias 为 `[0, 10]`，exposure 为 `[-10, 10]` EV。
+`render-settings set` 支持部分更新，并要求至少提供一个选项。`--shadows`、`--ibl` 和 `--skybox` 接受 `on/off`，`--tone-mapper` 接受 `aces`、`reinhard` 或 `passthrough`。Receiver bias 范围为 `[0, 0.05]`，constant/slope bias 为 `[0, 10]`，exposure 为 `[-10, 10]` EV，environment intensity 为 `[0, 100]`。CLI 用 degree 表示 rotation，协议字段 `environmentRotationRadians` 使用弧度；服务端将其规范化到一个完整旋转。
 
-Tone Mapper 和 Exposure 只影响两个 PBR-lite variant。Legacy 与所有 Debug variant 强制 PassThrough；阴影只影响 PBR-lite 的第一盏方向光，但 `Debug Shadow` 可显示最终 visibility。UI 的 `Render -> Pipeline/Lighting` 与 Runtime Control 修改同一个 `RenderSettings` 对象。
+Tone Mapping policy 由 Shader Manifest 决定：两个 PBR-lite 和 `Debug IBL Diffuse/Specular` 可配置，Legacy 与其他 Debug variant 强制 PassThrough。阴影只影响 PBR-lite 的第一盏方向光，但 `Debug Shadow` 可显示最终 visibility。IBL 只在环境已发布且开关开启时替代 PBR 的 constant ambient；Skybox 开关独立。UI 的 `Render -> Pipeline/Lighting` 与 Runtime Control 修改同一个 `RenderSettings` 对象。
 
 ### 派生资产
 
@@ -192,7 +213,7 @@ Tone Mapper 和 Exposure 只影响两个 PBR-lite variant。Legacy 与所有 Deb
 .\VulkanLabCtl.exe asset cache-info
 ```
 
-这些写操作只在 `--asset-mode ondemand` 下可用。ReadOnly/CookedOnly 返回 `asset_import_disabled`；查询 Catalog、状态和 cache 仍可用。Runtime Control 不接收任意本地模型路径，注册新源文件仍使用 ImGui 导入器或 `VulkanLabAssetTool catalog add`。
+这些 scene 写操作只在 `--asset-mode ondemand` 下可用。ReadOnly/CookedOnly 返回 `asset_import_disabled`；查询 Catalog、状态和 cache 仍可用。Runtime Control 不接收任意本地模型/HDR 路径，注册新源文件仍使用 ImGui 导入器或 `VulkanLabAssetTool catalog add`/`catalog add-environment`。Environment 派生缓存的 Build/Rebuild 目前由 Assets UI 或 AssetTool 完成，不由 Runtime Control 自动 bake。
 
 ### 加载统计
 

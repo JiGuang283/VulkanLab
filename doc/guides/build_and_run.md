@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-26
-> Verified against: `c9462cd`
+> Verified against: `9092755`
 
 ## 环境要求
 
@@ -47,7 +47,7 @@ cmake --build build --config Release
 
 构建会生成 Git revision/dirty、configuration、compiler、Vulkan SDK 和 `glslc` 版本信息。启用 Runtime Control 后可通过 `VulkanLabCtl.exe --json info` 查看。确定性窗口、fixed delta、无 GUI 和诊断输出配置见 [诊断与自动化启动配置](diagnostics.md)。
 
-CMake 将 `shader/` 下显式登记的 20 个 GLSL 源增量编译到 `build-*/generated/<Config>/shader/`，每个产物通过 `spirv-val` 后再 stage 到可执行文件旁的 `shader/`。共享 ABI include 会作为依赖触发相关 shader 重编译。源码树不保存 SPIR-V，也没有独立的 `compile.bat`；普通 C++ rebuild 不会重新调用 `glslc`，修改一个 Shader 只更新对应产物。需要单独构建 Shader 时使用：
+CMake 将 `shader/` 下由 Manifest 引用的 24 个 GLSL 源增量编译到 `build-*/generated/<Config>/shader/`，每个产物通过 `spirv-val` 后再 stage 到可执行文件旁的 `shader/`。共享 ABI include 会作为依赖触发相关 shader 重编译。源码树不保存 SPIR-V，也没有独立的 `compile.bat`；普通 C++ rebuild 不会重新调用 `glslc`，修改一个 Shader 只更新对应产物。需要单独构建 Shader 时使用：
 
 ```powershell
 cmake --build build-debug --config Debug --target VulkanLabShaders
@@ -255,6 +255,47 @@ cache hit 时，worker 读取预生成 mip chain，并优先转码为 BC7；设�
 
 可在日志、`VulkanLab -> Diagnostics -> Load Stats` 或 Runtime Control 的加载统计中检查 cache lookup/hit/miss/invalid、KTX2 读取与转码耗时、BC7/RGBA32 数量、prebuilt mip 数量和实际上传字节。首次验证建议先加载 1024 profile，再与无缓存加载结果比较。
 
+## HDR 环境与 IBL 派生缓存
+
+环境光照不在运行时卷积源 HDR。Catalog schema v2 使用稳定 environment ID 和 `EnvironmentProfile` 管理本地 `.hdr`；schema v1 Catalog 仍可读取，并获得内建的 `ibl_desktop_v1` profile。当前 profile 固定输出：
+
+- 512 cubemap Radiance，`RGBA16F`，完整普通 mip chain。
+- 32 cubemap Irradiance，`RGBA16F`，单 mip，已包含 diffuse convolution 并除以 π。
+- 256 cubemap Prefiltered Specular，`RGBA16F`，完整 roughness mip chain。
+- 256x256 BRDF LUT，`RG16F`。
+
+通过 UI 导入时，打开 `VulkanLab -> Scene -> Assets`，点击 `Import HDR`，选择项目本地或外部的 2:1 equirectangular `.hdr`。导入器把文件复制到 `assets/environments/<environment-id>/` 并写入 Catalog；同名 ID 或目标文件已存在时会拒绝覆盖。随后在同一页面点击 `Build` 或 `Rebuild` 生成派生资源。
+
+等价的 CLI 流程为：
+
+```powershell
+.\VulkanLabAssetTool.exe catalog add-environment `
+  --project C:\Project\vulkan_learn `
+  --source D:\Assets\HDR\studio.hdr `
+  --display-name "Studio" `
+  --environment-id studio `
+  --profile ibl_desktop_v1
+
+.\VulkanLabAssetTool.exe environment-cache build `
+  --project C:\Project\vulkan_learn `
+  --environment-id studio `
+  --profile ibl_desktop_v1 `
+  --workers 4
+```
+
+首次构建是确定性的 CPU bake，固定使用 Hammersley 序列生成 diffuse irradiance、GGX prefilter 和 split-sum BRDF LUT，计算量明显高于普通纹理导入。有效 manifest 与四个 blob 已存在时会直接复用，不再解码 HDR 或重复积分；`--force` 才会强制重建。Ctrl+C 可取消构建，只有四个输出全部验证成功后才原子发布新 manifest。
+
+环境缓存与 scene 纹理共享 cache root 和内容寻址 blob：
+
+```text
+DerivedAssets/<projectId>/
+  manifests/environments/<environment-id>/<profile-id>.json
+  blobs/<content-cache-key>.ktx2
+  artifact_index.json
+```
+
+在 `VulkanLab -> Render -> Lighting` 选择环境，再分别开启 `Image-Based Lighting` 和 `Skybox`。二者默认关闭，选择环境本身不会隐式打开开关。环境在 worker 读取 KTX2，并通过增量上传队列分帧发布；切换失败或取消时旧环境保持有效。设备不支持 float cubemap/LUT 线性采样时只禁用 IBL，原有 constant ambient 路径仍可使用。
+
 ## Cook 与独立运行包
 
 先构建 Release，并确保目标 scene/profile 的派生纹理处于 Ready。下面的命令只发布 Main Sponza 1024：
@@ -268,10 +309,11 @@ cmake --build build-release --config Release
   --output .\dist\main-sponza `
   --platform windows-x64 `
   --profile desktop_1024 `
-  --scene-id main-sponza
+  --scene-id main-sponza `
+  --environment-id studio
 ```
 
-可以重复传入 `--scene-id` 选择多个场景。完全省略时会选择 Catalog 中 `optional=false` 的场景。默认要求 artifact 已经 Ready；需要在 cook 前自动补建时显式增加 `--build-missing`，也可以用 `--workers` 和 `--memory-budget-mib` 控制编码器。省略 `--cache-root` 时使用项目共享缓存。
+可以重复传入 `--scene-id` 和 `--environment-id`。省略 scene ID 时选择 Catalog 中 `optional=false` 的场景；省略 environment ID 时包含 Catalog 中所有环境。默认要求所有选中 artifact 已经 Ready；需要在 cook 前自动补建时显式增加 `--build-missing`，也可以用 `--workers` 和 `--memory-budget-mib` 控制编码器。省略 `--cache-root` 时使用项目共享缓存。
 
 交付前使用同一套 hash 校验：
 
@@ -292,11 +334,11 @@ dist/main-sponza/
   shader/...                         # Manifest 实际引用的唯一 SPIR-V
   models/...                         # glTF/GLB 与必要 buffer，不含源图片
   runtime_assets/artifact_index.json
-  runtime_assets/manifests/...
+  runtime_assets/manifests/...       # scene 和 environment manifests
   runtime_assets/blobs/*.ktx2
 ```
 
-Cook 先在输出目录旁构建 staging，验证 package manifest 后才原子替换旧包。输出目录不能与 runtime 或 cache 相互包含，也不能包含项目根目录。失败不会发布 staging，也不会破坏已经存在的包。
+Cook 先在输出目录旁构建 staging，验证 package manifest 后才原子替换旧包。环境闭包只包含四个派生 KTX2 与 manifest，不包含源 HDR。输出目录不能与 runtime 或 cache 相互包含，也不能包含项目根目录。失败不会发布 staging，也不会破坏已经存在的包。
 
 包内运行不需要源码 locator 或用户级 derived cache：
 
@@ -315,6 +357,7 @@ Stage F gate 的当前 Release/Main Sponza 1024 基线是总加载约 `1.36 s`�
 
 - 开发模式的 glTF 纹理尺寸默认限制为 `2048`，可在 `VulkanLab -> Render -> Pipeline` 切换为 `Full`、`2048`、`1024` 或 `512`。切换会创建新的场景加载任务；CookedOnly 控件禁用。
 - 开发模式下，KTX2 编码由 `AssetImportManager` 监督的独立 `VulkanLabAssetTool` 进程执行；glTF prepare 在 SceneLoadManager worker 执行；GPU 创建和上传由主线程按帧推进。CookedOnly 不创建 AssetImportManager。资产导入显示在 `Scene -> Assets`，场景加载显示在窗口顶部及 `Scene -> Scenes`。
+- HDR 环境的首次 CPU bake 可能持续较长时间，应在资产导入阶段完成，而不是在场景切换时触发。运行时只读取已经发布的环境 KTX2；IBL 与 Skybox 默认关闭。
 - GPU build 前会释放旧 Scene 以控制大场景切换时的显存峰值，因此该阶段可能只显示统一工具窗口和空场景。活跃任务的紧凑进度位于窗口顶部，详细进度位于 `Scene -> Scenes`。
 - `Full` 对 Main Sponza 仍是高风险选项。开发模式的 KTX2 缓存只覆盖已经显式生成且精确匹配的 profile；未命中时仍可能回退 RGBA8。
 - 日志写入运行目录下的 `logs/VulkanLab.log`。加载统计也显示在 `VulkanLab -> Diagnostics -> Load Stats`。

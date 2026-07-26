@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-26
-> Verified against: `bfb50ef`
+> Verified against: `9092755`
 
 VulkanLab 的开发 UI 使用一个可移动、缩放和折叠的 `VulkanLab` 工具窗口。
 它不依赖 ImGui docking branch，也不创建独立的平台窗口。
@@ -31,7 +31,10 @@ VulkanLab 的开发 UI 使用一个可移动、缩放和折叠的 `VulkanLab` �
   保存相机和移除操作也在这里。活跃场景任务的详细进度和 Cancel 位于页面
   底部；没有任务时不显示空 Loading 区域。
 - `Assets`：项目、Catalog、cache、artifact 状态、当前资产导入进度、取消、
-  日志和最近任务历史。
+  日志和最近任务历史。该页还管理 HDR environment：`Import HDR` 将本地
+  2:1 `.hdr` 复制进项目并注册到 Catalog；环境列表显示 profile 与
+  `Ready/Missing/Stale/Invalid`，并提供 Build、Rebuild、Cancel 和 Remove。
+  环境 bake 完成前不会替换当前已发布环境。
 
 Import 和 Remove 仍使用 modal；文件导入和场景加载的数据流没有因布局调整
 而改变。
@@ -43,7 +46,9 @@ Import 和 Remove 仍使用 modal；文件导入和场景加载的数据流没�
 - `Pipeline`：Shader variant、Texture Limit、Exposure EV 和 PBR Tone Mapper。
   Shader 下拉按 Manifest 的 `legacy`、`pbr`、`debug` category 分组。
 - `Lighting`：方向光阴影、bias、ambient、灯光统计和无场景灯光时的 fallback
-  Sun 参数。
+  Sun 参数；Environment combo、Image-Based Lighting、Skybox、Intensity
+  和 Rotation 也在这里。`None` 始终可选，选择环境与启用 IBL/Skybox 是
+  三个独立操作，默认两个开关均关闭。
 - `Camera`：位置、移动速度、near/far clip plane 和 Scene bounds。
 
 这些控件直接操作 Application 已有状态，与 Runtime Control 使用同一份渲染

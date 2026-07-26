@@ -1,8 +1,8 @@
 # 自动视觉回归
 
 > Status: Current
-> Last verified: 2026-07-21
-> Verified against: current working tree based on `a154f52`
+> Last verified: 2026-07-26
+> Verified against: `9092755`
 
 `VulkanLabRenderTest.exe` 是独立的开发测试程序。它通过 Runtime Control 启动并控制 `VulkanLab.exe`，固定场景、Shader、相机、窗口尺寸和时间步，等待画面稳定后截图，再执行 smoke 或 golden 比较。测试程序不链接渲染器或 Vulkan；实际 GPU 能力仍由被测 `VulkanLab.exe` 提供。
 
@@ -46,15 +46,16 @@ ctest --test-dir build/windows-msvc-release -C Release --output-on-failure
 - Sheen Chair + Debug BaseColor smoke；
 - Viking Room + PBR-lite NormalMapped shadow smoke；
 - Viking Room + Debug Shadow smoke；
+- 运行时生成 tiny HDR/KTX2 后执行 Skybox rotation、Debug IBL Diffuse 和 Debug IBL Specular smoke；
 - Viking Room + Legacy Forward reference golden。
 
 Main Sponza 只作为本地扩展 smoke 和 LoadStats 场景，不进入快速默认测试集。
 
 `viking_pbr_shadow_golden.json` 是待审核候选。仓库当前不包含其 baseline；只有人工检查 `actual.png` 并显式 `--accept` 后，CMake 才会把它注册为 golden CTest。
 
-## Spec v1 与 v2
+## Spec v1、v2 与 v3
 
-规格文件位于 `tests/render/`，使用稳定 scene/profile ID，而不是 UI index。解析器继续接受 schema v1，并使用默认 `RenderSettings`；schema v2 可增加可选 `renderSettings`，从而固定阴影、bias、曝光和 Tone Mapper。解析器拒绝未知字段、非法范围和缺失字段。
+规格文件位于 `tests/render/`，使用稳定 scene/profile/environment ID，而不是 UI index。解析器继续接受 schema v1，并使用默认 `RenderSettings`；schema v2 可增加可选 `renderSettings`，从而固定阴影、bias、曝光和 Tone Mapper。schema v3 进一步增加可选 `environmentId` 以及 IBL、Skybox、环境强度和旋转设置。v1/v2 强制使用 `None` 且关闭 IBL/Skybox，因此旧 golden 不会因 Catalog default environment 改变。解析器拒绝未知字段、非法范围和缺失字段。
 
 ```json
 {
@@ -87,6 +88,41 @@ Main Sponza 只作为本地扩展 smoke 和 LoadStats 场景，不进入快速�
   }
 }
 ```
+
+IBL 测试使用 schema v3，例如：
+
+```json
+{
+  "schemaVersion": 3,
+  "name": "viking-ibl-smoke",
+  "sceneId": "viking-room",
+  "profileId": "desktop_2048",
+  "environmentId": "studio",
+  "shader": "PBR-lite NormalMapped",
+  "camera": {
+    "position": [2.0, 2.0, 2.0],
+    "yaw": -135.0,
+    "pitch": -30.0
+  },
+  "viewport": [800, 600],
+  "fixedDelta": 0.000001,
+  "stableFrames": 8,
+  "includeGui": false,
+  "renderSettings": {
+    "iblEnabled": true,
+    "skyboxEnabled": true,
+    "environmentIntensity": 1.0,
+    "environmentRotationRadians": 0.0
+  },
+  "mode": "smoke",
+  "thresholds": {
+    "minimumNonBlackRatio": 0.05,
+    "maximumSolidColorRatio": 0.98
+  }
+}
+```
+
+Runner 会先查询 `environment.list`，提交异步 environment load 并等待发布，再应用渲染设置。仓库的 IBL CTest 不提交大型 HDR/KTX2：测试脚本在临时项目中生成非均匀 tiny HDR、离线 bake、运行四个 schema v3 smoke，并确认旋转 0°/90° 的 PNG SHA-256 不同。
 
 Smoke 检查尺寸、非黑像素比例和主导纯色比例，用于发现黑屏、空帧或完全错误的输出。Golden 在此基础上比较 RGBA8 的逐通道绝对差、MAE、RMSE 和坏像素比例。
 

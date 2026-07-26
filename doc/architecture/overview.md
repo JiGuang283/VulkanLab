@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-26
-> Verified against: `bfb50ef`
+> Verified against: `9092755`
 
 VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Application` 为组合根，场景、渲染提交、GPU 资源和调试控制之间保持显式所有权，不使用全局引擎服务定位器。
 
@@ -11,11 +11,11 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 | 目录 | 职责 |
 |---|---|
 | `src/app/` | 应用生命周期、场景注册与切换、相机、统一 ImGui 工作区、RenderView 输入和命令执行。 |
-| `src/assets/` | ProjectContext、Scene Catalog/编辑事务、RuntimePackage、ArtifactIndex/依赖校验、cache prune、资产工具进程监督、manifest 和 KTX2 cache 读取。 |
+| `src/assets/` | ProjectContext、Scene/Environment Catalog、编辑事务、RuntimePackage、ArtifactIndex/依赖校验、cache prune、资产工具进程监督、manifest 和 KTX2 cache 读取。 |
 | `src/control/` | Windows Named Pipe 服务、运行时命令队列和 JSON 协议。 |
 | `src/core/` | Vulkan instance/device、SwapChain、FrameSync、Buffer/Image、Descriptor、Pipeline、VMA、同步与增量上传。 |
-| `src/render/` | Mesh、Texture、材质、纯 CPU glTF prepare、RenderView、RenderQueue、RenderResourceRegistry、PipelineCache、Renderer、GPU profiler 和 Shader variant。 |
-| `src/render/pass/` | RenderPipeline 中的具体 pass；当前为 DirectionalShadow、MainForward 和 ToneMap。 |
+| `src/render/` | Mesh、Texture、材质、纯 CPU glTF prepare、Environment GPU build、RenderView、RenderQueue、RenderResourceRegistry、PipelineCache、Renderer、GPU profiler 和 Shader variant。 |
+| `src/render/pass/` | RenderPipeline 中的具体 pass；当前为 DirectionalShadow、Skybox、MainForward 和 ToneMap。 |
 | `src/scene/` | Scene、SceneObject、SceneLight、Camera、prepared data、加载任务、GPU builder、SceneFactory 和内建场景。 |
 | `src/window/` | GLFW 窗口和输入状态。 |
 | `src/platform/` | Win32 原生文件选择等平台适配。 |
@@ -34,8 +34,8 @@ Cooked package 中 `projectRoot == runtimeRoot == package root`，cache 固定�
 2. Window 和 InputManager。
 3. VulkanContext、Device 和 DescriptorAllocator。
 4. SwapChain 和 FrameSync。
-5. Renderer、全局 UBO、类型化 render resource registry、三段 RenderPipeline、GPU timestamp profiler 和开发模式 CaptureService。
-6. PipelineCache、SceneLoadManager worker、ArtifactIndex 和初始 Scene/admission；只有 OnDemand 创建 AssetImportManager supervisor。
+5. Renderer、全局 UBO、Lighting descriptor generation、类型化 render resource registry、四段 RenderPipeline、GPU timestamp profiler 和开发模式 CaptureService。
+6. PipelineCache、SceneLoadManager/EnvironmentLoadManager worker、ArtifactIndex 和初始 Scene/environment admission；只有 OnDemand 创建 AssetImportManager supervisor。
 7. GuiSystem。
 8. 可选的 Runtime Control 命令队列和 Named Pipe 线程。
 
@@ -54,13 +54,15 @@ Cooked package 中 `projectRoot == runtimeRoot == package root`，cache 固定�
 
 ## 线程模型
 
-主线程拥有 GLFW、ImGui、DescriptorAllocator 和全部 Vulkan/VMA 对象。它每帧轮询 upload fence、按预算记录上传命令，并在资源全部可用后发布 Scene。
+主线程拥有 GLFW、ImGui、DescriptorAllocator 和全部 Vulkan/VMA 对象。它每帧轮询 upload fence、按预算记录上传命令，并在资源全部可用后发布 Scene 或新的 Environment descriptor generation。
 
 SceneLoadManager 持有一个长期 worker。worker 只执行 glTF 文件读取、解析、图片解码/缩放、顶点转换、tangent、bounds 和 hierarchy，输出不包含 Vulkan handle 的 `PreparedSceneData`。它通过 atomic 进度/取消标记和受 mutex 保护的结果与主线程通信。
 
+EnvironmentLoadManager 持有独立 worker，只读取和校验已经离线 bake 的四个浮点 KTX2，输出 `PreparedEnvironment`。主线程使用 EnvironmentGpuBuilder 和增量上传队列创建 cubemap/LUT；完整新 generation 发布前保留旧环境，旧 descriptor/resources 按 submission serial 延迟销毁。
+
 `VulkanLab -> Scene -> Scenes` 的文件对话框在主线程打开；选定文件后的依赖 preflight 和 `SceneImportService` 事务由独立 `std::async` worker 执行。该 worker 可以读取/复制源文件并原子更新源码项目 Catalog，但不能访问 GLFW、ImGui 或 Vulkan。Application 只轮询 future 和进度；退出时先请求取消并等待导入 worker 收束。
 
-AssetImportManager 持有一个 supervisor thread，串行监督资产工具进程；每个工具内部再按 worker/内存预算并行启动 `ktx.exe`。supervisor 只读取 NDJSON、日志和进程状态，不解析 glTF、不访问 Application Scene，也不创建 Vulkan 对象。Windows Job Object 拥有完整子进程树，取消和退出会终止工具及其编码子进程。主线程轮询任务状态，并由 `AssetLoadCoordinator` 保证只有最新 operation generation 可以从 import 接续到 scene load。
+AssetImportManager 持有一个 supervisor thread，串行监督资产工具进程；scene texture 工具内部再按 worker/内存预算并行启动 `ktx.exe`，environment 工具执行确定性 CPU bake。supervisor 只读取 NDJSON、日志和进程状态，不解析 glTF/HDR、不访问 Application Scene，也不创建 Vulkan 对象。Windows Job Object 拥有完整子进程树，取消和退出会终止工具及其编码子进程。主线程轮询任务状态，并由 `AssetLoadCoordinator` 保证只有最新 operation generation 可以从 import 接续到 scene load。
 
 ArtifactIndex 由 Application 主线程持有；Fast/Admission 查询和 UI 快照不跨线程访问。独立资产工具负责 manifest/blob 和索引核心记录的发布，Application 只合并访问/失败遥测。不同进程通过短时 index mutex 原子更新 JSON；改变 cache 内容的工具命令还持有覆盖完整事务的 cache mutation mutex。
 
@@ -73,13 +75,13 @@ CaptureService 的主线程部分创建 readback buffer、记录 image copy 并�
 ## 每帧数据流
 
 1. 轮询窗口和输入，收割 asset import 结果，执行一条待处理控制命令。
-2. 轮询 worker 结果与 upload fence，在软预算内推进 SceneGpuBuilder。
+2. 轮询 worker 结果与 upload fence，在软预算内推进 SceneGpuBuilder 和 EnvironmentGpuBuilder。
 3. 应用待切换场景，更新计时、输入模式、相机和 Scene tick。
 4. 轮询场景导入 future，构建唯一的 `VulkanLab` 工具窗口；Scene、Render、Materials 和 Diagnostics 页面只读取或修改 Application 已有状态。
 5. `FrameSync::beginFrame()` 获取 frame index、swapchain image 和 command buffer。
 6. Application 组装 `RenderViewInput`；纯函数 `buildRenderView()` 完成默认 Sun、灯光截断/GPU 打包和阴影拟合，生成不可变 `RenderView`。
 7. Scene 生成 RenderCommand，RenderQueue 分别排序 opaque 与 transparent 命令。
-8. Renderer 上传 `RenderView::globalUbo`、读取已完成 frame slot 的 timestamp，并组装 RenderFrameContext；RenderPipeline 依次执行 DirectionalShadowPass、输出线性 HDR 的 MainForwardPass，以及 ToneMapPass；ImGui 在 tone mapping 后绘制，每个 Pass 由 timestamp query 包围。
+8. Renderer 上传 `RenderView::globalUbo`、读取已完成 frame slot 的 timestamp，并组装 RenderFrameContext；RenderPipeline 依次执行 DirectionalShadowPass、清除/绘制 HDR 背景的 SkyboxPass、以 `LOAD` 叠加场景的 MainForwardPass，以及 ToneMapPass；ImGui 在 tone mapping 后绘制，每个 Pass 由 timestamp query 包围。
 9. 若有截图任务，在同一个 frame command buffer 中把最终 swapchain image 复制到 readback buffer，然后恢复 present layout。
 10. `FrameSync::endFrame()` 提交和 present；需要时重建 SwapChain 相关资源。后续帧推进 completed submission serial，并把已完成截图交给 CPU worker。
 

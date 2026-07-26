@@ -2,11 +2,11 @@
 
 > Status: Current
 > Last verified: 2026-07-26
-> Verified against: `bfb50ef`
+> Verified against: `9092755`
 
 ## 项目、Catalog 与导入
 
-`ProjectContextResolver` 先检查可执行文件旁的 `package_manifest.json`。存在时完整校验 package 并返回只读 package root、Catalog、cache root 和 profile，禁止 `--project` 覆盖。否则按开发规则优先使用 `--project <path>`，再读取可执行文件旁由 CMake 生成的 `vulkanlab_project.json`，最后才从当前目录祖先查找 Catalog。解析结果明确区分 `projectRoot`、`runtimeRoot`、`cacheRoot` 和 `captureRoot`；后续 subsystem 只消费已经解析的路径，不再按当前工作目录拼接资源。Debug、Release 和资产工具因此指向同一个源码 `assets/catalog.json`。Catalog 使用稳定 `projectId`、scene `id` 和 import profile ID，具体 glTF 场景不再硬编码在 `main.cpp`。
+`ProjectContextResolver` 先检查可执行文件旁的 `package_manifest.json`。存在时完整校验 package 并返回只读 package root、Catalog、cache root 和 profile，禁止 `--project` 覆盖。否则按开发规则优先使用 `--project <path>`，再读取可执行文件旁由 CMake 生成的 `vulkanlab_project.json`，最后才从当前目录祖先查找 Catalog。解析结果明确区分 `projectRoot`、`runtimeRoot`、`cacheRoot` 和 `captureRoot`；后续 subsystem 只消费已经解析的路径，不再按当前工作目录拼接资源。Debug、Release 和资产工具因此指向同一个源码 `assets/catalog.json`。Catalog schema v2 使用稳定 `projectId`、scene/environment ID、import profile 和 environment profile；schema v1 继续可读，并自动获得内建的 `ibl_desktop_v1` profile。具体场景和环境不再硬编码在 `main.cpp`。
 
 开发模式下 Catalog scene、glTF/GLB、外部 buffer/image 以及 Viking Room 的 OBJ/PNG 从 `projectRoot` 读取，SPIR-V 和 sibling 工具从 executable 所在的 `runtimeRoot` 读取。Cooked package 中 `projectRoot` 与 `runtimeRoot` 都是 package root，`cacheRoot` 固定为包内 `runtime_assets`。
 
@@ -19,6 +19,8 @@
 5. 用临时文件验证新 Catalog，检查磁盘版本未变化，再以 atomic replace 发布。
 
 任何步骤失败或取消都会删除本次 staging；目录已发布但 Catalog 未发布时会回滚新目录。项目内源文件也可选择 Reference Existing，只在 Catalog 中保存项目相对路径。`VulkanLabAssetTool catalog add` 调用相同服务，供自动化使用。
+
+HDR 环境导入只接受本地 2:1 equirectangular `.hdr`。UI 或 `VulkanLabAssetTool catalog add-environment` 将源文件复制到 `assets/environments/<environment-id>/`，再原子更新 Catalog。已存在的 ID 或目标路径不会被覆盖；v1 不接受 EXR、远程 URI 或非 2:1 HDR。
 
 ## 加载入口
 
@@ -59,6 +61,7 @@ Windows 下所有 `ktx.exe` 都由独立 Job Object 管理，并使用 `KILL_ON_
 ```text
 DerivedAssets/<projectId>/
   manifests/<scene-id>/<profile-id>.json
+  manifests/environments/<environment-id>/<profile-id>.json
   blobs/<content-cache-key>.ktx2
   artifact_index.json
 ```
@@ -71,9 +74,24 @@ manifest schema v2 记录 project/scene/profile 稳定身份、scene、texture l
 
 开发模式下，glTF prepare 遇到单个派生条目缺失或 KTX2 读取/转码失败时可记录 miss 并走 RGBA fallback；普通 scene load 之前仍会先执行 scene/profile 级 artifact admission。CookedOnly 设置 `SceneLoadContext::requireDerivedTextures`，manifest 身份、scene stamp、entry/source stamp、KTX2 读取、转码和 mip offset 任一失败都会终止加载，不会调用 stb 解码。
 
+## 环境派生资产与异步加载
+
+`VulkanLabAssetTool environment-cache build` 在离线阶段读取 Catalog environment/profile，并使用 `stbi_loadf` 解码线性 RGB HDR。输入必须为 2:1，NaN/Inf 会清零。CPU Baker 使用固定 Hammersley 序列和右手 Z-up 坐标约定，cubemap face 顺序为 `+X/-X/+Y/-Y/+Z/-Z`，确定性生成：
+
+- Radiance：`RGBA16F` cubemap，普通 mip chain 使用跨 face 的 Lanczos4 filter。
+- Irradiance：`RGBA16F` cubemap，cosine-weighted convolution，结果已经除以 π。
+- Prefiltered Specular：`RGBA16F` cubemap，GGX importance sampling，每级 mip 对应 roughness。
+- BRDF LUT：`RG16F` 2D texture，split-sum integration。
+
+默认 `ibl_desktop_v1` 的尺寸为 512/32/256/256，样本数为 diffuse 1024、specular 512、BRDF 1024。四个原生浮点 KTX2 使用 Zstd 9，不转为 BC7。cache key 包含源 SHA-256、profile、算法版本、格式、尺寸、mip 和采样参数。每个输出先写临时文件并重新验证；全部成功后才原子发布 `DerivedEnvironmentManifest`。有效 manifest/blob 命中时跳过 HDR decode、卷积和 KTX2 编码；`--force` 才重新计算。
+
+运行时 `EnvironmentLoadManager` 使用独立 worker 读取并验证四个 KTX2，形成只含 CPU payload/subresource 描述的 `PreparedEnvironment`。主线程随后由 `EnvironmentGpuBuilder` 使用现有 `IncrementalUploadQueue` 上传所有 face/mip。设备必须支持 `RGBA16F` cubemap sampled + linear filtering 和 `RG16F` 2D sampled + linear filtering；不支持时环境功能不可用，但 Scene 渲染和 constant ambient 保持工作。
+
+环境发布是事务性的：只有四张 GPU texture 和统一 Lighting descriptor generation 全部完成后，Renderer 才切换到新环境。失败或取消保留旧环境；旧 generation 按 `FrameSync` submission serial 延迟销毁，不调用 `vkDeviceWaitIdle()`。所有 binding 始终有合法 fallback texture，因此关闭 IBL、选择 `None` 或加载期间都不会产生 partially-bound descriptor。
+
 ## Artifact Index 与依赖失效
 
-`ArtifactIndex` 是 `%LOCALAPPDATA%` 共享 cache 中的可丢弃 JSON 加速层，不是 artifact 的事实来源。每条 scene/profile 记录保存 manifest identity、source dependency 的 size/mtime/SHA-256、blob 闭包、schema/encoder settings、最后成功 import task、访问时间和最近失败诊断。索引缺失、JSON 损坏、schema 或 project ID 不匹配时，会从 Catalog 和已发布 manifest 自动重建并原子替换。
+`ArtifactIndex` schema v2 是 `%LOCALAPPDATA%` 共享 cache 中的可丢弃 JSON 加速层，不是 artifact 的事实来源。每条记录用 `assetKind + assetId + profileId` 区分 Scene 和 Environment，保存 manifest identity、source dependency 的 size/mtime/SHA-256、blob 闭包、schema/encoder settings、最后成功 import task、访问时间和最近失败诊断。读取 schema v1 时旧记录按 Scene 解释。索引缺失、JSON 损坏、schema 或 project ID 不匹配时，会从 Catalog 和已发布 manifest 自动重建并原子替换。
 
 状态查询分两级：
 
@@ -98,7 +116,7 @@ Application 使用 ArtifactIndex 的 Fast 查询展示精确 scene/profile 的 `
 
 AssetImportManager 拥有一个 supervisor thread、任务队列和最多 64 条历史。相同 scene/profile 的未完成请求合并；不同 profile 保持独立。supervisor 通过精确继承的 stdout/stderr pipe 启动同目录 `VulkanLabAssetTool import scene`，stdout 只接受最大 64 KiB、protocol v1 的 NDJSON，stderr 写入每任务日志。工具进程与全部 `ktx.exe` 位于 `KILL_ON_JOB_CLOSE` Job Object；取消、非法协议、进程异常和 Application 退出都会终止完整进程树。AssetImportManager 不解析 glTF、不访问 Scene/Vulkan，工具内部并发继续由 Stage B worker 与内存预算控制。
 
-资产 task 使用最高位为 1 的 operation ID，与 SceneLoadManager 的低位 task ID 隔离。`AssetLoadCoordinator` 为每次 scene 请求分配 generation：import 完成后可以保留有效缓存，但只有全局最新 generation 的 consumer 能继续提交 CPU prepare。import 失败或取消保留当前 Scene，不自动回退；显式 `Load Source Fallback` 使用不会命中 manifest 的专用 profile ID。
+任务 ID 使用不重叠的高位命名空间：Scene 使用低位，Environment 使用 bit 61，Capture 使用 bit 62，Asset Import 使用 bit 63。`AssetLoadCoordinator` 为每次 scene 请求分配 generation：import 完成后可以保留有效缓存，但只有全局最新 generation 的 consumer 能继续提交 CPU prepare。import 失败或取消保留当前 Scene，不自动回退；显式 `Load Source Fallback` 使用不会命中 manifest 的专用 profile ID。
 
 Stage A 的文件导入事务完成 Catalog 注册后会立即提交派生资产 import。勾选 `Load scene after import` 时，同一个 operation 连续覆盖 Catalog registration 后的 KTX2 import、CPU prepare、GPU upload 和 Scene publish。`Scene -> Scenes` 只承担选择/命令和活跃场景加载详情，`Scene -> Assets` 显示 artifact 状态、真实编码进度、worker、日志、错误和历史。
 
@@ -124,13 +142,14 @@ SceneGpuBuilder 每帧以默认 `32 MiB` 和 `2 ms` 软预算推进：fallback�
 
 DescriptorAllocator 创建支持单独释放 set 的 pool。MaterialInstance 析构会归还 descriptor set，因此失败、取消和反复重载不会持续耗尽 pool 容量。
 
-`RenderResourceRegistry` 不管理这里的 Scene Texture/Mesh，也不参与上传或 residency。它只拥有 Renderer 内部的 HDR、depth、shadow render target 和 sampler；Scene 资源仍由 SceneGpuBuilder、Texture/Mesh 与上传队列按上述生命周期管理。
+`RenderResourceRegistry` 不管理这里的 Scene Texture/Mesh 或 Environment Texture，也不参与上传或 residency。它只拥有 Renderer 内部的 HDR、depth、shadow render target 和 sampler；Scene/Environment 资源分别由 SceneGpuBuilder、EnvironmentGpuBuilder、Texture/Mesh 与上传队列按上述生命周期管理。
 
 ## 发布与失败语义
 
 - CPU prepare 期间继续渲染当前 Scene。
 - 开始 GPU build 后旧 Scene 已释放，期间渲染空场景；统一窗口顶部和 `Scene -> Scenes` 显示加载进度。
 - 只有最新 generation 且所有 upload fence 完成的任务可以发布。
+- Environment prepare/upload 始终保留当前 Scene 和旧 Environment；只有完整新 generation 可以原子替换。
 - CPU prepare 失败时保留当前 Scene；旧 Scene 已释放后的 GPU build 失败会保留可操作的空场景。
 - 同步 Viking Room 切换会先取消后台任务，旧 generation 不能在稍后覆盖同步场景。
 - Application 关闭前先停止控制服务和 source import future，再取消并 join AssetImportManager/完整工具进程树，然后取消 builder、join SceneLoadManager，最后销毁 Vulkan 对象。
@@ -150,18 +169,19 @@ VMA 快照在 SceneGpuBuilder 和 staging 销毁后采集，不把临时 staging
 
 ## Cook 与 packaged runtime
 
-`VulkanLabAssetTool cook` 将开发项目和共享 cache 转换成只读运行目录。输入是 ProjectContext、一个精确 profile、选中的 scene ID、已构建 runtime 目录和输出目录。默认选择非 optional scenes；显式 scene ID 可以形成更小的产品包。缺失 artifact 默认直接失败，`--build-missing` 才会在 cook 前调用现有有界并行 importer。
+`VulkanLabAssetTool cook` 将开发项目和共享 cache 转换成只读运行目录。输入是 ProjectContext、一个精确 scene profile、选中的 scene/environment ID、已构建 runtime 目录和输出目录。默认选择非 optional scenes 和全部 Catalog environments；显式 ID 可以形成更小的产品包。缺失 artifact 默认直接失败，`--build-missing` 才会在 cook 前调用现有 importer/baker。
 
 `CookPackageBuilder` 建立以下引用闭包：
 
 1. `VulkanLab.exe`、可选 `VulkanLabCtl.exe`、Shader Manifest 及其 programs 实际引用的唯一 SPIR-V。
-2. 只含选中场景和单一 profile 的 cooked Catalog。
+2. 只含选中场景、环境、单一 scene profile 和所需 environment profile 的 cooked Catalog。
 3. 选中的 builtin scene 明确需要的 OBJ/PNG；当前为 Viking Room。
 4. glTF/GLB 主文件；外部 `.gltf` 只复制 buffer URI，不复制源图片。
 5. 每个 glTF scene/profile 的 manifest 及其内容寻址 KTX2 blob 去重集合。
-6. 从 cooked Catalog、manifests 和 blobs 重建的 package-local ArtifactIndex。
+6. 每个选中 environment/profile 的 manifest 及四个浮点 KTX2 blob，不包含源 HDR。
+7. 从 cooked Catalog、manifests 和 blobs 重建的 package-local ArtifactIndex。
 
-Cooked manifest 将 source stamp 改写为包内 scene stamp。源图片因此不属于运行闭包；blob 内容由 package manifest SHA-256 保护，运行时 KTX2 loader 再验证结构和转码。Main Sponza 包不会包含 PNG/JPEG、FBX、USD、MAX 或未登记 shader。
+Cooked scene manifest 将 source stamp 改写为包内 scene stamp；cooked environment 在 Catalog 中标记为 optional，因为源 HDR 不进入包。源图片和 HDR 因此不属于运行闭包；blob 内容由 package manifest SHA-256 保护，运行时 KTX2 loader 再验证结构和 subresource。Main Sponza 包不会包含 PNG/JPEG、FBX、USD、MAX 或未登记 shader。
 
 所有文件先写入输出目录旁的唯一 staging。生成 sorted schema v1 `package_manifest.json` 后，工具验证每个文件的规范化相对路径、大小和 SHA-256，再通过目录 rename 发布。替换已有包时先保留 sibling backup；构建或验证失败时移除 staging，原包保持可验证。`package verify` 和运行时启动调用同一 verifier。
 
@@ -189,5 +209,6 @@ Stage F 当前推迟。Release cooked Main Sponza 1024 的 72 张 KTX2 全部转
 - 使用 graphics queue，没有专用 transfer queue 或 queue ownership transfer。
 - 开发模式中未生成或未命中 KTX2 profile 的图片仍可能运行时 decode/resize，并以 RGBA8 上传；CookedOnly 禁止该路径。
 - KTX2 v1 统一使用 BC7，不使用 BC5 normal 或 BC4 AO；无 BC7 设备使用 RGBA32，因此不会获得压缩显存收益。
+- 环境只支持本地 RGBE `.hdr` 和单个全局环境；没有 EXR、runtime convolution、reflection probe、parallax correction、diffuse SH、BC6H 或 environment streaming。
 - 没有运行时自动编码、mip streaming、LRU residency、virtual texturing 或加载时保留旧大场景的显存预算策略。
 - Viking Room 仍使用同步 OBJ/PNG factory；开发模式从 `projectRoot` 读取，正式包使用 Cook 闭包。
