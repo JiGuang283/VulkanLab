@@ -163,6 +163,21 @@ bool asciiEqualsIgnoreCase(const std::string &a, const std::string &b) {
     return true;
 }
 
+bool asciiContainsIgnoreCase(const std::string &text,
+                             const std::string &query) {
+    if (query.empty())
+        return true;
+
+    auto fold = [](unsigned char value) {
+        return static_cast<char>(std::tolower(value));
+    };
+    std::string foldedText(text.size(), '\0');
+    std::string foldedQuery(query.size(), '\0');
+    std::transform(text.begin(), text.end(), foldedText.begin(), fold);
+    std::transform(query.begin(), query.end(), foldedQuery.begin(), fold);
+    return foldedText.find(foldedQuery) != std::string::npos;
+}
+
 const char *assetImportModeName(AssetImportMode mode) {
     switch (mode) {
     case AssetImportMode::OnDemand:
@@ -520,6 +535,13 @@ struct SceneAssetOperationState {
     std::string error;
 };
 
+struct EditorUiState {
+    std::array<char, 128> materialSearch{};
+    size_t selectedMaterialIndex = 0;
+    uint64_t materialSceneGeneration =
+        std::numeric_limits<uint64_t>::max();
+};
+
 namespace {
 
 ControlJson loadOperationToJson(
@@ -584,6 +606,7 @@ Application::Application(const Config &config, ProjectContext projectContext,
     sceneRegistry_ = buildSceneRegistry(catalog_, projectContext_, config_);
     sceneImportUi_ = std::make_unique<SceneImportUiState>();
     sceneAssetOperations_ = std::make_unique<SceneAssetOperationState>();
+    editorUi_ = std::make_unique<EditorUiState>();
     runtimeControlPipeName_ =
         control::makeRuntimeControlEndpoint(
             config_.diagnostics.runtimePipeSuffix)
@@ -2179,9 +2202,7 @@ void Application::updateSceneImport() {
 
 void Application::drawScenePanel() {
     SceneImportUiState &ui = *sceneImportUi_;
-    updateSceneImport();
 
-    ImGui::Begin("Scenes");
     const bool busy = ui.preflightFuture.valid() || ui.importFuture.valid();
     const bool canImportSource =
         config_.assetImportMode == AssetImportMode::OnDemand &&
@@ -2256,26 +2277,10 @@ void Application::drawScenePanel() {
                              sceneAssetOperations_->search.data(),
                              sceneAssetOperations_->search.size());
     const std::string search = sceneAssetOperations_->search.data();
-    auto containsIgnoreCase = [](const std::string &text,
-                                 const std::string &query) {
-        if (query.empty())
-            return true;
-        std::string foldedText = text;
-        std::string foldedQuery = query;
-        std::transform(foldedText.begin(), foldedText.end(),
-                       foldedText.begin(), [](unsigned char c) {
-                           return static_cast<char>(std::tolower(c));
-                       });
-        std::transform(foldedQuery.begin(), foldedQuery.end(),
-                       foldedQuery.begin(), [](unsigned char c) {
-                           return static_cast<char>(std::tolower(c));
-                       });
-        return foldedText.find(foldedQuery) != std::string::npos;
-    };
     for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
         const SceneEntry &entry = sceneRegistry_[i];
-        if (!containsIgnoreCase(entry.name, search) &&
-            !containsIgnoreCase(entry.id, search))
+        if (!asciiContainsIgnoreCase(entry.name, search) &&
+            !asciiContainsIgnoreCase(entry.id, search))
             continue;
         const bool selected =
             (i == sceneAssetOperations_->selectedSceneIndex);
@@ -2486,11 +2491,9 @@ void Application::drawScenePanel() {
         }
         ImGui::EndPopup();
     }
-    ImGui::End();
 }
 
 void Application::drawAssetsPanel() {
-    ImGui::Begin("Assets");
     ImGui::Text("Project: %s", catalog_.projectId.c_str());
     ImGui::TextWrapped("Catalog: %s",
                        projectContext_.catalogPath.string().c_str());
@@ -2627,7 +2630,6 @@ void Application::drawAssetsPanel() {
         }
         ImGui::PopID();
     }
-    ImGui::End();
 }
 
 void Application::requestManualCapture(bool includeGui) {
@@ -2649,10 +2651,8 @@ void Application::requestManualCapture(bool includeGui) {
 }
 
 void Application::drawCapturePanel() {
-    ImGui::Begin("Capture");
     if (!captureService_) {
         ImGui::TextDisabled("Capture is unavailable in this package.");
-        ImGui::End();
         return;
     }
 
@@ -2726,23 +2726,60 @@ void Application::drawCapturePanel() {
         }
         ImGui::PopID();
     }
-    ImGui::End();
 }
 
-void Application::drawGui() {
-    ImGui::Begin("Renderer");
+void Application::drawRenderPanel() {
     const auto &shaderVariants = shaderRegistry_.variants();
     if (!shaderVariants.empty()) {
         const ShaderVariant &currentVariant = currentShaderVariant();
         const char *current = currentVariant.displayName.c_str();
         if (ImGui::BeginCombo("Shader", current)) {
+            auto drawCategory = [&](const char *category,
+                                    const char *displayName) {
+                bool hasVariants = false;
+                for (const ShaderVariant &variant : shaderVariants)
+                    hasVariants |= variant.category == category;
+                if (!hasVariants)
+                    return;
+
+                ImGui::SeparatorText(displayName);
+                for (const ShaderVariant &variant : shaderVariants) {
+                    if (variant.category != category)
+                        continue;
+                    const bool selected =
+                        variant.id == currentShaderVariantId_;
+                    if (ImGui::Selectable(variant.displayName.c_str(),
+                                          selected))
+                        setShaderVariant(variant.id);
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+            };
+            drawCategory("legacy", "Legacy");
+            drawCategory("pbr", "PBR");
+            drawCategory("debug", "Debug");
+
+            bool hasOtherVariants = false;
             for (const ShaderVariant &variant : shaderVariants) {
-                const bool selected =
-                    variant.id == currentShaderVariantId_;
-                if (ImGui::Selectable(variant.displayName.c_str(), selected))
-                    setShaderVariant(variant.id);
-                if (selected)
-                    ImGui::SetItemDefaultFocus();
+                hasOtherVariants |= variant.category != "legacy" &&
+                                    variant.category != "pbr" &&
+                                    variant.category != "debug";
+            }
+            if (hasOtherVariants) {
+                ImGui::SeparatorText("Other");
+                for (const ShaderVariant &variant : shaderVariants) {
+                    if (variant.category == "legacy" ||
+                        variant.category == "pbr" ||
+                        variant.category == "debug")
+                        continue;
+                    const bool selected =
+                        variant.id == currentShaderVariantId_;
+                    if (ImGui::Selectable(variant.displayName.c_str(),
+                                          selected))
+                        setShaderVariant(variant.id);
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
             }
             ImGui::EndCombo();
         }
@@ -2783,57 +2820,53 @@ void Application::drawGui() {
         applyRenderSettings(patch);
     }
     ImGui::TextUnformatted("Legacy and debug views use PassThrough");
-    ImGui::End();
+}
 
-    drawScenePanel();
-    drawAssetsPanel();
-    drawCapturePanel();
+void Application::drawSceneLoadingPanel() {
+    if (!latestSceneLoadTask_)
+        return;
 
-    ImGui::Begin("Loading");
-    if (!latestSceneLoadTask_) {
-        ImGui::Text("No active load task");
-    } else {
-        const auto task = latestSceneLoadTask_;
-        const SceneLoadState state = task->state.load();
-        ImGui::Text("Task: %llu",
-                    static_cast<unsigned long long>(task->id));
-        ImGui::Text("Scene: %s", task->sceneName.c_str());
-        ImGui::Text("State: %s", sceneLoadStateName(state));
-        const uint64_t textureTotal = task->progress.totalTextures.load();
-        const uint64_t textureDone =
-            task->progress.completedTextures.load();
-        const uint64_t meshTotal = task->progress.totalMeshes.load();
-        const uint64_t meshDone = task->progress.completedMeshes.load();
-        ImGui::Text("Textures: %llu / %llu",
-                    static_cast<unsigned long long>(textureDone),
-                    static_cast<unsigned long long>(textureTotal));
-        ImGui::Text("Meshes: %llu / %llu",
-                    static_cast<unsigned long long>(meshDone),
-                    static_cast<unsigned long long>(meshTotal));
-        ImGui::Text("GPU Textures: %llu / %llu",
-                    static_cast<unsigned long long>(
-                        task->progress.uploadedTextures.load()),
-                    static_cast<unsigned long long>(
-                        task->progress.uploadTextureTotal.load()));
-        ImGui::Text("GPU Meshes: %llu / %llu",
-                    static_cast<unsigned long long>(
-                        task->progress.uploadedMeshes.load()),
-                    static_cast<unsigned long long>(
-                        task->progress.uploadMeshTotal.load()));
-        ImGui::Text("Processed: %.2f MiB",
-                    bytesToMiB(task->progress.processedBytes.load()));
-        if (!isTerminalSceneLoadState(state) &&
-            state != SceneLoadState::ReadyToPublish) {
-            if (ImGui::Button("Cancel Load"))
-                cancelSceneLoad(task->id);
-        }
-        std::lock_guard<std::mutex> lock(task->mutex);
-        if (!task->error.empty())
-            ImGui::TextWrapped("Error: %s", task->error.c_str());
-    }
-    ImGui::End();
+    const auto task = latestSceneLoadTask_;
+    const SceneLoadState state = task->state.load();
+    if (isTerminalSceneLoadState(state))
+        return;
 
-    ImGui::Begin("Lighting");
+    ImGui::Text("Task: %llu",
+                static_cast<unsigned long long>(task->id));
+    ImGui::Text("Scene: %s", task->sceneName.c_str());
+    ImGui::Text("State: %s", sceneLoadStateName(state));
+    const uint64_t textureTotal = task->progress.totalTextures.load();
+    const uint64_t textureDone =
+        task->progress.completedTextures.load();
+    const uint64_t meshTotal = task->progress.totalMeshes.load();
+    const uint64_t meshDone = task->progress.completedMeshes.load();
+    ImGui::Text("Textures: %llu / %llu",
+                static_cast<unsigned long long>(textureDone),
+                static_cast<unsigned long long>(textureTotal));
+    ImGui::Text("Meshes: %llu / %llu",
+                static_cast<unsigned long long>(meshDone),
+                static_cast<unsigned long long>(meshTotal));
+    ImGui::Text("GPU Textures: %llu / %llu",
+                static_cast<unsigned long long>(
+                    task->progress.uploadedTextures.load()),
+                static_cast<unsigned long long>(
+                    task->progress.uploadTextureTotal.load()));
+    ImGui::Text("GPU Meshes: %llu / %llu",
+                static_cast<unsigned long long>(
+                    task->progress.uploadedMeshes.load()),
+                static_cast<unsigned long long>(
+                    task->progress.uploadMeshTotal.load()));
+    ImGui::Text("Processed: %.2f MiB",
+                bytesToMiB(task->progress.processedBytes.load()));
+    if (state != SceneLoadState::ReadyToPublish &&
+        ImGui::Button("Cancel Load"))
+        cancelSceneLoad(task->id);
+    std::lock_guard<std::mutex> lock(task->mutex);
+    if (!task->error.empty())
+        ImGui::TextWrapped("Error: %s", task->error.c_str());
+}
+
+void Application::drawLightingPanel() {
     bool shadowsEnabled = renderSettings_.shadowsEnabled;
     if (ImGui::Checkbox("Directional Shadows", &shadowsEnabled)) {
         RenderSettingsPatch patch;
@@ -2898,67 +2931,187 @@ void Application::drawGui() {
         ImGui::DragFloat("Sun Intensity", &defaultSunIntensity_, 0.05f, 0.0f,
                          20.0f);
     }
-    ImGui::End();
+}
 
-    ImGui::Begin("Materials");
-    if (!currentScene_) {
-        ImGui::Text("Materials: 0");
-    } else {
-        const auto &materials = currentScene_->materials();
-        ImGui::Text("Materials: %zu", materials.size());
-        for (size_t i = 0; i < materials.size(); ++i) {
-            const auto &material = materials[i];
-            if (!material) {
-                ImGui::Text("#%zu <null>", i);
-                continue;
+void Application::drawMaterialsPanel() {
+    EditorUiState &ui = *editorUi_;
+    if (ui.materialSceneGeneration != sceneGeneration_) {
+        ui.materialSceneGeneration = sceneGeneration_;
+        ui.selectedMaterialIndex = 0;
+        if (currentScene_) {
+            const auto &materials = currentScene_->materials();
+            const auto firstValid =
+                std::find_if(materials.begin(), materials.end(),
+                             [](const auto &material) {
+                                 return static_cast<bool>(material);
+                             });
+            if (firstValid != materials.end()) {
+                ui.selectedMaterialIndex =
+                    static_cast<size_t>(firstValid - materials.begin());
             }
-
-            const auto &params = material->params();
-            const std::string label =
-                "#" + std::to_string(i) + " " +
-                (params.debugName.empty() ? "<unnamed>" : params.debugName);
-            if (!ImGui::TreeNode(label.c_str()))
-                continue;
-
-            ImGui::Text("Alpha Mode: %s", alphaModeName(params.alphaMode));
-            ImGui::Text("Alpha Cutoff: %.3f", params.alphaCutoff);
-            ImGui::Text("Double Sided: %s",
-                        params.doubleSided ? "true" : "false");
-            ImGui::Text("Transmission: %.3f", params.transmissionFactor);
-            ImGui::Text("Emissive Strength: %.3f",
-                        params.emissiveStrength);
-            ImGui::Text("Metallic Factor: %.3f", params.metallicFactor);
-            ImGui::Text("Roughness Factor: %.3f", params.roughnessFactor);
-            ImGui::Text("Normal Scale: %.3f", params.normalScale);
-            ImGui::Text("Occlusion Strength: %.3f",
-                        params.occlusionStrength);
-            ImGui::Text("Occlusion UV: %u", params.occlusionTexCoord);
-            ImGui::Text("Base Color Factor: %.3f %.3f %.3f %.3f",
-                        params.baseColorFactor.r, params.baseColorFactor.g,
-                        params.baseColorFactor.b, params.baseColorFactor.a);
-            ImGui::Text("Emissive Factor: %.3f %.3f %.3f",
-                        params.emissiveFactor.r, params.emissiveFactor.g,
-                        params.emissiveFactor.b);
-            ImGui::Separator();
-            ImGui::Text("Render Queue: %s",
-                        isTransparentMaterial(params) ? "Transparent"
-                                                      : "Opaque");
-            ImGui::Text("Cull: %s", params.doubleSided ? "None" : "Back");
-            ImGui::Separator();
-            const auto &textures = material->textures();
-            for (size_t slotIndex = 0; slotIndex < kMaterialTextureSlotCount;
-                 ++slotIndex) {
-                const auto slot =
-                    static_cast<MaterialTextureSlot>(slotIndex);
-                ImGui::Text("%s: %s", slotName(slot),
-                            textures[slotIndex] ? "Bound" : "Missing");
-            }
-            ImGui::TreePop();
         }
     }
-    ImGui::End();
 
-    ImGui::Begin("Camera");
+    if (!currentScene_) {
+        ImGui::TextDisabled("No scene is loaded.");
+        return;
+    }
+
+    const auto &materials = currentScene_->materials();
+    ImGui::InputTextWithHint("##MaterialSearch", "Search materials...",
+                             ui.materialSearch.data(),
+                             ui.materialSearch.size());
+    ImGui::SameLine();
+    ImGui::TextDisabled("%zu", materials.size());
+
+    const std::string search = ui.materialSearch.data();
+    std::vector<size_t> filteredIndices;
+    filteredIndices.reserve(materials.size());
+    for (size_t i = 0; i < materials.size(); ++i) {
+        const auto &material = materials[i];
+        const std::string name =
+            material && !material->params().debugName.empty()
+                ? material->params().debugName
+                : "<unnamed>";
+        if (asciiContainsIgnoreCase(name, search) ||
+            asciiContainsIgnoreCase(std::to_string(i), search))
+            filteredIndices.push_back(i);
+    }
+
+    const bool selectionVisible =
+        std::find(filteredIndices.begin(), filteredIndices.end(),
+                  ui.selectedMaterialIndex) != filteredIndices.end();
+    if (!selectionVisible && !filteredIndices.empty())
+        ui.selectedMaterialIndex = filteredIndices.front();
+
+    const float availableHeight = ImGui::GetContentRegionAvail().y;
+    const float listHeight =
+        std::clamp(availableHeight * 0.35f, 100.0f, 220.0f);
+    ImGui::BeginChild("MaterialList", ImVec2(0.0f, listHeight),
+                      ImGuiChildFlags_Borders);
+    if (filteredIndices.empty())
+        ImGui::TextDisabled("No matching materials.");
+    for (size_t materialIndex : filteredIndices) {
+        const auto &material = materials[materialIndex];
+        const std::string name =
+            material && !material->params().debugName.empty()
+                ? material->params().debugName
+                : "<unnamed>";
+        const std::string label =
+            std::to_string(materialIndex) + "  " + name;
+        ImGui::PushID(static_cast<int>(materialIndex));
+        if (ImGui::Selectable(label.c_str(),
+                              materialIndex == ui.selectedMaterialIndex))
+            ui.selectedMaterialIndex = materialIndex;
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+
+    if (materials.empty() ||
+        ui.selectedMaterialIndex >= materials.size()) {
+        ImGui::TextDisabled("No material selected.");
+        return;
+    }
+
+    const auto &material = materials[ui.selectedMaterialIndex];
+    if (!material) {
+        ImGui::TextDisabled("Selected material is null.");
+        return;
+    }
+
+    const MaterialParams &params = material->params();
+    auto beginPropertyTable = [](const char *id) {
+        const ImGuiTableFlags flags =
+            ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
+            ImGuiTableFlags_SizingStretchProp;
+        if (!ImGui::BeginTable(id, 2, flags))
+            return false;
+        ImGui::TableSetupColumn("Property",
+                                ImGuiTableColumnFlags_WidthStretch, 0.46f);
+        ImGui::TableSetupColumn("Value",
+                                ImGuiTableColumnFlags_WidthStretch, 0.54f);
+        return true;
+    };
+    auto beginProperty = [](const char *name) {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted(name);
+        ImGui::TableSetColumnIndex(1);
+    };
+
+    if (ImGui::CollapsingHeader("Surface",
+                                ImGuiTreeNodeFlags_DefaultOpen) &&
+        beginPropertyTable("SurfaceProperties")) {
+        beginProperty("Name");
+        ImGui::TextWrapped("%s", params.debugName.empty()
+                                    ? "<unnamed>"
+                                    : params.debugName.c_str());
+        beginProperty("Index");
+        ImGui::Text("%zu", ui.selectedMaterialIndex);
+        beginProperty("Alpha Mode");
+        ImGui::TextUnformatted(alphaModeName(params.alphaMode));
+        beginProperty("Alpha Cutoff");
+        ImGui::Text("%.3f", params.alphaCutoff);
+        beginProperty("Double Sided");
+        ImGui::TextUnformatted(params.doubleSided ? "true" : "false");
+        ImGui::EndTable();
+    }
+
+    if (ImGui::CollapsingHeader("PBR",
+                                ImGuiTreeNodeFlags_DefaultOpen) &&
+        beginPropertyTable("PbrProperties")) {
+        beginProperty("Base Color");
+        ImGui::Text("%.3f %.3f %.3f %.3f", params.baseColorFactor.r,
+                    params.baseColorFactor.g, params.baseColorFactor.b,
+                    params.baseColorFactor.a);
+        beginProperty("Metallic");
+        ImGui::Text("%.3f", params.metallicFactor);
+        beginProperty("Roughness");
+        ImGui::Text("%.3f", params.roughnessFactor);
+        beginProperty("Normal Scale");
+        ImGui::Text("%.3f", params.normalScale);
+        beginProperty("Occlusion Strength");
+        ImGui::Text("%.3f", params.occlusionStrength);
+        beginProperty("Occlusion UV");
+        ImGui::Text("%u", params.occlusionTexCoord);
+        beginProperty("Emissive");
+        ImGui::Text("%.3f %.3f %.3f", params.emissiveFactor.r,
+                    params.emissiveFactor.g, params.emissiveFactor.b);
+        beginProperty("Emissive Strength");
+        ImGui::Text("%.3f", params.emissiveStrength);
+        beginProperty("Transmission");
+        ImGui::Text("%.3f", params.transmissionFactor);
+        ImGui::EndTable();
+    }
+
+    if (ImGui::CollapsingHeader("Textures",
+                                ImGuiTreeNodeFlags_DefaultOpen) &&
+        beginPropertyTable("TextureProperties")) {
+        const auto &textures = material->textures();
+        for (size_t slotIndex = 0; slotIndex < kMaterialTextureSlotCount;
+             ++slotIndex) {
+            const auto slot =
+                static_cast<MaterialTextureSlot>(slotIndex);
+            beginProperty(slotName(slot));
+            ImGui::TextUnformatted(textures[slotIndex] ? "Bound"
+                                                       : "Missing");
+        }
+        ImGui::EndTable();
+    }
+
+    if (ImGui::CollapsingHeader("Derived Render State",
+                                ImGuiTreeNodeFlags_DefaultOpen) &&
+        beginPropertyTable("DerivedProperties")) {
+        beginProperty("Render Queue");
+        ImGui::TextUnformatted(
+            isTransparentMaterial(params) ? "Transparent" : "Opaque");
+        beginProperty("Cull");
+        ImGui::TextUnformatted(params.doubleSided ? "None" : "Back");
+        ImGui::EndTable();
+    }
+}
+
+void Application::drawCameraPanel() {
     const auto cameraPos = camera_.position();
     ImGui::Text("Position: (%.2f, %.2f, %.2f)", cameraPos.x, cameraPos.y,
                 cameraPos.z);
@@ -2986,15 +3139,15 @@ void Application::drawGui() {
         ImGui::Separator();
         ImGui::Text("Bounds: unavailable");
     }
-    ImGui::End();
+}
 
-    ImGui::Begin("Stats");
+void Application::drawPerformancePanel() {
     ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
-    const auto p = camera_.position();
-    ImGui::Text("Camera: (%.2f, %.2f, %.2f)", p.x, p.y, p.z);
     ImGui::Text("Mode:   %s", mode_ == InputMode::UI ? "UI" : "CameraDrag");
     if (currentScene_)
         ImGui::Text("Objects: %zu", currentScene_->objects().size());
+    else
+        ImGui::Text("Objects: 0");
     if (ImGui::CollapsingHeader("GPU Pass Timings",
                                 ImGuiTreeNodeFlags_DefaultOpen)) {
         const GpuPassTimings &timings = renderer_->gpuPassTimings();
@@ -3010,6 +3163,9 @@ void Application::drawGui() {
             ImGui::Text("Total: %.3f ms", timings.totalMs);
         }
     }
+}
+
+void Application::drawLoadStatsPanel() {
     if (lastSceneLoadStats_ &&
         ImGui::CollapsingHeader("Last Scene Load",
                                 ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -3131,8 +3287,177 @@ void Application::drawGui() {
                     bytesToMiB(stats.allocatorBefore.blockBytes),
                     bytesToMiB(stats.allocatorAfter.blockBytes),
                     signedBytesToMiB(blockDelta));
+    } else if (!lastSceneLoadStats_) {
+        ImGui::TextDisabled("No scene load statistics are available.");
     }
-    ImGui::Text("(Hold RMB in viewport to fly, WASD/Q/E to move)");
+}
+
+void Application::drawGui() {
+    updateSceneImport();
+
+    const ImGuiViewport *viewport = ImGui::GetMainViewport();
+    const float initialWidth =
+        std::clamp(viewport->WorkSize.x * 0.32f, 320.0f, 420.0f);
+    const float initialHeight =
+        std::max(240.0f, viewport->WorkSize.y - 16.0f);
+    const ImVec2 initialPosition{
+        viewport->WorkPos.x +
+            std::max(0.0f, viewport->WorkSize.x - initialWidth - 8.0f),
+        viewport->WorkPos.y + 8.0f};
+    ImGui::SetNextWindowPos(initialPosition, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(initialWidth, initialHeight),
+                             ImGuiCond_FirstUseEver);
+
+    if (!ImGui::Begin("VulkanLab")) {
+        ImGui::End();
+        return;
+    }
+
+    std::string sceneName = "No Scene";
+    if (currentSceneIndex_ >= 0 &&
+        currentSceneIndex_ < static_cast<int>(sceneRegistry_.size()))
+        sceneName = sceneRegistry_[currentSceneIndex_].name;
+    if (ImGui::BeginTable("WorkspaceStatus", 2,
+                          ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("Scene",
+                                ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("FPS", ImGuiTableColumnFlags_WidthFixed,
+                                ImGui::CalcTextSize("999 FPS").x);
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted(sceneName.c_str());
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", sceneName.c_str());
+        ImGui::TableSetColumnIndex(1);
+        ImGui::Text("%.0f FPS", ImGui::GetIO().Framerate);
+        ImGui::EndTable();
+    }
+
+    bool hasActiveLoad = false;
+    if (latestSceneLoadTask_) {
+        const SceneLoadState state = latestSceneLoadTask_->state.load();
+        hasActiveLoad = !isTerminalSceneLoadState(state);
+        if (hasActiveLoad) {
+            const auto &progress = latestSceneLoadTask_->progress;
+            const uint64_t completed =
+                progress.completedTextures.load() +
+                progress.completedMeshes.load() +
+                progress.uploadedTextures.load() +
+                progress.uploadedMeshes.load();
+            const uint64_t total =
+                progress.totalTextures.load() +
+                progress.totalMeshes.load() +
+                progress.uploadTextureTotal.load() +
+                progress.uploadMeshTotal.load();
+            const float fraction =
+                total == 0
+                    ? 0.0f
+                    : std::clamp(static_cast<float>(completed) /
+                                     static_cast<float>(total),
+                                 0.0f, 1.0f);
+            char overlay[96]{};
+            std::snprintf(overlay, sizeof(overlay), "%s",
+                          sceneLoadStateName(state));
+            ImGui::ProgressBar(
+                fraction,
+                ImVec2(-std::numeric_limits<float>::min(), 0.0f), overlay);
+        }
+    }
+
+    if (ImGui::BeginTabBar("WorkspaceTabs")) {
+        if (ImGui::BeginTabItem("Scene")) {
+            ImGui::PushID("ScenePage");
+            ImGui::BeginChild("ScenePageContent");
+            if (ImGui::BeginTabBar("SceneTabs")) {
+                if (ImGui::BeginTabItem("Scenes")) {
+                    ImGui::PushID("ScenesTab");
+                    drawScenePanel();
+                    if (hasActiveLoad) {
+                        ImGui::SeparatorText("Loading");
+                        drawSceneLoadingPanel();
+                    }
+                    ImGui::PopID();
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Assets")) {
+                    ImGui::PushID("AssetsTab");
+                    drawAssetsPanel();
+                    ImGui::PopID();
+                    ImGui::EndTabItem();
+                }
+                ImGui::EndTabBar();
+            }
+            ImGui::EndChild();
+            ImGui::PopID();
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Render")) {
+            ImGui::PushID("RenderPage");
+            ImGui::BeginChild("RenderPageContent");
+            if (ImGui::CollapsingHeader(
+                    "Pipeline", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::PushID("Pipeline");
+                drawRenderPanel();
+                ImGui::PopID();
+            }
+            if (ImGui::CollapsingHeader(
+                    "Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::PushID("Lighting");
+                drawLightingPanel();
+                ImGui::PopID();
+            }
+            if (ImGui::CollapsingHeader(
+                    "Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::PushID("Camera");
+                drawCameraPanel();
+                ImGui::PopID();
+            }
+            ImGui::EndChild();
+            ImGui::PopID();
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Materials")) {
+            ImGui::PushID("MaterialsPage");
+            ImGui::BeginChild("MaterialsPageContent");
+            drawMaterialsPanel();
+            ImGui::EndChild();
+            ImGui::PopID();
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Diagnostics")) {
+            ImGui::PushID("DiagnosticsPage");
+            ImGui::BeginChild("DiagnosticsPageContent");
+            if (ImGui::BeginTabBar("DiagnosticsTabs")) {
+                if (ImGui::BeginTabItem("Performance")) {
+                    ImGui::PushID("PerformanceTab");
+                    drawPerformancePanel();
+                    ImGui::PopID();
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Load Stats")) {
+                    ImGui::PushID("LoadStatsTab");
+                    drawLoadStatsPanel();
+                    ImGui::PopID();
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Capture")) {
+                    ImGui::PushID("CaptureTab");
+                    drawCapturePanel();
+                    ImGui::PopID();
+                    ImGui::EndTabItem();
+                }
+                ImGui::EndTabBar();
+            }
+            ImGui::EndChild();
+            ImGui::PopID();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+
     ImGui::End();
 }
 

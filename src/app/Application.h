@@ -44,6 +44,7 @@ class SceneGpuBuilder;
 struct SceneLoadTask;
 struct SceneImportUiState;
 struct SceneAssetOperationState;
+struct EditorUiState;
 
 enum class InputMode {
     UI,         // 光标可见，ImGui 接管
@@ -78,7 +79,14 @@ class Application final : public RuntimeControlHost {
     void updateSceneLoading();
     void updateAssetImports();
     void drawScenePanel();
+    void drawSceneLoadingPanel();
     void drawAssetsPanel();
+    void drawRenderPanel();
+    void drawLightingPanel();
+    void drawCameraPanel();
+    void drawMaterialsPanel();
+    void drawPerformancePanel();
+    void drawLoadStatsPanel();
     void drawCapturePanel();
     void requestManualCapture(bool includeGui);
     void updateSceneImport();
@@ -186,6 +194,7 @@ class Application final : public RuntimeControlHost {
     std::shared_ptr<RuntimeCommand> pendingQuitCommand_;
     std::string runtimeControlPipeName_;
     std::unique_ptr<SceneImportUiState> sceneImportUi_;
+    std::unique_ptr<EditorUiState> editorUi_;
     uint64_t lastCaptureTaskId_ = 0;
     bool captureIncludeGui_ = false;
     std::string captureUiError_;
