@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-26
-> Verified against: `bfb50ef`
+> Verified against: `c9462cd`
 
 ## 环境要求
 
@@ -107,6 +107,14 @@ Runtime Control 默认关闭。需要从另一个终端控制运行中的渲染�
 ```powershell
 .\VulkanLab.exe --runtime-control
 ```
+
+Vulkan Validation 默认使用 `core`，也可以显式选择 `off/core/sync/gpu`：
+
+```powershell
+.\VulkanLab.exe --validation sync
+```
+
+`off` 不会关闭非 Cooked 构建中的 RenderDoc 标签。各 profile、回退规则和抓帧方式见 [RenderDoc 与 Vulkan Validation](renderdoc_validation.md)。
 
 并行运行或自动化时应为实例指定唯一 endpoint：
 

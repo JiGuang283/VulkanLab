@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-26
-> Verified against: `bfb50ef`
+> Verified against: `c9462cd`
 
 Runtime Control 通过 Windows Named Pipe 控制已经运行的 VulkanLab。它面向本机开发、诊断和自动化，可以查询状态、加载场景、设置相机和 Shader、等待渲染稳定、异步截图并安全退出程序。`scene.list.entries[]` 同时返回稳定 scene ID、Catalog profile ID 和该 profile 的纹理限制。
 
@@ -92,6 +92,14 @@ cd build\windows-msvc-debug\Debug
 ```
 
 `camera.set` 要求同时提供 position、yaw 和 pitch。所有值必须是有限浮点数；`NaN` 和无穷值会在客户端或服务端被拒绝。设置和 ImGui/输入共用同一个 `Camera` 实例，查询还会返回当前 near/far clip plane。
+
+### 自动化窗口尺寸
+
+```powershell
+.\VulkanLabCtl.exe window resize 1024 720
+```
+
+`window.resize` 只在渲染器以 `--automation` 启动时可用，合法范围为每个维度 `1..16384`。成功后 GLFW resize callback 会触发现有 swapchain 重建流程；普通交互实例返回 `automation_required`。启用时 `system.info.capabilities` 包含 `window_resize`，协议版本保持 `3`。
 
 ### 渲染状态与稳定等待
 

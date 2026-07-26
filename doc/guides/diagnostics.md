@@ -1,10 +1,12 @@
 # 诊断与自动化启动配置
 
 > Status: Current
-> Last verified: 2026-07-20
-> Verified against: `4bcabe9`
+> Last verified: 2026-07-26
+> Verified against: `c9462cd`
 
 本文说明当前可用的构建诊断信息、确定性启动参数、独立 Runtime Control endpoint 和截图输出。端到端 smoke/golden 编排见[自动视觉回归](visual_regression.md)。
+
+Vulkan Validation、RenderDoc 标签与对象命名见 [RenderDoc 与 Vulkan Validation](renderdoc_validation.md)。
 
 ## CMake Presets
 
@@ -62,6 +64,8 @@ Debug 和 Release 分别写入 `build/windows-msvc-debug/` 与 `build/windows-ms
   --no-gui `
   --capture-root .\artifacts\captures
 ```
+
+可在同一启动命令中增加 `--validation off|core|sync|gpu`。自动化验证应显式指定 profile，并检查 `system.info.diagnostics.validation.actual` 与 requested 一致。
 
 - `--automation`：禁用用户相机移动输入，并使窗口不可调整大小。
 - `--runtime-control-pipe SUFFIX`：把控制 endpoint 隔离为 `\\.\pipe\VulkanLab.SUFFIX`；最长 64 个字符，只允许 ASCII 字母、数字、`-` 和 `_`。
