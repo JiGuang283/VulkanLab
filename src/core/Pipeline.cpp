@@ -1,5 +1,6 @@
 #include "Pipeline.h"
 #include "Device.h"
+#include "GpuDebugUtils.h"
 #include "VulkanCheck.h"
 
 #include <fstream>
@@ -50,6 +51,16 @@ Pipeline::Pipeline(Device &device, VkRenderPass renderPass,
     VkShaderModule fragShaderModule =
         fragShaderCode.empty() ? VK_NULL_HANDLE
                                : createShaderModule(fragShaderCode);
+    const std::string pipelineName =
+        config.debugName.empty() ? "Pipeline/Unnamed" : config.debugName;
+    device.debugUtils().setObjectName(VK_OBJECT_TYPE_SHADER_MODULE,
+                                      vertShaderModule,
+                                      pipelineName + "/VertexShader");
+    if (fragShaderModule != VK_NULL_HANDLE) {
+        device.debugUtils().setObjectName(VK_OBJECT_TYPE_SHADER_MODULE,
+                                          fragShaderModule,
+                                          pipelineName + "/FragmentShader");
+    }
 
     VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
     vertShaderStageInfo.sType =
@@ -188,6 +199,9 @@ Pipeline::Pipeline(Device &device, VkRenderPass renderPass,
     VK_CHECK(vkCreatePipelineLayout(device_->logicalDevice(),
                                     &pipelineLayoutInfo, nullptr,
                                     &pipelineLayout_));
+    device.debugUtils().setObjectName(VK_OBJECT_TYPE_PIPELINE_LAYOUT,
+                                      pipelineLayout_,
+                                      pipelineName + "/Layout");
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -209,6 +223,8 @@ Pipeline::Pipeline(Device &device, VkRenderPass renderPass,
 
     VK_CHECK(vkCreateGraphicsPipelines(device_->logicalDevice(), VK_NULL_HANDLE,
                                        1, &pipelineInfo, nullptr, &pipeline_));
+    device.debugUtils().setObjectName(VK_OBJECT_TYPE_PIPELINE, pipeline_,
+                                      pipelineName);
 
     if (fragShaderModule != VK_NULL_HANDLE)
         vkDestroyShaderModule(device_->logicalDevice(), fragShaderModule,

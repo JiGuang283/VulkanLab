@@ -96,6 +96,7 @@ add_library(vkl_engine STATIC
     core/DescriptorAllocator.cpp
     core/Device.cpp
     core/FrameSync.cpp
+    core/GpuDebugUtils.cpp
     core/Image.cpp
     core/IncrementalUploadQueue.cpp
     core/Pipeline.cpp
@@ -103,6 +104,7 @@ add_library(vkl_engine STATIC
     core/ResourcePoolSelfTest.cpp
     core/SwapChain.cpp
     core/UploadContext.cpp
+    core/ValidationProfile.cpp
     core/VulkanContext.cpp
     core/VulkanException.cpp
     diagnostics/CaptureService.cpp

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vulkan/vulkan.h>
 
 namespace vkr {
@@ -21,7 +22,8 @@ class UploadContext : public UploadRecorder {
 
     explicit UploadContext(
         Device &device, ResourceLoadStats *stats = nullptr,
-        VkDeviceSize stagingCapacity = kDefaultStagingCapacity);
+        VkDeviceSize stagingCapacity = kDefaultStagingCapacity,
+        std::string debugName = {});
     ~UploadContext();
 
     UploadContext(const UploadContext &) = delete;
@@ -57,6 +59,9 @@ class UploadContext : public UploadRecorder {
     bool                    recording_ = false;
     bool                    hasCommands_ = false;
     bool                    oversizedBatch_ = false;
+    bool                    labelActive_ = false;
+    uint64_t                batchIndex_ = 0;
+    std::string             debugName_;
 };
 
 } // namespace vkr

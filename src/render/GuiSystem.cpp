@@ -1,6 +1,7 @@
 #include "GuiSystem.h"
 
 #include "core/Device.h"
+#include "core/GpuDebugUtils.h"
 #include "core/VulkanCheck.h"
 
 #include <imgui.h>
@@ -33,6 +34,9 @@ GuiSystem::GuiSystem(VkInstance instance, Device &device,
     poolInfo.pPoolSizes = &poolSize;
     VK_CHECK(vkCreateDescriptorPool(device_->logicalDevice(), &poolInfo,
                                     nullptr, &descriptorPool_));
+    device_->debugUtils().setObjectName(VK_OBJECT_TYPE_DESCRIPTOR_POOL,
+                                        descriptorPool_,
+                                        "ImGui/DescriptorPool");
 
     // --- ImGui context ---
     IMGUI_CHECKVERSION();

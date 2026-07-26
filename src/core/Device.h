@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <memory>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -11,6 +12,8 @@
 #include "vk_mem_alloc.h"
 
 namespace vkr {
+
+class GpuDebugUtils;
 
 class Device {
   public:
@@ -35,6 +38,8 @@ class Device {
 
     VmaAllocator allocator() const { return allocator_; }
     AllocatorMemorySnapshot allocatorMemorySnapshot() const;
+    GpuDebugUtils &debugUtils() { return *debugUtils_; }
+    const GpuDebugUtils &debugUtils() const { return *debugUtils_; }
 
   private:
     void pickPhysicalDevice();
@@ -57,6 +62,7 @@ class Device {
     TextureTranscodeTarget textureTranscodeTarget_ =
         TextureTranscodeTarget::Rgba8;
     VmaAllocator          allocator_ = VK_NULL_HANDLE;
+    std::unique_ptr<GpuDebugUtils> debugUtils_;
 };
 
 } // namespace vkr

@@ -2,6 +2,7 @@
 
 #include "MaterialTextureSlot.h"
 #include "core/Device.h"
+#include "core/GpuDebugUtils.h"
 #include "core/VulkanCheck.h"
 
 #include <array>
@@ -40,6 +41,9 @@ void MaterialTemplate::createDescriptorSetLayout() {
 
     VK_CHECK(vkCreateDescriptorSetLayout(device_->logicalDevice(), &layoutInfo,
                                          nullptr, &descriptorSetLayout_));
+    device_->debugUtils().setObjectName(
+        VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, descriptorSetLayout_,
+        "Material/TextureSetLayout");
 }
 
 } // namespace vkr

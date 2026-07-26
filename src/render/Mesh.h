@@ -19,7 +19,7 @@ class Mesh {
 
     Mesh(Device &device, UploadRecorder &upload, const void *vertexData,
          VkDeviceSize vertexSize, const uint32_t *indexData,
-         uint32_t indexCount);
+         uint32_t indexCount, std::string debugName = {});
     ~Mesh() = default;
 
     Mesh(const Mesh &) = delete;

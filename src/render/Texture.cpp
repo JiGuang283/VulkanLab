@@ -1,5 +1,6 @@
 #include "Texture.h"
 #include "TextureData.h"
+#include "core/GpuDebugUtils.h"
 #include "core/Log.h"
 #include "core/UploadRecorder.h"
 #include "core/VulkanCheck.h"
@@ -11,13 +12,16 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <vector>
 
 namespace vkr {
 
 Texture::Texture(Device &device, UploadRecorder &upload, const std::string &path)
-    : device_(&device) {
+    : device_(&device),
+      debugName_("Texture/" +
+                 std::filesystem::path(path).filename().string()) {
     ResourceLoadStats *loadStats = upload.stats();
     int      w = 0, h = 0, c = 0;
     stbi_uc *pixels = stbi_load(path.c_str(), &w, &h, &c, STBI_rgb_alpha);
@@ -52,7 +56,9 @@ Texture::Texture(Device &device, UploadRecorder &upload, const std::string &path
 
 Texture::Texture(Device &device, UploadRecorder &upload,
                  const TextureCreateInfo &info)
-    : device_(&device) {
+    : device_(&device),
+      debugName_(info.debugName.empty() ? "Texture/Unnamed"
+                                        : info.debugName) {
     if (!info.pixels || info.width == 0 || info.height == 0) {
         throw std::runtime_error("TextureCreateInfo: missing pixels/size");
     }
@@ -122,7 +128,7 @@ void Texture::createFromPixels(UploadRecorder &upload, const void *pixels,
         mipLevels_, VK_SAMPLE_COUNT_1_BIT, format, VK_IMAGE_TILING_OPTIMAL,
         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
             VK_IMAGE_USAGE_SAMPLED_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, debugName_ + "/Image");
 
     image_->createView(format, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels_);
 
@@ -191,7 +197,7 @@ void Texture::createFromMipChain(UploadRecorder &upload,
         mipLevels_, VK_SAMPLE_COUNT_1_BIT, info.format,
         VK_IMAGE_TILING_OPTIMAL,
         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, debugName_ + "/Image");
     image_->createView(info.format, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels_);
 
     VkCommandBuffer commandBuffer = upload.commandBuffer();
@@ -241,6 +247,8 @@ void Texture::createSamplerFrom(VkFilter minFilter, VkFilter magFilter,
 
     VK_CHECK(vkCreateSampler(device_->logicalDevice(), &samplerInfo, nullptr,
                              &sampler_));
+    device_->debugUtils().setObjectName(VK_OBJECT_TYPE_SAMPLER, sampler_,
+                                        debugName_ + "/Sampler");
 }
 
 void Texture::transitionImageLayout(VkCommandBuffer cmd, VkImage image,

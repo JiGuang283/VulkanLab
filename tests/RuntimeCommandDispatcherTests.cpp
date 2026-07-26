@@ -104,6 +104,16 @@ class FakeRuntimeHost final : public vkr::RuntimeControlHost {
                       {"yaw", pose.yaw},
                       {"pitch", pose.pitch}});
     }
+    vkr::ControlJson runtimeWindowResize(uint32_t width,
+                                         uint32_t height) override {
+        if (!automationMode) {
+            throw vkr::RuntimeCommandError(
+                "automation_required",
+                "window.resize is available only in automation mode.");
+        }
+        return reply("window.resize",
+                     {{"width", width}, {"height", height}});
+    }
     vkr::ControlJson runtimeRenderStatus() override {
         return reply("render.status");
     }
@@ -145,6 +155,7 @@ class FakeRuntimeHost final : public vkr::RuntimeControlHost {
 
     std::string lastAction;
     bool failSystemInfo = false;
+    bool automationMode = true;
 };
 
 struct DispatchCase {
@@ -204,6 +215,9 @@ void testAllProtocolMethods() {
                 {{"position", {1.0f, 2.0f, 3.0f}},
                  {"yaw", -135.0f},
                  {"pitch", -30.0f}})},
+        {"window.resize", {{"width", uint64_t{1024}},
+                            {"height", uint64_t{720}}},
+         result("window.resize", {{"width", 1024}, {"height", 720}})},
         {"render.status", {}, result("render.status")},
         {"render_settings.get", {}, result("render_settings.get")},
         {"render_settings.set",
@@ -328,6 +342,33 @@ void testValidationAndErrorMapping() {
                  "Parameter 'taskId' must be an unsigned integer.");
     requireError("capture.cancel", {{"taskId", -1}}, "invalid_params",
                  "Parameter 'taskId' must be an unsigned integer.");
+    requireError("window.resize",
+                 {{"width", uint64_t{0}}, {"height", uint64_t{720}}},
+                 "invalid_params",
+                 "Parameter 'width' must be in 1..16384.");
+    requireError("window.resize",
+                 {{"width", uint64_t{1024}},
+                  {"height", uint64_t{16385}}},
+                 "invalid_params",
+                 "Parameter 'height' must be in 1..16384.");
+
+    vkr::RuntimeCommand resizeCommand;
+    resizeCommand.id = 89;
+    resizeCommand.method = "window.resize";
+    resizeCommand.params = {{"width", uint64_t{1024}},
+                            {"height", uint64_t{720}}};
+    FakeRuntimeHost interactiveHost;
+    interactiveHost.automationMode = false;
+    const auto resizeResult =
+        vkr::RuntimeCommandDispatcher{}.dispatch(resizeCommand,
+                                                 interactiveHost);
+    requireDispatcher(
+        resizeResult.response == vkr::makeRuntimeError(
+                                     resizeCommand.id,
+                                     "automation_required",
+                                     "window.resize is available only in "
+                                     "automation mode."),
+        "non-automation resize was not rejected");
 
     vkr::RuntimeCommand command;
     command.id = 88;

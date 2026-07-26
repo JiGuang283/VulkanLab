@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -19,7 +20,8 @@ class IncrementalUploadQueue {
     explicit IncrementalUploadQueue(
         Device &device, ResourceLoadStats *stats = nullptr,
         uint32_t slotCount = 2,
-        VkDeviceSize slotCapacity = kDefaultSlotCapacity);
+        VkDeviceSize slotCapacity = kDefaultSlotCapacity,
+        uint64_t taskId = 0, std::string sceneName = {});
     ~IncrementalUploadQueue();
 
     IncrementalUploadQueue(const IncrementalUploadQueue &) = delete;
@@ -42,6 +44,9 @@ class IncrementalUploadQueue {
     VkDeviceSize copyAlignment_ = 4;
     std::vector<std::unique_ptr<Slot>> slots_;
     Slot *active_ = nullptr;
+    uint64_t taskId_ = 0;
+    uint64_t nextBatchIndex_ = 0;
+    std::string sceneName_;
 };
 
 } // namespace vkr

@@ -2,6 +2,7 @@
 
 #include "Buffer.h"
 #include "Device.h"
+#include "GpuDebugUtils.h"
 #include "VulkanCheck.h"
 #include "diagnostics/SceneLoadStats.h"
 
@@ -13,8 +14,10 @@
 namespace vkr {
 
 UploadContext::UploadContext(Device &device, ResourceLoadStats *stats,
-                             VkDeviceSize stagingCapacity)
-    : device_(&device), stats_(stats), defaultCapacity_(stagingCapacity) {
+                             VkDeviceSize stagingCapacity,
+                             std::string debugName)
+    : device_(&device), stats_(stats), defaultCapacity_(stagingCapacity),
+      debugName_(debugName.empty() ? "Synchronous" : std::move(debugName)) {
     if (defaultCapacity_ == 0)
         throw std::invalid_argument("UploadContext staging capacity is zero");
 
@@ -31,6 +34,9 @@ UploadContext::UploadContext(Device &device, ResourceLoadStats *stats,
     poolInfo.queueFamilyIndex = families.graphicsFamily.value();
     VK_CHECK(vkCreateCommandPool(device.logicalDevice(), &poolInfo, nullptr,
                                  &commandPool_));
+    device.debugUtils().setObjectName(
+        VK_OBJECT_TYPE_COMMAND_POOL, commandPool_,
+        "SceneUpload/" + debugName_ + "/CommandPool");
 
     VkCommandBufferAllocateInfo commandInfo{};
     commandInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -39,11 +45,16 @@ UploadContext::UploadContext(Device &device, ResourceLoadStats *stats,
     commandInfo.commandBufferCount = 1;
     VK_CHECK(vkAllocateCommandBuffers(device.logicalDevice(), &commandInfo,
                                       &commandBuffer_));
+    device.debugUtils().setObjectName(
+        VK_OBJECT_TYPE_COMMAND_BUFFER, commandBuffer_,
+        "SceneUpload/" + debugName_ + "/CommandBuffer");
 
     VkFenceCreateInfo fenceInfo{};
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     VK_CHECK(vkCreateFence(device.logicalDevice(), &fenceInfo, nullptr,
                            &fence_));
+    device.debugUtils().setObjectName(VK_OBJECT_TYPE_FENCE, fence_,
+                                      "SceneUpload/" + debugName_ + "/Fence");
 }
 
 UploadContext::~UploadContext() {
@@ -92,7 +103,8 @@ void UploadContext::ensureStaging(VkDeviceSize capacity, bool allowShrink) {
         *device_, capacity, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT);
+        VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
+        "SceneUpload/" + debugName_ + "/StagingBuffer");
     mapped_ = staging_->map();
     stagingCapacity_ = capacity;
 }
@@ -175,6 +187,10 @@ void UploadContext::beginCommands() {
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VK_CHECK(vkBeginCommandBuffer(commandBuffer_, &beginInfo));
+    labelActive_ = device_->debugUtils().beginLabel(
+        commandBuffer_,
+        "SceneUpload scene=" + debugName_ +
+            " batch=" + std::to_string(batchIndex_));
     recording_ = true;
 }
 
@@ -185,6 +201,10 @@ void UploadContext::flushAndWait() {
         return;
     }
 
+    if (labelActive_) {
+        device_->debugUtils().endLabel(commandBuffer_);
+        labelActive_ = false;
+    }
     VK_CHECK(vkEndCommandBuffer(commandBuffer_));
     recording_ = false;
 
@@ -212,6 +232,7 @@ void UploadContext::flushAndWait() {
     hasCommands_ = false;
     cursor_ = 0;
     oversizedBatch_ = false;
+    ++batchIndex_;
 }
 
 void UploadContext::finish() {

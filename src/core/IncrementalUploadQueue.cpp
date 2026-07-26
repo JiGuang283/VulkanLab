@@ -2,6 +2,7 @@
 
 #include "Buffer.h"
 #include "Device.h"
+#include "GpuDebugUtils.h"
 #include "UploadRecorder.h"
 #include "VulkanCheck.h"
 #include "diagnostics/SceneLoadStats.h"
@@ -31,9 +32,11 @@ VkDeviceSize alignUp(VkDeviceSize value, VkDeviceSize alignment) {
 class IncrementalUploadQueue::Slot final : public UploadRecorder {
   public:
     Slot(Device &device, ResourceLoadStats *stats,
-         VkDeviceSize defaultCapacity)
+         VkDeviceSize defaultCapacity, uint32_t slotIndex,
+         std::string debugPrefix)
         : device_(&device), stats_(stats),
-          defaultCapacity_(defaultCapacity) {
+          defaultCapacity_(defaultCapacity), slotIndex_(slotIndex),
+          debugPrefix_(std::move(debugPrefix)) {
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(device.physicalDevice(), &properties);
         alignment_ = std::max<VkDeviceSize>(
@@ -47,6 +50,10 @@ class IncrementalUploadQueue::Slot final : public UploadRecorder {
         poolInfo.queueFamilyIndex = families.graphicsFamily.value();
         VK_CHECK(vkCreateCommandPool(device.logicalDevice(), &poolInfo,
                                      nullptr, &commandPool_));
+        device.debugUtils().setObjectName(
+            VK_OBJECT_TYPE_COMMAND_POOL, commandPool_,
+            debugPrefix_ + "/Slot" + std::to_string(slotIndex_) +
+                "/CommandPool");
 
         VkCommandBufferAllocateInfo commandInfo{};
         commandInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -55,11 +62,18 @@ class IncrementalUploadQueue::Slot final : public UploadRecorder {
         commandInfo.commandBufferCount = 1;
         VK_CHECK(vkAllocateCommandBuffers(device.logicalDevice(),
                                           &commandInfo, &commandBuffer_));
+        device.debugUtils().setObjectName(
+            VK_OBJECT_TYPE_COMMAND_BUFFER, commandBuffer_,
+            debugPrefix_ + "/Slot" + std::to_string(slotIndex_) +
+                "/CommandBuffer");
 
         VkFenceCreateInfo fenceInfo{};
         fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         VK_CHECK(vkCreateFence(device.logicalDevice(), &fenceInfo, nullptr,
                                &fence_));
+        device.debugUtils().setObjectName(
+            VK_OBJECT_TYPE_FENCE, fence_,
+            debugPrefix_ + "/Slot" + std::to_string(slotIndex_) + "/Fence");
     }
 
     ~Slot() override {
@@ -122,6 +136,8 @@ class IncrementalUploadQueue::Slot final : public UploadRecorder {
             beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
             beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
             VK_CHECK(vkBeginCommandBuffer(commandBuffer_, &beginInfo));
+            labelActive_ = device_->debugUtils().beginLabel(
+                commandBuffer_, batchLabel_);
             recording_ = true;
         }
         hasCommands_ = true;
@@ -132,10 +148,19 @@ class IncrementalUploadQueue::Slot final : public UploadRecorder {
 
     bool hasCommands() const { return hasCommands_; }
     bool inFlight() const { return inFlight_; }
+    void setBatchLabel(std::string label) {
+        if (hasCommands_ || recording_ || inFlight_)
+            throw std::logic_error("Cannot relabel an active upload slot");
+        batchLabel_ = std::move(label);
+    }
 
     void submit() {
         if (!hasCommands_)
             return;
+        if (labelActive_) {
+            device_->debugUtils().endLabel(commandBuffer_);
+            labelActive_ = false;
+        }
         VK_CHECK(vkEndCommandBuffer(commandBuffer_));
         recording_ = false;
         VkSubmitInfo submitInfo{};
@@ -193,10 +218,13 @@ class IncrementalUploadQueue::Slot final : public UploadRecorder {
             *device_, capacity, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT);
+            VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
+            debugPrefix_ + "/Slot" + std::to_string(slotIndex_) +
+                "/StagingBuffer");
         mapped_ = staging_->map();
         capacity_ = capacity;
         cursor_ = 0;
+        batchLabel_.clear();
     }
 
     void resetAfterCompletion() {
@@ -223,12 +251,18 @@ class IncrementalUploadQueue::Slot final : public UploadRecorder {
     bool recording_ = false;
     bool hasCommands_ = false;
     bool inFlight_ = false;
+    bool labelActive_ = false;
+    uint32_t slotIndex_ = 0;
+    std::string debugPrefix_;
+    std::string batchLabel_;
 };
 
 IncrementalUploadQueue::IncrementalUploadQueue(
     Device &device, ResourceLoadStats *stats, uint32_t slotCount,
-    VkDeviceSize slotCapacity)
-    : device_(&device), stats_(stats), defaultCapacity_(slotCapacity) {
+    VkDeviceSize slotCapacity, uint64_t taskId, std::string sceneName)
+    : device_(&device), stats_(stats), defaultCapacity_(slotCapacity),
+      taskId_(taskId),
+      sceneName_(sceneName.empty() ? "Unknown" : std::move(sceneName)) {
     if (slotCount < 2 || slotCapacity == 0)
         throw std::invalid_argument("Incremental upload queue requires slots");
     VkPhysicalDeviceProperties properties{};
@@ -237,8 +271,10 @@ IncrementalUploadQueue::IncrementalUploadQueue(
         16, properties.limits.optimalBufferCopyOffsetAlignment);
     slots_.reserve(slotCount);
     for (uint32_t i = 0; i < slotCount; ++i) {
-        slots_.push_back(
-            std::make_unique<Slot>(device, stats, slotCapacity));
+        slots_.push_back(std::make_unique<Slot>(
+            device, stats, slotCapacity, i,
+            "SceneUpload/" + sceneName_ + "/Task" +
+                std::to_string(taskId_)));
     }
 }
 
@@ -258,6 +294,9 @@ UploadRecorder *IncrementalUploadQueue::acquire(
     for (auto &slot : slots_) {
         if (!slot->inFlight() && !slot->hasCommands()) {
             slot->prepare(requiredBytes);
+            slot->setBatchLabel(
+                "SceneUpload task=" + std::to_string(taskId_) +
+                " batch=" + std::to_string(nextBatchIndex_++));
             active_ = slot.get();
             return active_;
         }

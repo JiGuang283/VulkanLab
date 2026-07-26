@@ -1,5 +1,6 @@
 #pragma once
 #include "vk_mem_alloc.h"
+#include <string>
 #include <vulkan/vulkan.h>
 
 namespace vkr {
@@ -10,7 +11,8 @@ class Image {
   public:
     Image(Device &device, uint32_t width, uint32_t height, uint32_t mipLevels,
           VkSampleCountFlagBits samples, VkFormat format, VkImageTiling tiling,
-          VkImageUsageFlags usage, VkMemoryPropertyFlags memProps);
+          VkImageUsageFlags usage, VkMemoryPropertyFlags memProps,
+          std::string debugName = {});
     ~Image();
 
     Image(const Image &) = delete;
@@ -32,6 +34,7 @@ class Image {
     VkImage       image_ = VK_NULL_HANDLE;
     VmaAllocation allocation_ = VK_NULL_HANDLE;
     VkImageView   view_ = VK_NULL_HANDLE;
+    std::string   debugName_;
 };
 
 } // namespace vkr

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <initializer_list>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -21,7 +22,8 @@ class DescriptorAllocator {
     VkDescriptorSet allocate(VkDescriptorSetLayout layout);
     VkDescriptorSet allocate(
         VkDescriptorSetLayout layout,
-        std::initializer_list<VkDescriptorPoolSize> descriptorCounts);
+        std::initializer_list<VkDescriptorPoolSize> descriptorCounts,
+        std::string_view debugName = {});
     void free(VkDescriptorSet set) noexcept;
     void            resetPools();
 
@@ -52,6 +54,7 @@ class DescriptorAllocator {
     std::vector<PoolState> usedPools_;
     std::vector<PoolState> freePools_;
     std::unordered_map<VkDescriptorSet, AllocationState> allocations_;
+    uint32_t poolSerial_ = 0;
 };
 
 } // namespace vkr

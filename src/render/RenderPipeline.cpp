@@ -4,6 +4,7 @@
 #include "GpuPassProfiler.h"
 #include "RenderQueue.h"
 #include "RenderResourceRegistry.h"
+#include "core/GpuDebugUtils.h"
 #include "core/SwapChain.h"
 #include "render/pass/IRenderPass.h"
 
@@ -56,7 +57,12 @@ void RenderPipeline::execute(const RenderFrameContext &frame,
         if (profiler)
             profiler->beginPass(frame.cmd, frame.frameIndex, passIndex);
         auto &pass = passes_[passIndex];
-        pass->execute(frame, resources, queue);
+        if (frame.debugUtils) {
+            ScopedGpuLabel label(*frame.debugUtils, frame.cmd, pass->name());
+            pass->execute(frame, resources, queue);
+        } else {
+            pass->execute(frame, resources, queue);
+        }
         if (profiler)
             profiler->endPass(frame.cmd, frame.frameIndex, passIndex);
     }

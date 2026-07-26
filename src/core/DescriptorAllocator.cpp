@@ -1,9 +1,11 @@
 #include "DescriptorAllocator.h"
 
 #include "Device.h"
+#include "GpuDebugUtils.h"
 #include "VulkanException.h"
 
 #include <array>
+#include <string>
 #include <utility>
 
 namespace vkr {
@@ -38,7 +40,8 @@ VkDescriptorSet DescriptorAllocator::allocate(VkDescriptorSetLayout layout) {
 
 VkDescriptorSet DescriptorAllocator::allocate(
     VkDescriptorSetLayout layout,
-    std::initializer_list<VkDescriptorPoolSize> descriptorCounts) {
+    std::initializer_list<VkDescriptorPoolSize> descriptorCounts,
+    std::string_view debugName) {
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorSetCount = 1;
@@ -56,6 +59,8 @@ VkDescriptorSet DescriptorAllocator::allocate(
             set, AllocationState{
                      pool->pool,
                      std::vector<VkDescriptorPoolSize>(descriptorCounts)});
+        device_->debugUtils().setObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET, set,
+                                            debugName);
         return set;
     }
 
@@ -72,6 +77,8 @@ VkDescriptorSet DescriptorAllocator::allocate(
                 set, AllocationState{
                          pool->pool,
                          std::vector<VkDescriptorPoolSize>(descriptorCounts)});
+            device_->debugUtils().setObjectName(
+                VK_OBJECT_TYPE_DESCRIPTOR_SET, set, debugName);
             return set;
         }
     }
@@ -136,6 +143,9 @@ DescriptorAllocator::PoolState DescriptorAllocator::createPool() {
     if (result != VK_SUCCESS)
         throw VulkanException(result, "vkCreateDescriptorPool", __FILE__,
                               __LINE__);
+    device_->debugUtils().setObjectName(
+        VK_OBJECT_TYPE_DESCRIPTOR_POOL, pool.pool,
+        "DescriptorAllocator/Pool/" + std::to_string(poolSerial_++));
     resetState(pool);
     return pool;
 }

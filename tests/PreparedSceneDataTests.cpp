@@ -28,6 +28,7 @@ void runRuntimeCommandDispatcherTests();
 void runRuntimeControlProtocolTests();
 void runBuildInfoTests();
 void runDiagnosticsConfigTests();
+void runValidationProfileTests();
 void runSubmissionSerialTrackerTests();
 void runCaptureTests();
 void runRenderTestSpecTests();
@@ -40,6 +41,7 @@ void runPipelineKeyTests();
 void runShaderRegistryTests();
 void runShaderContractTests();
 void runGpuPassProfilerTests();
+void runGpuDebugUtilsTests();
 
 namespace {
 
@@ -186,6 +188,7 @@ int main(int argc, char **argv) {
         runRuntimeControlProtocolTests();
         runBuildInfoTests();
         runDiagnosticsConfigTests();
+        runValidationProfileTests();
         runSubmissionSerialTrackerTests();
         runCaptureTests();
         runRenderTestSpecTests();
@@ -198,6 +201,7 @@ int main(int argc, char **argv) {
         runShaderRegistryTests();
         runShaderContractTests();
         runGpuPassProfilerTests();
+        runGpuDebugUtilsTests();
         std::cout << "VulkanLab CPU tests passed\n";
         return 0;
     } catch (const std::exception &error) {

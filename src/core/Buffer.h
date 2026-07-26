@@ -1,5 +1,6 @@
 #pragma once
 #include "vk_mem_alloc.h"
+#include <string>
 #include <vulkan/vulkan.h>
 
 namespace vkr {
@@ -10,7 +11,8 @@ class Buffer {
   public:
     Buffer(Device &device, VkDeviceSize size, VkBufferUsageFlags usage,
            VkMemoryPropertyFlags memProps,
-           VmaAllocationCreateFlags allocationFlags = 0);
+           VmaAllocationCreateFlags allocationFlags = 0,
+           std::string debugName = {});
     ~Buffer();
 
     Buffer(const Buffer &) = delete;

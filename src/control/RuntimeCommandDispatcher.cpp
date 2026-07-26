@@ -53,6 +53,17 @@ uint32_t requiredUint32(const RuntimeCommand &command, const char *name) {
     return static_cast<uint32_t>(*value);
 }
 
+uint32_t requiredWindowDimension(const RuntimeCommand &command,
+                                 const char *name) {
+    const uint32_t value = requiredUint32(command, name);
+    if (value < 1 || value > 16384) {
+        throw RuntimeCommandError(
+            "invalid_params", std::string("Parameter '") + name +
+                                  "' must be in 1..16384.");
+    }
+    return value;
+}
+
 uint64_t requiredUint64(const RuntimeCommand &command, const char *name) {
     const std::optional<uint64_t> value = optionalUnsigned(command, name);
     if (!value) {
@@ -240,6 +251,10 @@ RuntimeDispatchResult RuntimeCommandDispatcher::dispatch(
             result = host.runtimeCameraGet();
         } else if (command.method == "camera.set") {
             result = host.runtimeCameraSet(requiredCameraPose(command));
+        } else if (command.method == "window.resize") {
+            result = host.runtimeWindowResize(
+                requiredWindowDimension(command, "width"),
+                requiredWindowDimension(command, "height"));
         } else if (command.method == "render.status") {
             result = host.runtimeRenderStatus();
         } else if (command.method == "render_settings.get") {

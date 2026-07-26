@@ -14,6 +14,7 @@
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
 #include "core/FrameSync.h"
+#include "core/GpuDebugUtils.h"
 #include "core/Log.h"
 #include "core/ResourcePoolSelfTest.h"
 #include "core/SwapChain.h"
@@ -681,9 +682,13 @@ void Application::init() {
     input_ = std::make_unique<InputManager>(*window_);
 
     auto extensions = Window::getRequiredVulkanExtensions();
+    VulkanContextOptions contextOptions;
+    contextOptions.validationProfile = config_.validationProfile;
+    contextOptions.validationAllowed = !projectContext_.cookedPackage;
+    contextOptions.debugUtilsRequested = !projectContext_.cookedPackage;
     context_ = std::make_unique<VulkanContext>(
         [this](VkInstance inst) { return window_->createSurface(inst); },
-        std::move(extensions), config_.enableValidation);
+        std::move(extensions), contextOptions);
     device_ = std::make_unique<Device>(*context_);
     descriptorAllocator_ = std::make_unique<DescriptorAllocator>(*device_);
     swapChain_ =
@@ -788,7 +793,9 @@ void Application::loadScene(int index, bool replaceCurrent) {
         {
             ScopedLoadTimer factoryTimer(&stats.sceneFactoryMs);
             if (entry.factory) {
-                UploadContext upload(*device_, &stats.resources);
+                UploadContext upload(
+                    *device_, &stats.resources,
+                    UploadContext::kDefaultStagingCapacity, entry.name);
                 loadedScene = entry.factory(*device_, upload,
                                             *descriptorAllocator_,
                                             sceneLoadContext_);
@@ -1411,7 +1418,14 @@ ControlJson Application::runtimeSystemInfo() {
     }
     if (captureService_ && swapChain_->captureSupported())
         capabilities.push_back("capture");
+    if (config_.diagnostics.automationMode)
+        capabilities.push_back("window_resize");
     const ShaderVariant *shader = &currentShaderVariant();
+    const ValidationStatus validation = context_->validationStatus();
+    const ControlJson validationFallback =
+        validation.fallbackReason.empty()
+            ? ControlJson(nullptr)
+            : ControlJson(validation.fallbackReason);
     return {
         {"application", "VulkanLab"},
         {"protocolVersion", control::kProtocolVersion},
@@ -1445,7 +1459,18 @@ ControlJson Application::runtimeSystemInfo() {
           {"windowResizable", config_.diagnostics.windowResizable()},
           {"guiVisible", config_.diagnostics.guiVisible},
           {"runtimePipeSuffix", config_.diagnostics.runtimePipeSuffix},
-          {"captureRoot", projectContext_.captureRoot.u8string()}}},
+          {"captureRoot", projectContext_.captureRoot.u8string()},
+          {"validation",
+           {{"requested", validationProfileName(validation.requested)},
+            {"actual", validationProfileName(validation.actual)},
+            {"layerAvailable", validation.layerAvailable},
+            {"validationFeaturesAvailable",
+             validation.validationFeaturesAvailable},
+            {"debugUtilsAvailable", validation.debugUtilsAvailable},
+            {"debugUtilsEnabled", validation.debugUtilsEnabled},
+            {"fallbackReason", validationFallback},
+            {"warningCount", validation.warningCount},
+            {"errorCount", validation.errorCount}}}}},
         {"projectRoot", projectContext_.projectRoot.u8string()},
         {"runtimeRoot", projectContext_.runtimeRoot.u8string()},
         {"assetMode", assetImportModeName(config_.assetImportMode)},
@@ -1792,6 +1817,17 @@ Application::runtimeCameraSet(const RuntimeCameraPose &pose) {
         {pose.position[0], pose.position[1], pose.position[2]});
     camera_.setYawPitch(pose.yaw, pose.pitch);
     return runtimeCameraGet();
+}
+
+ControlJson Application::runtimeWindowResize(uint32_t width,
+                                             uint32_t height) {
+    if (!config_.diagnostics.automationMode) {
+        throw RuntimeCommandError(
+            "automation_required",
+            "window.resize is available only in automation mode.");
+    }
+    window_->resize(width, height);
+    return {{"width", width}, {"height", height}};
 }
 
 ControlJson Application::runtimeRenderStatus() {
@@ -3614,11 +3650,17 @@ void Application::mainLoop() {
             gui_->discardFrame();
             frameGui = nullptr;
         }
-        renderer_->renderFrame(*ctx, renderQueue_, *pipelineCache_, frameGui,
-                               currentShaderVariant(), renderView);
-        if (captureSelection) {
-            captureService_->recordCopy(ctx->cmd,
-                                        swapChain_->image(ctx->imageIndex));
+        {
+            ScopedGpuLabel frameLabel(
+                device_->debugUtils(), ctx->cmd,
+                "Frame " + std::to_string(presentedFrameCount_ + 1));
+            renderer_->renderFrame(*ctx, renderQueue_, *pipelineCache_,
+                                   frameGui, currentShaderVariant(),
+                                   renderView);
+            if (captureSelection) {
+                captureService_->recordCopy(
+                    ctx->cmd, swapChain_->image(ctx->imageIndex));
+            }
         }
         const uint64_t submissionSerial = frameSync_->endFrame(*ctx);
         ++presentedFrameCount_;

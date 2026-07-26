@@ -42,7 +42,7 @@ std::string utf8Argument(const wchar_t *value) {
 
 void printUsage(std::ostream &out) {
     out << "Usage: VulkanLab.exe [--project <path>] [--runtime-control] "
-           "[--runtime-control-pipe <suffix>] "
+           "[--runtime-control-pipe <suffix>] [--validation <profile>] "
            "[--asset-mode <mode>] [--cache-root <path>] [diagnostics] "
            "[--help]\n"
         << "\n"
@@ -57,6 +57,8 @@ void printUsage(std::ostream &out) {
         << "  --asset-mode <mode>  ondemand, readonly, or cooked-only.\n"
         << "  --asset-tool <path>  Override VulkanLabAssetTool.exe path.\n"
         << "  --cache-root <path>  Override the derived asset cache root.\n"
+        << "  --validation <profile>  Use off, core, sync, or gpu "
+           "validation (default: core).\n"
         << "  --automation      Enable deterministic automation behavior.\n"
         << "  --window-size <WxH>  Use a fixed, non-resizable window size.\n"
         << "  --fixed-delta <seconds>  Advance scene simulation by a fixed "
@@ -137,6 +139,12 @@ bool parseArguments(int argc, wchar_t **argv, vkr::Config &config) {
             config.derivedTextureCachePath =
                 std::filesystem::path(argv[i]).u8string();
             config.cachePathExplicit = true;
+        } else if (argument == L"--validation") {
+            if (++i >= argc)
+                throw std::invalid_argument(
+                    "--validation requires a profile");
+            config.validationProfile =
+                vkr::parseValidationProfile(utf8Argument(argv[i]));
         } else if (argument == L"--help") {
             return false;
         } else {
@@ -196,7 +204,6 @@ int wmain(int argc, wchar_t **argv) {
                     "Cooked catalog profile does not match package manifest");
             }
             config.assetImportMode = vkr::AssetImportMode::CookedOnly;
-            config.enableValidation = false;
             config.gltfMaxTextureSize =
                 catalog.profile(projectContext.packageProfileId).textureLimit;
             config.derivedTextureCachePath =

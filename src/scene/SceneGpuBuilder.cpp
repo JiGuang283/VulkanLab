@@ -65,7 +65,9 @@ SceneGpuBuilder::SceneGpuBuilder(
     if (!task_ || !prepared_)
         throw std::invalid_argument("SceneGpuBuilder requires task and data");
     uploadQueue_ = std::make_unique<IncrementalUploadQueue>(
-        device, &task_->stats.resources);
+        device, &task_->stats.resources, 2,
+        IncrementalUploadQueue::kDefaultSlotCapacity, task_->id,
+        task_->sceneName);
     scene_ = std::make_unique<Scene>();
     textures_.reserve(prepared_->textures.size());
     meshes_.reserve(prepared_->meshes.size());
@@ -133,6 +135,9 @@ void SceneGpuBuilder::pump(const Budget &budget) {
                 info.format = index == 2 ? VK_FORMAT_R8G8B8A8_UNORM
                                          : VK_FORMAT_R8G8B8A8_SRGB;
                 info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+                info.debugName =
+                    "Scene/" + task_->sceneName + "/FallbackTexture/" +
+                    std::to_string(index);
                 fallbackBuildTextures_.push_back(
                     std::make_shared<Texture>(*device_, *recorder, info));
                 recordedBytes += 4;
@@ -165,6 +170,11 @@ void SceneGpuBuilder::pump(const Budget &budget) {
             info.mipmapMode = source.mipmapMode;
             info.wrapU = source.wrapU;
             info.wrapV = source.wrapV;
+            info.debugName =
+                "Scene/" + task_->sceneName + "/Texture/" +
+                std::to_string(textureIndex_) +
+                (source.debugName.empty() ? std::string{}
+                                          : "/" + source.debugName);
             std::vector<TextureMipLevelInfo> mipLevels;
             if (source.image->kind ==
                 PreparedTextureDataKind::PrebuiltMipChain) {
@@ -213,7 +223,11 @@ void SceneGpuBuilder::pump(const Budget &budget) {
             meshes_.push_back(std::make_shared<Mesh>(
                 *device_, *recorder, source.vertices.data(), vertexBytes,
                 source.indices.data(),
-                static_cast<uint32_t>(source.indices.size())));
+                static_cast<uint32_t>(source.indices.size()),
+                "Scene/" + task_->sceneName + "/Mesh/" +
+                    std::to_string(meshIndex_) +
+                    (source.debugName.empty() ? std::string{}
+                                              : "/" + source.debugName)));
             source.vertices.clear();
             source.vertices.shrink_to_fit();
             source.indices.clear();

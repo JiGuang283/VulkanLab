@@ -30,6 +30,7 @@ class Window {
     bool shouldClose() const;
     void setShouldClose(bool value);
     void pollEvents();
+    void resize(uint32_t width, uint32_t height);
 
     GLFWwindow *handle() const { return window_; }
     void *nativeHandle() const;

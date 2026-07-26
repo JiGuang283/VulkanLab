@@ -1,4 +1,5 @@
 #include "Device.h"
+#include "GpuDebugUtils.h"
 #include "Log.h"
 #include "VulkanCheck.h"
 
@@ -7,8 +8,6 @@
 #include <vector>
 
 namespace {
-const std::vector<const char *> validationLayers = {
-    "VK_LAYER_KHRONOS_validation"};
 const std::vector<const char *> deviceExtensions = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 } // namespace
@@ -18,10 +17,19 @@ namespace vkr {
 Device::Device(VulkanContext &ctx) : ctx_(ctx) {
     pickPhysicalDevice();
     createLogicalDevice();
+    debugUtils_ =
+        std::make_unique<GpuDebugUtils>(device_, ctx_.debugUtilsEnabled());
+    debugUtils_->setObjectName(VK_OBJECT_TYPE_DEVICE, device_,
+                               "Device/Logical");
+    debugUtils_->setObjectName(VK_OBJECT_TYPE_QUEUE, graphicsQueue_,
+                               "Queue/Graphics");
+    debugUtils_->setObjectName(VK_OBJECT_TYPE_QUEUE, presentQueue_,
+                               "Queue/Present");
     createAllocator();
 }
 Device::~Device() {
     vmaDestroyAllocator(allocator_);
+    debugUtils_.reset();
     vkDestroyDevice(device_, nullptr);
 }
 
@@ -185,14 +193,6 @@ void Device::createLogicalDevice() {
     createInfo.enabledExtensionCount =
         static_cast<uint32_t>(deviceExtensions.size());
     createInfo.ppEnabledExtensionNames = deviceExtensions.data();
-
-    if (ctx_.validationEnabled()) {
-        createInfo.enabledLayerCount =
-            static_cast<uint32_t>(validationLayers.size());
-        createInfo.ppEnabledLayerNames = validationLayers.data();
-    } else {
-        createInfo.enabledLayerCount = 0;
-    }
 
     VK_CHECK(vkCreateDevice(physicalDevice_, &createInfo, nullptr, &device_));
 

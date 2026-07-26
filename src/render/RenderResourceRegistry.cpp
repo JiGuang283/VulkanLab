@@ -1,6 +1,7 @@
 #include "render/RenderResourceRegistry.h"
 
 #include "core/Device.h"
+#include "core/GpuDebugUtils.h"
 #include "core/Image.h"
 #include "core/VulkanCheck.h"
 #include "render/DirectionalShadow.h"
@@ -237,11 +238,17 @@ void RenderResourceRegistry::createImageEntry(uint32_t index) {
             : 1;
     auto &entry = images_.at(index);
     entry.resize(count);
-    for (auto &image : entry) {
+    for (uint32_t frameIndex = 0; frameIndex < entry.size(); ++frameIndex) {
+        auto &image = entry[frameIndex];
+        const std::string debugName =
+            "RenderTarget/" + desc.name +
+            (desc.multiplicity == RenderResourceMultiplicity::PerFrame
+                 ? "/Frame" + std::to_string(frameIndex)
+                 : std::string{});
         image = std::make_unique<Image>(
             *device_, imageExtent.width, imageExtent.height, desc.mipLevels,
             desc.samples, desc.format, desc.tiling, desc.usage,
-            desc.memoryProperties);
+            desc.memoryProperties, debugName);
         image->createView(desc.format, desc.aspect, desc.mipLevels);
     }
 }
@@ -266,6 +273,9 @@ void RenderResourceRegistry::createSamplerEntry(uint32_t index) {
     info.borderColor = desc.borderColor;
     VK_CHECK(vkCreateSampler(device_->logicalDevice(), &info, nullptr,
                              &samplers_.at(index)));
+    device_->debugUtils().setObjectName(
+        VK_OBJECT_TYPE_SAMPLER, samplers_.at(index),
+        "RenderTarget/" + desc.name);
 }
 
 RendererResourceHandles

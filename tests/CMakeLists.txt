@@ -15,6 +15,7 @@ add_executable(VulkanLabCpuTests
     RuntimeControlProtocolTests.cpp
     BuildInfoTests.cpp
     DiagnosticsConfigTests.cpp
+    ValidationProfileTests.cpp
     SubmissionSerialTrackerTests.cpp
     CaptureTests.cpp
     RenderTestSpecTests.cpp
@@ -27,6 +28,7 @@ add_executable(VulkanLabCpuTests
     ShaderRegistryTests.cpp
     ShaderContractTests.cpp
     GpuPassProfilerTests.cpp
+    GpuDebugUtilsTests.cpp
 )
 target_link_libraries(VulkanLabCpuTests PRIVATE
     vkl_build_options

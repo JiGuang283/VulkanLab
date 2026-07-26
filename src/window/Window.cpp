@@ -46,6 +46,15 @@ void Window::pollEvents() {
     glfwPollEvents();
 }
 
+void Window::resize(uint32_t width, uint32_t height) {
+    if (width < 1 || height < 1 || width > 16384 || height > 16384)
+        throw std::out_of_range("window size must be in 1..16384");
+    width_ = width;
+    height_ = height;
+    glfwSetWindowSize(window_, static_cast<int>(width),
+                      static_cast<int>(height));
+}
+
 void *Window::nativeHandle() const {
 #ifdef _WIN32
     return glfwGetWin32Window(window_);
@@ -60,6 +69,10 @@ void Window::setResizeCallback(ResizeCallback cb) {
 
 void Window::framebufferResizeCallback(GLFWwindow *w, int width, int height) {
     auto *data = static_cast<WindowUserData *>(glfwGetWindowUserPointer(w));
+    if (data->window && width > 0 && height > 0) {
+        data->window->width_ = static_cast<uint32_t>(width);
+        data->window->height_ = static_cast<uint32_t>(height);
+    }
     if (data->window && data->window->resizeCallback_)
         data->window->resizeCallback_(width, height);
 }

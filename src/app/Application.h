@@ -135,6 +135,8 @@ class Application final : public RuntimeControlHost {
     ControlJson runtimeShaderSet(const std::string &name) override;
     ControlJson runtimeCameraGet() override;
     ControlJson runtimeCameraSet(const RuntimeCameraPose &pose) override;
+    ControlJson runtimeWindowResize(uint32_t width,
+                                    uint32_t height) override;
     ControlJson runtimeRenderStatus() override;
     ControlJson runtimeRenderSettingsGet() override;
     ControlJson

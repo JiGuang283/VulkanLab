@@ -33,6 +33,7 @@ struct TextureCreateInfo {
     VkSamplerAddressMode wrapV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     const TextureMipLevelInfo *mipLevels = nullptr;
     uint32_t mipLevelCount = 0;
+    std::string debugName;
 };
 
 class Texture {
@@ -78,6 +79,7 @@ class Texture {
     std::unique_ptr<Image> image_;
     VkSampler sampler_ = VK_NULL_HANDLE;
     uint32_t mipLevels_ = 1;
+    std::string debugName_;
 };
 
 } // namespace vkr

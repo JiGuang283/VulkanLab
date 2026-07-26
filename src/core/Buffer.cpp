@@ -1,5 +1,6 @@
 #include "Buffer.h"
 #include "Device.h"
+#include "GpuDebugUtils.h"
 #include "VulkanCheck.h"
 
 #include <stdexcept>
@@ -8,7 +9,8 @@ namespace vkr {
 
 Buffer::Buffer(Device &device, VkDeviceSize size, VkBufferUsageFlags usage,
                VkMemoryPropertyFlags memProps,
-               VmaAllocationCreateFlags allocationFlags)
+               VmaAllocationCreateFlags allocationFlags,
+               std::string debugName)
     : device_(&device), size_(size) {
     VkBufferCreateInfo bufferInfo{};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -22,6 +24,12 @@ Buffer::Buffer(Device &device, VkDeviceSize size, VkBufferUsageFlags usage,
 
     VK_CHECK(vmaCreateBuffer(device.allocator(), &bufferInfo, &allocCI,
                              &buffer_, &allocation_, nullptr));
+    if (!debugName.empty()) {
+        device.debugUtils().setObjectName(VK_OBJECT_TYPE_BUFFER, buffer_,
+                                          debugName);
+        vmaSetAllocationName(device.allocator(), allocation_,
+                             debugName.c_str());
+    }
 }
 
 Buffer::~Buffer() {

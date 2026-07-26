@@ -52,6 +52,7 @@ void printUsage() {
         << "  VulkanLabCtl [--json] shader set <name>\n"
         << "  VulkanLabCtl [--json] camera get\n"
         << "  VulkanLabCtl [--json] camera set --position X,Y,Z --yaw Y --pitch P\n"
+        << "  VulkanLabCtl [--json] window resize <width> <height>\n"
         << "  VulkanLabCtl [--json] render status\n"
         << "  VulkanLabCtl [--json] render-settings get\n"
         << "  VulkanLabCtl [--json] render-settings set "
@@ -301,6 +302,17 @@ ParsedCommand parseCommand(int argc, char **argv) {
         parsed.params = {{"position", parsePosition(*position)},
                          {"yaw", parseFiniteFloat(*yaw, "--yaw")},
                          {"pitch", parseFiniteFloat(*pitch, "--pitch")}};
+    } else if (args.size() == 4 && args[0] == "window" &&
+               args[1] == "resize") {
+        parsed.method = "window.resize";
+        const uint32_t width =
+            parsePositiveUint32(args[2], "window width");
+        const uint32_t height =
+            parsePositiveUint32(args[3], "window height");
+        if (width > 16384 || height > 16384)
+            throw std::invalid_argument(
+                "window dimensions must be in 1..16384");
+        parsed.params = {{"width", width}, {"height", height}};
     } else if (args == std::vector<std::string>{"render", "status"}) {
         parsed.method = "render.status";
     } else if (args == std::vector<std::string>{"render", "wait"}) {
@@ -570,6 +582,9 @@ void printHuman(const std::string &method, const Json &result) {
                   << "yaw: " << result.at("yaw").get<float>()
                   << ", pitch: " << result.at("pitch").get<float>()
                   << '\n';
+    } else if (method == "window.resize") {
+        std::cout << result.at("width").get<uint32_t>() << "x"
+                  << result.at("height").get<uint32_t>() << '\n';
     } else if (method == "render.status") {
         const Json &scene = result.at("scene");
         std::cout << "scene: "

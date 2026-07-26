@@ -1,9 +1,11 @@
 #include "FrameSync.h"
 #include "Device.h"
+#include "GpuDebugUtils.h"
 #include "SwapChain.h"
 #include "VulkanCheck.h"
 
 #include <stdexcept>
+#include <string>
 
 namespace vkr {
 
@@ -123,8 +125,13 @@ void FrameSync::onSwapChainRecreated() {
     VkSemaphoreCreateInfo semInfo{};
     semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
     renderFinished_.resize(swapChain_->imageCount());
-    for (auto &sem : renderFinished_)
+    for (uint32_t index = 0; index < renderFinished_.size(); ++index) {
+        auto &sem = renderFinished_[index];
         VK_CHECK(vkCreateSemaphore(d, &semInfo, nullptr, &sem));
+        device_->debugUtils().setObjectName(
+            VK_OBJECT_TYPE_SEMAPHORE, sem,
+            "Swapchain/Image" + std::to_string(index) + "/RenderFinished");
+    }
 
     swapChainOutOfDate_ = false;
 }
@@ -141,6 +148,9 @@ VkCommandBuffer FrameSync::beginSingleTimeCommands() {
     VkCommandBuffer commandBuffer;
     vkAllocateCommandBuffers(device_->logicalDevice(), &allocInfo,
                              &commandBuffer);
+    device_->debugUtils().setObjectName(
+        VK_OBJECT_TYPE_COMMAND_BUFFER, commandBuffer,
+        "FrameSync/SingleTimeCommandBuffer");
 
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -180,6 +190,9 @@ void FrameSync::createCommandPool() {
 
     VK_CHECK(vkCreateCommandPool(device_->logicalDevice(), &poolInfo, nullptr,
                                  &commandPool_));
+    device_->debugUtils().setObjectName(VK_OBJECT_TYPE_COMMAND_POOL,
+                                        commandPool_,
+                                        "Frame/CommandPool");
 }
 
 void FrameSync::createCommandBuffers() {
@@ -195,6 +208,9 @@ void FrameSync::createCommandBuffers() {
                                       buffers.data()));
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         frames_[i].commandBuffer = buffers[i];
+        device_->debugUtils().setObjectName(
+            VK_OBJECT_TYPE_COMMAND_BUFFER, frames_[i].commandBuffer,
+            "Frame/" + std::to_string(i) + "/CommandBuffer");
     }
 }
 
@@ -207,15 +223,26 @@ void FrameSync::createSyncObjects() {
     fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
     VkDevice d = device_->logicalDevice();
-    for (auto &f : frames_) {
+    for (uint32_t frame = 0; frame < frames_.size(); ++frame) {
+        auto &f = frames_[frame];
         VK_CHECK(
             vkCreateSemaphore(d, &semaphoreInfo, nullptr, &f.imageAvailable));
         VK_CHECK(vkCreateFence(d, &fenceInfo, nullptr, &f.inFlight));
+        device_->debugUtils().setObjectName(
+            VK_OBJECT_TYPE_SEMAPHORE, f.imageAvailable,
+            "Frame/" + std::to_string(frame) + "/ImageAvailable");
+        device_->debugUtils().setObjectName(
+            VK_OBJECT_TYPE_FENCE, f.inFlight,
+            "Frame/" + std::to_string(frame) + "/InFlightFence");
     }
 
     renderFinished_.resize(swapChain_->imageCount());
-    for (auto &sem : renderFinished_) {
+    for (uint32_t index = 0; index < renderFinished_.size(); ++index) {
+        auto &sem = renderFinished_[index];
         VK_CHECK(vkCreateSemaphore(d, &semaphoreInfo, nullptr, &sem));
+        device_->debugUtils().setObjectName(
+            VK_OBJECT_TYPE_SEMAPHORE, sem,
+            "Swapchain/Image" + std::to_string(index) + "/RenderFinished");
     }
 }
 

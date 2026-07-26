@@ -28,6 +28,8 @@ struct ColorBlendAttachmentConfig {
 };
 
 struct PipelineConfig {
+    // Diagnostic-only label. Pipeline cache equality intentionally ignores it.
+    std::string debugName;
     std::string vertShaderPath;
     std::string fragShaderPath;
 

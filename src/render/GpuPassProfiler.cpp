@@ -1,6 +1,7 @@
 #include "GpuPassProfiler.h"
 
 #include "core/Device.h"
+#include "core/GpuDebugUtils.h"
 #include "core/VulkanCheck.h"
 
 #include <limits>
@@ -58,6 +59,8 @@ GpuPassProfiler::GpuPassProfiler(Device &device,
     info.queryCount = queriesPerFrame_ * MAX_FRAMES_IN_FLIGHT;
     VK_CHECK(vkCreateQueryPool(device.logicalDevice(), &info, nullptr,
                                &queryPool_));
+    device.debugUtils().setObjectName(VK_OBJECT_TYPE_QUERY_POOL, queryPool_,
+                                      "Diagnostics/GpuPassTimestamps");
 }
 
 GpuPassProfiler::~GpuPassProfiler() {

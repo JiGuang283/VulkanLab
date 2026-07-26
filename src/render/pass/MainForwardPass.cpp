@@ -2,6 +2,7 @@
 
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
+#include "core/GpuDebugUtils.h"
 #include "core/Image.h"
 #include "core/Pipeline.h"
 #include "core/PipelineConfigBuilder.h"
@@ -139,6 +140,8 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
     const auto drawCommands = [&](const std::vector<RenderCommand> &commands,
                                   RenderQueueType queueType) {
         const bool transparent = queueType == RenderQueueType::Transparent;
+        ScopedGpuLabel queueLabel(device_->debugUtils(), frame.cmd,
+                                  transparent ? "Transparent" : "Opaque");
         Pipeline *boundPipeline = nullptr;
 
         for (const auto &command : commands) {
@@ -162,6 +165,10 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                 frame.shaderVariant->vertSpvPath;
             pipelineConfig.fragShaderPath =
                 frame.shaderVariant->fragSpvPath;
+            pipelineConfig.debugName =
+                "Pipeline/MainForward/" + frame.shaderVariant->id + "/" +
+                (transparent ? "Transparent" : "Opaque") + "/" +
+                (cullMode == VK_CULL_MODE_NONE ? "CullNone" : "CullBack");
             pipelineConfig.descriptorLayouts.insert(
                 pipelineConfig.descriptorLayouts.begin(),
                 frame.globalDescriptorSetLayout);
@@ -305,6 +312,9 @@ void MainForwardPass::createRenderPass(
     info.pDependencies = dependencies.data();
     VK_CHECK(vkCreateRenderPass(device_->logicalDevice(), &info, nullptr,
                                 &renderPass_));
+    device_->debugUtils().setObjectName(VK_OBJECT_TYPE_RENDER_PASS,
+                                        renderPass_,
+                                        "Pass/MainForward/RenderPass");
 }
 
 void MainForwardPass::createFramebuffers(
@@ -338,6 +348,10 @@ void MainForwardPass::createFramebuffers(
         info.layers = 1;
         VK_CHECK(vkCreateFramebuffer(device_->logicalDevice(), &info, nullptr,
                                      &framebuffers_[frameIndex]));
+        device_->debugUtils().setObjectName(
+            VK_OBJECT_TYPE_FRAMEBUFFER, framebuffers_[frameIndex],
+            "Pass/MainForward/Framebuffer/Frame" +
+                std::to_string(frameIndex));
     }
 }
 
@@ -356,12 +370,17 @@ void MainForwardPass::createShadowDescriptors(
     VK_CHECK(vkCreateDescriptorSetLayout(device_->logicalDevice(), &layoutInfo,
                                          nullptr,
                                          &shadowDescriptorSetLayout_));
+    device_->debugUtils().setObjectName(
+        VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, shadowDescriptorSetLayout_,
+        "Pass/MainForward/ShadowDescriptorSetLayout");
 
     for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT;
          ++frameIndex) {
         shadowDescriptorSets_[frameIndex] = descriptorAllocator_->allocate(
             shadowDescriptorSetLayout_,
-            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1}});
+            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1}},
+            "Pass/MainForward/ShadowDescriptorSet/Frame" +
+                std::to_string(frameIndex));
         VkDescriptorImageInfo imageInfo{};
         imageInfo.sampler =
             resources.sampler(resourceHandles_.shadowSampler);

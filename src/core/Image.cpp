@@ -1,14 +1,17 @@
 #include "Image.h"
 #include "Device.h"
+#include "GpuDebugUtils.h"
 #include "VulkanCheck.h"
+
+#include <utility>
 
 namespace vkr {
 
 Image::Image(Device &device, uint32_t width, uint32_t height,
              uint32_t mipLevels, VkSampleCountFlagBits samples, VkFormat format,
              VkImageTiling tiling, VkImageUsageFlags usage,
-             VkMemoryPropertyFlags memProps)
-    : device_(&device) {
+             VkMemoryPropertyFlags memProps, std::string debugName)
+    : device_(&device), debugName_(std::move(debugName)) {
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -27,6 +30,12 @@ Image::Image(Device &device, uint32_t width, uint32_t height,
 
     VK_CHECK(vmaCreateImage(device.allocator(), &imageInfo, &allocCI, &image_,
                             &allocation_, nullptr));
+    if (!debugName_.empty()) {
+        device.debugUtils().setObjectName(VK_OBJECT_TYPE_IMAGE, image_,
+                                          debugName_);
+        vmaSetAllocationName(device.allocator(), allocation_,
+                             debugName_.c_str());
+    }
 }
 
 Image::~Image() {
@@ -35,7 +44,8 @@ Image::~Image() {
 
 Image::Image(Image &&other) noexcept
     : device_(other.device_), image_(other.image_),
-      allocation_(other.allocation_), view_(other.view_) {
+      allocation_(other.allocation_), view_(other.view_),
+      debugName_(std::move(other.debugName_)) {
     other.device_ = nullptr;
     other.image_ = VK_NULL_HANDLE;
     other.allocation_ = VK_NULL_HANDLE;
@@ -49,6 +59,7 @@ Image &Image::operator=(Image &&other) noexcept {
         image_ = other.image_;
         allocation_ = other.allocation_;
         view_ = other.view_;
+        debugName_ = std::move(other.debugName_);
         other.device_ = nullptr;
         other.image_ = VK_NULL_HANDLE;
         other.allocation_ = VK_NULL_HANDLE;
@@ -77,6 +88,10 @@ void Image::createView(VkFormat format, VkImageAspectFlags aspectFlags,
 
     VK_CHECK(vkCreateImageView(device_->logicalDevice(), &viewInfo, nullptr,
                                &view_));
+    if (!debugName_.empty()) {
+        device_->debugUtils().setObjectName(VK_OBJECT_TYPE_IMAGE_VIEW, view_,
+                                            debugName_ + "/View");
+    }
 }
 
 void Image::cleanup() {

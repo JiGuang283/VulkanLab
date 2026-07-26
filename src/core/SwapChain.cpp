@@ -1,10 +1,12 @@
 #include "SwapChain.h"
 #include "Device.h"
+#include "GpuDebugUtils.h"
 #include "VulkanCheck.h"
 #include "diagnostics/CaptureTypes.h"
 
 #include <algorithm>
 #include <limits>
+#include <string>
 
 namespace vkr {
 
@@ -133,12 +135,19 @@ void SwapChain::createSwapChain() {
 
     VK_CHECK(vkCreateSwapchainKHR(device_->logicalDevice(), &createInfo,
                                   nullptr, &swapChain_));
+    device_->debugUtils().setObjectName(VK_OBJECT_TYPE_SWAPCHAIN_KHR,
+                                        swapChain_, "Swapchain");
 
     vkGetSwapchainImagesKHR(device_->logicalDevice(), swapChain_, &imageCount,
                             nullptr);
     images_.resize(imageCount);
     vkGetSwapchainImagesKHR(device_->logicalDevice(), swapChain_, &imageCount,
                             images_.data());
+    for (uint32_t index = 0; index < images_.size(); ++index) {
+        device_->debugUtils().setObjectName(
+            VK_OBJECT_TYPE_IMAGE, images_[index],
+            "Swapchain/Image" + std::to_string(index));
+    }
 
     imageFormat_ = surfaceFormat.format;
     extent_ = extent;
@@ -152,6 +161,9 @@ void SwapChain::createImageViews() {
     for (size_t i = 0; i < images_.size(); i++) {
         imageViews_[i] = createImageView(images_[i], imageFormat_,
                                          VK_IMAGE_ASPECT_COLOR_BIT, 1);
+        device_->debugUtils().setObjectName(
+            VK_OBJECT_TYPE_IMAGE_VIEW, imageViews_[i],
+            "Swapchain/Image" + std::to_string(i) + "/View");
     }
 }
 

@@ -4,6 +4,7 @@
 #include "assets/ContentHash.h"
 #include "core/Buffer.h"
 #include "core/Device.h"
+#include "core/GpuDebugUtils.h"
 #include "core/Log.h"
 #include "core/SwapChain.h"
 
@@ -263,7 +264,8 @@ class CaptureService::Impl {
             active.buffer = std::make_unique<Buffer>(
                 *device_, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
-                VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT);
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
+                "Capture/Task" + std::to_string(taskId) + "/ReadbackBuffer");
             active.buffer->map();
             task->result.width = extent.width;
             task->result.height = extent.height;
@@ -285,6 +287,8 @@ class CaptureService::Impl {
                 "capture copy requires a recording task");
         if (active_->copyRecorded)
             throw std::logic_error("capture copy was already recorded");
+        ScopedGpuLabel label(device_->debugUtils(), commandBuffer,
+                             "ScreenshotCopy");
 
         VkImageMemoryBarrier toTransfer{};
         toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;

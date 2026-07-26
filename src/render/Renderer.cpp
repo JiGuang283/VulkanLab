@@ -3,6 +3,7 @@
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
 #include "core/FrameSync.h"
+#include "core/GpuDebugUtils.h"
 #include "core/SwapChain.h"
 #include "core/VulkanCheck.h"
 #include "render/FrameGpuData.h"
@@ -67,6 +68,7 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.globalDescriptorSet = globalDescriptorSet(frame.frameIndex);
     renderFrame.globalDescriptorSetLayout = globalDescriptorSetLayout_;
     renderFrame.pipelineCache = &pipelineCache;
+    renderFrame.debugUtils = &device_->debugUtils();
     renderFrame.gui = gui;
     renderFrame.shaderVariant = &shaderVariant;
     renderFrame.view = &view;
@@ -96,12 +98,13 @@ void Renderer::createUniformBuffers() {
     if (uniformBufferSize_ == 0)
         return;
     uniformBuffers_.resize(MAX_FRAMES_IN_FLIGHT);
-    for (auto &buf : uniformBuffers_) {
-        buf = std::make_unique<Buffer>(
+    for (uint32_t frame = 0; frame < uniformBuffers_.size(); ++frame) {
+        uniformBuffers_[frame] = std::make_unique<Buffer>(
             *device_, uniformBufferSize_, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        buf->map();
+                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            0, "Frame/" + std::to_string(frame) + "/GlobalUniformBuffer");
+        uniformBuffers_[frame]->map();
     }
 }
 
@@ -121,6 +124,9 @@ void Renderer::createGlobalDescriptorSetLayout() {
     VK_CHECK(vkCreateDescriptorSetLayout(device_->logicalDevice(), &layoutInfo,
                                          nullptr,
                                          &globalDescriptorSetLayout_));
+    device_->debugUtils().setObjectName(
+        VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, globalDescriptorSetLayout_,
+        "Frame/GlobalDescriptorSetLayout");
 }
 
 void Renderer::createGlobalDescriptorSets() {
@@ -128,10 +134,12 @@ void Renderer::createGlobalDescriptorSets() {
         return;
 
     globalDescriptorSets_.resize(MAX_FRAMES_IN_FLIGHT);
-    for (auto &set : globalDescriptorSets_)
-        set = descriptorAllocator_->allocate(
+    for (uint32_t frame = 0; frame < globalDescriptorSets_.size(); ++frame) {
+        globalDescriptorSets_[frame] = descriptorAllocator_->allocate(
             globalDescriptorSetLayout_,
-            {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}});
+            {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}},
+            "Frame/" + std::to_string(frame) + "/GlobalDescriptorSet");
+    }
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         VkDescriptorBufferInfo bufferInfo{};

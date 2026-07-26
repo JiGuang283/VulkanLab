@@ -2,6 +2,7 @@
 
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
+#include "core/GpuDebugUtils.h"
 #include "core/Image.h"
 #include "core/Pipeline.h"
 #include "core/PipelineConfigBuilder.h"
@@ -112,43 +113,53 @@ void ToneMapPass::execute(const RenderFrameContext &frame,
     const VkRect2D scissor{{0, 0}, frame.extent};
     vkCmdSetScissor(frame.cmd, 0, 1, &scissor);
 
-    PipelineConfig config =
-        PipelineConfigBuilder{}
-            .shaders(fullscreenVertPath_, toneMapFragPath_)
-            .vertexLayout(VertexLayout{})
-            .rasterization(VK_CULL_MODE_NONE,
-                           VK_FRONT_FACE_COUNTER_CLOCKWISE)
-            .depth(false, false)
-            .blending(false)
-            .msaa(VK_SAMPLE_COUNT_1_BIT)
-            .descriptorLayout(sourceDescriptorSetLayout_)
-            .pushConstant({VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                           sizeof(ToneMapPushConstants)})
-            .build();
+    {
+        ScopedGpuLabel label(device_->debugUtils(), frame.cmd,
+                             "FullscreenToneMap");
+        PipelineConfig config =
+            PipelineConfigBuilder{}
+                .shaders(fullscreenVertPath_, toneMapFragPath_)
+                .vertexLayout(VertexLayout{})
+                .rasterization(VK_CULL_MODE_NONE,
+                               VK_FRONT_FACE_COUNTER_CLOCKWISE)
+                .depth(false, false)
+                .blending(false)
+                .msaa(VK_SAMPLE_COUNT_1_BIT)
+                .descriptorLayout(sourceDescriptorSetLayout_)
+                .pushConstant({VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                               sizeof(ToneMapPushConstants)})
+                .build();
+        config.debugName = "Pipeline/ToneMap/Fullscreen";
 
-    Pipeline &pipeline =
-        frame.pipelineCache->getOrCreate(renderPass_, std::move(config));
-    vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                      pipeline.handle());
-    const VkDescriptorSet sourceSet =
-        sourceDescriptorSets_.at(frame.frameIndex);
-    vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            pipeline.layout(), 0, 1, &sourceSet, 0, nullptr);
+        Pipeline &pipeline =
+            frame.pipelineCache->getOrCreate(renderPass_, std::move(config));
+        vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          pipeline.handle());
+        const VkDescriptorSet sourceSet =
+            sourceDescriptorSets_.at(frame.frameIndex);
+        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pipeline.layout(), 0, 1, &sourceSet, 0,
+                                nullptr);
 
-    ToneMapPushConstants push{};
-    if (frame.shaderVariant->toneMapping ==
-        ShaderToneMappingPolicy::Configurable) {
-        push.exposureEv = frame.view->settings.exposureEv;
-        push.toneMapper = toneMapperValue(frame.view->settings.toneMapper);
-        push.applyExposure = 1;
+        ToneMapPushConstants push{};
+        if (frame.shaderVariant->toneMapping ==
+            ShaderToneMappingPolicy::Configurable) {
+            push.exposureEv = frame.view->settings.exposureEv;
+            push.toneMapper = toneMapperValue(frame.view->settings.toneMapper);
+            push.applyExposure = 1;
+        }
+        push.encodeGamma =
+            isSrgbFormat(swapChain_->imageFormat()) ? 0u : 1u;
+        vkCmdPushConstants(frame.cmd, pipeline.layout(),
+                           VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push),
+                           &push);
+        vkCmdDraw(frame.cmd, 3, 1, 0, 0);
     }
-    push.encodeGamma = isSrgbFormat(swapChain_->imageFormat()) ? 0u : 1u;
-    vkCmdPushConstants(frame.cmd, pipeline.layout(),
-                       VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
-    vkCmdDraw(frame.cmd, 3, 1, 0, 0);
 
-    if (frame.gui)
+    if (frame.gui) {
+        ScopedGpuLabel label(device_->debugUtils(), frame.cmd, "ImGui");
         frame.gui->render(frame.cmd);
+    }
     vkCmdEndRenderPass(frame.cmd);
 }
 
@@ -190,6 +201,9 @@ void ToneMapPass::createRenderPass() {
     info.pDependencies = &dependency;
     VK_CHECK(vkCreateRenderPass(device_->logicalDevice(), &info, nullptr,
                                 &renderPass_));
+    device_->debugUtils().setObjectName(VK_OBJECT_TYPE_RENDER_PASS,
+                                        renderPass_,
+                                        "Pass/ToneMap/RenderPass");
 }
 
 void ToneMapPass::createFramebuffers() {
@@ -206,6 +220,9 @@ void ToneMapPass::createFramebuffers() {
         info.layers = 1;
         VK_CHECK(vkCreateFramebuffer(device_->logicalDevice(), &info, nullptr,
                                      &framebuffers_[index]));
+        device_->debugUtils().setObjectName(
+            VK_OBJECT_TYPE_FRAMEBUFFER, framebuffers_[index],
+            "Pass/ToneMap/Framebuffer/Image" + std::to_string(index));
     }
 }
 
@@ -229,10 +246,15 @@ void ToneMapPass::createDescriptors(
     VK_CHECK(vkCreateDescriptorSetLayout(device_->logicalDevice(), &info,
                                          nullptr,
                                          &sourceDescriptorSetLayout_));
-    for (VkDescriptorSet &set : sourceDescriptorSets_) {
-        set = descriptorAllocator_->allocate(
+    device_->debugUtils().setObjectName(
+        VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, sourceDescriptorSetLayout_,
+        "Pass/ToneMap/SourceDescriptorSetLayout");
+    for (uint32_t frame = 0; frame < sourceDescriptorSets_.size(); ++frame) {
+        sourceDescriptorSets_[frame] = descriptorAllocator_->allocate(
             sourceDescriptorSetLayout_,
-            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1}});
+            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1}},
+            "Pass/ToneMap/SourceDescriptorSet/Frame" +
+                std::to_string(frame));
     }
     updateDescriptors(resources);
 }

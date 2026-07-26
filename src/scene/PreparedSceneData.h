@@ -35,6 +35,7 @@ struct PreparedImage {
 
 struct PreparedTexture {
     std::shared_ptr<const PreparedImage> image;
+    std::string          debugName;
     VkFormat             format = VK_FORMAT_R8G8B8A8_SRGB;
     VkFilter             minFilter = VK_FILTER_LINEAR;
     VkFilter             magFilter = VK_FILTER_LINEAR;
@@ -54,6 +55,7 @@ struct PreparedMesh {
     std::vector<Vertex>   vertices;
     std::vector<uint32_t> indices;
     Bounds                bounds;
+    std::string           debugName;
 };
 
 struct PreparedObject {

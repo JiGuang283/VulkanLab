@@ -9,6 +9,7 @@
 #include <tiny_obj_loader.h>
 
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <stdexcept>
 #include <unordered_map>
@@ -45,7 +46,7 @@ Bounds computeBounds(const void *vertexData, VkDeviceSize vertexSize) {
 
 Mesh::Mesh(Device &device, UploadRecorder &upload, const void *vertexData,
            VkDeviceSize vertexSize, const uint32_t *indexData,
-           uint32_t indexCount)
+           uint32_t indexCount, std::string debugName)
     : indexCount_(indexCount) {
     ResourceLoadStats *loadStats = upload.stats();
     localBounds_ = computeBounds(vertexData, vertexSize);
@@ -61,11 +62,16 @@ Mesh::Mesh(Device &device, UploadRecorder &upload, const void *vertexData,
         std::make_unique<Buffer>(device, vertexSize,
                                  VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0,
+                                 debugName.empty()
+                                     ? "Mesh/Unnamed/VertexBuffer"
+                                     : debugName + "/VertexBuffer");
     indexBuffer_ = std::make_unique<Buffer>(
         device, indexSize,
         VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0,
+        debugName.empty() ? "Mesh/Unnamed/IndexBuffer"
+                          : debugName + "/IndexBuffer");
 
     upload.uploadBuffer(vertexData, vertexSize, vertexBuffer_->handle());
     upload.uploadBuffer(indexData, indexSize, indexBuffer_->handle());
@@ -135,7 +141,9 @@ std::unique_ptr<Mesh> Mesh::fromOBJ(Device &device, UploadRecorder &upload,
     return std::make_unique<Mesh>(
         device, upload, vertices.data(),
         static_cast<VkDeviceSize>(sizeof(Vertex) * vertices.size()),
-        indices.data(), static_cast<uint32_t>(indices.size()));
+        indices.data(), static_cast<uint32_t>(indices.size()),
+        "Scene/OBJ/Mesh/" +
+            std::filesystem::path(path).filename().string());
 }
 
 void Mesh::bind(VkCommandBuffer cmd) const {

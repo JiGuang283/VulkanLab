@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/ValidationProfile.h"
 #include "diagnostics/DiagnosticsConfig.h"
 
 #include <cstdint>
@@ -25,7 +26,7 @@ struct Config {
     bool assetToolPathExplicit = false;
 
     // ---- 渲染设置 ----
-    bool enableValidation = true;
+    ValidationProfile validationProfile = ValidationProfile::Core;
     bool enableRuntimeControl = false;
     uint32_t gltfMaxTextureSize = 2048; // 0 = Full resolution
     AssetImportMode assetImportMode = AssetImportMode::OnDemand;

@@ -1,6 +1,7 @@
 #include "DirectionalShadowPass.h"
 
 #include "core/Device.h"
+#include "core/GpuDebugUtils.h"
 #include "core/Image.h"
 #include "core/Pipeline.h"
 #include "core/PipelineConfigBuilder.h"
@@ -78,8 +79,12 @@ void DirectionalShadowPass::execute(const RenderFrameContext &frame,
                             kDirectionalShadowMapSize}};
     vkCmdSetScissor(frame.cmd, 0, 1, &scissor);
 
-    if (frame.view && frame.view->directionalShadow.enabled)
-        drawCasters(frame, queue);
+    {
+        ScopedGpuLabel label(device_->debugUtils(), frame.cmd,
+                             "ShadowCasters");
+        if (frame.view && frame.view->directionalShadow.enabled)
+            drawCasters(frame, queue);
+    }
     vkCmdEndRenderPass(frame.cmd);
 }
 
@@ -118,6 +123,10 @@ void DirectionalShadowPass::drawCasters(const RenderFrameContext &frame,
         if (alphaMasked)
             builder.descriptorLayout(materialTemplate.descriptorSetLayout());
         PipelineConfig config = builder.build();
+        config.debugName =
+            "Pipeline/DirectionalShadow/" +
+            std::string(alphaMasked ? "Mask" : "Opaque") + "/" +
+            (cullMode == VK_CULL_MODE_NONE ? "CullNone" : "CullBack");
 
         Pipeline &pipeline = frame.pipelineCache->getOrCreate(
             renderPass_, std::move(config));
@@ -198,6 +207,9 @@ void DirectionalShadowPass::createRenderPass(
     info.pDependencies = dependencies.data();
     VK_CHECK(vkCreateRenderPass(device_->logicalDevice(), &info, nullptr,
                                 &renderPass_));
+    device_->debugUtils().setObjectName(
+        VK_OBJECT_TYPE_RENDER_PASS, renderPass_,
+        "Pass/DirectionalShadow/RenderPass");
 }
 
 void DirectionalShadowPass::createFramebuffers(
@@ -216,6 +228,10 @@ void DirectionalShadowPass::createFramebuffers(
         info.layers = 1;
         VK_CHECK(vkCreateFramebuffer(device_->logicalDevice(), &info, nullptr,
                                      &framebuffers_[frameIndex]));
+        device_->debugUtils().setObjectName(
+            VK_OBJECT_TYPE_FRAMEBUFFER, framebuffers_[frameIndex],
+            "Pass/DirectionalShadow/Framebuffer/Frame" +
+                std::to_string(frameIndex));
     }
 }
 

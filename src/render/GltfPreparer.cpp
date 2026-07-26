@@ -509,6 +509,9 @@ PreparedSceneData GltfPreparer::prepare(
             return cached->second;
 
         PreparedTexture preparedTexture;
+        preparedTexture.debugName =
+            "Image" + std::to_string(texture.source) + "/" +
+            textureSemanticName(semantic);
         preparedTexture.format = format;
         applySampler(gltf, texture, preparedTexture);
         auto image = derivedCache.load(texture.source, semantic,
@@ -676,6 +679,9 @@ PreparedSceneData GltfPreparer::prepare(
             }
 
             PreparedMesh result;
+            result.debugName =
+                "Mesh" + std::to_string(meshIndex) + "/Primitive" +
+                std::to_string(primitiveIndex);
             result.vertices.resize(static_cast<size_t>(vertexCount));
             for (uint64_t vertexIndex = 0; vertexIndex < vertexCount;
                  ++vertexIndex) {

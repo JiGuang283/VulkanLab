@@ -57,6 +57,16 @@ void testEquivalentConfigsShareIdentity() {
                                      baseConfig()};
     requirePipelineKey(!(first == otherPass),
                        "render pass was omitted from pipeline identity");
+
+    vkr::PipelineConfig renamedConfig = baseConfig();
+    renamedConfig.debugName = "Pipeline/DiagnosticsOnly";
+    const vkr::PipelineKey renamed{fakeHandle<VkRenderPass>(1),
+                                   std::move(renamedConfig)};
+    requirePipelineKey(first == renamed,
+                       "diagnostic pipeline name changed cache identity");
+    requirePipelineKey(vkr::PipelineKeyHash{}(first) ==
+                           vkr::PipelineKeyHash{}(renamed),
+                       "diagnostic pipeline name changed cache hash");
 }
 
 void testAllImmutableStateParticipates() {
