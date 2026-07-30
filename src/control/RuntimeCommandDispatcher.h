@@ -8,6 +8,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace vkr {
 
@@ -19,7 +20,8 @@ struct RuntimeCameraPose {
 
 class RuntimeCommandError : public std::runtime_error {
   public:
-    RuntimeCommandError(std::string code, std::string message);
+    RuntimeCommandError(std::string code, std::string message)
+        : std::runtime_error(std::move(message)), code_(std::move(code)) {}
 
     const std::string &code() const { return code_; }
 

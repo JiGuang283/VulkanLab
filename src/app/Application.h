@@ -54,7 +54,11 @@ enum class InputMode {
     CameraDrag, // 按住右键，相机接管鼠标
 };
 
-class Application final : public RuntimeControlHost {
+class Application final
+#if VKL_ENABLE_RUNTIME_CONTROL
+    : public RuntimeControlHost
+#endif
+{
   public:
     Application(const Config &config, ProjectContext projectContext,
                 SceneCatalog catalog);
@@ -78,7 +82,9 @@ class Application final : public RuntimeControlHost {
     void handleSwapChainRecreate();
     const ShaderVariant &currentShaderVariant() const;
     void applySceneCameraDefaults();
+#if VKL_ENABLE_RUNTIME_CONTROL
     void processRuntimeCommand();
+#endif
     void updateSceneLoading();
     void updateEnvironmentLoading();
     void updateAssetImports();
@@ -123,6 +129,7 @@ class Application final : public RuntimeControlHost {
     void refreshArtifactStatus(int sceneIndex, bool admission = false);
     void refreshAllArtifactStatuses();
 
+#if VKL_ENABLE_RUNTIME_CONTROL
     ControlJson runtimeSystemInfo() override;
     ControlJson runtimeSceneList() override;
     ControlJson runtimeSceneCurrent() override;
@@ -166,6 +173,7 @@ class Application final : public RuntimeControlHost {
     ControlJson runtimeIndexedArtifactStatus(int index,
                                              const std::string &profileId,
                                              const ArtifactStatus &status) const;
+#endif
 
     Config config_;
     ProjectContext projectContext_;
@@ -207,11 +215,13 @@ class Application final : public RuntimeControlHost {
     std::optional<ArtifactIndexUsage> artifactUsage_;
     std::unique_ptr<SceneAssetOperationState> sceneAssetOperations_;
 
+#if VKL_ENABLE_RUNTIME_CONTROL
     std::unique_ptr<RuntimeCommandQueue> runtimeCommandQueue_;
     std::unique_ptr<NamedPipeServerWin32> runtimeControlServer_;
     RuntimeCommandDispatcher runtimeCommandDispatcher_;
     std::shared_ptr<RuntimeCommand> pendingQuitCommand_;
     std::string runtimeControlPipeName_;
+#endif
     std::unique_ptr<SceneImportUiState> sceneImportUi_;
     std::unique_ptr<EditorUiState> editorUi_;
     uint64_t lastCaptureTaskId_ = 0;

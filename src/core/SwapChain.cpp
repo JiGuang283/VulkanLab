@@ -1,4 +1,5 @@
 #include "SwapChain.h"
+#include <BuildFeatures.h>
 #include "Device.h"
 #include "GpuDebugUtils.h"
 #include "VulkanCheck.h"
@@ -96,13 +97,22 @@ void SwapChain::createSwapChain() {
     createInfo.imageColorSpace = surfaceFormat.colorSpace;
     createInfo.imageExtent = extent;
     createInfo.imageArrayLayers = 1;
+#if VKL_ENABLE_CAPTURE
     const bool transferSourceSupported =
         (swapChainSupport.capabilities.supportedUsageFlags &
          VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
     const bool formatSupported =
         describeCaptureFormat(surfaceFormat.format).supported;
+#else
+    constexpr bool transferSourceSupported = false;
+    constexpr bool formatSupported = false;
+#endif
     captureSupported_ = transferSourceSupported && formatSupported;
     captureUnsupportedReason_.clear();
+#if !VKL_ENABLE_CAPTURE
+        captureUnsupportedReason_ =
+            "capture support was not compiled";
+#else
     if (!transferSourceSupported) {
         captureUnsupportedReason_ =
             "surface does not support swapchain TRANSFER_SRC usage";
@@ -110,6 +120,7 @@ void SwapChain::createSwapChain() {
         captureUnsupportedReason_ =
             "swapchain format is not a supported 8-bit RGBA/BGRA format";
     }
+#endif
 
     createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     if (captureSupported_)

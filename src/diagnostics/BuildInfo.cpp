@@ -1,5 +1,6 @@
 #include "BuildInfo.h"
 
+#include <BuildFeatures.h>
 #include <BuildInfoGenerated.h>
 
 namespace vkr {
@@ -10,7 +11,17 @@ const BuildInfo &currentBuildInfo() {
                                 generated::kBuildConfiguration,
                                 generated::kBuildCompiler,
                                 generated::kBuildVulkanSdk,
-                                generated::kBuildGlslc};
+                                generated::kBuildGlslc,
+                                {build::kEditorUi,
+                                 build::kRuntimeControl,
+                                 build::kCapture,
+                                 build::kAssetAuthoring,
+                                 build::kValidation,
+                                 build::kGpuDebugUtils,
+                                 build::kGpuProfiling,
+                                 build::kAssetTool,
+                                 build::kControlTool,
+                                 build::kRenderTest}};
     return info;
 }
 

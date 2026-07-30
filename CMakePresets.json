@@ -14,7 +14,17 @@
       "binaryDir": "${sourceDir}/build/windows-msvc-debug",
       "cacheVariables": {
         "BUILD_TESTING": "ON",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "VKL_ENABLE_EDITOR_UI": "ON",
+        "VKL_ENABLE_RUNTIME_CONTROL": "ON",
+        "VKL_ENABLE_CAPTURE": "ON",
+        "VKL_ENABLE_ASSET_AUTHORING": "ON",
+        "VKL_ENABLE_VALIDATION": "ON",
+        "VKL_ENABLE_GPU_DEBUG_UTILS": "ON",
+        "VKL_ENABLE_GPU_PROFILING": "ON",
+        "VKL_BUILD_ASSET_TOOL": "ON",
+        "VKL_BUILD_CONTROL_TOOL": "ON",
+        "VKL_BUILD_RENDER_TEST": "ON"
       }
     },
     {
@@ -25,7 +35,59 @@
       "binaryDir": "${sourceDir}/build/windows-msvc-release",
       "cacheVariables": {
         "BUILD_TESTING": "ON",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "VKL_ENABLE_EDITOR_UI": "ON",
+        "VKL_ENABLE_RUNTIME_CONTROL": "ON",
+        "VKL_ENABLE_CAPTURE": "ON",
+        "VKL_ENABLE_ASSET_AUTHORING": "ON",
+        "VKL_ENABLE_VALIDATION": "ON",
+        "VKL_ENABLE_GPU_DEBUG_UTILS": "ON",
+        "VKL_ENABLE_GPU_PROFILING": "ON",
+        "VKL_BUILD_ASSET_TOOL": "ON",
+        "VKL_BUILD_CONTROL_TOOL": "ON",
+        "VKL_BUILD_RENDER_TEST": "ON"
+      }
+    },
+    {
+      "name": "windows-msvc-dev-fast",
+      "displayName": "Windows MSVC Fast Development",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/windows-msvc-dev-fast",
+      "cacheVariables": {
+        "BUILD_TESTING": "OFF",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "VKL_ENABLE_EDITOR_UI": "ON",
+        "VKL_ENABLE_RUNTIME_CONTROL": "ON",
+        "VKL_ENABLE_CAPTURE": "ON",
+        "VKL_ENABLE_ASSET_AUTHORING": "ON",
+        "VKL_ENABLE_VALIDATION": "ON",
+        "VKL_ENABLE_GPU_DEBUG_UTILS": "ON",
+        "VKL_ENABLE_GPU_PROFILING": "ON",
+        "VKL_BUILD_ASSET_TOOL": "ON",
+        "VKL_BUILD_CONTROL_TOOL": "OFF",
+        "VKL_BUILD_RENDER_TEST": "OFF"
+      }
+    },
+    {
+      "name": "windows-msvc-runtime",
+      "displayName": "Windows MSVC Minimal Runtime",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/windows-msvc-runtime",
+      "cacheVariables": {
+        "BUILD_TESTING": "OFF",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "VKL_ENABLE_EDITOR_UI": "OFF",
+        "VKL_ENABLE_RUNTIME_CONTROL": "OFF",
+        "VKL_ENABLE_CAPTURE": "OFF",
+        "VKL_ENABLE_ASSET_AUTHORING": "OFF",
+        "VKL_ENABLE_VALIDATION": "OFF",
+        "VKL_ENABLE_GPU_DEBUG_UTILS": "OFF",
+        "VKL_ENABLE_GPU_PROFILING": "OFF",
+        "VKL_BUILD_ASSET_TOOL": "OFF",
+        "VKL_BUILD_CONTROL_TOOL": "OFF",
+        "VKL_BUILD_RENDER_TEST": "OFF"
       }
     }
   ],
@@ -39,6 +101,22 @@
       "name": "windows-msvc-release",
       "configurePreset": "windows-msvc-release",
       "configuration": "Release"
+    },
+    {
+      "name": "windows-msvc-dev-fast",
+      "configurePreset": "windows-msvc-dev-fast",
+      "configuration": "Debug",
+      "targets": [
+        "VulkanLab"
+      ]
+    },
+    {
+      "name": "windows-msvc-runtime",
+      "configurePreset": "windows-msvc-runtime",
+      "configuration": "Release",
+      "targets": [
+        "VulkanLab"
+      ]
     }
   ],
   "testPresets": [

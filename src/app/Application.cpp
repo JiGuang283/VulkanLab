@@ -1,5 +1,7 @@
 #include "Application.h"
 
+#include <BuildFeatures.h>
+
 #include "assets/DerivedAssetPaths.h"
 #include "assets/ContentHash.h"
 #include "assets/ArtifactIndex.h"
@@ -9,9 +11,11 @@
 #include "assets/EnvironmentLoadManager.h"
 #include "assets/SceneImportService.h"
 #include "assets/SceneCatalogEditor.h"
+#if VKL_ENABLE_RUNTIME_CONTROL
 #include "control/NamedPipeServerWin32.h"
 #include "control/RuntimeCommand.h"
 #include "control/RuntimeControlProtocol.h"
+#endif
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
 #include "core/FrameSync.h"
@@ -41,14 +45,20 @@
 #include "scene/SceneRegistryBuilder.h"
 #include "window/InputManager.h"
 #include "window/Window.h"
+#if VKL_ENABLE_EDITOR_UI && VKL_ENABLE_ASSET_AUTHORING
 #include "platform/FileDialogWin32.h"
+#endif
 
+#if VKL_ENABLE_EDITOR_UI
 #include <imgui.h>
+#endif
 
+#if VKL_ENABLE_EDITOR_UI
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <Windows.h>
 #include <shellapi.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -199,6 +209,7 @@ std::string artifactStatusKey(const std::string &sceneId,
     return sceneId + '\n' + profileId;
 }
 
+#if VKL_ENABLE_RUNTIME_CONTROL
 ControlJson assetImportTaskToJson(
     const std::shared_ptr<AssetImportTask> &task) {
     if (!task)
@@ -424,6 +435,7 @@ ControlJson captureTaskToJson(const CaptureTaskSnapshot &task) {
                       ? ControlJson(nullptr)
                       : ControlJson(task.result.error)}};
 }
+#endif
 
 void validateSceneLoadStats(const SceneLoadStats &stats) {
     const double detailedMax =
@@ -592,6 +604,7 @@ struct EditorUiState {
 
 namespace {
 
+#if VKL_ENABLE_RUNTIME_CONTROL
 ControlJson loadOperationToJson(
     const std::shared_ptr<AssetImportTask> &importTask,
     const std::shared_ptr<SceneLoadTask> &loadTask) {
@@ -636,6 +649,7 @@ ControlJson artifactStatusToJson(const SceneEntry &entry,
             {"artifactCount", status.entryCount},
             {"blobBytes", status.blobBytes}};
 }
+#endif
 
 } // namespace
 
@@ -655,15 +669,19 @@ Application::Application(const Config &config, ProjectContext projectContext,
     sceneImportUi_ = std::make_unique<SceneImportUiState>();
     sceneAssetOperations_ = std::make_unique<SceneAssetOperationState>();
     editorUi_ = std::make_unique<EditorUiState>();
+#if VKL_ENABLE_RUNTIME_CONTROL
     runtimeControlPipeName_ =
         control::makeRuntimeControlEndpoint(
             config_.diagnostics.runtimePipeSuffix)
             .nameUtf8;
+#endif
 }
 
 Application::~Application() {
+#if VKL_ENABLE_RUNTIME_CONTROL
     if (runtimeControlServer_)
         runtimeControlServer_->stop();
+#endif
     if (sceneImportUi_) {
         if (sceneImportUi_->worker)
             sceneImportUi_->worker->cancel = true;
@@ -697,6 +715,7 @@ Application::~Application() {
 
 void Application::run() {
     init();
+#if VKL_ENABLE_RUNTIME_CONTROL
     if (config_.enableRuntimeControl) {
         runtimeCommandQueue_ = std::make_unique<RuntimeCommandQueue>();
         runtimeControlServer_ = std::make_unique<NamedPipeServerWin32>(
@@ -717,6 +736,9 @@ void Application::run() {
     }
     if (runtimeControlServer_)
         runtimeControlServer_->stop();
+#else
+    mainLoop();
+#endif
 }
 
 void Application::registerScene(SceneEntry entry) {
@@ -736,8 +758,10 @@ void Application::init() {
     auto extensions = Window::getRequiredVulkanExtensions();
     VulkanContextOptions contextOptions;
     contextOptions.validationProfile = config_.validationProfile;
-    contextOptions.validationAllowed = !projectContext_.cookedPackage;
-    contextOptions.debugUtilsRequested = !projectContext_.cookedPackage;
+    contextOptions.validationAllowed =
+        build::kValidation && !projectContext_.cookedPackage;
+    contextOptions.debugUtilsRequested =
+        build::kGpuDebugUtils && !projectContext_.cookedPackage;
     context_ = std::make_unique<VulkanContext>(
         [this](VkInstance inst) { return window_->createSurface(inst); },
         std::move(extensions), contextOptions);
@@ -760,10 +784,12 @@ void Application::init() {
             shadowOpaque.vertSpvPath, shadowMask.fragSpvPath,
             toneMap.vertSpvPath, toneMap.fragSpvPath,
             skybox.fragSpvPath});
+#if VKL_ENABLE_CAPTURE
     if (!projectContext_.cookedPackage) {
         captureService_ = std::make_unique<CaptureService>(
             *device_, projectContext_.captureRoot);
     }
+#endif
 
     window_->setResizeCallback(
         [this](int, int) { frameSync_->notifyResize(); });
@@ -781,6 +807,7 @@ void Application::init() {
     sceneLoadManager_ = std::make_unique<SceneLoadManager>();
     environmentLoadManager_ =
         std::make_unique<EnvironmentLoadManager>();
+#if VKL_ENABLE_ASSET_AUTHORING
     if (config_.assetImportMode == AssetImportMode::OnDemand) {
         assetImportManager_ = std::make_unique<AssetImportManager>(
             AssetImportManagerOptions{
@@ -791,6 +818,7 @@ void Application::init() {
                 config_.assetImportWorkers,
                 config_.assetImportMemoryBudgetMiB});
     }
+#endif
     sceneLoadContext_.maxTextureSize = config_.gltfMaxTextureSize;
     sceneLoadContext_.derivedTextureCachePath =
         config_.derivedTextureCachePath;
@@ -817,12 +845,14 @@ void Application::init() {
     else
         requestSceneOperation(start);
 
+#if VKL_ENABLE_EDITOR_UI
     if (config_.diagnostics.guiVisible) {
         gui_ = std::make_unique<GuiSystem>(
             context_->instance(), *device_, renderer_->renderPass(),
             window_->handle(), swapChain_->imageCount(),
             swapChain_->imageCount());
     }
+#endif
 }
 
 void Application::loadScene(int index, bool replaceCurrent) {
@@ -1617,6 +1647,7 @@ bool Application::cancelLoadOperation(uint64_t taskId) {
     return assetImportManager_ && assetImportManager_->cancel(taskId);
 }
 
+#if VKL_ENABLE_RUNTIME_CONTROL
 void Application::processRuntimeCommand() {
     if (!runtimeCommandQueue_)
         return;
@@ -1673,7 +1704,18 @@ ControlJson Application::runtimeSystemInfo() {
           {"configuration", build.configuration},
           {"compiler", build.compiler},
           {"vulkanSdk", build.vulkanSdk},
-          {"glslc", build.glslc}}},
+          {"glslc", build.glslc},
+          {"features",
+           {{"editorUi", build.features.editorUi},
+            {"runtimeControl", build.features.runtimeControl},
+            {"capture", build.features.capture},
+            {"assetAuthoring", build.features.assetAuthoring},
+            {"validation", build.features.validation},
+            {"gpuDebugUtils", build.features.gpuDebugUtils},
+            {"gpuProfiling", build.features.gpuProfiling},
+            {"assetTool", build.features.assetTool},
+            {"controlTool", build.features.controlTool},
+            {"renderTest", build.features.renderTest}}}}},
         {"gpu",
          {{"name", gpu.deviceName},
           {"vendorId", gpu.vendorID},
@@ -1954,6 +1996,14 @@ ControlJson Application::runtimeAssetStatus(
 
 ControlJson Application::runtimeAssetImport(const std::string &name,
                                             bool force, bool loadAfter) {
+#if !VKL_ENABLE_ASSET_AUTHORING
+    (void)name;
+    (void)force;
+    (void)loadAfter;
+    throw RuntimeCommandError(
+        "feature_not_compiled",
+        "Asset authoring support was not compiled into this build.");
+#else
     if (config_.assetImportMode != AssetImportMode::OnDemand)
         throw RuntimeCommandError(
             "asset_import_disabled",
@@ -1976,10 +2026,17 @@ ControlJson Application::runtimeAssetImport(const std::string &name,
             artifactStatusKey(entry.id, profileId)));
     result["terminal"] = true;
     return result;
+#endif
 }
 
 ControlJson
 Application::runtimeAssetCancel(std::optional<uint64_t> requestedTaskId) {
+#if !VKL_ENABLE_ASSET_AUTHORING
+    (void)requestedTaskId;
+    throw RuntimeCommandError(
+        "feature_not_compiled",
+        "Asset authoring support was not compiled into this build.");
+#else
     uint64_t taskId = requestedTaskId.value_or(0);
     if (taskId == 0 && assetImportManager_) {
         if (const auto active = assetImportManager_->activeTask())
@@ -1992,6 +2049,7 @@ Application::runtimeAssetCancel(std::optional<uint64_t> requestedTaskId) {
                                   "Asset import cannot be cancelled.");
     }
     return {{"taskId", taskId}, {"cancelRequested", true}};
+#endif
 }
 
 ControlJson Application::runtimeAssetCacheInfo() {
@@ -2211,7 +2269,8 @@ ControlJson Application::runtimeRenderStatus() {
          frameSync_->completedSubmissionSerial()},
         {"presentedFrames", presentedFrameCount_},
         {"gpuTimings",
-         {{"available", gpuTimings.available},
+         {{"compiled", build::kGpuProfiling},
+          {"available", build::kGpuProfiling && gpuTimings.available},
           {"frameSerial", gpuTimings.frameSerial},
           {"passes", std::move(gpuPasses)},
           {"totalMs", gpuTimings.totalMs}}},
@@ -2327,6 +2386,13 @@ ControlJson Application::runtimeEnvironmentReload() {
 
 ControlJson Application::runtimeCaptureScreenshot(const std::string &path,
                                                    bool includeGui) {
+#if !VKL_ENABLE_CAPTURE
+    (void)path;
+    (void)includeGui;
+    throw RuntimeCommandError(
+        "feature_not_compiled",
+        "Capture support was not compiled into this build.");
+#else
     if (!captureService_) {
         throw RuntimeCommandError(
             "capture_disabled",
@@ -2357,9 +2423,16 @@ ControlJson Application::runtimeCaptureScreenshot(const std::string &path,
     } catch (const std::exception &error) {
         throw RuntimeCommandError("capture_failed", error.what());
     }
+#endif
 }
 
 ControlJson Application::runtimeCaptureStatus(uint64_t taskId) {
+#if !VKL_ENABLE_CAPTURE
+    (void)taskId;
+    throw RuntimeCommandError(
+        "feature_not_compiled",
+        "Capture support was not compiled into this build.");
+#else
     if (!captureService_) {
         throw RuntimeCommandError(
             "capture_disabled",
@@ -2371,9 +2444,16 @@ ControlJson Application::runtimeCaptureStatus(uint64_t taskId) {
                                   "Capture task was not found.");
     }
     return captureTaskToJson(*task);
+#endif
 }
 
 ControlJson Application::runtimeCaptureCancel(uint64_t taskId) {
+#if !VKL_ENABLE_CAPTURE
+    (void)taskId;
+    throw RuntimeCommandError(
+        "feature_not_compiled",
+        "Capture support was not compiled into this build.");
+#else
     if (!captureService_) {
         throw RuntimeCommandError(
             "capture_disabled",
@@ -2393,6 +2473,7 @@ ControlJson Application::runtimeCaptureCancel(uint64_t taskId) {
     if (!updated)
         throw std::logic_error("cancelled capture task was not retained");
     return captureTaskToJson(*updated);
+#endif
 }
 
 ControlJson Application::runtimeLastLoadStats() {
@@ -2405,6 +2486,7 @@ ControlJson Application::runtimeLastLoadStats() {
 ControlJson Application::runtimeQuit() {
     return {{"quitting", true}};
 }
+#endif
 
 void Application::applySceneCameraDefaults() {
     constexpr float kFallbackNear = 0.05f;
@@ -2438,25 +2520,33 @@ void Application::applySceneCameraDefaults() {
 }
 
 void Application::updateInputMode() {
+#if VKL_ENABLE_EDITOR_UI
     ImGuiIO *io = gui_ ? &ImGui::GetIO() : nullptr;
+#endif
 
     if (mode_ == InputMode::UI) {
         const bool pressed = input_->isMousePressed(MouseButton::Right);
-        const bool overUI =
-            io && (io->WantCaptureMouse || ImGui::IsAnyItemActive());
+        bool overUI = gui_ && gui_->wantCaptureMouse();
+#if VKL_ENABLE_EDITOR_UI
+        overUI = overUI || (io && ImGui::IsAnyItemActive());
+#endif
         if (pressed && !overUI) {
             savedCursor_ = input_->cursorPos();
             input_->setCursorCaptured(true);
+#if VKL_ENABLE_EDITOR_UI
             if (io)
                 io->ConfigFlags |= ImGuiConfigFlags_NoMouse;
+#endif
             mode_ = InputMode::CameraDrag;
         }
     } else { // CameraDrag
         if (input_->isMouseReleased(MouseButton::Right)) {
             input_->setCursorCaptured(false);
             input_->setCursorPos(savedCursor_);
+#if VKL_ENABLE_EDITOR_UI
             if (io)
                 io->ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+#endif
             mode_ = InputMode::UI;
         }
     }
@@ -2518,6 +2608,7 @@ void Application::refreshSceneRegistry(const std::string &selectSceneId) {
     refreshAllArtifactStatuses();
 }
 
+#if VKL_ENABLE_EDITOR_UI
 void Application::updateSceneImport() {
     SceneImportUiState &ui = *sceneImportUi_;
     if (ui.preflightFuture.valid() &&
@@ -3318,6 +3409,8 @@ void Application::drawAssetsPanel() {
     }
 }
 
+#endif
+
 void Application::requestManualCapture(bool includeGui) {
     captureUiError_.clear();
     if (!captureService_) {
@@ -3336,6 +3429,7 @@ void Application::requestManualCapture(bool includeGui) {
     }
 }
 
+#if VKL_ENABLE_EDITOR_UI
 void Application::drawCapturePanel() {
     if (!captureService_) {
         ImGui::TextDisabled("Capture is unavailable in this package.");
@@ -3931,7 +4025,9 @@ void Application::drawPerformancePanel() {
     if (ImGui::CollapsingHeader("GPU Pass Timings",
                                 ImGuiTreeNodeFlags_DefaultOpen)) {
         const GpuPassTimings &timings = renderer_->gpuPassTimings();
-        if (!timings.available) {
+        if (!build::kGpuProfiling) {
+            ImGui::TextUnformatted("Not compiled");
+        } else if (!timings.available) {
             ImGui::TextUnformatted("Unavailable");
         } else {
             ImGui::Text("Frame Serial: %llu",
@@ -4223,12 +4319,14 @@ void Application::drawGui() {
                     ImGui::PopID();
                     ImGui::EndTabItem();
                 }
+#if VKL_ENABLE_CAPTURE
                 if (ImGui::BeginTabItem("Capture")) {
                     ImGui::PushID("CaptureTab");
                     drawCapturePanel();
                     ImGui::PopID();
                     ImGui::EndTabItem();
                 }
+#endif
                 ImGui::EndTabBar();
             }
             ImGui::EndChild();
@@ -4240,6 +4338,9 @@ void Application::drawGui() {
 
     ImGui::End();
 }
+#else
+void Application::drawGui() {}
+#endif
 
 void Application::handleSwapChainRecreate() {
     const VkExtent2D framebufferExtent = window_->framebufferExtent();
@@ -4282,6 +4383,7 @@ void Application::mainLoop() {
         }
 
         updateAssetImports();
+#if VKL_ENABLE_RUNTIME_CONTROL
         processRuntimeCommand();
         if (pendingQuitCommand_ &&
             pendingQuitCommand_->responseDelivered.load()) {
@@ -4289,6 +4391,7 @@ void Application::mainLoop() {
             pendingQuitCommand_.reset();
             break;
         }
+#endif
 
         // 1. 帧外：场景切�?
         if (pendingSceneIndex_ != -1) {
@@ -4318,8 +4421,10 @@ void Application::mainLoop() {
         }
         if (input_->isKeyDown(Key::Escape))
             window_->setShouldClose(true);
+#if VKL_ENABLE_CAPTURE
         if (input_->isKeyPressed(Key::F12))
             requestManualCapture(captureIncludeGui_);
+#endif
 
         // 5. 场景 tick
         simulationTime = config_.diagnostics.fixedDeltaSeconds

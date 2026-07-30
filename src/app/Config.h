@@ -1,5 +1,7 @@
 #pragma once
 
+#include <BuildFeatures.h>
+
 #include "core/ValidationProfile.h"
 #include "diagnostics/DiagnosticsConfig.h"
 
@@ -26,10 +28,14 @@ struct Config {
     bool assetToolPathExplicit = false;
 
     // ---- 渲染设置 ----
-    ValidationProfile validationProfile = ValidationProfile::Core;
+    ValidationProfile validationProfile =
+        build::kValidation ? ValidationProfile::Core
+                           : ValidationProfile::Off;
     bool enableRuntimeControl = false;
     uint32_t gltfMaxTextureSize = 2048; // 0 = Full resolution
-    AssetImportMode assetImportMode = AssetImportMode::OnDemand;
+    AssetImportMode assetImportMode =
+        build::kAssetAuthoring ? AssetImportMode::OnDemand
+                               : AssetImportMode::ReadOnly;
     bool assetImportModeExplicit = false;
     uint32_t assetImportWorkers = 0;
     uint64_t assetImportMemoryBudgetMiB = 2048;

@@ -55,13 +55,23 @@ target_link_libraries(vkl_asset_core
         bcrypt
 )
 
-add_library(vkl_asset_runtime STATIC
-    assets/AssetImportManager.cpp
+set(VKL_ASSET_RUNTIME_SOURCES
     assets/AssetLoadCoordinator.cpp
     assets/DerivedEnvironmentCache.cpp
     assets/DerivedTextureCache.cpp
     assets/EnvironmentLoadManager.cpp
 )
+if(VKL_ENABLE_ASSET_AUTHORING)
+    list(APPEND VKL_ASSET_RUNTIME_SOURCES
+        assets/AssetImportManager.cpp
+    )
+else()
+    list(APPEND VKL_ASSET_RUNTIME_SOURCES
+        assets/AssetImportManagerDisabled.cpp
+    )
+endif()
+
+add_library(vkl_asset_runtime STATIC ${VKL_ASSET_RUNTIME_SOURCES})
 add_library(VulkanLab::AssetRuntime ALIAS vkl_asset_runtime)
 target_include_directories(vkl_asset_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(vkl_asset_runtime
@@ -77,29 +87,36 @@ target_link_libraries(vkl_asset_runtime
         ktx_read
 )
 
-add_library(vkl_control STATIC
-    control/NamedPipeServerWin32.cpp
-    control/RuntimeControlClientWin32.cpp
-    control/RuntimeCommand.cpp
-    control/RuntimeCommandDispatcher.cpp
-    control/RuntimeControlProtocol.cpp
-)
-add_library(VulkanLab::Control ALIAS vkl_control)
-target_include_directories(vkl_control PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(vkl_control
-    PUBLIC
-        vkl_build_options
-        vkl_json
-    PRIVATE
-        vkl_foundation
-)
+set(VKL_CONTROL_REQUIRED OFF)
+if(VKL_ENABLE_RUNTIME_CONTROL OR VKL_BUILD_CONTROL_TOOL OR
+   VKL_BUILD_RENDER_TEST OR BUILD_TESTING)
+    set(VKL_CONTROL_REQUIRED ON)
+endif()
 
-add_library(vkl_engine STATIC
+if(VKL_CONTROL_REQUIRED)
+    add_library(vkl_control STATIC
+        control/NamedPipeServerWin32.cpp
+        control/RuntimeControlClientWin32.cpp
+        control/RuntimeCommand.cpp
+        control/RuntimeCommandDispatcher.cpp
+        control/RuntimeControlProtocol.cpp
+    )
+    add_library(VulkanLab::Control ALIAS vkl_control)
+    target_include_directories(vkl_control PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(vkl_control
+        PUBLIC
+            vkl_build_options
+            vkl_json
+        PRIVATE
+            vkl_foundation
+    )
+endif()
+
+set(VKL_ENGINE_SOURCES
     core/Buffer.cpp
     core/DescriptorAllocator.cpp
     core/Device.cpp
     core/FrameSync.cpp
-    core/GpuDebugUtils.cpp
     core/Image.cpp
     core/IncrementalUploadQueue.cpp
     core/Pipeline.cpp
@@ -110,16 +127,11 @@ add_library(vkl_engine STATIC
     core/ValidationProfile.cpp
     core/VulkanContext.cpp
     core/VulkanException.cpp
-    diagnostics/CaptureService.cpp
-    diagnostics/CaptureTaskQueue.cpp
     diagnostics/CaptureTypes.cpp
-    platform/FileDialogWin32.cpp
     render/FallbackTextures.cpp
     render/EnvironmentGpuBuilder.cpp
     render/DirectionalShadow.cpp
-    render/GpuPassProfiler.cpp
     render/GltfPreparer.cpp
-    render/GuiSystem.cpp
     render/MaterialInstance.cpp
     render/MaterialTemplate.cpp
     render/Mesh.cpp
@@ -146,6 +158,41 @@ add_library(vkl_engine STATIC
     window/InputManager.cpp
     window/Window.cpp
 )
+
+if(VKL_ENABLE_GPU_DEBUG_UTILS)
+    list(APPEND VKL_ENGINE_SOURCES core/GpuDebugUtils.cpp)
+else()
+    list(APPEND VKL_ENGINE_SOURCES core/GpuDebugUtilsDisabled.cpp)
+endif()
+
+if(VKL_ENABLE_GPU_PROFILING)
+    list(APPEND VKL_ENGINE_SOURCES render/GpuPassProfiler.cpp)
+else()
+    list(APPEND VKL_ENGINE_SOURCES render/GpuPassProfilerDisabled.cpp)
+endif()
+
+if(VKL_ENABLE_EDITOR_UI)
+    list(APPEND VKL_ENGINE_SOURCES render/GuiSystem.cpp)
+else()
+    list(APPEND VKL_ENGINE_SOURCES render/GuiSystemDisabled.cpp)
+endif()
+
+if(VKL_ENABLE_CAPTURE)
+    list(APPEND VKL_ENGINE_SOURCES
+        diagnostics/CaptureService.cpp
+        diagnostics/CaptureTaskQueue.cpp
+    )
+else()
+    list(APPEND VKL_ENGINE_SOURCES
+        diagnostics/CaptureServiceDisabled.cpp
+    )
+endif()
+
+if(VKL_ENABLE_ASSET_AUTHORING AND VKL_ENABLE_EDITOR_UI)
+    list(APPEND VKL_ENGINE_SOURCES platform/FileDialogWin32.cpp)
+endif()
+
+add_library(vkl_engine STATIC ${VKL_ENGINE_SOURCES})
 add_library(VulkanLab::Engine ALIAS vkl_engine)
 target_include_directories(vkl_engine PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(vkl_engine
@@ -163,12 +210,14 @@ target_link_libraries(vkl_engine
         vkl_gltf_parser
         vkl_obj_parser
         vkl_vma_impl
-        vkl_imgui
         vkl_glfw
         ktx_read
         ole32
         uuid
 )
+if(VKL_ENABLE_EDITOR_UI)
+    target_link_libraries(vkl_engine PRIVATE vkl_imgui)
+endif()
 
 add_executable(VulkanLab
     main.cpp
@@ -180,14 +229,18 @@ target_link_libraries(VulkanLab PRIVATE
     vkl_engine
     vkl_asset_core
     vkl_asset_runtime
-    vkl_control
     vkl_foundation
     vkl_shader_catalog
-    vkl_imgui
     vkl_glfw
     vkl_json
     Vulkan::Vulkan
 )
+if(VKL_ENABLE_RUNTIME_CONTROL)
+    target_link_libraries(VulkanLab PRIVATE vkl_control)
+endif()
+if(VKL_ENABLE_EDITOR_UI)
+    target_link_libraries(VulkanLab PRIVATE vkl_imgui)
+endif()
 add_dependencies(VulkanLab VulkanLabShaders)
 
 # Developer builds locate source assets through vulkanlab_project.json. Only

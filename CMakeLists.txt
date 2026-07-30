@@ -8,7 +8,9 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/$<CONFIG>")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/$<CONFIG>")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/$<CONFIG>")
 
+include(CTest)
 include(cmake/ProjectOptions.cmake)
+include(cmake/BuildFeatures.cmake)
 include(cmake/Dependencies.cmake)
 include(cmake/BuildInfo.cmake)
 
@@ -17,8 +19,6 @@ configure_file(
     "${PROJECT_BINARY_DIR}/generated/vulkanlab_project.json"
     @ONLY
 )
-
-include(CTest)
 
 add_subdirectory(shader)
 add_subdirectory(src)

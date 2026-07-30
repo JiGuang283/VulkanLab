@@ -1,4 +1,5 @@
 #include "VulkanContext.h"
+#include <BuildFeatures.h>
 #include "Log.h"
 #include "VulkanCheck.h"
 
@@ -108,6 +109,13 @@ VulkanContext::VulkanContext(SurfaceCreator            createSurface,
                              std::vector<const char *> requiredExtensions,
                              VulkanContextOptions options)
     : options_(options) {
+#if !VKL_ENABLE_VALIDATION
+        options_.validationProfile = ValidationProfile::Off;
+        options_.validationAllowed = false;
+#endif
+#if !VKL_ENABLE_GPU_DEBUG_UTILS
+    options_.debugUtilsRequested = false;
+#endif
     createInstance(std::move(requiredExtensions));
     setupDebugMessenger();
     surface_ = createSurface(instance_);

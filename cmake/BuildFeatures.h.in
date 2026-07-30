@@ -1,0 +1,29 @@
+#pragma once
+
+#cmakedefine01 VKL_ENABLE_EDITOR_UI
+#cmakedefine01 VKL_ENABLE_RUNTIME_CONTROL
+#cmakedefine01 VKL_ENABLE_CAPTURE
+#cmakedefine01 VKL_ENABLE_ASSET_AUTHORING
+#cmakedefine01 VKL_ENABLE_VALIDATION
+#cmakedefine01 VKL_ENABLE_GPU_DEBUG_UTILS
+#cmakedefine01 VKL_ENABLE_GPU_PROFILING
+
+#cmakedefine01 VKL_BUILD_ASSET_TOOL
+#cmakedefine01 VKL_BUILD_CONTROL_TOOL
+#cmakedefine01 VKL_BUILD_RENDER_TEST
+
+namespace vkr::build {
+
+inline constexpr bool kEditorUi = VKL_ENABLE_EDITOR_UI != 0;
+inline constexpr bool kRuntimeControl = VKL_ENABLE_RUNTIME_CONTROL != 0;
+inline constexpr bool kCapture = VKL_ENABLE_CAPTURE != 0;
+inline constexpr bool kAssetAuthoring = VKL_ENABLE_ASSET_AUTHORING != 0;
+inline constexpr bool kValidation = VKL_ENABLE_VALIDATION != 0;
+inline constexpr bool kGpuDebugUtils = VKL_ENABLE_GPU_DEBUG_UTILS != 0;
+inline constexpr bool kGpuProfiling = VKL_ENABLE_GPU_PROFILING != 0;
+
+inline constexpr bool kAssetTool = VKL_BUILD_ASSET_TOOL != 0;
+inline constexpr bool kControlTool = VKL_BUILD_CONTROL_TOOL != 0;
+inline constexpr bool kRenderTest = VKL_BUILD_RENDER_TEST != 0;
+
+} // namespace vkr::build

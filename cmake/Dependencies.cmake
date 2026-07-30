@@ -10,12 +10,27 @@ set(KTX_FEATURE_PY OFF CACHE BOOL "Disable KTX Python bindings" FORCE)
 set(KTX_FEATURE_GL_UPLOAD OFF CACHE BOOL "Disable KTX OpenGL upload" FORCE)
 set(KTX_FEATURE_VK_UPLOAD OFF CACHE BOOL "Disable KTX Vulkan upload" FORCE)
 set(KTX_FEATURE_LOADTEST_APPS OFF CACHE STRING "Disable KTX load tests" FORCE)
-set(KTX_FEATURE_KTX1 ON CACHE BOOL "Required by KTX 4.4.2 tools" FORCE)
+set(KTX_FEATURE_KTX1 ${VKL_BUILD_ASSET_TOOL}
+    CACHE BOOL "Required by KTX 4.4.2 tools" FORCE)
 set(KTX_FEATURE_KTX2 ON CACHE BOOL "Enable KTX2" FORCE)
-set(KTX_FEATURE_TOOLS ON CACHE BOOL "Build KTX command-line tools" FORCE)
+set(KTX_FEATURE_TOOLS ${VKL_BUILD_ASSET_TOOL}
+    CACHE BOOL "Build KTX command-line tools" FORCE)
 set(KTX_FEATURE_TOOLS_CTS OFF CACHE BOOL "Disable KTX tools CTS" FORCE)
 add_subdirectory("${PROJECT_SOURCE_DIR}/external/ktx" external/ktx
                  EXCLUDE_FROM_ALL)
+
+# KTX 4.4.2's read-only target still references the KTX1 constructor from
+# its format dispatcher when KTX1 is disabled. Supply the documented
+# unsupported-feature result so runtime-only builds can retain KTX2 without
+# compiling the KTX1 implementation.
+if(NOT KTX_FEATURE_KTX1)
+    target_sources(ktx_read PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/third_party/Ktx1DisabledStub.c"
+    )
+    target_include_directories(ktx_read PRIVATE
+        "${PROJECT_SOURCE_DIR}/external/ktx/lib"
+    )
+endif()
 
 # KTX registers CLI tests whenever its tools are enabled, including tools this
 # project intentionally does not build. Keep the repository-wide CTest suite
@@ -53,19 +68,21 @@ endif()
 
 find_package(Vulkan REQUIRED)
 
-add_library(vkl_spirv_reflect STATIC
-    "${PROJECT_SOURCE_DIR}/external/spirv-reflect/spirv_reflect.c"
-)
-add_library(VulkanLab::SpirvReflect ALIAS vkl_spirv_reflect)
-target_compile_features(vkl_spirv_reflect PRIVATE c_std_99)
-target_compile_definitions(vkl_spirv_reflect
-    PUBLIC SPIRV_REFLECT_USE_SYSTEM_SPIRV_H
-)
-target_include_directories(vkl_spirv_reflect SYSTEM PUBLIC
-    "${PROJECT_SOURCE_DIR}/external/spirv-reflect"
-    "${PROJECT_SOURCE_DIR}/external/spirv-reflect/include"
-)
-target_link_libraries(vkl_spirv_reflect PUBLIC Vulkan::Vulkan)
+if(BUILD_TESTING)
+    add_library(vkl_spirv_reflect STATIC
+        "${PROJECT_SOURCE_DIR}/external/spirv-reflect/spirv_reflect.c"
+    )
+    add_library(VulkanLab::SpirvReflect ALIAS vkl_spirv_reflect)
+    target_compile_features(vkl_spirv_reflect PRIVATE c_std_99)
+    target_compile_definitions(vkl_spirv_reflect
+        PUBLIC SPIRV_REFLECT_USE_SYSTEM_SPIRV_H
+    )
+    target_include_directories(vkl_spirv_reflect SYSTEM PUBLIC
+        "${PROJECT_SOURCE_DIR}/external/spirv-reflect"
+        "${PROJECT_SOURCE_DIR}/external/spirv-reflect/include"
+    )
+    target_link_libraries(vkl_spirv_reflect PUBLIC Vulkan::Vulkan)
+endif()
 
 find_path(GLM_INCLUDE_DIR glm/glm.hpp
     HINTS "$ENV{VULKAN_SDK}/Include"
@@ -152,20 +169,22 @@ add_library(VulkanLab::VmaImpl ALIAS vkl_vma_impl)
 target_compile_features(vkl_vma_impl PRIVATE cxx_std_17)
 target_link_libraries(vkl_vma_impl PUBLIC vkl_vma_headers Vulkan::Vulkan)
 
-set(VKL_IMGUI_DIR "${PROJECT_SOURCE_DIR}/external/imgui")
-add_library(vkl_imgui STATIC
-    "${VKL_IMGUI_DIR}/imgui.cpp"
-    "${VKL_IMGUI_DIR}/imgui_draw.cpp"
-    "${VKL_IMGUI_DIR}/imgui_tables.cpp"
-    "${VKL_IMGUI_DIR}/imgui_widgets.cpp"
-    "${VKL_IMGUI_DIR}/imgui_demo.cpp"
-    "${VKL_IMGUI_DIR}/backends/imgui_impl_glfw.cpp"
-    "${VKL_IMGUI_DIR}/backends/imgui_impl_vulkan.cpp"
-)
-add_library(VulkanLab::ImGui ALIAS vkl_imgui)
-target_compile_features(vkl_imgui PRIVATE cxx_std_17)
-target_include_directories(vkl_imgui SYSTEM PUBLIC
-    "${VKL_IMGUI_DIR}"
-    "${VKL_IMGUI_DIR}/backends"
-)
-target_link_libraries(vkl_imgui PUBLIC vkl_glfw Vulkan::Vulkan)
+if(VKL_ENABLE_EDITOR_UI)
+    set(VKL_IMGUI_DIR "${PROJECT_SOURCE_DIR}/external/imgui")
+    add_library(vkl_imgui STATIC
+        "${VKL_IMGUI_DIR}/imgui.cpp"
+        "${VKL_IMGUI_DIR}/imgui_draw.cpp"
+        "${VKL_IMGUI_DIR}/imgui_tables.cpp"
+        "${VKL_IMGUI_DIR}/imgui_widgets.cpp"
+        "${VKL_IMGUI_DIR}/imgui_demo.cpp"
+        "${VKL_IMGUI_DIR}/backends/imgui_impl_glfw.cpp"
+        "${VKL_IMGUI_DIR}/backends/imgui_impl_vulkan.cpp"
+    )
+    add_library(VulkanLab::ImGui ALIAS vkl_imgui)
+    target_compile_features(vkl_imgui PRIVATE cxx_std_17)
+    target_include_directories(vkl_imgui SYSTEM PUBLIC
+        "${VKL_IMGUI_DIR}"
+        "${VKL_IMGUI_DIR}/backends"
+    )
+    target_link_libraries(vkl_imgui PUBLIC vkl_glfw Vulkan::Vulkan)
+endif()

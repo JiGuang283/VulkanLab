@@ -3,7 +3,10 @@
 #include "assets/ProjectContext.h"
 #include "assets/SceneCatalog.h"
 #include "control/RuntimeControlProtocol.h"
+#include "diagnostics/BuildInfo.h"
 #include "core/Log.h"
+
+#include <BuildFeatures.h>
 
 #include <cstdlib>
 #include <cwchar>
@@ -65,15 +68,36 @@ void printUsage(std::ostream &out) {
            "delta in (0, 1].\n"
         << "  --no-gui          Disable ImGui initialization and rendering.\n"
         << "  --capture-root <path>  Override the diagnostics output root.\n"
-        << "  --help             Show this help and exit.\n";
+        << "  --help             Show this help and exit.\n"
+        << "\nCompiled features:\n"
+        << "  editor-ui=" << (vkr::build::kEditorUi ? "on" : "off")
+        << ", runtime-control="
+        << (vkr::build::kRuntimeControl ? "on" : "off")
+        << ", capture=" << (vkr::build::kCapture ? "on" : "off")
+        << ", asset-authoring="
+        << (vkr::build::kAssetAuthoring ? "on" : "off")
+        << ", validation=" << (vkr::build::kValidation ? "on" : "off")
+        << ", gpu-debug-utils="
+        << (vkr::build::kGpuDebugUtils ? "on" : "off")
+        << ", gpu-profiling="
+        << (vkr::build::kGpuProfiling ? "on" : "off") << "\n";
 }
 
 bool parseArguments(int argc, wchar_t **argv, vkr::Config &config) {
     for (int i = 1; i < argc; ++i) {
         const std::wstring argument = argv[i];
         if (argument == L"--runtime-control") {
+#if !VKL_ENABLE_RUNTIME_CONTROL
+            throw std::invalid_argument(
+                "--runtime-control is not compiled into this build");
+#else
             config.enableRuntimeControl = true;
+#endif
         } else if (argument == L"--runtime-control-pipe") {
+#if !VKL_ENABLE_RUNTIME_CONTROL
+            throw std::invalid_argument(
+                "--runtime-control-pipe is not compiled into this build");
+#else
             if (++i >= argc)
                 throw std::invalid_argument(
                     "--runtime-control-pipe requires a suffix");
@@ -83,6 +107,7 @@ bool parseArguments(int argc, wchar_t **argv, vkr::Config &config) {
                     "--runtime-control-pipe requires a non-empty suffix");
             vkr::control::makeRuntimeControlEndpoint(suffix);
             config.diagnostics.runtimePipeSuffix = suffix;
+#endif
         } else if (argument == L"--automation") {
             config.diagnostics.automationMode = true;
         } else if (argument == L"--window-size") {
@@ -103,10 +128,15 @@ bool parseArguments(int argc, wchar_t **argv, vkr::Config &config) {
         } else if (argument == L"--no-gui") {
             config.diagnostics.guiVisible = false;
         } else if (argument == L"--capture-root") {
+#if !VKL_ENABLE_CAPTURE
+            throw std::invalid_argument(
+                "--capture-root is not compiled into this build");
+#else
             if (++i >= argc)
                 throw std::invalid_argument(
                     "--capture-root requires a directory path");
             config.diagnostics.captureRoot = argv[i];
+#endif
         } else if (argument == L"--project") {
             if (++i >= argc)
                 throw std::invalid_argument(
@@ -117,9 +147,14 @@ bool parseArguments(int argc, wchar_t **argv, vkr::Config &config) {
                 throw std::invalid_argument("--asset-mode requires a value");
             const std::string mode = utf8Argument(argv[i]);
             config.assetImportModeExplicit = true;
-            if (mode == "ondemand")
+            if (mode == "ondemand") {
+#if !VKL_ENABLE_ASSET_AUTHORING
+                throw std::invalid_argument(
+                    "--asset-mode ondemand is not compiled into this build");
+#else
                 config.assetImportMode = vkr::AssetImportMode::OnDemand;
-            else if (mode == "readonly")
+#endif
+            } else if (mode == "readonly")
                 config.assetImportMode = vkr::AssetImportMode::ReadOnly;
             else if (mode == "cooked-only")
                 config.assetImportMode = vkr::AssetImportMode::CookedOnly;
@@ -128,11 +163,16 @@ bool parseArguments(int argc, wchar_t **argv, vkr::Config &config) {
                     "--asset-mode must be ondemand, readonly, or "
                     "cooked-only");
         } else if (argument == L"--asset-tool") {
+#if !VKL_ENABLE_ASSET_AUTHORING
+            throw std::invalid_argument(
+                "--asset-tool is not compiled into this build");
+#else
             if (++i >= argc)
                 throw std::invalid_argument("--asset-tool requires a path");
             config.assetToolPath =
                 std::filesystem::path(argv[i]).u8string();
             config.assetToolPathExplicit = true;
+#endif
         } else if (argument == L"--cache-root") {
             if (++i >= argc)
                 throw std::invalid_argument("--cache-root requires a path");
@@ -143,8 +183,16 @@ bool parseArguments(int argc, wchar_t **argv, vkr::Config &config) {
             if (++i >= argc)
                 throw std::invalid_argument(
                     "--validation requires a profile");
-            config.validationProfile =
+            const vkr::ValidationProfile profile =
                 vkr::parseValidationProfile(utf8Argument(argv[i]));
+#if !VKL_ENABLE_VALIDATION
+            if (profile != vkr::ValidationProfile::Off) {
+                throw std::invalid_argument(
+                    "Vulkan validation is not compiled into this build; "
+                    "only --validation off is accepted");
+            }
+#endif
+            config.validationProfile = profile;
         } else if (argument == L"--help") {
             return false;
         } else {
@@ -172,6 +220,16 @@ int wmain(int argc, wchar_t **argv) {
 
     vkr::log::init();
     try {
+        const vkr::BuildFeatureInfo &features =
+            vkr::currentBuildInfo().features;
+        VKR_LOG_INFO(
+            "Build",
+            "Compiled features: editor-ui={}, runtime-control={}, "
+            "capture={}, asset-authoring={}, validation={}, "
+            "gpu-debug-utils={}, gpu-profiling={}",
+            features.editorUi, features.runtimeControl, features.capture,
+            features.assetAuthoring, features.validation,
+            features.gpuDebugUtils, features.gpuProfiling);
         // 按需覆写默认配置，例如：
         // config.windowWidth  = 1280;
         // config.windowHeight = 720;

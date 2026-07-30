@@ -203,10 +203,6 @@ RuntimeCameraPose requiredCameraPose(const RuntimeCommand &command) {
 
 } // namespace
 
-RuntimeCommandError::RuntimeCommandError(std::string code,
-                                         std::string message)
-    : std::runtime_error(std::move(message)), code_(std::move(code)) {}
-
 RuntimeDispatchResult RuntimeCommandDispatcher::dispatch(
     const RuntimeCommand &command, RuntimeControlHost &host) const {
     RuntimeDispatchResult dispatched;
