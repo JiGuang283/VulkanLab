@@ -2610,6 +2610,9 @@ void Application::refreshSceneRegistry(const std::string &selectSceneId) {
 
 #if VKL_ENABLE_EDITOR_UI
 void Application::updateSceneImport() {
+#if !VKL_ENABLE_ASSET_AUTHORING
+    return;
+#else
     SceneImportUiState &ui = *sceneImportUi_;
     if (ui.preflightFuture.valid() &&
         ui.preflightFuture.wait_for(std::chrono::seconds(0)) ==
@@ -2673,11 +2676,13 @@ void Application::updateSceneImport() {
             ui.status.clear();
         }
     }
+#endif
 }
 
 void Application::drawScenePanel() {
     SceneImportUiState &ui = *sceneImportUi_;
 
+#if VKL_ENABLE_ASSET_AUTHORING
     const bool busy = ui.preflightFuture.valid() || ui.importFuture.valid();
     const bool canImportSource =
         config_.assetImportMode == AssetImportMode::OnDemand &&
@@ -2710,6 +2715,9 @@ void Application::drawScenePanel() {
         }
         ImGui::SameLine();
     }
+#else
+    constexpr bool busy = false;
+#endif
 
     ImGui::BeginDisabled(busy);
     if (ImGui::Button("Refresh")) {
@@ -2805,6 +2813,7 @@ void Application::drawScenePanel() {
             }
         }
         ImGui::EndDisabled();
+#if VKL_ENABLE_ASSET_AUTHORING
         if (!entry.builtin &&
             config_.assetImportMode == AssetImportMode::OnDemand) {
             ImGui::SameLine();
@@ -2873,6 +2882,7 @@ void Application::drawScenePanel() {
                 ImGui::EndPopup();
             }
         }
+#endif
     }
     if (!sceneAssetOperations_->status.empty())
         ImGui::TextWrapped("%s", sceneAssetOperations_->status.c_str());
@@ -2880,6 +2890,7 @@ void Application::drawScenePanel() {
         ImGui::TextWrapped("Error: %s",
                            sceneAssetOperations_->error.c_str());
 
+#if VKL_ENABLE_ASSET_AUTHORING
     if (ui.requestOpenModal) {
         ImGui::OpenPopup("Import Scene");
         ui.requestOpenModal = false;
@@ -2966,6 +2977,7 @@ void Application::drawScenePanel() {
         }
         ImGui::EndPopup();
     }
+#endif
 }
 
 void Application::drawAssetsPanel() {
@@ -3090,6 +3102,7 @@ void Application::drawAssetsPanel() {
         }
     }
 
+#if VKL_ENABLE_ASSET_AUTHORING
     const bool canEditEnvironments =
         projectContext_.catalogWritable &&
         config_.assetImportMode == AssetImportMode::OnDemand;
@@ -3313,6 +3326,7 @@ void Application::drawAssetsPanel() {
         }
         ImGui::EndPopup();
     }
+#endif
     if (!environmentUi.environmentStatus.empty())
         ImGui::TextWrapped("%s",
                            environmentUi.environmentStatus.c_str());
@@ -3320,6 +3334,7 @@ void Application::drawAssetsPanel() {
         ImGui::TextWrapped("Error: %s",
                            environmentUi.environmentError.c_str());
 
+#if VKL_ENABLE_ASSET_AUTHORING
     const auto active = assetImportManager_
                             ? assetImportManager_->activeTask()
                             : std::shared_ptr<AssetImportTask>{};
@@ -3407,6 +3422,10 @@ void Application::drawAssetsPanel() {
         }
         ImGui::PopID();
     }
+#else
+    ImGui::Separator();
+    ImGui::TextDisabled("Asset authoring is not compiled.");
+#endif
 }
 
 #endif

@@ -29,7 +29,7 @@ target_link_libraries(vkl_shader_catalog
         vkl_json
 )
 
-add_library(vkl_asset_core STATIC
+set(VKL_ASSET_CORE_SOURCES
     assets/ArtifactCachePruner.cpp
     assets/ArtifactIndex.cpp
     assets/ArtifactStatus.cpp
@@ -41,9 +41,15 @@ add_library(vkl_asset_core STATIC
     assets/ProjectContext.cpp
     assets/RuntimePackage.cpp
     assets/SceneCatalog.cpp
-    assets/SceneCatalogEditor.cpp
-    assets/SceneImportService.cpp
 )
+if(VKL_ENABLE_ASSET_AUTHORING OR VKL_BUILD_ASSET_TOOL OR BUILD_TESTING)
+    list(APPEND VKL_ASSET_CORE_SOURCES
+        assets/SceneCatalogEditor.cpp
+        assets/SceneImportService.cpp
+    )
+endif()
+
+add_library(vkl_asset_core STATIC ${VKL_ASSET_CORE_SOURCES})
 add_library(VulkanLab::AssetCore ALIAS vkl_asset_core)
 target_include_directories(vkl_asset_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(vkl_asset_core
