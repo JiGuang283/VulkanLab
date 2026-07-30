@@ -39,7 +39,7 @@ struct GoldenSpec {
 };
 
 struct RenderTestSpec {
-    static constexpr uint32_t kSchemaVersion = 3;
+    static constexpr uint32_t kSchemaVersion = 4;
 
     std::filesystem::path sourcePath;
     std::string name;

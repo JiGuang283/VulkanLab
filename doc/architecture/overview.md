@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-30
-> Verified against: `56b84b1`
+> Verified against: Compute Bloom v1 working tree
 
 VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Application` 为组合根，场景、渲染提交、GPU 资源和调试控制之间保持显式所有权，不使用全局引擎服务定位器。
 
@@ -15,7 +15,7 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 | `src/control/` | Windows Named Pipe 服务、运行时命令队列和 JSON 协议。 |
 | `src/core/` | Vulkan instance/device、SwapChain、FrameSync、Buffer/Image、Descriptor、Pipeline、VMA、同步与增量上传。 |
 | `src/render/` | Mesh、Texture、材质、纯 CPU glTF prepare、Environment GPU build、RenderView、RenderQueue、RenderResourceRegistry、PipelineCache、Renderer、GPU profiler 和 Shader variant。 |
-| `src/render/pass/` | RenderPipeline 中的具体 pass；当前为 DirectionalShadow、Skybox、MainForward 和 ToneMap。 |
+| `src/render/pass/` | RenderPipeline 中的具体 pass；当前为 DirectionalShadow、Skybox、MainForward、Bloom 和 ToneMap。 |
 | `src/scene/` | Scene、SceneObject、SceneLight、Camera、prepared data、加载任务、GPU builder、SceneFactory 和内建场景。 |
 | `src/window/` | GLFW 窗口和输入状态。 |
 | `src/platform/` | Win32 原生文件选择等平台适配。 |
@@ -26,7 +26,7 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 
 `cmake/BuildFeatures.cmake` 是可选开发基础设施的唯一构建期开关入口，生成的 `BuildFeatures.h` 同时提供 `0/1` 宏和 `vkr::build` 常量。CMake 在 target/source 边界选择真实实现或空实现：Editor 可移除 ImGui，Runtime Control 可移除 Named Pipe 控制库，Capture 可移除截图后端并停止请求 swapchain transfer-source usage，Asset Authoring 可替换进程 supervisor，GPU Debug Utils 和 GPU Profiler 可替换为 no-op 实现。
 
-这些开关不参与渲染算法选择。Directional Shadow、HDR/Tone Mapping、IBL、Skybox、Global UBO、descriptor layout、push constant、材质布局和 Shader Manifest 在所有 preset 中保持同一契约。运行时算法仍由 `RenderSettings` 和 Shader variant 控制，避免不同二进制产生不兼容资产或 Shader ABI。
+这些开关不参与渲染算法选择。Directional Shadow、HDR/Tone Mapping、Compute Bloom、IBL、Skybox、Global UBO、descriptor layout、push constant、材质布局和 Shader Manifest 在所有 preset 中保持同一契约。运行时算法仍由 `RenderSettings` 和 Shader variant 控制，避免不同二进制产生不兼容资产或 Shader ABI。
 
 ## 启动与所有权
 
@@ -40,7 +40,7 @@ Cooked package 中 `projectRoot == runtimeRoot == package root`，cache 固定�
 2. Window 和 InputManager。
 3. VulkanContext、Device 和 DescriptorAllocator。
 4. SwapChain 和 FrameSync。
-5. Renderer、全局 UBO、Lighting descriptor generation、类型化 render resource registry、四段 RenderPipeline、GPU timestamp profiler 和开发模式 CaptureService。
+5. Renderer、全局 UBO、Lighting descriptor generation、类型化 render resource registry、Forward + Compute RenderPipeline、GPU timestamp profiler 和开发模式 CaptureService。
 6. PipelineCache、SceneLoadManager/EnvironmentLoadManager worker、ArtifactIndex 和初始 Scene/environment admission；只有 OnDemand 创建 AssetImportManager supervisor。
 7. GuiSystem。
 8. 可选的 Runtime Control 命令队列和 Named Pipe 线程。
@@ -87,7 +87,7 @@ CaptureService 的主线程部分创建 readback buffer、记录 image copy 并�
 5. `FrameSync::beginFrame()` 获取 frame index、swapchain image 和 command buffer。
 6. Application 组装 `RenderViewInput`；纯函数 `buildRenderView()` 完成默认 Sun、灯光截断/GPU 打包和阴影拟合，生成不可变 `RenderView`。
 7. Scene 生成 RenderCommand，RenderQueue 分别排序 opaque 与 transparent 命令。
-8. Renderer 上传 `RenderView::globalUbo`、读取已完成 frame slot 的 timestamp，并组装 RenderFrameContext；RenderPipeline 依次执行 DirectionalShadowPass、清除/绘制 HDR 背景的 SkyboxPass、以 `LOAD` 叠加场景的 MainForwardPass，以及 ToneMapPass；ImGui 在 tone mapping 后绘制，每个 Pass 由 timestamp query 包围。
+8. Renderer 上传 `RenderView::globalUbo`、读取已完成 frame slot 的 timestamp，并组装 RenderFrameContext；RenderPipeline 依次执行 DirectionalShadowPass、清除/绘制 HDR 背景的 SkyboxPass、以 `LOAD` 叠加场景的 MainForwardPass、可选 Compute Bloom，以及 ToneMapPass；ImGui 在 tone mapping 后绘制，每个 Pass 由 timestamp query 包围。
 9. 若有截图任务，在同一个 frame command buffer 中把最终 swapchain image 复制到 readback buffer，然后恢复 present layout。
 10. `FrameSync::endFrame()` 提交和 present；需要时重建 SwapChain 相关资源。后续帧推进 completed submission serial，并把已完成截图交给 CPU worker。
 

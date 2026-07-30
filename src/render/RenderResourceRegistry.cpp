@@ -6,6 +6,7 @@
 #include "core/VulkanCheck.h"
 #include "render/DirectionalShadow.h"
 
+#include <algorithm>
 #include <array>
 #include <stdexcept>
 #include <unordered_map>
@@ -97,6 +98,9 @@ VkImageUsageFlags requiredUsage(RenderImageAccess access) {
         return VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
     case RenderImageAccess::SampledRead:
         return VK_IMAGE_USAGE_SAMPLED_BIT;
+    case RenderImageAccess::StorageWrite:
+    case RenderImageAccess::StorageReadWrite:
+        return VK_IMAGE_USAGE_STORAGE_BIT;
     }
     return 0;
 }
@@ -130,6 +134,8 @@ RenderResourceRegistry::registerImage(RenderImageDesc desc) {
         (desc.fixedExtent.width == 0 || desc.fixedExtent.height == 0)) {
         throw std::invalid_argument("fixed render image extent is zero");
     }
+    if (desc.extentDivisor == 0)
+        throw std::invalid_argument("render image extent divisor is zero");
     const RenderImageHandle handle{
         static_cast<uint32_t>(imageDescriptions_.size())};
     imageDescriptions_.push_back(std::move(desc));
@@ -221,15 +227,27 @@ VkSampler RenderResourceRegistry::sampler(RenderSamplerHandle handle) const {
 
 VkExtent2D RenderResourceRegistry::extent(RenderImageHandle handle) const {
     const RenderImageDesc &desc = description(handle);
-    return desc.extentPolicy == RenderExtentPolicy::Fixed ? desc.fixedExtent
-                                                           : swapchainExtent_;
+    if (desc.extentPolicy == RenderExtentPolicy::Fixed)
+        return desc.fixedExtent;
+    const uint32_t divisor = desc.extentDivisor;
+    return {
+        std::max(1u, (swapchainExtent_.width + divisor - 1u) / divisor),
+        std::max(1u, (swapchainExtent_.height + divisor - 1u) / divisor)};
 }
 
 void RenderResourceRegistry::createImageEntry(uint32_t index) {
     const RenderImageDesc &desc = imageDescriptions_.at(index);
     const VkExtent2D imageExtent =
-        desc.extentPolicy == RenderExtentPolicy::Fixed ? desc.fixedExtent
-                                                        : swapchainExtent_;
+        desc.extentPolicy == RenderExtentPolicy::Fixed
+            ? desc.fixedExtent
+            : VkExtent2D{
+                  std::max(1u,
+                           (swapchainExtent_.width + desc.extentDivisor - 1u) /
+                               desc.extentDivisor),
+                  std::max(1u,
+                           (swapchainExtent_.height + desc.extentDivisor -
+                            1u) /
+                               desc.extentDivisor)};
     if (imageExtent.width == 0 || imageExtent.height == 0)
         return;
     const uint32_t count =
@@ -318,6 +336,24 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
              VK_IMAGE_USAGE_SAMPLED_BIT,
          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, VK_IMAGE_ASPECT_DEPTH_BIT});
 
+    if (device.computeBloomSupport().available) {
+        for (uint32_t level = 0;
+             level < RendererResourceHandles::kBloomPyramidLevelCount;
+             ++level) {
+            RenderImageDesc bloom{};
+            bloom.name = "Bloom/Level" + std::to_string(level);
+            bloom.extentPolicy = RenderExtentPolicy::Swapchain;
+            bloom.multiplicity = RenderResourceMultiplicity::PerFrame;
+            bloom.format = device.computeBloomSupport().format;
+            bloom.usage =
+                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+            bloom.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+            bloom.extentDivisor = 1u << (level + 1u);
+            handles.bloomLevels[level] =
+                registry.registerImage(std::move(bloom));
+        }
+    }
+
     RenderSamplerDesc hdrSampler{};
     hdrSampler.name = "HDR Sampler";
     handles.hdrSampler = registry.registerSampler(std::move(hdrSampler));
@@ -332,6 +368,16 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
     shadowSampler.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
     handles.shadowSampler =
         registry.registerSampler(std::move(shadowSampler));
+
+    if (device.computeBloomSupport().available) {
+        RenderSamplerDesc bloomSampler{};
+        bloomSampler.name = "Bloom Sampler";
+        bloomSampler.magFilter = VK_FILTER_LINEAR;
+        bloomSampler.minFilter = VK_FILTER_LINEAR;
+        bloomSampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        handles.bloomSampler =
+            registry.registerSampler(std::move(bloomSampler));
+    }
     return handles;
 }
 
@@ -359,9 +405,12 @@ void validateRenderResourceContracts(
                                          " without the required usage flag");
             }
 
-            if (use.access == RenderImageAccess::SampledRead ||
+            const bool reads =
+                use.access == RenderImageAccess::SampledRead ||
                 use.access ==
-                    RenderImageAccess::ColorAttachmentReadWrite) {
+                    RenderImageAccess::ColorAttachmentReadWrite ||
+                use.access == RenderImageAccess::StorageReadWrite;
+            if (reads) {
                 if (written.count(use.image.index) == 0) {
                     throw std::runtime_error(pass.passName + " reads " +
                                              desc.name + " before a writer");
@@ -375,7 +424,8 @@ void validateRenderResourceContracts(
                                              " with an incompatible layout");
                 }
                 if (use.access ==
-                    RenderImageAccess::ColorAttachmentReadWrite) {
+                        RenderImageAccess::ColorAttachmentReadWrite ||
+                    use.access == RenderImageAccess::StorageReadWrite) {
                     written.insert(use.image.index);
                 }
             } else {

@@ -120,6 +120,7 @@ endif()
 
 set(VKL_ENGINE_SOURCES
     core/Buffer.cpp
+    core/ComputePipeline.cpp
     core/DescriptorAllocator.cpp
     core/Device.cpp
     core/FrameSync.cpp
@@ -152,6 +153,7 @@ set(VKL_ENGINE_SOURCES
     render/TextureData.cpp
     render/pass/MainForwardPass.cpp
     render/pass/DirectionalShadowPass.cpp
+    render/pass/BloomPass.cpp
     render/pass/SkyboxPass.cpp
     render/pass/ToneMapPass.cpp
     scene/BuiltinScenes.cpp

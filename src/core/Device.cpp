@@ -188,6 +188,60 @@ void Device::pickPhysicalDevice() {
         VKR_LOG_WARN("Device",
                      "Floating-point IBL textures unavailable; IBL disabled");
     }
+
+    const QueueFamilyIndices selectedFamilies =
+        findQueueFamilies(physicalDevice_);
+    uint32_t queueFamilyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(
+        physicalDevice_, &queueFamilyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> queueProperties(queueFamilyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(
+        physicalDevice_, &queueFamilyCount, queueProperties.data());
+    const bool graphicsQueueSupportsCompute =
+        selectedFamilies.graphicsFamily &&
+        *selectedFamilies.graphicsFamily < queueProperties.size() &&
+        (queueProperties[*selectedFamilies.graphicsFamily].queueFlags &
+         VK_QUEUE_COMPUTE_BIT) != 0;
+
+    VkFormatProperties bloomFormatProperties{};
+    vkGetPhysicalDeviceFormatProperties(
+        physicalDevice_, VK_FORMAT_R16G16B16A16_SFLOAT,
+        &bloomFormatProperties);
+    const VkFormatFeatureFlags bloomRequired =
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
+        VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
+    VkImageFormatProperties bloomImageProperties{};
+    const bool bloomImageSupported =
+        vkGetPhysicalDeviceImageFormatProperties(
+            physicalDevice_, VK_FORMAT_R16G16B16A16_SFLOAT,
+            VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT, 0,
+            &bloomImageProperties) == VK_SUCCESS;
+
+    if (!graphicsQueueSupportsCompute) {
+        computeBloomSupport_.reason =
+            "selected graphics queue does not support compute";
+    } else if (!features.shaderStorageImageExtendedFormats) {
+        computeBloomSupport_.reason =
+            "shaderStorageImageExtendedFormats is unavailable";
+    } else if ((bloomFormatProperties.optimalTilingFeatures &
+                bloomRequired) != bloomRequired ||
+               !bloomImageSupported) {
+        computeBloomSupport_.reason =
+            "RGBA16F sampled, linear-filtered storage images are unavailable";
+    } else {
+        computeBloomSupport_.available = true;
+        computeBloomSupport_.format =
+            VK_FORMAT_R16G16B16A16_SFLOAT;
+    }
+
+    if (computeBloomSupport_.available) {
+        VKR_LOG_INFO("Device", "Compute Bloom is supported");
+    } else {
+        VKR_LOG_WARN("Device", "Compute Bloom unavailable: {}",
+                     computeBloomSupport_.reason);
+    }
 }
 void Device::createLogicalDevice() {
     QueueFamilyIndices indices = findQueueFamilies(physicalDevice_);
@@ -211,6 +265,8 @@ void Device::createLogicalDevice() {
     deviceFeatures.sampleRateShading = VK_TRUE;
     deviceFeatures.textureCompressionBC =
         textureTranscodeTarget_ == TextureTranscodeTarget::Bc7;
+    deviceFeatures.shaderStorageImageExtendedFormats =
+        computeBloomSupport_.available ? VK_TRUE : VK_FALSE;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -279,26 +335,32 @@ QueueFamilyIndices Device::findQueueFamilies(VkPhysicalDevice device) const {
     vkGetPhysicalDeviceQueueFamilyProperties(device, &QueueFamilyCount,
                                              queueFamilies.data());
 
-    int i = 0;
+    std::optional<uint32_t> graphicsFallback;
+    std::optional<uint32_t> graphicsCompute;
+    uint32_t i = 0;
     for (const auto &queueFamily : queueFamilies) {
         if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-            indices.graphicsFamily = i;
+            if (!graphicsFallback)
+                graphicsFallback = i;
+            if (!graphicsCompute &&
+                (queueFamily.queueFlags & VK_QUEUE_COMPUTE_BIT)) {
+                graphicsCompute = i;
+            }
         }
 
         VkBool32 presentSupport = false;
         vkGetPhysicalDeviceSurfaceSupportKHR(device, i, ctx_.surface(),
                                              &presentSupport);
 
-        if (presentSupport) {
+        if (presentSupport && !indices.presentFamily) {
             indices.presentFamily = i;
-        }
-
-        if (indices.isComplete()) {
-            break;
         }
 
         i++;
     }
+
+    indices.graphicsFamily =
+        graphicsCompute ? graphicsCompute : graphicsFallback;
 
     return indices;
 }

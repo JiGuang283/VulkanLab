@@ -164,13 +164,31 @@ void checkPushConstant(const SpvReflectShaderModule &module,
     if (contract == vkr::ShaderProgramContract::Fullscreen) {
         static const std::vector<MemberLayout> toneMapMembers = {
             {"exposureEv", offsetof(vkr::ToneMapPushConstants, exposureEv)},
+            {"bloomIntensity",
+             offsetof(vkr::ToneMapPushConstants, bloomIntensity)},
             {"toneMapper", offsetof(vkr::ToneMapPushConstants, toneMapper)},
             {"encodeGamma", offsetof(vkr::ToneMapPushConstants, encodeGamma)},
             {"applyExposure",
              offsetof(vkr::ToneMapPushConstants, applyExposure)},
+            {"applyBloom", offsetof(vkr::ToneMapPushConstants, applyBloom)},
+            {"reserved0", offsetof(vkr::ToneMapPushConstants, reserved0)},
+            {"reserved1", offsetof(vkr::ToneMapPushConstants, reserved1)},
         };
         checkBlockLayout(*blocks[0], sizeof(vkr::ToneMapPushConstants),
                          toneMapMembers, "ToneMapPushConstants", path);
+        return;
+    }
+    if (contract == vkr::ShaderProgramContract::Compute) {
+        static const std::vector<MemberLayout> bloomMembers = {
+            {"threshold", offsetof(vkr::BloomPushConstants, threshold)},
+            {"softKnee", offsetof(vkr::BloomPushConstants, softKnee)},
+            {"filterRadius",
+             offsetof(vkr::BloomPushConstants, filterRadius)},
+            {"applyThreshold",
+             offsetof(vkr::BloomPushConstants, applyThreshold)},
+        };
+        checkBlockLayout(*blocks[0], sizeof(vkr::BloomPushConstants),
+                         bloomMembers, "BloomPushConstants", path);
         return;
     }
 
@@ -187,12 +205,30 @@ void checkPushConstant(const SpvReflectShaderModule &module,
 
 void checkDescriptors(const ReflectedModule &reflected,
                       vkr::ShaderProgramContract contract) {
-    if (contract == vkr::ShaderProgramContract::Compute)
-        return;
     const auto &module = reflected.module();
     const auto bindings = enumerateVariables<SpvReflectDescriptorBinding>(
         module, spvReflectEnumerateDescriptorBindings, "descriptor bindings",
         reflected.path());
+    if (contract == vkr::ShaderProgramContract::Compute) {
+        requireShader(bindings.size() == 2,
+                      "Bloom compute descriptor count mismatch in " +
+                          reflected.path());
+        for (const SpvReflectDescriptorBinding *binding : bindings) {
+            const bool validSource =
+                binding->set == 0 && binding->binding == 0 &&
+                binding->descriptor_type ==
+                    SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            const bool validDestination =
+                binding->set == 0 && binding->binding == 1 &&
+                binding->descriptor_type ==
+                    SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            requireShader(
+                binding->count == 1 && (validSource || validDestination),
+                "Bloom compute descriptor contract mismatch in " +
+                    reflected.path());
+        }
+        return;
+    }
     const bool toneMap =
         contract == vkr::ShaderProgramContract::Fullscreen &&
         module.shader_stage == SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT &&
@@ -207,7 +243,7 @@ void checkDescriptors(const ReflectedModule &reflected,
                           reflected.path());
         if (toneMap) {
             requireShader(
-                binding->set == 0 && binding->binding == 0 &&
+                binding->set == 0 && binding->binding < 2 &&
                     binding->descriptor_type ==
                         SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
                     stage == VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -368,10 +404,7 @@ void testShaderContracts() {
         requireShader(reflected->module().shader_stage == expectedStage,
                       "stage mismatch in " + runtimePath);
         checkDescriptors(*reflected, contract);
-        if (contract != vkr::ShaderProgramContract::Compute) {
-            checkPushConstant(reflected->module(), contract,
-                              reflected->path());
-        }
+        checkPushConstant(reflected->module(), contract, reflected->path());
         checkVertexInputs(*reflected, contract);
         checkFragmentOutputs(*reflected, contract);
         ReflectedModule &result = *reflected;

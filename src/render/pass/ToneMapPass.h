@@ -23,6 +23,8 @@ class ToneMapPass final : public IRenderPass {
                 const RenderResourceRegistry &resources,
                 RenderImageHandle hdrColor,
                 RenderSamplerHandle hdrSampler,
+                RenderImageHandle bloomColor,
+                RenderSamplerHandle bloomSampler,
                 DescriptorAllocator &descriptorAllocator,
                 std::string fullscreenVertPath,
                 std::string toneMapFragPath);
@@ -53,6 +55,8 @@ class ToneMapPass final : public IRenderPass {
     SwapChain *swapChain_ = nullptr;
     RenderImageHandle hdrColor_{};
     RenderSamplerHandle hdrSampler_{};
+    RenderImageHandle bloomColor_{};
+    RenderSamplerHandle bloomSampler_{};
     DescriptorAllocator *descriptorAllocator_ = nullptr;
     std::string fullscreenVertPath_;
     std::string toneMapFragPath_;

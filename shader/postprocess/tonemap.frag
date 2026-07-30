@@ -2,12 +2,17 @@
 
 layout(location = 0) in vec2 fragUv;
 layout(set = 0, binding = 0) uniform sampler2D hdrColor;
+layout(set = 0, binding = 1) uniform sampler2D bloomColor;
 
 layout(push_constant) uniform ToneMapPushConstants {
     float exposureEv;
+    float bloomIntensity;
     uint toneMapper;
     uint encodeGamma;
     uint applyExposure;
+    uint applyBloom;
+    uint reserved0;
+    uint reserved1;
 } push;
 
 layout(location = 0) out vec4 outColor;
@@ -26,6 +31,10 @@ vec3 acesFitted(vec3 color)
 void main()
 {
     vec3 color = max(texture(hdrColor, fragUv).rgb, vec3(0.0));
+    if (push.applyBloom != 0u) {
+        color += max(texture(bloomColor, fragUv).rgb, vec3(0.0)) *
+                 push.bloomIntensity;
+    }
     if (push.applyExposure != 0u)
         color *= exp2(push.exposureEv);
     if (push.toneMapper == 1u)

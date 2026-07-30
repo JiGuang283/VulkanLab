@@ -47,11 +47,14 @@ ToneMapPass::ToneMapPass(Device &device, SwapChain &swapChain,
                          const RenderResourceRegistry &resources,
                          RenderImageHandle hdrColor,
                          RenderSamplerHandle hdrSampler,
+                         RenderImageHandle bloomColor,
+                         RenderSamplerHandle bloomSampler,
                          DescriptorAllocator &descriptorAllocator,
                          std::string fullscreenVertPath,
                          std::string toneMapFragPath)
     : device_(&device), swapChain_(&swapChain), hdrColor_(hdrColor),
-      hdrSampler_(hdrSampler),
+      hdrSampler_(hdrSampler), bloomColor_(bloomColor),
+      bloomSampler_(bloomSampler),
       descriptorAllocator_(&descriptorAllocator),
       fullscreenVertPath_(std::move(fullscreenVertPath)),
       toneMapFragPath_(std::move(toneMapFragPath)) {
@@ -77,9 +80,16 @@ void ToneMapPass::releaseSwapChainResources() {
 }
 
 std::vector<RenderImageUsage> ToneMapPass::resourceUsages() const {
-    return {{hdrColor_, RenderImageAccess::SampledRead,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+    std::vector<RenderImageUsage> usages = {
+        {hdrColor_, RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+    if (bloomColor_.valid()) {
+        usages.push_back(
+            {bloomColor_, RenderImageAccess::SampledRead,
+             VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+    }
+    return usages;
 }
 
 void ToneMapPass::onResize(const SwapChain &,
@@ -147,6 +157,11 @@ void ToneMapPass::execute(const RenderFrameContext &frame,
             push.exposureEv = frame.view->settings.exposureEv;
             push.toneMapper = toneMapperValue(frame.view->settings.toneMapper);
             push.applyExposure = 1;
+        }
+        if (bloomColor_.valid() && frame.view->settings.bloomEnabled &&
+            frame.shaderVariant->supportsBloom) {
+            push.bloomIntensity = frame.view->settings.bloomIntensity;
+            push.applyBloom = 1;
         }
         push.encodeGamma =
             isSrgbFormat(swapChain_->imageFormat()) ? 0u : 1u;
@@ -234,15 +249,19 @@ void ToneMapPass::destroyFramebuffers() {
 
 void ToneMapPass::createDescriptors(
     const RenderResourceRegistry &resources) {
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+    for (uint32_t bindingIndex = 0; bindingIndex < bindings.size();
+         ++bindingIndex) {
+        bindings[bindingIndex].binding = bindingIndex;
+        bindings[bindingIndex].descriptorType =
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[bindingIndex].descriptorCount = 1;
+        bindings[bindingIndex].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
     VkDescriptorSetLayoutCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    info.bindingCount = 1;
-    info.pBindings = &binding;
+    info.bindingCount = static_cast<uint32_t>(bindings.size());
+    info.pBindings = bindings.data();
     VK_CHECK(vkCreateDescriptorSetLayout(device_->logicalDevice(), &info,
                                          nullptr,
                                          &sourceDescriptorSetLayout_));
@@ -252,7 +271,7 @@ void ToneMapPass::createDescriptors(
     for (uint32_t frame = 0; frame < sourceDescriptorSets_.size(); ++frame) {
         sourceDescriptorSets_[frame] = descriptorAllocator_->allocate(
             sourceDescriptorSetLayout_,
-            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1}},
+            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2}},
             "Pass/ToneMap/SourceDescriptorSet/Frame" +
                 std::to_string(frame));
     }
@@ -263,20 +282,40 @@ void ToneMapPass::updateDescriptors(
     const RenderResourceRegistry &resources) {
     for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT;
          ++frameIndex) {
-        VkDescriptorImageInfo imageInfo{};
-        imageInfo.sampler = resources.sampler(hdrSampler_);
-        imageInfo.imageView =
+        VkDescriptorImageInfo hdrInfo{};
+        hdrInfo.sampler = resources.sampler(hdrSampler_);
+        hdrInfo.imageView =
             resources.image(hdrColor_, frameIndex).imageView();
-        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = sourceDescriptorSets_[frameIndex];
-        write.dstBinding = 0;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &imageInfo;
-        vkUpdateDescriptorSets(device_->logicalDevice(), 1, &write, 0,
-                               nullptr);
+        hdrInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkDescriptorImageInfo bloomInfo{};
+        if (bloomColor_.valid()) {
+            bloomInfo.sampler = resources.sampler(bloomSampler_);
+            bloomInfo.imageView =
+                resources.image(bloomColor_, frameIndex).imageView();
+            bloomInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        } else {
+            bloomInfo = hdrInfo;
+        }
+
+        std::array<VkWriteDescriptorSet, 2> writes{};
+        for (uint32_t bindingIndex = 0; bindingIndex < writes.size();
+             ++bindingIndex) {
+            writes[bindingIndex].sType =
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[bindingIndex].dstSet =
+                sourceDescriptorSets_[frameIndex];
+            writes[bindingIndex].dstBinding = bindingIndex;
+            writes[bindingIndex].descriptorType =
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[bindingIndex].descriptorCount = 1;
+        }
+        writes[0].pImageInfo = &hdrInfo;
+        writes[1].pImageInfo = &bloomInfo;
+        vkUpdateDescriptorSets(
+            device_->logicalDevice(),
+            static_cast<uint32_t>(writes.size()), writes.data(), 0,
+            nullptr);
     }
 }
 

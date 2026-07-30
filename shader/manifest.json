@@ -103,6 +103,16 @@
       "fragment": "postprocess/tonemap.frag"
     },
     {
+      "id": "postprocess.bloom-downsample",
+      "contract": "compute",
+      "compute": "postprocess/bloom_downsample.comp"
+    },
+    {
+      "id": "postprocess.bloom-upsample",
+      "contract": "compute",
+      "compute": "postprocess/bloom_upsample.comp"
+    },
+    {
       "id": "skybox",
       "contract": "fullscreen",
       "vertex": "postprocess/fullscreen.vert",
@@ -125,6 +135,7 @@
       "program": "forward.pbr-lite",
       "category": "pbr",
       "toneMapping": "configurable",
+      "bloom": true,
       "default": false,
       "order": 10
     },
@@ -134,6 +145,7 @@
       "program": "forward.pbr-lite-normal-mapped",
       "category": "pbr",
       "toneMapping": "configurable",
+      "bloom": true,
       "default": true,
       "order": 20
     },

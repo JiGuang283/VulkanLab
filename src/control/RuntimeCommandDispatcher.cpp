@@ -131,6 +131,13 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         command, "environmentIntensity", 0.0f, 100.0f);
     patch.environmentRotationRadians = optionalFiniteFloat(
         command, "environmentRotationRadians", -1000.0f, 1000.0f);
+    patch.bloomEnabled = optionalBoolValue(command, "bloomEnabled");
+    patch.bloomThreshold = optionalFiniteFloat(
+        command, "bloomThreshold", 0.0f, 20.0f);
+    patch.bloomSoftKnee = optionalFiniteFloat(
+        command, "bloomSoftKnee", 0.0f, 1.0f);
+    patch.bloomIntensity = optionalFiniteFloat(
+        command, "bloomIntensity", 0.0f, 5.0f);
     if (const auto toneMapper = optionalString(command, "toneMapper")) {
         patch.toneMapper = toneMapperFromName(*toneMapper);
         if (!patch.toneMapper) {
@@ -143,7 +150,9 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         !patch.shadowConstantBias && !patch.shadowSlopeBias &&
         !patch.exposureEv && !patch.toneMapper && !patch.iblEnabled &&
         !patch.skyboxEnabled && !patch.environmentIntensity &&
-        !patch.environmentRotationRadians) {
+        !patch.environmentRotationRadians && !patch.bloomEnabled &&
+        !patch.bloomThreshold && !patch.bloomSoftKnee &&
+        !patch.bloomIntensity) {
         throw RuntimeCommandError(
             "invalid_params",
             "render_settings.set requires at least one setting.");

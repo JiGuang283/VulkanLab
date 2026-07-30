@@ -21,6 +21,7 @@
 #include "render/pass/MainForwardPass.h"
 #include "render/pass/SkyboxPass.h"
 #include "render/pass/ToneMapPass.h"
+#include "render/pass/BloomPass.h"
 
 #include <cstring>
 #include <memory>
@@ -379,6 +380,14 @@ float Renderer::currentEnvironmentMaxSpecularLod() const {
                : 0.0f;
 }
 
+bool Renderer::bloomSupported() const {
+    return device_->computeBloomSupport().available;
+}
+
+const std::string &Renderer::bloomUnsupportedReason() const {
+    return device_->computeBloomSupport().reason;
+}
+
 void Renderer::createRenderPipeline() {
     pipeline_.addPass(std::make_unique<DirectionalShadowPass>(
         *device_, *renderResources_, resourceHandles_.directionalShadowDepth,
@@ -396,9 +405,17 @@ void Renderer::createRenderPipeline() {
     mainForwardPass_ = mainPass.get();
     pipeline_.addPass(std::move(mainPass));
 
+    if (device_->computeBloomSupport().available) {
+        pipeline_.addPass(std::make_unique<BloomPass>(
+            *device_, *renderResources_, resourceHandles_,
+            *descriptorAllocator_, shaderPaths_.bloomDownsampleComp,
+            shaderPaths_.bloomUpsampleComp));
+    }
+
     auto toneMapPass = std::make_unique<ToneMapPass>(
         *device_, *swapChain_, *renderResources_, resourceHandles_.hdrColor,
-        resourceHandles_.hdrSampler, *descriptorAllocator_,
+        resourceHandles_.hdrSampler, resourceHandles_.bloomLevels.front(),
+        resourceHandles_.bloomSampler, *descriptorAllocator_,
         shaderPaths_.fullscreenVert, shaderPaths_.toneMapFrag);
     toneMapPass_ = toneMapPass.get();
     pipeline_.addPass(std::move(toneMapPass));

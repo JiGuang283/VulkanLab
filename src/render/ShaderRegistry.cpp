@@ -242,7 +242,7 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
                 "variants[" + std::to_string(index) + "]";
             rejectUnknownFields(item, field,
                                 {"id", "displayName", "program", "category",
-                                 "toneMapping", "default", "order"});
+                                 "toneMapping", "bloom", "default", "order"});
 
             ShaderVariant variant;
             variant.id = requiredString(item, "id", field);
@@ -271,6 +271,7 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
             variant.toneMapping = parseToneMapping(
                 requiredString(item, "toneMapping", field),
                 field + ".toneMapping");
+            variant.supportsBloom = item.value("bloom", false);
             variant.isDefault = item.at("default").get<bool>();
             variant.order = item.at("order").get<int32_t>();
             variant.vertSpvPath = program.vertSpvPath;

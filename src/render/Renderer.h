@@ -61,6 +61,8 @@ class Renderer {
     bool environmentReady() const;
     std::string currentEnvironmentId() const;
     float currentEnvironmentMaxSpecularLod() const;
+    bool bloomSupported() const;
+    const std::string &bloomUnsupportedReason() const;
 
     // ---- per-frame UBO 访问器 ----
   private:

@@ -145,6 +145,14 @@ class FakeRuntimeHost final : public vkr::RuntimeControlHost {
         if (patch.environmentRotationRadians)
             arguments["environmentRotationRadians"] =
                 *patch.environmentRotationRadians;
+        if (patch.bloomEnabled)
+            arguments["bloomEnabled"] = *patch.bloomEnabled;
+        if (patch.bloomThreshold)
+            arguments["bloomThreshold"] = *patch.bloomThreshold;
+        if (patch.bloomSoftKnee)
+            arguments["bloomSoftKnee"] = *patch.bloomSoftKnee;
+        if (patch.bloomIntensity)
+            arguments["bloomIntensity"] = *patch.bloomIntensity;
         return reply("render_settings.set", std::move(arguments));
     }
     vkr::ControlJson runtimeEnvironmentList() override {
@@ -258,7 +266,11 @@ void testAllProtocolMethods() {
           {"iblEnabled", true},
           {"skyboxEnabled", true},
           {"environmentIntensity", 1.5},
-          {"environmentRotationRadians", 0.5}},
+          {"environmentRotationRadians", 0.5},
+          {"bloomEnabled", true},
+          {"bloomThreshold", 1.25},
+          {"bloomSoftKnee", 0.4},
+          {"bloomIntensity", 0.2}},
          result("render_settings.set",
                 {{"shadowsEnabled", false},
                  {"shadowReceiverBias", 0.002f},
@@ -269,7 +281,11 @@ void testAllProtocolMethods() {
                  {"iblEnabled", true},
                  {"skyboxEnabled", true},
                  {"environmentIntensity", 1.5f},
-                 {"environmentRotationRadians", 0.5f}})},
+                 {"environmentRotationRadians", 0.5f},
+                 {"bloomEnabled", true},
+                 {"bloomThreshold", 1.25f},
+                 {"bloomSoftKnee", 0.4f},
+                 {"bloomIntensity", 0.2f}})},
         {"capture.screenshot", {{"path", "suite/frame.png"}},
          result("capture.screenshot",
                 {{"path", "suite/frame.png"}, {"includeGui", false}})},

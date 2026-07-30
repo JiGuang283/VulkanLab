@@ -36,9 +36,20 @@ struct alignas(16) GlobalFrameUbo {
 
 struct alignas(16) ToneMapPushConstants {
     float exposureEv = 0.0f;
+    float bloomIntensity = 0.0f;
     uint32_t toneMapper = 0;
     uint32_t encodeGamma = 0;
     uint32_t applyExposure = 0;
+    uint32_t applyBloom = 0;
+    uint32_t reserved0 = 0;
+    uint32_t reserved1 = 0;
+};
+
+struct alignas(16) BloomPushConstants {
+    float threshold = 1.0f;
+    float softKnee = 0.5f;
+    float filterRadius = 1.0f;
+    uint32_t applyThreshold = 0;
 };
 
 static_assert(std::is_standard_layout_v<GpuLight>);
@@ -60,6 +71,13 @@ static_assert(offsetof(GlobalFrameUbo, punctualLights) == 304);
 static_assert(offsetof(GlobalFrameUbo, directionalShadowViewProj) == 816);
 static_assert(offsetof(GlobalFrameUbo, shadowParams) == 880);
 static_assert(offsetof(GlobalFrameUbo, environmentParams) == 896);
-static_assert(sizeof(ToneMapPushConstants) == 16);
+static_assert(sizeof(ToneMapPushConstants) == 32);
+static_assert(offsetof(ToneMapPushConstants, exposureEv) == 0);
+static_assert(offsetof(ToneMapPushConstants, bloomIntensity) == 4);
+static_assert(offsetof(ToneMapPushConstants, toneMapper) == 8);
+static_assert(offsetof(ToneMapPushConstants, encodeGamma) == 12);
+static_assert(offsetof(ToneMapPushConstants, applyExposure) == 16);
+static_assert(offsetof(ToneMapPushConstants, applyBloom) == 20);
+static_assert(sizeof(BloomPushConstants) == 16);
 
 } // namespace vkr

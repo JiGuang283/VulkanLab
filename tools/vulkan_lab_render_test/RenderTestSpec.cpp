@@ -99,7 +99,17 @@ void parseRenderSettings(const nlohmann::json &document,
     if (found == document.end())
         return;
     requireObject(*found, "renderSettings");
-    if (schemaVersion >= 3) {
+    if (schemaVersion >= 4) {
+        rejectUnknownKeys(
+            *found,
+            {"shadowsEnabled", "shadowReceiverBias",
+             "shadowConstantBias", "shadowSlopeBias", "exposureEv",
+             "toneMapper", "iblEnabled", "skyboxEnabled",
+             "environmentIntensity", "environmentRotationRadians",
+             "bloomEnabled", "bloomThreshold", "bloomSoftKnee",
+             "bloomIntensity"},
+            "renderSettings");
+    } else if (schemaVersion >= 3) {
         rejectUnknownKeys(
             *found,
             {"shadowsEnabled", "shadowReceiverBias",
@@ -154,6 +164,21 @@ void parseRenderSettings(const nlohmann::json &document,
         settings.environmentRotationRadians = optionalFiniteFloat(
             *found, "environmentRotationRadians",
             settings.environmentRotationRadians, -1000.0f, 1000.0f);
+    }
+    if (schemaVersion >= 4) {
+        const auto bloom = found->find("bloomEnabled");
+        if (bloom != found->end()) {
+            if (!bloom->is_boolean())
+                throw std::invalid_argument(
+                    "field 'bloomEnabled' must be a boolean");
+            settings.bloomEnabled = bloom->get<bool>();
+        }
+        settings.bloomThreshold = optionalFiniteFloat(
+            *found, "bloomThreshold", settings.bloomThreshold, 0.0f, 20.0f);
+        settings.bloomSoftKnee = optionalFiniteFloat(
+            *found, "bloomSoftKnee", settings.bloomSoftKnee, 0.0f, 1.0f);
+        settings.bloomIntensity = optionalFiniteFloat(
+            *found, "bloomIntensity", settings.bloomIntensity, 0.0f, 5.0f);
     }
 
     const auto toneMapper = found->find("toneMapper");
@@ -318,7 +343,7 @@ RenderTestSpec parseRenderTestSpec(const nlohmann::json &document,
     spec.sourcePath = std::filesystem::absolute(sourcePath).lexically_normal();
     const uint32_t schemaVersion =
         requiredUint32(document, "schemaVersion", 1, UINT32_MAX);
-    if (schemaVersion != 1 && schemaVersion != 2 &&
+    if (schemaVersion != 1 && schemaVersion != 2 && schemaVersion != 3 &&
         schemaVersion != RenderTestSpec::kSchemaVersion)
         throw std::invalid_argument("unsupported render test schemaVersion");
     if (schemaVersion == 1 && document.contains("renderSettings"))
@@ -482,7 +507,11 @@ nlohmann::json renderTestSpecToJson(const RenderTestSpec &spec) {
           {"environmentIntensity",
            spec.renderSettings.environmentIntensity},
           {"environmentRotationRadians",
-           spec.renderSettings.environmentRotationRadians}}},
+           spec.renderSettings.environmentRotationRadians},
+          {"bloomEnabled", spec.renderSettings.bloomEnabled},
+          {"bloomThreshold", spec.renderSettings.bloomThreshold},
+          {"bloomSoftKnee", spec.renderSettings.bloomSoftKnee},
+          {"bloomIntensity", spec.renderSettings.bloomIntensity}}},
         {"mode", renderTestModeName(spec.mode)},
         {"thresholds",
          {{"minimumNonBlackRatio",

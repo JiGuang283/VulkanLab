@@ -148,8 +148,14 @@ void testProjectManifestPreservesPublicVariants() {
     requireRegistry(registry.findProgram("shadow.opaque") != nullptr &&
                         registry.findProgram("shadow.mask") != nullptr &&
                         registry.findProgram("postprocess.tonemap") != nullptr &&
+                        registry.findProgram(
+                            "postprocess.bloom-downsample") != nullptr &&
+                        registry.findProgram(
+                            "postprocess.bloom-upsample") != nullptr &&
                         registry.findProgram("skybox") != nullptr,
                     "required internal shader program is missing");
+    requireRegistry(registry.defaultVariant().supportsBloom,
+                    "project default shader must support Bloom");
 }
 
 void testRegistryRejectsDuplicateDisplayName() {

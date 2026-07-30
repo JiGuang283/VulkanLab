@@ -10,6 +10,8 @@ struct RendererShaderPaths {
     std::string fullscreenVert;
     std::string toneMapFrag;
     std::string skyboxFrag;
+    std::string bloomDownsampleComp;
+    std::string bloomUpsampleComp;
 };
 
 } // namespace vkr

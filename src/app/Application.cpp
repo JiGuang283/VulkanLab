@@ -777,13 +777,18 @@ void Application::init() {
     const ShaderProgram &shadowMask = shaderRegistry_.program("shadow.mask");
     const ShaderProgram &toneMap =
         shaderRegistry_.program("postprocess.tonemap");
+    const ShaderProgram &bloomDownsample =
+        shaderRegistry_.program("postprocess.bloom-downsample");
+    const ShaderProgram &bloomUpsample =
+        shaderRegistry_.program("postprocess.bloom-upsample");
     const ShaderProgram &skybox = shaderRegistry_.program("skybox");
     renderer_ = std::make_unique<Renderer>(
         *device_, *swapChain_, *frameSync_, *descriptorAllocator_,
         RendererShaderPaths{
             shadowOpaque.vertSpvPath, shadowMask.fragSpvPath,
             toneMap.vertSpvPath, toneMap.fragSpvPath,
-            skybox.fragSpvPath});
+            skybox.fragSpvPath, bloomDownsample.computeSpvPath,
+            bloomUpsample.computeSpvPath});
 #if VKL_ENABLE_CAPTURE
     if (!projectContext_.cookedPackage) {
         captureService_ = std::make_unique<CaptureService>(
@@ -1333,6 +1338,13 @@ void Application::setShaderVariant(const std::string &id) {
 }
 
 void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
+    if (patch.bloomEnabled && *patch.bloomEnabled && renderer_ &&
+        !renderer_->bloomSupported()) {
+        throw RuntimeCommandError(
+            "bloom_unsupported",
+            "Compute Bloom is unavailable: " +
+                renderer_->bloomUnsupportedReason());
+    }
     RenderSettings next = renderSettings_;
     applyRenderSettingsPatch(next, patch);
     next.shadowReceiverBias =
@@ -1341,6 +1353,12 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
         glm::clamp(next.shadowConstantBias, 0.0f, 10.0f);
     next.shadowSlopeBias = glm::clamp(next.shadowSlopeBias, 0.0f, 10.0f);
     next.exposureEv = glm::clamp(next.exposureEv, -10.0f, 10.0f);
+    next.bloomThreshold =
+        glm::clamp(next.bloomThreshold, 0.0f, 20.0f);
+    next.bloomSoftKnee =
+        glm::clamp(next.bloomSoftKnee, 0.0f, 1.0f);
+    next.bloomIntensity =
+        glm::clamp(next.bloomIntensity, 0.0f, 5.0f);
     next.environmentIntensity =
         glm::clamp(next.environmentIntensity, 0.0f, 100.0f);
     next.environmentRotationRadians =
@@ -2087,6 +2105,7 @@ ControlJson Application::runtimeShaderList() {
              {"category", variant.category},
              {"toneMapping",
               shaderToneMappingPolicyName(variant.toneMapping)},
+             {"bloom", variant.supportsBloom},
              {"default", variant.isDefault}});
     }
     return {{"shaders", std::move(shaders)},
@@ -2095,7 +2114,9 @@ ControlJson Application::runtimeShaderList() {
 
 ControlJson Application::runtimeShaderCurrent() {
     const ShaderVariant &variant = currentShaderVariant();
-    return {{"id", variant.id}, {"name", variant.displayName}};
+    return {{"id", variant.id},
+            {"name", variant.displayName},
+            {"bloom", variant.supportsBloom}};
 }
 
 ControlJson Application::runtimeShaderSet(const std::string &name) {
@@ -2302,13 +2323,27 @@ ControlJson Application::runtimeRenderSettingsGet() {
             {"shadowSlopeBias", renderSettings_.shadowSlopeBias},
             {"exposureEv", renderSettings_.exposureEv},
             {"toneMapper", toneMapperName(renderSettings_.toneMapper)},
+            {"bloomEnabled", renderSettings_.bloomEnabled},
+            {"bloomThreshold", renderSettings_.bloomThreshold},
+            {"bloomSoftKnee", renderSettings_.bloomSoftKnee},
+            {"bloomIntensity", renderSettings_.bloomIntensity},
+            {"bloomAvailable", renderer_->bloomSupported()},
+            {"bloomActive",
+             renderer_->bloomSupported() &&
+                 renderSettings_.bloomEnabled &&
+                 currentShaderVariant().supportsBloom},
+            {"bloomUnavailableReason",
+             renderer_->bloomSupported()
+                 ? std::string{}
+                 : renderer_->bloomUnsupportedReason()},
             {"iblEnabled", renderSettings_.iblEnabled},
             {"skyboxEnabled", renderSettings_.skyboxEnabled},
             {"environmentIntensity",
              renderSettings_.environmentIntensity},
             {"environmentRotationRadians",
              renderSettings_.environmentRotationRadians},
-            {"toneMappingPolicy", "pbr_only"}};
+            {"toneMappingPolicy", "pbr_only"},
+            {"bloomPolicy", "pbr_only"}};
 }
 
 ControlJson Application::runtimeRenderSettingsSet(
@@ -3621,6 +3656,52 @@ void Application::drawRenderPanel() {
     ImGui::TextUnformatted("Legacy and debug views use PassThrough");
 }
 
+void Application::drawPostProcessingPanel() {
+    const bool available = renderer_ && renderer_->bloomSupported();
+    const bool compatible = currentShaderVariant().supportsBloom;
+    ImGui::BeginDisabled(!available);
+    bool enabled = renderSettings_.bloomEnabled;
+    if (ImGui::Checkbox("Bloom", &enabled)) {
+        RenderSettingsPatch patch;
+        patch.bloomEnabled = enabled;
+        applyRenderSettings(patch);
+    }
+    ImGui::BeginDisabled(!renderSettings_.bloomEnabled);
+    float threshold = renderSettings_.bloomThreshold;
+    if (ImGui::DragFloat("Threshold", &threshold, 0.05f, 0.0f, 20.0f)) {
+        RenderSettingsPatch patch;
+        patch.bloomThreshold = threshold;
+        applyRenderSettings(patch);
+    }
+    float softKnee = renderSettings_.bloomSoftKnee;
+    if (ImGui::DragFloat("Soft Knee", &softKnee, 0.01f, 0.0f, 1.0f)) {
+        RenderSettingsPatch patch;
+        patch.bloomSoftKnee = softKnee;
+        applyRenderSettings(patch);
+    }
+    float intensity = renderSettings_.bloomIntensity;
+    if (ImGui::DragFloat("Intensity", &intensity, 0.01f, 0.0f, 5.0f)) {
+        RenderSettingsPatch patch;
+        patch.bloomIntensity = intensity;
+        applyRenderSettings(patch);
+    }
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+
+    ImGui::Text("Available: %s", available ? "Yes" : "No");
+    const bool active =
+        available && renderSettings_.bloomEnabled && compatible;
+    ImGui::Text("Active: %s", active ? "Yes" : "No");
+    if (!available && renderer_) {
+        ImGui::TextWrapped("Unavailable: %s",
+                           renderer_->bloomUnsupportedReason().c_str());
+    } else if (renderSettings_.bloomEnabled && !compatible) {
+        ImGui::TextDisabled(
+            "Inactive for the selected Shader variant.");
+    }
+    ImGui::TextDisabled("Pyramid: up to 6 half-resolution levels");
+}
+
 void Application::drawSceneLoadingPanel() {
     if (!latestSceneLoadTask_)
         return;
@@ -4294,6 +4375,13 @@ void Application::drawGui() {
                     "Pipeline", ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::PushID("Pipeline");
                 drawRenderPanel();
+                ImGui::PopID();
+            }
+            if (ImGui::CollapsingHeader(
+                    "Post Processing",
+                    ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::PushID("PostProcessing");
+                drawPostProcessingPanel();
                 ImGui::PopID();
             }
             if (ImGui::CollapsingHeader(

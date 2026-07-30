@@ -2,6 +2,7 @@
 
 #include "core/FrameSync.h"
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -58,6 +59,7 @@ struct RenderImageDesc {
     uint32_t mipLevels = 1;
     bool externallyInitialized = false;
     VkImageLayout initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    uint32_t extentDivisor = 1;
 };
 
 struct RenderSamplerDesc {
@@ -83,6 +85,8 @@ enum class RenderImageAccess {
     ColorAttachmentReadWrite,
     DepthAttachmentWrite,
     SampledRead,
+    StorageWrite,
+    StorageReadWrite,
 };
 
 struct RenderImageUsage {
@@ -98,12 +102,16 @@ struct RenderPassResourceUsage {
 };
 
 struct RendererResourceHandles {
+    static constexpr uint32_t kBloomPyramidLevelCount = 6;
+
     RenderImageHandle hdrColor{};
     RenderImageHandle hdrMsaaColor{};
     RenderImageHandle mainDepth{};
     RenderImageHandle directionalShadowDepth{};
+    std::array<RenderImageHandle, kBloomPyramidLevelCount> bloomLevels{};
     RenderSamplerHandle hdrSampler{};
     RenderSamplerHandle shadowSampler{};
+    RenderSamplerHandle bloomSampler{};
 };
 
 class RenderResourceRegistry {

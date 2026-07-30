@@ -99,7 +99,7 @@ void testSchemaV2RenderSettings() {
 
     const Json serialized =
         vkr::render_test::renderTestSpecToJson(spec);
-    requireSpec(serialized["schemaVersion"] == 3 &&
+    requireSpec(serialized["schemaVersion"] == 4 &&
                     serialized["renderSettings"]["toneMapper"] ==
                         "reinhard" &&
                     serialized["renderSettings"]["shadowsEnabled"] ==
@@ -130,10 +130,42 @@ void testSchemaV3Environment() {
         "schema v3 environment fields changed during parsing");
     const Json serialized =
         vkr::render_test::renderTestSpecToJson(spec);
-    requireSpec(serialized["schemaVersion"] == 3 &&
+    requireSpec(serialized["schemaVersion"] == 4 &&
                     serialized["environmentId"] == "studio-hdr" &&
                     serialized["renderSettings"]["iblEnabled"] == true,
                 "schema v3 environment fields were not serialized");
+}
+
+void testSchemaV4Bloom() {
+    Json document = validSpec();
+    document["schemaVersion"] = 4;
+    document["renderSettings"] = {
+        {"bloomEnabled", true},
+        {"bloomThreshold", 1.25f},
+        {"bloomSoftKnee", 0.4f},
+        {"bloomIntensity", 0.2f},
+    };
+    const auto source =
+        std::filesystem::temp_directory_path() / "render-tests" /
+        "bloom-v4.json";
+    const auto spec =
+        vkr::render_test::parseRenderTestSpec(document, source);
+    requireSpec(
+        spec.renderSettings.bloomEnabled &&
+            std::abs(spec.renderSettings.bloomThreshold - 1.25f) <
+                0.0001f &&
+            std::abs(spec.renderSettings.bloomSoftKnee - 0.4f) <
+                0.0001f &&
+            std::abs(spec.renderSettings.bloomIntensity - 0.2f) <
+                0.0001f,
+        "schema v4 Bloom fields changed during parsing");
+    const Json serialized =
+        vkr::render_test::renderTestSpecToJson(spec);
+    requireSpec(
+        serialized["schemaVersion"] == 4 &&
+            serialized["renderSettings"]["bloomEnabled"] == true &&
+            serialized["renderSettings"]["bloomThreshold"] == 1.25f,
+        "schema v4 Bloom fields were not serialized");
 }
 
 void testValidGoldenSpecAndResolvedPaths() {
@@ -278,6 +310,7 @@ void runRenderTestSpecTests() {
     testValidSmokeSpec();
     testSchemaV2RenderSettings();
     testSchemaV3Environment();
+    testSchemaV4Bloom();
     testValidGoldenSpecAndResolvedPaths();
     testStrictValidation();
     testGoldenPathConfinement();

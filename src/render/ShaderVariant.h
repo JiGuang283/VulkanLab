@@ -35,6 +35,7 @@ struct ShaderVariant {
     std::string category;
     int32_t order = 0;
     bool isDefault = false;
+    bool supportsBloom = false;
     ShaderToneMappingPolicy toneMapping =
         ShaderToneMappingPolicy::PassThrough;
     std::string vertSpvPath;

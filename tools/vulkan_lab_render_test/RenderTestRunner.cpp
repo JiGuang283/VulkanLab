@@ -560,7 +560,11 @@ class RunnerSession {
                 {"environmentIntensity",
                  spec_->renderSettings.environmentIntensity},
                 {"environmentRotationRadians",
-                 spec_->renderSettings.environmentRotationRadians}});
+                 spec_->renderSettings.environmentRotationRadians},
+                {"bloomEnabled", spec_->renderSettings.bloomEnabled},
+                {"bloomThreshold", spec_->renderSettings.bloomThreshold},
+                {"bloomSoftKnee", spec_->renderSettings.bloomSoftKnee},
+                {"bloomIntensity", spec_->renderSettings.bloomIntensity}});
         report_["runtime"]["environment"] =
             invoke("environment.current");
         info = invoke("system.info");

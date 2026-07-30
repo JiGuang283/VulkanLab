@@ -62,7 +62,9 @@ void printUsage() {
            "[--constant-bias N] [--slope-bias N] "
            "[--exposure N] [--tone-mapper passthrough|reinhard|aces] "
            "[--ibl on|off] [--skybox on|off] "
-           "[--environment-intensity N] [--environment-rotation-deg N]\n"
+           "[--environment-intensity N] [--environment-rotation-deg N] "
+           "[--bloom on|off] [--bloom-threshold N] "
+           "[--bloom-soft-knee N] [--bloom-intensity N]\n"
         << "  VulkanLabCtl [--json] render wait [--stable-frames N] "
            "[--timeout-ms N]\n"
         << "  VulkanLabCtl [--json] capture screenshot <relative.png> "
@@ -157,6 +159,10 @@ ParsedCommand parseCommand(int argc, char **argv) {
     std::optional<std::string> skybox;
     std::optional<std::string> environmentIntensity;
     std::optional<std::string> environmentRotationDegrees;
+    std::optional<std::string> bloom;
+    std::optional<std::string> bloomThreshold;
+    std::optional<std::string> bloomSoftKnee;
+    std::optional<std::string> bloomIntensity;
     for (int i = 1; i < argc; ++i) {
         const std::string argument = argv[i];
         if (argument == "--pipe") {
@@ -181,7 +187,11 @@ ParsedCommand parseCommand(int argc, char **argv) {
                  argument == "--ibl" ||
                  argument == "--skybox" ||
                  argument == "--environment-intensity" ||
-                 argument == "--environment-rotation-deg") {
+                 argument == "--environment-rotation-deg" ||
+                 argument == "--bloom" ||
+                 argument == "--bloom-threshold" ||
+                 argument == "--bloom-soft-knee" ||
+                 argument == "--bloom-intensity") {
             if (++i >= argc)
                 throw std::invalid_argument(argument + " requires a value");
             if (argument == "--position")
@@ -212,8 +222,16 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 skybox = argv[i];
             else if (argument == "--environment-intensity")
                 environmentIntensity = argv[i];
-            else
+            else if (argument == "--environment-rotation-deg")
                 environmentRotationDegrees = argv[i];
+            else if (argument == "--bloom")
+                bloom = argv[i];
+            else if (argument == "--bloom-threshold")
+                bloomThreshold = argv[i];
+            else if (argument == "--bloom-soft-knee")
+                bloomSoftKnee = argv[i];
+            else
+                bloomIntensity = argv[i];
         }
         else if (argument == "--no-wait")
             waitForLoad = false;
@@ -397,6 +415,21 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 parseFiniteFloat(*environmentRotationDegrees,
                                  "--environment-rotation-deg") *
                 kDegreesToRadians;
+        }
+        if (bloom)
+            parsed.params["bloomEnabled"] =
+                parseOnOff(*bloom, "--bloom");
+        if (bloomThreshold) {
+            parsed.params["bloomThreshold"] =
+                parseFiniteFloat(*bloomThreshold, "--bloom-threshold");
+        }
+        if (bloomSoftKnee) {
+            parsed.params["bloomSoftKnee"] =
+                parseFiniteFloat(*bloomSoftKnee, "--bloom-soft-knee");
+        }
+        if (bloomIntensity) {
+            parsed.params["bloomIntensity"] =
+                parseFiniteFloat(*bloomIntensity, "--bloom-intensity");
         }
         if (parsed.params.empty())
             throw std::invalid_argument(
@@ -719,7 +752,20 @@ void printHuman(const std::string &method, const Json &result) {
                   << result.at("environmentIntensity").get<float>()
                   << ", rotation: "
                   << result.at("environmentRotationRadians").get<float>()
-                  << " rad\n";
+                  << " rad\nBloom: "
+                  << (result.at("bloomEnabled").get<bool>() ? "on" : "off")
+                  << ", active: "
+                  << (result.at("bloomActive").get<bool>() ? "yes" : "no")
+                  << ", available: "
+                  << (result.at("bloomAvailable").get<bool>() ? "yes" : "no")
+                  << "\nthreshold/knee/intensity: "
+                  << result.at("bloomThreshold").get<float>() << "/"
+                  << result.at("bloomSoftKnee").get<float>() << "/"
+                  << result.at("bloomIntensity").get<float>() << '\n';
+        const std::string bloomReason =
+            result.value("bloomUnavailableReason", std::string{});
+        if (!bloomReason.empty())
+            std::cout << "Bloom unavailable: " << bloomReason << '\n';
     } else if (method == "capture.screenshot" ||
                method == "capture.status" ||
                method == "capture.cancel") {

@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <memory>
+#include <string>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -14,6 +15,12 @@
 namespace vkr {
 
 class GpuDebugUtils;
+
+struct ComputeBloomSupport {
+    bool available = false;
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    std::string reason;
+};
 
 class Device {
   public:
@@ -35,6 +42,9 @@ class Device {
     }
     bool environmentIblSupported() const {
         return environmentIblSupported_;
+    }
+    const ComputeBloomSupport &computeBloomSupport() const {
+        return computeBloomSupport_;
     }
 
     SwapChainSupportDetails querySwapChainSupport() const;
@@ -65,6 +75,7 @@ class Device {
     TextureTranscodeTarget textureTranscodeTarget_ =
         TextureTranscodeTarget::Rgba8;
     bool environmentIblSupported_ = false;
+    ComputeBloomSupport computeBloomSupport_{};
     VmaAllocator          allocator_ = VK_NULL_HANDLE;
     std::unique_ptr<GpuDebugUtils> debugUtils_;
 };

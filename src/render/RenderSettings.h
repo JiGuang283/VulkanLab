@@ -40,9 +40,13 @@ struct RenderSettings {
     float      shadowSlopeBias = 1.75f;
     float      exposureEv = 0.0f;
     ToneMapper toneMapper = ToneMapper::Aces;
-    bool iblEnabled = false;
-    bool skyboxEnabled = false;
-    float environmentIntensity = 1.0f;
+    bool       bloomEnabled = false;
+    float      bloomThreshold = 1.0f;
+    float      bloomSoftKnee = 0.5f;
+    float      bloomIntensity = 0.1f;
+    bool       iblEnabled = false;
+    bool       skyboxEnabled = false;
+    float      environmentIntensity = 1.0f;
     float environmentRotationRadians = 0.0f;
 };
 
@@ -53,9 +57,13 @@ struct RenderSettingsPatch {
     std::optional<float>      shadowSlopeBias;
     std::optional<float>      exposureEv;
     std::optional<ToneMapper> toneMapper;
-    std::optional<bool> iblEnabled;
-    std::optional<bool> skyboxEnabled;
-    std::optional<float> environmentIntensity;
+    std::optional<bool>       bloomEnabled;
+    std::optional<float>      bloomThreshold;
+    std::optional<float>      bloomSoftKnee;
+    std::optional<float>      bloomIntensity;
+    std::optional<bool>       iblEnabled;
+    std::optional<bool>       skyboxEnabled;
+    std::optional<float>      environmentIntensity;
     std::optional<float> environmentRotationRadians;
 };
 
@@ -73,6 +81,14 @@ inline void applyRenderSettingsPatch(RenderSettings &settings,
         settings.exposureEv = *patch.exposureEv;
     if (patch.toneMapper)
         settings.toneMapper = *patch.toneMapper;
+    if (patch.bloomEnabled)
+        settings.bloomEnabled = *patch.bloomEnabled;
+    if (patch.bloomThreshold)
+        settings.bloomThreshold = *patch.bloomThreshold;
+    if (patch.bloomSoftKnee)
+        settings.bloomSoftKnee = *patch.bloomSoftKnee;
+    if (patch.bloomIntensity)
+        settings.bloomIntensity = *patch.bloomIntensity;
     if (patch.iblEnabled)
         settings.iblEnabled = *patch.iblEnabled;
     if (patch.skyboxEnabled)

@@ -1,8 +1,8 @@
 # 编辑器 UI 工作区
 
 > Status: Current
-> Last verified: 2026-07-26
-> Verified against: `9092755`
+> Last verified: 2026-07-30
+> Verified against: Compute Bloom v1 working tree
 
 VulkanLab 的开发 UI 使用一个可移动、缩放和折叠的 `VulkanLab` 工具窗口。
 它不依赖 ImGui docking branch，也不创建独立的平台窗口。
@@ -41,10 +41,14 @@ Import 和 Remove 仍使用 modal；文件导入和场景加载的数据流没�
 
 ## Render
 
-`Render` 页使用三个默认展开的分区：
+`Render` 页使用四个默认展开的分区：
 
 - `Pipeline`：Shader variant、Texture Limit、Exposure EV 和 PBR Tone Mapper。
   Shader 下拉按 Manifest 的 `legacy`、`pbr`、`debug` category 分组。
+- `Post Processing`：Compute Bloom 开关、Threshold、Soft Knee 和 Intensity，
+  并显示设备 Available 与当前 Shader 下的 Active 状态。Bloom 默认关闭，只在
+  `PBR-lite Forward` 和 `PBR-lite NormalMapped` 下生效；切换到 Legacy 或
+  Debug variant 不会丢失设置，但 Active 会变为 No。
 - `Lighting`：方向光阴影、bias、ambient、灯光统计和无场景灯光时的 fallback
   Sun 参数；Environment combo、Image-Based Lighting、Skybox、Intensity
   和 Rotation 也在这里。`None` 始终可选，选择环境与启用 IBL/Skybox 是

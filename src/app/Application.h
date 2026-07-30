@@ -92,6 +92,7 @@ class Application final
     void drawSceneLoadingPanel();
     void drawAssetsPanel();
     void drawRenderPanel();
+    void drawPostProcessingPanel();
     void drawLightingPanel();
     void drawCameraPanel();
     void drawMaterialsPanel();
