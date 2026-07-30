@@ -1,8 +1,8 @@
 # 构建与运行
 
 > Status: Current
-> Last verified: 2026-07-26
-> Verified against: `9092755`
+> Last verified: 2026-07-30
+> Verified against: `56b84b1`
 
 ## 环境要求
 
@@ -18,6 +18,63 @@ git submodule update --init --recursive
 ```
 
 如果模型资产由 Git LFS 管理，还需要先安装 Git LFS 并在仓库根目录执行 `git lfs pull`。KTX2 派生缓存本身不提交到 Git LFS 或普通 Git。
+
+## 构建配置
+
+Windows MSVC 提供四个 configure/build preset：
+
+| Preset | 配置 | 用途 | 主要产物 |
+|---|---|---|---|
+| `windows-msvc-debug` | Debug，全功能，`BUILD_TESTING=ON` | 完整开发与诊断 | VulkanLab、AssetTool、Ctl、RenderTest 和测试目标 |
+| `windows-msvc-release` | Release，全功能，`BUILD_TESTING=ON` | 完整 Release 验证与 Cook 输入 | 与 Debug 相同的功能和工具 |
+| `windows-msvc-dev-fast` | Debug，全运行时功能，`BUILD_TESTING=OFF` | 日常快速迭代 | VulkanLab 和 AssetTool |
+| `windows-msvc-runtime` | Release，开发基础设施全部关闭 | 精简运行时 | 仅 VulkanLab |
+
+日常修改渲染器时优先使用快速配置：
+
+```powershell
+cmake --preset windows-msvc-dev-fast
+cmake --build --preset windows-msvc-dev-fast
+```
+
+构建精简运行时：
+
+```powershell
+cmake --preset windows-msvc-runtime
+cmake --build --preset windows-msvc-runtime
+```
+
+`windows-msvc-runtime` 仍保留 Forward、Directional Shadow、HDR/Tone Mapping、IBL、Skybox、场景加载和 KTX2 读取。它只裁剪编辑器、Runtime Control、截图、资产写入、Validation、GPU Debug Utils 和 GPU timestamp profiling，不改变 Shader ABI、材质布局或 descriptor layout。
+
+## 编译期功能开关
+
+所有选项默认均为 `ON`，可在自定义 CMake 配置中独立设置：
+
+| Option | 控制内容 |
+|---|---|
+| `VKL_ENABLE_EDITOR_UI` | Dear ImGui 编辑器工作区及其依赖 |
+| `VKL_ENABLE_RUNTIME_CONTROL` | VulkanLab 内的 Named Pipe 服务端 |
+| `VKL_ENABLE_CAPTURE` | 截图服务和 swapchain `TRANSFER_SRC` usage |
+| `VKL_ENABLE_ASSET_AUTHORING` | OnDemand import、资产工具进程监督和 Catalog 写操作 |
+| `VKL_ENABLE_VALIDATION` | Validation profile 集成 |
+| `VKL_ENABLE_GPU_DEBUG_UTILS` | Vulkan 对象命名和 GPU command labels |
+| `VKL_ENABLE_GPU_PROFILING` | 每 Pass timestamp query |
+| `VKL_BUILD_ASSET_TOOL` | `VulkanLabAssetTool.exe` |
+| `VKL_BUILD_CONTROL_TOOL` | `VulkanLabCtl.exe` |
+| `VKL_BUILD_RENDER_TEST` | `VulkanLabRenderTest.exe` |
+| `BUILD_TESTING` | CTest 目标和 SPIRV-Reflect 测试依赖 |
+
+依赖规则：
+
+- RenderTest 要求 Runtime Control 和 Capture 同时编译，否则 CMake 配置失败。
+- Runtime Control 服务端与 VulkanLabCtl 客户端可以独立构建。
+- Asset Authoring 可使用外部 `--asset-tool`；启用 authoring 但不构建本地 AssetTool 时 CMake 给出 warning。
+- 关闭 AssetTool 会同时关闭 KTX CLI 与 KTX1，只保留渲染器读取 KTX2 所需的 `ktx_read`。
+- `BUILD_TESTING=OFF` 时不构建 SPIRV-Reflect。
+
+CMake 通过 `configure_file()` 生成 `BuildFeatures.h`。宏仅用于程序入口、模块装配和真实/空实现选择，不用于控制 IBL、Shadow 或任何 GPU ABI。`VulkanLab.exe --help`、启动日志、BuildInfo 和 Runtime Control 的 `system.info.build.features` 都会报告实际编译能力。
+
+未编译功能的启动参数不会被静默忽略。`--runtime-control`、`--runtime-control-pipe`、`--capture-root`、`--asset-mode ondemand`、`--asset-tool` 和非 `off` Validation profile 会在创建 Window/Vulkan 前返回明确错误。Editor 未编译时 `--no-gui` 仍被接受；Asset Authoring 未编译时默认模式为 `ReadOnly`。Runtime Control 已编译但某个子功能被裁剪时，对应协议方法返回 `feature_not_compiled`。
 
 推荐使用仓库 presets 配置、构建和测试：
 

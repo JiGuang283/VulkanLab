@@ -1,12 +1,14 @@
 # VulkanLab Runtime Control 使用说明
 
 > Status: Current
-> Last verified: 2026-07-26
-> Verified against: `9092755`
+> Last verified: 2026-07-30
+> Verified against: `56b84b1`
 
 Runtime Control 通过 Windows Named Pipe 控制已经运行的 VulkanLab。它面向本机开发、诊断和自动化，可以查询状态、加载场景和环境、设置相机、Shader 与渲染参数、等待渲染稳定、异步截图并安全退出程序。`scene.list.entries[]` 同时返回稳定 scene ID、Catalog profile ID 和该 profile 的纹理限制。
 
 Runtime Control 默认关闭。启用时必须显式传入 `--runtime-control`；Named Pipe 拒绝远程客户端，不开放网络端口。
+
+该服务还必须以 `VKL_ENABLE_RUNTIME_CONTROL=ON` 编译。全功能 Debug/Release 和 `windows-msvc-dev-fast` 包含服务端；`windows-msvc-runtime` 不包含服务端或 VulkanLabCtl，传入 `--runtime-control` 会在 Vulkan 初始化前报错。服务端存在但 Capture 或 Asset Authoring 被独立裁剪时，相关协议方法保留并返回 `feature_not_compiled`。
 
 ## 构建与启动
 

@@ -1,8 +1,8 @@
 # 系统架构概览
 
 > Status: Current
-> Last verified: 2026-07-26
-> Verified against: `9092755`
+> Last verified: 2026-07-30
+> Verified against: `56b84b1`
 
 VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Application` 为组合根，场景、渲染提交、GPU 资源和调试控制之间保持显式所有权，不使用全局引擎服务定位器。
 
@@ -21,6 +21,12 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 | `src/platform/` | Win32 原生文件选择等平台适配。 |
 | `src/diagnostics/` | 场景加载耗时、资源上传量、VMA 快照、截图与自动化诊断。 |
 | `tools/` | 独立资产、Runtime Control 和视觉回归程序；不拥有渲染器内部对象。 |
+
+## 编译期模块装配
+
+`cmake/BuildFeatures.cmake` 是可选开发基础设施的唯一构建期开关入口，生成的 `BuildFeatures.h` 同时提供 `0/1` 宏和 `vkr::build` 常量。CMake 在 target/source 边界选择真实实现或空实现：Editor 可移除 ImGui，Runtime Control 可移除 Named Pipe 控制库，Capture 可移除截图后端并停止请求 swapchain transfer-source usage，Asset Authoring 可替换进程 supervisor，GPU Debug Utils 和 GPU Profiler 可替换为 no-op 实现。
+
+这些开关不参与渲染算法选择。Directional Shadow、HDR/Tone Mapping、IBL、Skybox、Global UBO、descriptor layout、push constant、材质布局和 Shader Manifest 在所有 preset 中保持同一契约。运行时算法仍由 `RenderSettings` 和 Shader variant 控制，避免不同二进制产生不兼容资产或 Shader ABI。
 
 ## 启动与所有权
 
