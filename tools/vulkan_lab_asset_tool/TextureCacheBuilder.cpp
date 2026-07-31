@@ -1,4 +1,5 @@
 #include "TextureCacheBuilder.h"
+#include "NativeBc7Encoder.h"
 #include "ProcessRunner.h"
 #include "TextureCachePipeline.h"
 
@@ -10,6 +11,7 @@
 
 #include <json.hpp>
 #include <ktx.h>
+#include <vulkan/vulkan_core.h>
 #include <stb_image.h>
 #include <stb_image_write.h>
 #include <tiny_gltf_v3.h>
@@ -44,28 +46,39 @@ namespace {
 
 struct EncoderPreset {
     const char *name = "development";
-    const char *settings = nullptr;
+    std::string settings;
     const wchar_t *quality = L"2";
     const wchar_t *zstd = L"9";
     bool rdo = true;
+    bool exhaustiveBc7 = false;
 };
 
-const EncoderPreset &encoderPreset(const std::string &name) {
-    static const EncoderPreset development{
-        "development",
-        "ktx-4.4.2|uastc|quality=2|rdo=1|zstd=9|mips=lanczos4|tf=semantic",
-        L"2", L"9", true};
-    static const EncoderPreset production{
-        "production",
-        "ktx-4.4.2|uastc|quality=4|rdo=1|zstd=18|mips=lanczos4|tf=semantic",
-        L"4", L"18", true};
-    if (name == development.name)
-        return development;
-    if (name == production.name)
-        return production;
-    throw std::invalid_argument(
-        "texture preset must be development or production");
-};
+EncoderPreset encoderPreset(TextureEncoder encoder, const std::string &name) {
+    if (name != "development" && name != "production")
+        throw std::invalid_argument(
+            "texture preset must be development or production");
+
+    const bool production = name == "production";
+    EncoderPreset preset;
+    preset.name = production ? "production" : "development";
+    preset.quality = production ? L"4" : L"2";
+    preset.zstd = production ? L"18" : L"9";
+    preset.exhaustiveBc7 = production;
+    if (encoder == TextureEncoder::Bc7) {
+        preset.rdo = false;
+        preset.settings =
+            std::string("ktx-4.4.2|directxtex-may2026|bc7|") +
+            (production ? "exhaustive=1" : "quick=1") +
+            "|supercompression=none|mips=lanczos4|tf=semantic";
+    } else {
+        preset.settings =
+            std::string("ktx-4.4.2|uastc|quality=") +
+            (production ? "4" : "2") + "|rdo=1|zstd=" +
+            (production ? "18" : "9") +
+            "|mips=lanczos4|tf=semantic";
+    }
+    return preset;
+}
 
 struct ScopedTemporaryFile {
     std::filesystem::path path;
@@ -269,8 +282,35 @@ std::filesystem::path findKtxTool(const std::filesystem::path &requested) {
         "provide --ktx-tool <path>");
 }
 
-void validateKtx2(const std::filesystem::path &path, uint32_t expectedWidth,
-                  uint32_t expectedHeight) {
+struct KtxBlobInfo {
+    DerivedTexturePayloadKind payloadKind =
+        DerivedTexturePayloadKind::BasisUastc;
+    uint32_t vkFormat = 0;
+    uint32_t mipLevels = 0;
+    uint64_t payloadBytes = 0;
+    uint64_t blobBytes = 0;
+    std::string supercompression;
+};
+
+const char *supercompressionName(ktxSupercmpScheme scheme) {
+    switch (scheme) {
+    case KTX_SS_NONE:
+        return "none";
+    case KTX_SS_BASIS_LZ:
+        return "basis-lz";
+    case KTX_SS_ZSTD:
+        return "zstd";
+    case KTX_SS_ZLIB:
+        return "zlib";
+    default:
+        return "unknown";
+    }
+}
+
+KtxBlobInfo validateKtx2(const std::filesystem::path &path,
+                         uint32_t expectedWidth, uint32_t expectedHeight,
+                         TextureEncoder expectedEncoder,
+                         TextureSemantic semantic) {
     ktxTexture *texture = nullptr;
     const KTX_error_code result = ktxTexture_CreateFromNamedFile(
         path.string().c_str(), KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT,
@@ -282,12 +322,93 @@ void validateKtx2(const std::filesystem::path &path, uint32_t expectedWidth,
                        texture->baseWidth == expectedWidth &&
                        texture->baseHeight == expectedHeight &&
                        texture->numLevels != 0;
-    ktxTexture_Destroy(texture);
     if (!valid) {
+        ktxTexture_Destroy(texture);
         throw std::runtime_error(
             "generated KTX2 has unexpected type or dimensions: " +
             path.string());
     }
+
+    uint32_t expectedMipLevels = 1;
+    for (uint32_t extent = std::max(expectedWidth, expectedHeight);
+         extent > 1; extent >>= 1u) {
+        ++expectedMipLevels;
+    }
+    if (texture->numLevels != expectedMipLevels) {
+        ktxTexture_Destroy(texture);
+        throw std::runtime_error(
+            "generated KTX2 does not contain a complete mip chain: " +
+            path.string());
+    }
+
+    ktxTexture2 *texture2 = reinterpret_cast<ktxTexture2 *>(texture);
+    const bool needsTranscoding = ktxTexture2_NeedsTranscoding(texture2);
+    const uint32_t expectedFormat =
+        semantic == TextureSemantic::SrgbColor
+            ? VK_FORMAT_BC7_SRGB_BLOCK
+            : VK_FORMAT_BC7_UNORM_BLOCK;
+    const bool payloadMatches =
+        expectedEncoder == TextureEncoder::Bc7
+            ? (!needsTranscoding && texture2->vkFormat == expectedFormat &&
+               texture2->supercompressionScheme == KTX_SS_NONE)
+            : needsTranscoding;
+    if (!payloadMatches) {
+        ktxTexture_Destroy(texture);
+        throw std::runtime_error(
+            "generated KTX2 payload does not match the requested encoder: " +
+            path.string());
+    }
+
+    KtxBlobInfo info;
+    info.payloadKind = expectedEncoder == TextureEncoder::Bc7
+                           ? DerivedTexturePayloadKind::NativeBc7
+                           : DerivedTexturePayloadKind::BasisUastc;
+    info.vkFormat = texture2->vkFormat;
+    info.mipLevels = texture->numLevels;
+    info.supercompression =
+        supercompressionName(texture2->supercompressionScheme);
+    const ktx_size_t dataSize = ktxTexture_GetDataSize(texture);
+    for (uint32_t level = 0; level < texture->numLevels; ++level) {
+        ktx_size_t offset = 0;
+        if (ktxTexture_GetImageOffset(texture, level, 0, 0, &offset) !=
+            KTX_SUCCESS) {
+            ktxTexture_Destroy(texture);
+            throw std::runtime_error(
+                "generated KTX2 contains an invalid mip offset: " +
+                path.string());
+        }
+        const ktx_size_t levelSize =
+            ktxTexture_GetImageSize(texture, level);
+        if (offset > dataSize || levelSize > dataSize - offset) {
+            ktxTexture_Destroy(texture);
+            throw std::runtime_error(
+                "generated KTX2 mip payload exceeds its data buffer: " +
+                path.string());
+        }
+        if (expectedEncoder == TextureEncoder::Bc7) {
+            const uint64_t width =
+                std::max(1u, expectedWidth >> level);
+            const uint64_t height =
+                std::max(1u, expectedHeight >> level);
+            const uint64_t expectedLevelSize =
+                ((width + 3u) / 4u) * ((height + 3u) / 4u) * 16u;
+            if (levelSize != expectedLevelSize) {
+                ktxTexture_Destroy(texture);
+                throw std::runtime_error(
+                    "generated KTX2 contains an invalid BC7 mip size: " +
+                    path.string());
+            }
+        }
+        info.payloadBytes += levelSize;
+    }
+    ktxTexture_Destroy(texture);
+
+    std::error_code sizeError;
+    info.blobBytes = std::filesystem::file_size(path, sizeError);
+    if (sizeError)
+        throw std::runtime_error("could not read KTX2 blob size: " +
+                                 path.string());
+    return info;
 }
 
 void atomicReplace(const std::filesystem::path &source,
@@ -445,6 +566,7 @@ uint64_t estimateTaskMemory(const ImageSource &source, uint32_t outputWidth,
 
 std::vector<std::wstring>
 makeKtxArguments(const ScannedTask &task, const EncoderPreset &preset,
+                 TextureEncoder encoder,
                  const std::filesystem::path &input,
                  const std::filesystem::path &output) {
     std::vector<std::wstring> arguments{
@@ -455,21 +577,24 @@ makeKtxArguments(const ScannedTask &task, const EncoderPreset &preset,
             : L"R8G8B8A8_UNORM",
         L"--assign-tf",
         task.sourceTask.semantic == TextureSemantic::SrgbColor ? L"srgb"
-                                                               : L"linear",
-        L"--encode",
-        L"uastc",
-        L"--uastc-quality",
-        preset.quality};
-    if (preset.rdo) {
+                                                               : L"linear"};
+    if (encoder == TextureEncoder::Uastc) {
+        arguments.insert(arguments.end(),
+                         {L"--encode", L"uastc", L"--uastc-quality",
+                          preset.quality});
+    }
+    if (encoder == TextureEncoder::Uastc && preset.rdo) {
         arguments.push_back(L"--uastc-rdo");
         arguments.push_back(L"--uastc-rdo-l");
         arguments.push_back(task.sourceTask.semantic == TextureSemantic::Normal
                                 ? L"0.5"
                                 : L"1.0");
     }
+    if (encoder == TextureEncoder::Uastc)
+        arguments.insert(arguments.end(), {L"--zstd", preset.zstd});
     arguments.insert(arguments.end(),
-                     {L"--zstd", preset.zstd, L"--generate-mipmap",
-                      L"--mipmap-filter", L"lanczos4", L"--mipmap-wrap",
+                     {L"--generate-mipmap", L"--mipmap-filter", L"lanczos4",
+                      L"--mipmap-wrap",
                       std::wstring(ktxWrapName(task.sourceTask.wrap),
                                    ktxWrapName(task.sourceTask.wrap) +
                                        std::char_traits<char>::length(
@@ -614,7 +739,8 @@ scanTextureBuildPlan(const tg3_model *model,
                      const std::vector<BuildTask> &tasks,
                      const std::filesystem::path &scene, uint32_t textureLimit,
                      const std::filesystem::path &blobDirectory,
-                     const EncoderPreset &preset, bool force) {
+                     const EncoderPreset &preset, TextureEncoder encoder,
+                     bool force) {
     std::vector<ScannedTask> result;
     result.reserve(tasks.size());
     for (const BuildTask &task : tasks) {
@@ -622,7 +748,7 @@ scanTextureBuildPlan(const tg3_model *model,
         const auto [outputWidth, outputHeight] =
             limitedExtent(source.width, source.height, textureLimit);
         const std::string keyMaterial =
-            std::string(preset.settings) + "|source=" + source.stamp.sha256 +
+            preset.settings + "|source=" + source.stamp.sha256 +
             "|semantic=" + textureSemanticName(task.semantic) +
             "|size=" + std::to_string(outputWidth) + "x" +
             std::to_string(outputHeight) +
@@ -641,7 +767,8 @@ scanTextureBuildPlan(const tg3_model *model,
         scanned.blob = blobDirectory / (scanned.cacheKey + ".ktx2");
         if (!force && std::filesystem::is_regular_file(scanned.blob)) {
             try {
-                validateKtx2(scanned.blob, outputWidth, outputHeight);
+                validateKtx2(scanned.blob, outputWidth, outputHeight, encoder,
+                             task.semantic);
                 scanned.reused = true;
             } catch (const std::exception &exception) {
                 std::cerr << "  invalid cached blob, rebuilding: "
@@ -655,7 +782,8 @@ scanTextureBuildPlan(const tg3_model *model,
 
 void appendManifestEntries(DerivedTextureManifest &manifest,
                            const std::vector<ScannedTask> &tasks,
-                           const std::filesystem::path &cacheRoot) {
+                           const std::filesystem::path &cacheRoot,
+                           TextureEncoder encoder) {
     manifest.entries.reserve(tasks.size());
     for (const ScannedTask &task : tasks) {
         DerivedTextureEntry entry;
@@ -664,6 +792,15 @@ void appendManifestEntries(DerivedTextureManifest &manifest,
         entry.mipWrap = task.sourceTask.wrap;
         entry.width = task.outputWidth;
         entry.height = task.outputHeight;
+        const KtxBlobInfo blobInfo =
+            validateKtx2(task.blob, task.outputWidth, task.outputHeight,
+                         encoder, task.sourceTask.semantic);
+        entry.payloadKind = blobInfo.payloadKind;
+        entry.vkFormat = blobInfo.vkFormat;
+        entry.mipLevels = blobInfo.mipLevels;
+        entry.payloadBytes = blobInfo.payloadBytes;
+        entry.blobBytes = blobInfo.blobBytes;
+        entry.supercompression = blobInfo.supercompression;
         entry.cacheKey = task.cacheKey;
         entry.blob =
             genericPath(std::filesystem::relative(task.blob, cacheRoot));
@@ -694,7 +831,8 @@ int buildTextureCache(const TextureCacheBuildOptions &options,
         options.profileId.empty())
         throw std::invalid_argument(
             "projectId, sceneId, and profileId are required");
-    const EncoderPreset &preset = encoderPreset(options.qualityPreset);
+    const EncoderPreset preset =
+        encoderPreset(options.textureEncoder, options.qualityPreset);
     const uint32_t defaultWorkers = std::max(
         1u,
         std::min(4u, std::max(1u, std::thread::hardware_concurrency() / 2)));
@@ -739,13 +877,20 @@ int buildTextureCache(const TextureCacheBuildOptions &options,
     const std::vector<BuildTask> sourceTasks = collectTasks(model.get());
     const std::vector<ScannedTask> tasks = scanTextureBuildPlan(
         model.get(), sourceTasks, scene, options.textureLimit, blobDirectory,
-        preset, options.force);
+        preset, options.textureEncoder, options.force);
     DerivedTextureManifest manifest;
     manifest.projectId = options.projectId;
     manifest.sceneId = options.sceneId;
     manifest.profileId = options.profileId;
     manifest.scenePath = genericPath(sceneIdentity);
     manifest.qualityPreset = preset.name;
+    manifest.textureEncoder = options.textureEncoder;
+    manifest.encoderName = options.textureEncoder == TextureEncoder::Bc7
+                               ? "DirectXTex"
+                               : "ktx create";
+    manifest.encoderVersion = options.textureEncoder == TextureEncoder::Bc7
+                                  ? "may2026"
+                                  : "4.4.2";
     manifest.encoderSettings = preset.settings;
     manifest.textureLimit = options.textureLimit;
     const std::vector<uint8_t> sceneBytes = readFile(scene);
@@ -770,6 +915,7 @@ int buildTextureCache(const TextureCacheBuildOptions &options,
     if (!options.progressNdjson) {
         std::cout << "Building texture cache for " << scene.string() << '\n'
                   << "  profile: " << options.profileId << " (" << preset.name
+                  << ", " << textureEncoderName(options.textureEncoder)
                   << ")\n  textures: " << tasks.size()
                   << "\n  workers: " << maxWorkers
                   << "\n  memory budget: " << options.memoryBudgetMiB
@@ -808,9 +954,16 @@ int buildTextureCache(const TextureCacheBuildOptions &options,
                                writeTemporaryPng(source, blobDirectory));
                 ScopedTemporaryFile temporaryOutput{
                     makeTemporaryPath(blobDirectory, ".output.ktx2")};
+                ScopedTemporaryFile temporaryRgba;
+                const std::filesystem::path preprocessOutput =
+                    options.textureEncoder == TextureEncoder::Bc7
+                        ? (temporaryRgba.path = makeTemporaryPath(
+                               blobDirectory, ".rgba.ktx2"))
+                        : temporaryOutput.path;
                 const ProcessResult process = processRunner.run(
-                    {ktxTool, makeKtxArguments(task, preset, input,
-                                               temporaryOutput.path)},
+                    {ktxTool,
+                     makeKtxArguments(task, preset, options.textureEncoder,
+                                      input, preprocessOutput)},
                     cancel);
                 if (!process.output.empty()) {
                     std::lock_guard outputLock(childOutputMutex);
@@ -829,8 +982,15 @@ int buildTextureCache(const TextureCacheBuildOptions &options,
                         textureSemanticName(task.sourceTask.semantic) +
                         ") with exit code " + std::to_string(process.exitCode);
                 } else {
+                    if (options.textureEncoder == TextureEncoder::Bc7) {
+                        encodeNativeBc7Ktx2(
+                            temporaryRgba.path, temporaryOutput.path,
+                            task.sourceTask.semantic, preset.exhaustiveBc7,
+                            cancel);
+                    }
                     validateKtx2(temporaryOutput.path, task.outputWidth,
-                                 task.outputHeight);
+                                 task.outputHeight, options.textureEncoder,
+                                 task.sourceTask.semantic);
                     if (cancel.load()) {
                         result.cancelled = true;
                         result.error = "texture encoding cancelled";
@@ -876,7 +1036,8 @@ int buildTextureCache(const TextureCacheBuildOptions &options,
         return 130;
     }
 
-    appendManifestEntries(manifest, tasks, cacheRoot);
+    appendManifestEntries(manifest, tasks, cacheRoot,
+                          options.textureEncoder);
 
     const std::filesystem::path manifestPath =
         derivedManifestPath(cacheRoot, options.sceneId, options.profileId);
@@ -946,13 +1107,25 @@ int migrateTextureCache(const TextureCacheMigrationOptions &options) {
             manifest.sceneId = scene.id;
             manifest.profileId = profile.id;
             manifest.scenePath = scene.source.generic_string();
+            manifest.textureEncoder = TextureEncoder::Uastc;
+            manifest.encoderName = "ktx create";
+            manifest.encoderVersion = "4.4.2";
 
-            for (const DerivedTextureEntry &entry : manifest.entries) {
+            for (DerivedTextureEntry &entry : manifest.entries) {
                 const std::filesystem::path oldBlob = legacyRoot / entry.blob;
                 const std::filesystem::path newBlob = targetRoot / entry.blob;
                 if (!std::filesystem::is_regular_file(oldBlob))
                     throw std::runtime_error("legacy blob is missing: " +
                                              oldBlob.string());
+                const KtxBlobInfo info =
+                    validateKtx2(oldBlob, entry.width, entry.height,
+                                 TextureEncoder::Uastc, entry.semantic);
+                entry.payloadKind = info.payloadKind;
+                entry.vkFormat = info.vkFormat;
+                entry.mipLevels = info.mipLevels;
+                entry.payloadBytes = info.payloadBytes;
+                entry.blobBytes = info.blobBytes;
+                entry.supercompression = info.supercompression;
                 if (!std::filesystem::is_regular_file(newBlob)) {
                     std::filesystem::create_directories(newBlob.parent_path());
                     std::filesystem::copy_file(

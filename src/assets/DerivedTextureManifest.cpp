@@ -66,6 +66,15 @@ const char *derivedMipmapWrapName(DerivedMipmapWrap wrap) {
     }
 }
 
+const char *textureEncoderName(TextureEncoder encoder) {
+    return encoder == TextureEncoder::Bc7 ? "bc7" : "uastc";
+}
+
+const char *derivedTexturePayloadKindName(DerivedTexturePayloadKind kind) {
+    return kind == DerivedTexturePayloadKind::NativeBc7 ? "native-bc7"
+                                                        : "basis-uastc";
+}
+
 std::optional<TextureSemantic>
 textureSemanticFromName(const std::string &name) {
     if (name == "srgb-color")
@@ -85,6 +94,23 @@ derivedMipmapWrapFromName(const std::string &name) {
         return DerivedMipmapWrap::Repeat;
     if (name == "reflect")
         return DerivedMipmapWrap::Reflect;
+    return std::nullopt;
+}
+
+std::optional<TextureEncoder> textureEncoderFromName(const std::string &name) {
+    if (name == "uastc")
+        return TextureEncoder::Uastc;
+    if (name == "bc7")
+        return TextureEncoder::Bc7;
+    return std::nullopt;
+}
+
+std::optional<DerivedTexturePayloadKind>
+derivedTexturePayloadKindFromName(const std::string &name) {
+    if (name == "basis-uastc")
+        return DerivedTexturePayloadKind::BasisUastc;
+    if (name == "native-bc7")
+        return DerivedTexturePayloadKind::NativeBc7;
     return std::nullopt;
 }
 
@@ -179,15 +205,36 @@ bool loadDerivedTextureManifest(const std::filesystem::path &path,
         manifest.scene = stampFromJson(root.at("scene"));
         if (manifest.schemaVersion != DerivedTextureManifest::kSchemaVersion &&
             manifest.schemaVersion !=
+                DerivedTextureManifest::kUastcSchemaVersion &&
+            manifest.schemaVersion !=
                 DerivedTextureManifest::kLegacySchemaVersion) {
             error = "unsupported manifest schema";
             return false;
         }
-        if (manifest.schemaVersion == DerivedTextureManifest::kSchemaVersion &&
+        if (manifest.schemaVersion >=
+                DerivedTextureManifest::kUastcSchemaVersion &&
             (manifest.projectId.empty() || manifest.sceneId.empty() ||
              manifest.profileId.empty())) {
             error = "manifest identity is incomplete";
             return false;
+        }
+        if (manifest.schemaVersion == DerivedTextureManifest::kSchemaVersion) {
+            const Json &encoder = root.at("encoder");
+            const auto parsedEncoder = textureEncoderFromName(
+                encoder.value("codec", std::string{}));
+            if (!parsedEncoder) {
+                error = "manifest contains an unknown texture encoder";
+                return false;
+            }
+            manifest.textureEncoder = *parsedEncoder;
+            manifest.encoderName =
+                encoder.value("name", std::string{});
+            manifest.encoderVersion =
+                encoder.value("version", std::string{});
+        } else {
+            manifest.textureEncoder = TextureEncoder::Uastc;
+            manifest.encoderName = "ktx create";
+            manifest.encoderVersion = "4.4.2";
         }
         for (const Json &item : root.at("entries")) {
             const auto semantic = textureSemanticFromName(
@@ -204,6 +251,26 @@ bool loadDerivedTextureManifest(const std::filesystem::path &path,
             entry.mipWrap = *wrap;
             entry.width = item.value("width", 0u);
             entry.height = item.value("height", 0u);
+            if (manifest.schemaVersion ==
+                DerivedTextureManifest::kSchemaVersion) {
+                const auto payload = derivedTexturePayloadKindFromName(
+                    item.value("payloadKind", std::string{}));
+                if (!payload) {
+                    error = "manifest contains an unknown texture payload";
+                    return false;
+                }
+                entry.payloadKind = *payload;
+                entry.vkFormat = item.value("vkFormat", 0u);
+                entry.mipLevels = item.value("mipLevels", 0u);
+                entry.payloadBytes = item.value("payloadBytes", uint64_t{0});
+                entry.blobBytes = item.value("blobBytes", uint64_t{0});
+                entry.supercompression =
+                    item.value("supercompression", std::string("none"));
+            } else {
+                entry.payloadKind =
+                    DerivedTexturePayloadKind::BasisUastc;
+                entry.supercompression = "zstd";
+            }
             entry.cacheKey = item.value("cacheKey", std::string{});
             entry.blob = item.value("blob", std::string{});
             entry.source = stampFromJson(item.at("source"));
@@ -231,11 +298,11 @@ bool saveDerivedTextureManifest(const std::filesystem::path &path,
                   {"textureLimit", manifest.textureLimit},
                   {"scene", stampToJson(manifest.scene)},
                   {"encoder",
-                   {{"name", "ktx create"},
-                    {"version", "4.4.2"},
-                    {"codec", "uastc-ldr-4x4"},
-                    {"preset", manifest.qualityPreset},
-                    {"settings", manifest.encoderSettings}}},
+                    {{"name", manifest.encoderName},
+                     {"version", manifest.encoderVersion},
+                     {"codec", textureEncoderName(manifest.textureEncoder)},
+                     {"preset", manifest.qualityPreset},
+                     {"settings", manifest.encoderSettings}}},
                   {"entries", Json::array()}};
         for (const DerivedTextureEntry &entry : manifest.entries) {
             root["entries"].push_back(
@@ -244,6 +311,13 @@ bool saveDerivedTextureManifest(const std::filesystem::path &path,
                  {"mipWrap", derivedMipmapWrapName(entry.mipWrap)},
                  {"width", entry.width},
                  {"height", entry.height},
+                 {"payloadKind",
+                  derivedTexturePayloadKindName(entry.payloadKind)},
+                 {"vkFormat", entry.vkFormat},
+                 {"mipLevels", entry.mipLevels},
+                 {"payloadBytes", entry.payloadBytes},
+                 {"blobBytes", entry.blobBytes},
+                 {"supercompression", entry.supercompression},
                  {"cacheKey", entry.cacheKey},
                  {"blob", entry.blob},
                  {"source", stampToJson(entry.source)}});

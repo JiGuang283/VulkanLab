@@ -42,6 +42,7 @@ struct ArtifactIndexRecord {
     int64_t manifestWriteTime = 0;
     uint32_t manifestSchema = 0;
     std::string qualityPreset;
+    std::string textureEncoder;
     std::string encoderSettings;
     std::vector<ArtifactIndexDependency> dependencies;
     std::vector<ArtifactIndexBlob> blobs;
@@ -68,7 +69,7 @@ struct ArtifactIndexUsage {
 class ArtifactIndex {
   public:
     static constexpr uint32_t kLegacySchemaVersion = 1;
-    static constexpr uint32_t kSchemaVersion = 2;
+    static constexpr uint32_t kSchemaVersion = 3;
 
     static ArtifactIndex loadOrRebuild(
         const std::filesystem::path &cacheRoot,

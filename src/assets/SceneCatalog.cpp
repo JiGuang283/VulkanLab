@@ -137,6 +137,12 @@ SceneCatalog SceneCatalog::load(const std::filesystem::path &catalogPath,
                                  "expected 0, 512, 1024, or 2048");
             profile.textureEncoder =
                 it.value().value("textureEncoder", std::string("uastc"));
+            if (profile.textureEncoder != "uastc" &&
+                profile.textureEncoder != "bc7") {
+                throw fieldError("importProfiles." + profile.id +
+                                     ".textureEncoder",
+                                 "expected uastc or bc7");
+            }
             profile.qualityPreset = it.value().value(
                 "qualityPreset", std::string("development"));
             catalog.importProfiles.emplace(profile.id, std::move(profile));

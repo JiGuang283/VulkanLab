@@ -10,12 +10,19 @@ namespace vkr {
 
 enum class TextureSemantic { SrgbColor, LinearData, Normal };
 enum class DerivedMipmapWrap { Clamp, Repeat, Reflect };
+enum class TextureEncoder { Uastc, Bc7 };
+enum class DerivedTexturePayloadKind { BasisUastc, NativeBc7 };
 
 const char *textureSemanticName(TextureSemantic semantic);
 const char *derivedMipmapWrapName(DerivedMipmapWrap wrap);
+const char *textureEncoderName(TextureEncoder encoder);
+const char *derivedTexturePayloadKindName(DerivedTexturePayloadKind kind);
 std::optional<TextureSemantic> textureSemanticFromName(const std::string &name);
 std::optional<DerivedMipmapWrap>
 derivedMipmapWrapFromName(const std::string &name);
+std::optional<TextureEncoder> textureEncoderFromName(const std::string &name);
+std::optional<DerivedTexturePayloadKind>
+derivedTexturePayloadKindFromName(const std::string &name);
 
 struct DerivedFileStamp {
     std::string path;
@@ -30,6 +37,13 @@ struct DerivedTextureEntry {
     DerivedMipmapWrap mipWrap = DerivedMipmapWrap::Clamp;
     uint32_t width = 0;
     uint32_t height = 0;
+    DerivedTexturePayloadKind payloadKind =
+        DerivedTexturePayloadKind::BasisUastc;
+    uint32_t vkFormat = 0;
+    uint32_t mipLevels = 0;
+    uint64_t payloadBytes = 0;
+    uint64_t blobBytes = 0;
+    std::string supercompression;
     std::string cacheKey;
     std::string blob;
     DerivedFileStamp source;
@@ -37,7 +51,8 @@ struct DerivedTextureEntry {
 
 struct DerivedTextureManifest {
     static constexpr uint32_t kLegacySchemaVersion = 1;
-    static constexpr uint32_t kSchemaVersion = 2;
+    static constexpr uint32_t kUastcSchemaVersion = 2;
+    static constexpr uint32_t kSchemaVersion = 3;
 
     uint32_t schemaVersion = kSchemaVersion;
     std::string projectId;
@@ -45,6 +60,9 @@ struct DerivedTextureManifest {
     std::string profileId;
     std::string scenePath;
     std::string qualityPreset = "development";
+    TextureEncoder textureEncoder = TextureEncoder::Uastc;
+    std::string encoderName = "ktx create";
+    std::string encoderVersion = "4.4.2";
     std::string encoderSettings;
     uint32_t textureLimit = 0;
     DerivedFileStamp scene;

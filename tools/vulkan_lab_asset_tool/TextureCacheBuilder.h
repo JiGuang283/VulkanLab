@@ -1,5 +1,7 @@
 #pragma once
 
+#include "assets/DerivedTextureManifest.h"
+
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
@@ -19,6 +21,7 @@ struct TextureCacheBuildOptions {
     std::filesystem::path cacheRoot;
     std::filesystem::path ktxTool;
     std::string qualityPreset = "development";
+    TextureEncoder textureEncoder = TextureEncoder::Bc7;
     uint32_t maxWorkers = 0;
     uint64_t memoryBudgetMiB = 2048;
     bool progressNdjson = false;

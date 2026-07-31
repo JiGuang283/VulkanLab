@@ -651,7 +651,9 @@ int main(int argc, char **argv) {
                     const vkr::ArtifactStatus status =
                         vkr::inspectTextureArtifacts(
                             {cook.cacheRoot, source, catalog.projectId,
-                             scene.id, profile.id, profile.textureLimit});
+                             scene.id, profile.id, profile.textureLimit,
+                             *vkr::textureEncoderFromName(
+                                 profile.textureEncoder)});
                     if (status.ready())
                         continue;
                     build.scene = source;
@@ -662,6 +664,8 @@ int main(int argc, char **argv) {
                     build.profileId = profile.id;
                     build.textureLimit = profile.textureLimit;
                     build.qualityPreset = profile.qualityPreset;
+                    build.textureEncoder =
+                        *vkr::textureEncoderFromName(profile.textureEncoder);
                     build.cancelRequested = &cancelRequested;
                     vkr::CacheMutationLock buildLock(cook.cacheRoot,
                                                      &cancelRequested);
@@ -884,6 +888,8 @@ int main(int argc, char **argv) {
             options.textureLimit = profile.textureLimit;
         if (!hasPreset)
             options.qualityPreset = profile.qualityPreset;
+        options.textureEncoder =
+            *vkr::textureEncoderFromName(profile.textureEncoder);
         if (options.cacheRoot.empty())
             options.cacheRoot = project.cacheRoot;
 

@@ -14,7 +14,7 @@ namespace vkr {
 struct ImportProfile {
     std::string id;
     uint32_t textureLimit = 2048;
-    std::string textureEncoder = "uastc";
+    std::string textureEncoder = "bc7";
     std::string qualityPreset = "development";
 };
 

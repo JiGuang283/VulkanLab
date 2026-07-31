@@ -4,6 +4,7 @@
 #include "DerivedTextureManifest.h"
 #include "SceneCatalog.h"
 
+#include <algorithm>
 #include <array>
 #include <fstream>
 #include <system_error>
@@ -20,14 +21,35 @@ bool stampMatches(const DerivedFileStamp &expected,
            current.writeTime == expected.writeTime;
 }
 
-bool hasKtx2Identifier(const std::filesystem::path &path) {
+struct Ktx2HeaderSummary {
+    uint32_t vkFormat = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t levelCount = 0;
+    uint32_t supercompression = 0;
+};
+
+uint32_t readU32(const std::array<uint8_t, 48> &bytes, size_t offset) {
+    return static_cast<uint32_t>(bytes[offset]) |
+           (static_cast<uint32_t>(bytes[offset + 1]) << 8u) |
+           (static_cast<uint32_t>(bytes[offset + 2]) << 16u) |
+           (static_cast<uint32_t>(bytes[offset + 3]) << 24u);
+}
+
+std::optional<Ktx2HeaderSummary>
+readKtx2Header(const std::filesystem::path &path) {
     static constexpr std::array<uint8_t, 12> identifier{
         0xab, 0x4b, 0x54, 0x58, 0x20, 0x32,
         0x30, 0xbb, 0x0d, 0x0a, 0x1a, 0x0a};
     std::ifstream input(path, std::ios::binary);
-    std::array<uint8_t, identifier.size()> actual{};
-    return input.read(reinterpret_cast<char *>(actual.data()), actual.size()) &&
-           actual == identifier;
+    std::array<uint8_t, 48> header{};
+    if (!input.read(reinterpret_cast<char *>(header.data()), header.size()) ||
+        !std::equal(identifier.begin(), identifier.end(), header.begin())) {
+        return std::nullopt;
+    }
+    return Ktx2HeaderSummary{readU32(header, 12), readU32(header, 20),
+                             readU32(header, 24), readU32(header, 40),
+                             readU32(header, 44)};
 }
 
 ArtifactStatus makeStatus(ArtifactState state, std::string reason,
@@ -68,7 +90,8 @@ ArtifactStatus inspectTextureArtifacts(const ArtifactStatusRequest &request) {
                                           : ArtifactState::Invalid,
             error, manifestPath);
     }
-    if (manifest.schemaVersion != DerivedTextureManifest::kSchemaVersion ||
+    if (manifest.schemaVersion <
+            DerivedTextureManifest::kUastcSchemaVersion ||
         manifest.projectId != request.projectId ||
         manifest.sceneId != request.sceneId ||
         manifest.profileId != request.profileId ||
@@ -76,6 +99,14 @@ ArtifactStatus inspectTextureArtifacts(const ArtifactStatusRequest &request) {
         return makeStatus(ArtifactState::Invalid,
                           "manifest identity or profile mismatch",
                           manifestPath);
+    }
+    if (manifest.textureEncoder != request.textureEncoder) {
+        return makeStatus(
+            ArtifactState::Stale,
+            std::string("texture encoder changed: expected ") +
+                textureEncoderName(request.textureEncoder) + ", found " +
+                textureEncoderName(manifest.textureEncoder),
+            manifestPath);
     }
     if (!stampMatches(manifest.scene, request.scenePath)) {
         return makeStatus(ArtifactState::Stale, "scene source changed",
@@ -86,6 +117,10 @@ ArtifactStatus inspectTextureArtifacts(const ArtifactStatusRequest &request) {
         request.scenePath.parent_path();
     ArtifactStatus result =
         makeStatus(ArtifactState::Ready, "ready", manifestPath);
+    result.textureEncoder = textureEncoderName(manifest.textureEncoder);
+    result.payloadKind =
+        manifest.textureEncoder == TextureEncoder::Bc7 ? "native-bc7"
+                                                       : "basis-uastc";
     result.entryCount = manifest.entries.size();
     for (const DerivedTextureEntry &entry : manifest.entries) {
         if (entry.source.path.empty()) {
@@ -115,17 +150,45 @@ ArtifactStatus inspectTextureArtifacts(const ArtifactStatusRequest &request) {
                               "derived blob is missing: " + entry.blob,
                               manifestPath);
         }
-        if (!hasKtx2Identifier(blob)) {
+        const auto header = readKtx2Header(blob);
+        if (!header) {
             return makeStatus(
                 ArtifactState::Invalid,
                 "derived blob has an invalid KTX2 header: " + entry.blob,
                 manifestPath);
+        }
+        if (manifest.schemaVersion == DerivedTextureManifest::kSchemaVersion) {
+            const DerivedTexturePayloadKind expectedPayload =
+                request.textureEncoder == TextureEncoder::Bc7
+                    ? DerivedTexturePayloadKind::NativeBc7
+                    : DerivedTexturePayloadKind::BasisUastc;
+            if (entry.payloadKind != expectedPayload ||
+                entry.mipLevels == 0 || entry.width != header->width ||
+                entry.height != header->height ||
+                entry.mipLevels != header->levelCount ||
+                entry.vkFormat != header->vkFormat ||
+                (expectedPayload == DerivedTexturePayloadKind::NativeBc7 &&
+                 (entry.vkFormat == 0 || header->supercompression != 0 ||
+                  entry.supercompression != "none"))) {
+                return makeStatus(
+                    ArtifactState::Invalid,
+                    "derived blob metadata does not match manifest: " +
+                        entry.blob,
+                    manifestPath);
+            }
         }
         std::error_code sizeError;
         const uint64_t bytes = std::filesystem::file_size(blob, sizeError);
         if (sizeError) {
             return makeStatus(ArtifactState::Invalid,
                               "could not read derived blob size: " +
+                                  entry.blob,
+                              manifestPath);
+        }
+        if (manifest.schemaVersion == DerivedTextureManifest::kSchemaVersion &&
+            (entry.blobBytes != bytes || entry.payloadBytes == 0)) {
+            return makeStatus(ArtifactState::Invalid,
+                              "derived blob size metadata mismatch: " +
                                   entry.blob,
                               manifestPath);
         }
@@ -174,7 +237,7 @@ ArtifactStatus inspectEnvironmentArtifacts(
                                   image.blob,
                               manifestPath);
         }
-        if (!hasKtx2Identifier(blob)) {
+        if (!readKtx2Header(blob)) {
             return makeStatus(ArtifactState::Invalid,
                               "derived environment blob has an invalid KTX2 "
                               "header: " +

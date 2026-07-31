@@ -1,6 +1,7 @@
 add_library(vkl_asset_tool_core STATIC
     CookPackageBuilder.cpp
     EnvironmentCacheBuilder.cpp
+    NativeBc7Encoder.cpp
     ProcessRunner.cpp
     TextureCacheBuilder.cpp
     TextureCachePipeline.cpp
@@ -20,6 +21,8 @@ target_link_libraries(vkl_asset_tool_core
         vkl_image_codecs
         vkl_gltf_parser
         ktx
+        DirectXTex
+        Vulkan::Vulkan
         bcrypt
 )
 

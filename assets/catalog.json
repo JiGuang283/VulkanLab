@@ -5,22 +5,22 @@
   "importProfiles": {
     "desktop_512": {
       "textureLimit": 512,
-      "textureEncoder": "uastc",
+      "textureEncoder": "bc7",
       "qualityPreset": "development"
     },
     "desktop_1024": {
       "textureLimit": 1024,
-      "textureEncoder": "uastc",
+      "textureEncoder": "bc7",
       "qualityPreset": "development"
     },
     "desktop_2048": {
       "textureLimit": 2048,
-      "textureEncoder": "uastc",
+      "textureEncoder": "bc7",
       "qualityPreset": "development"
     },
     "desktop_full": {
       "textureLimit": 0,
-      "textureEncoder": "uastc",
+      "textureEncoder": "bc7",
       "qualityPreset": "development"
     }
   },

@@ -129,6 +129,7 @@ Json recordToJson(const ArtifactIndexRecord &record) {
             {"manifestWriteTime", record.manifestWriteTime},
             {"manifestSchema", record.manifestSchema},
             {"qualityPreset", record.qualityPreset},
+            {"textureEncoder", record.textureEncoder},
             {"encoderSettings", record.encoderSettings},
             {"dependencies", std::move(dependencies)},
             {"blobs", std::move(blobs)},
@@ -167,6 +168,7 @@ ArtifactIndexRecord recordFromJson(const Json &json) {
     record.manifestWriteTime = json.value("manifestWriteTime", int64_t{0});
     record.manifestSchema = json.value("manifestSchema", 0u);
     record.qualityPreset = json.value("qualityPreset", std::string{});
+    record.textureEncoder = json.value("textureEncoder", std::string{});
     record.encoderSettings = json.value("encoderSettings", std::string{});
     for (const Json &item : json.at("dependencies")) {
         record.dependencies.push_back(
@@ -260,8 +262,7 @@ ArtifactIndex ArtifactIndex::loadOrRebuild(
         Json root;
         input >> root;
         const uint32_t schema = root.value("schemaVersion", 0u);
-        if ((schema != kSchemaVersion &&
-             schema != kLegacySchemaVersion) ||
+        if (schema != kSchemaVersion ||
             root.value("projectId", std::string{}) != catalog.projectId)
             throw std::runtime_error("index schema or project mismatch");
         for (const Json &item : root.at("records")) {
@@ -334,6 +335,7 @@ void ArtifactIndex::refreshRecord(const CatalogScene &scene,
     record.sceneId = scene.id;
     record.profileId = profile.id;
     record.textureLimit = profile.textureLimit;
+    record.textureEncoder = profile.textureEncoder;
     const std::filesystem::path scenePath =
         (projectRoot_ / scene.source).lexically_normal();
     const std::filesystem::path manifestPath =
@@ -345,7 +347,8 @@ void ArtifactIndex::refreshRecord(const CatalogScene &scene,
 
     const ArtifactStatus inspected = inspectTextureArtifacts(
         {cacheRoot_, scenePath, projectId_, scene.id, profile.id,
-         profile.textureLimit});
+         profile.textureLimit,
+         *textureEncoderFromName(profile.textureEncoder)});
     record.state = inspected.state;
     record.reason = inspected.reason;
     DerivedTextureManifest manifest;
@@ -357,6 +360,7 @@ void ArtifactIndex::refreshRecord(const CatalogScene &scene,
     }
     record.manifestSchema = manifest.schemaVersion;
     record.qualityPreset = manifest.qualityPreset;
+    record.textureEncoder = textureEncoderName(manifest.textureEncoder);
     record.encoderSettings = manifest.encoderSettings;
     const auto addDependency = [&](const std::filesystem::path &path,
                                    const DerivedFileStamp &stamp) {
@@ -520,10 +524,20 @@ ArtifactStatus ArtifactIndex::query(const ArtifactStatusRequest &request,
     ArtifactIndexRecord &record = found->second;
     ArtifactStatus status{record.state, record.reason, manifestPath,
                           record.blobs.size(), 0};
+    status.textureEncoder = record.textureEncoder;
+    status.payloadKind = record.textureEncoder == "bc7" ? "native-bc7"
+                                                        : "basis-uastc";
     for (const auto &blob : record.blobs)
         status.blobBytes += blob.bytes;
     if (record.state != ArtifactState::Ready)
         return status;
+    if (record.textureEncoder != textureEncoderName(request.textureEncoder)) {
+        return {ArtifactState::Stale,
+                std::string("texture encoder changed: expected ") +
+                    textureEncoderName(request.textureEncoder) + ", found " +
+                    record.textureEncoder,
+                manifestPath};
+    }
     if (record.textureLimit != request.textureLimit ||
         request.projectId != projectId_)
         return {ArtifactState::Invalid, "index identity or profile mismatch",

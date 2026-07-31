@@ -1,5 +1,7 @@
 #pragma once
 
+#include "DerivedTextureManifest.h"
+
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -17,6 +19,7 @@ struct ArtifactStatusRequest {
     std::string sceneId;
     std::string profileId;
     uint32_t textureLimit = 0;
+    TextureEncoder textureEncoder = TextureEncoder::Bc7;
 };
 
 struct EnvironmentArtifactStatusRequest {
@@ -33,6 +36,8 @@ struct ArtifactStatus {
     std::filesystem::path manifestPath;
     uint64_t entryCount = 0;
     uint64_t blobBytes = 0;
+    std::string textureEncoder;
+    std::string payloadKind;
 
     bool ready() const { return state == ArtifactState::Ready; }
 };
