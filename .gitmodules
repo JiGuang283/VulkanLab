@@ -4,3 +4,6 @@
 [submodule "external/spirv-reflect"]
 	path = external/spirv-reflect
 	url = https://github.com/KhronosGroup/SPIRV-Reflect.git
+[submodule "external/DirectXTex"]
+	path = external/DirectXTex
+	url = https://github.com/microsoft/DirectXTex.git

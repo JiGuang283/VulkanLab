@@ -19,6 +19,20 @@ set(KTX_FEATURE_TOOLS_CTS OFF CACHE BOOL "Disable KTX tools CTS" FORCE)
 add_subdirectory("${PROJECT_SOURCE_DIR}/external/ktx" external/ktx
                  EXCLUDE_FROM_ALL)
 
+if(VKL_BUILD_ASSET_TOOL)
+    # DirectXTex is an offline-only dependency used to produce native BC7
+    # payloads. Runtime builds intentionally keep libktx_read as their only
+    # derived-texture dependency.
+    set(BUILD_TOOLS OFF CACHE BOOL "Disable DirectXTex tools" FORCE)
+    set(BUILD_SAMPLE OFF CACHE BOOL "Disable DirectXTex samples" FORCE)
+    set(BUILD_DX11 OFF CACHE BOOL "Disable DirectXTex D3D11 helpers" FORCE)
+    set(BUILD_DX12 OFF CACHE BOOL "Disable DirectXTex D3D12 helpers" FORCE)
+    set(BC_USE_OPENMP OFF CACHE BOOL
+        "Texture-level scheduling owns BC7 parallelism" FORCE)
+    add_subdirectory("${PROJECT_SOURCE_DIR}/external/DirectXTex"
+                     external/DirectXTex EXCLUDE_FROM_ALL)
+endif()
+
 # KTX 4.4.2's read-only target still references the KTX1 constructor from
 # its format dispatcher when KTX1 is disabled. Supply the documented
 # unsupported-feature result so runtime-only builds can retain KTX2 without
