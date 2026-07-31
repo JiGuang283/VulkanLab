@@ -1,8 +1,8 @@
 # 大型场景响应式加载路线图
 
 > Status: Active
-> Last verified: 2026-07-19
-> Verified against: `fa30693`
+> Last verified: 2026-07-31
+> Verified against: `73285cd`
 
 ## Summary
 
@@ -35,7 +35,7 @@
 - generation、CPU/GPU 取消、Loading UI、失败收尾和 descriptor set 回收已经接入。
 - Runtime Control v2 提供 taskId、`load.status`、`load.cancel` 和客户端 `--no-wait`。
 
-阶段 3 已加入 KTX2 派生纹理资产管线：离线工具生成 UASTC + Zstd 缓存，worker 优先转码为 BC7 并保留 stb fallback，GPU 直接上传预生成 mip chain。Main Sponza 的最终画面和显存曲线仍需在目标 GPU 上手动验证。
+阶段 3 已加入 KTX2 派生纹理资产管线，并在 2026-07-31 扩展为 Windows Native BC7：离线工具直接生成 BC7 KTX2，worker 不再为当前 desktop profiles 执行 UASTC 转码，GPU 直接上传预生成 mip chain。旧 UASTC loader 与开发模式 source fallback 继续保留。
 
 ## Goals
 
@@ -283,6 +283,14 @@ VulkanLabAssetTool texture-cache build --scene models/main_sponza/NewSponza_Main
 - 加载期间 Runtime Control `ping` 能立即返回；BC7 路径使用 3 个增量 batch，没有 legacy queue wait。
 - Windows GPU process counter 在加载完成后记录约 `592.82 MiB` dedicated usage；它包含驱动和非 VMA 开销，不能与 VMA allocation 直接等同。
 - 最终 sRGB、normal、MR、AO、alpha、emissive 画面验收仍需人工完成。
+
+### Native BC7 v1 扩展
+
+2026-07-31 根据 Main Sponza 2048 Debug 基线中约 `21.64 s` 的 UASTC 到 BC7 转码成本，desktop profiles 改为离线生成 Native BC7 KTX2。DirectXTex `may2026` 只链接 AssetTool；运行时继续只依赖 `ktx_read`。manifest schema v3 记录 payload kind、VkFormat、mip/payload/blob bytes、supercompression 和编码器身份，旧 schema v1/v2 UASTC manifest 在 BC7 profile 下显示为 Stale。
+
+小场景实际验证使用 Anisotropy Barn Lamp 512 profile：3 个 Native BC7 blob 全部命中，`textureDecodes=0`、`resizedTextures=0`、`basisTranscodeCount=0`、`derivedTextureTranscodeMs=0`，Native KTX2 读取约 `0.55 ms`。
+
+Main Sponza 2048 的 Release AssetTool 首次构建生成 72 个 Native BC7 blob，4 workers 用时约 `776.84 s`、峰值调度预算约 `1551.49 MiB`；全复用扫描约 `3.15 s`。Debug runtime 连续两次加载约 `1.06 s` 和 `1.02 s`，Native KTX2 read 约 `146 ms`，72/72 命中，transcode/decode/resize 都为 0；相对原 `26.11 s` 基线约有 24 倍加速。首次 BC7 压缩是较慢但可复用的一次性 import。
 
 ## Stage 4: Residency And Streaming, Conditional
 

@@ -1,8 +1,8 @@
 # 资源加载
 
 > Status: Current
-> Last verified: 2026-07-30
-> Verified against: KHR_lights_punctual working tree
+> Last verified: 2026-07-31
+> Verified against: `73285cd`
 
 ## 项目、Catalog 与导入
 
@@ -51,13 +51,13 @@ glTF 灯光与 mesh 使用同一套 node hierarchy 和 Y-up 到 Z-up 根变换�
 
 ## KTX2 派生资产
 
-阶段三在原始 glTF 与运行时 loader 之间增加只读派生缓存。离线 `VulkanLabAssetTool texture-cache build` 扫描材质实际引用的图片，用 KTX-Software 生成 UASTC + Zstd KTX2 和完整 mip chain。源 glTF、GLB 和图片保持不变。
+原始 glTF 与运行时 loader 之间有一层只读派生缓存。离线 `VulkanLabAssetTool texture-cache build` 扫描材质实际引用的图片，生成带完整 mip chain 的 KTX2。当前 Windows desktop profiles 默认生成原生 BC7；源 glTF、GLB 和图片保持不变。
 
-资产工具把一次构建分为 scan、schedule/worker 和 publish：scan 解析 glTF、读取源 hash、计算输出尺寸/cache key，并验证可复用 blob；未命中任务进入确定性调度器。默认 worker 数为 `min(4, max(1, logicalCpuCount / 2))`，同时受默认 `2048 MiB` 估算工作集预算约束。单任务超过预算时可以独占执行，多个任务不能绕过总预算。worker 只负责一张纹理的临时输入、`ktx create` 子进程、KTX2 验证和内容寻址 blob 原子发布。
+资产工具把一次构建分为 scan、schedule/worker 和 publish：scan 解析 glTF、读取源 hash、计算输出尺寸/cache key，并验证可复用 blob；未命中任务进入确定性调度器。默认 worker 数为 `min(4, max(1, logicalCpuCount / 2))`，同时受默认 `2048 MiB` 估算工作集预算约束。单任务超过预算时可以独占执行，多个任务不能绕过总预算。每个 worker 先调用 KTX-Software 完成源图片解码、尺寸限制、Lanczos4 mipmap、wrap 边缘和 normal normalize，得到临时 RGBA8 KTX2；随后使用 DirectXTex 将每级 mip 压缩为 BC7，并通过 libktx 直接写入原生 BC7 KTX2。
 
 Windows 下所有 `ktx.exe` 都由独立 Job Object 管理，并使用 `KILL_ON_JOB_CLOSE`。每个子进程只继承自己的输出管道；Ctrl+C、首个任务失败或资产工具退出会停止分发、终止完整子进程树并清理临时输入/输出。已经验证并原子发布的 blob 可以保留供重试复用，但只有全部任务成功后才通过 atomic replace 发布 scene manifest，因此取消和失败不会覆盖已有有效 manifest。
 
-`development` preset 保留阶段三已有的 quality 2、RDO、Zstd 9 参数和 cache key，以继续复用现有缓存；`production` 使用 quality 4、RDO 和 Zstd 18，并产生不同 key。preset 名称和完整 encoder settings 写入 manifest。使用 `--progress ndjson` 时 stdout 只输出带 `protocolVersion`、task ID、artifact 状态、计数、耗时、峰值 worker 和估算保留字节的 UTF-8 NDJSON；子进程输出和普通错误写入 stderr。
+`development` preset 使用 DirectXTex BC7 quick 模式，`production` 使用完整 BC7 搜索；两者产生不同 cache key。Native BC7 v1 不使用 Zstd supercompression，优先降低运行时 CPU 成本。纹理级并行由现有 worker 调度器控制，DirectXTex 内部并行关闭，避免线程过度订阅。preset、编码器版本和完整 settings 都写入 manifest。使用 `--progress ndjson` 时 stdout 只输出带 `protocolVersion`、task ID、artifact 状态、计数、耗时、峰值 worker 和估算保留字节的 UTF-8 NDJSON；子进程输出和普通错误写入 stderr。
 
 默认缓存根目录为 `%LOCALAPPDATA%/VulkanLab/DerivedAssets/<projectId>`，Debug、Release 和资产工具共享：
 
@@ -69,13 +69,13 @@ DerivedAssets/<projectId>/
   artifact_index.json
 ```
 
-manifest schema v2 记录 project/scene/profile 稳定身份、scene、texture limit、源文件 size/write time/SHA-256，以及每个 image 的语义、mipmap wrap、输出尺寸、cache key 和 blob。schema v1 仍可读取用于显式 migration，但运行时只查询 v2 稳定路径。`TextureSemantic` 固定为 `SrgbColor`、`LinearData` 和 `Normal`；BaseColor/Emissive 使用 `SrgbColor`，MetallicRoughness/Occlusion 使用 `LinearData`，normal map 使用 `Normal`。同一图片以不同语义或 wrap 参与材质时必须生成独立条目。
+manifest schema v3 记录 project/scene/profile 稳定身份、scene、texture limit、编码器名称/版本/质量设置，以及每个 image 的 payload kind、Vulkan format、mip 数量、GPU payload/blob 字节、supercompression、语义、mipmap wrap、输出尺寸、cache key 和源 stamp。schema v1/v2 UASTC manifest 仍可读取；当当前 profile 要求 BC7 时，它们被标记为 `Stale`，不能作为 Native BC7 Ready artifact。`TextureSemantic` 固定为 `SrgbColor`、`LinearData` 和 `Normal`；BaseColor/Emissive 生成 `VK_FORMAT_BC7_SRGB_BLOCK`，MetallicRoughness/Occlusion/Normal 生成 `VK_FORMAT_BC7_UNORM_BLOCK`。同一图片以不同语义或 wrap 参与材质时必须生成独立条目。
 
-运行时按 scene ID 和实际 texture limit 对应的 profile ID 查找精确 manifest，并用 size + write time 快速检查依赖。命中后由 worker 使用 libktx 读取 KTX2：支持 BC7 的设备转码到 BC7 SRGB/UNORM，不支持 BC7 时转为 RGBA32。两条路径都保留离线 mip chain，不执行 stb decode、bilinear resize 或 GPU blit mip generation。
+运行时按 scene ID 和实际 texture limit 对应的 profile ID 查找精确 manifest，并用 size + write time 快速检查依赖。Native BC7 命中后，worker 只用 libktx 读取和校验 mip payload，不调用 `ktxTexture2_TranscodeBasis()`；`SceneGpuBuilder` 直接上传 BC7 mip chain。旧 schema v1/v2 UASTC 缓存仍保留 BC7/RGBA32 转码兼容路径。开发设备不支持 BC7 时，Native BC7 条目记录 `native_bc7_unsupported` 并回退源图片；Cooked package 在加载场景前返回 `bc7_required`，不会引入 DirectXTex 或静默回退。
 
 `PreparedImage` 的 prebuilt mip payload 包含总字节数组、最终 `VkFormat` 和每级 mip 的 offset、size、width、height。`SceneGpuBuilder` 将所有 mip 写入 staging，并通过多个 `VkBufferImageCopy` region 上传到只需要 `TRANSFER_DST | SAMPLED` 的 image。原始 RGBA8 fallback 继续上传 base level，并由 GPU blit 生成 mip。
 
-开发模式下，glTF prepare 遇到单个派生条目缺失或 KTX2 读取/转码失败时可记录 miss 并走 RGBA fallback；普通 scene load 之前仍会先执行 scene/profile 级 artifact admission。CookedOnly 设置 `SceneLoadContext::requireDerivedTextures`，manifest 身份、scene stamp、entry/source stamp、KTX2 读取、转码和 mip offset 任一失败都会终止加载，不会调用 stb 解码。
+开发模式下，glTF prepare 遇到单个派生条目缺失、KTX2 读取/校验失败或 Native BC7 不受支持时可记录 miss 并走 RGBA fallback；普通 scene load 之前仍会先执行 scene/profile 级 artifact admission。CookedOnly 设置 `SceneLoadContext::requireDerivedTextures`，并要求 scene texture manifest 全部为 Native BC7；manifest 身份、scene stamp、entry/source stamp、format、payload size、mip offset 任一不匹配都会终止加载，不会调用 stb 解码。
 
 ## 环境派生资产与异步加载
 
@@ -165,7 +165,7 @@ DescriptorAllocator 创建支持单独释放 set 的 pool。MaterialInstance 析
 - glTF parse、图片读取/解码/缩放、材质、mesh CPU、hierarchy 和 command recording 耗时。
 - prepared CPU bytes、纹理/mesh/vertex/index/material/object 数量及上传字节。
 - 每帧 upload pump 的最大耗时/字节、batch submit/completion、fence poll/wait 和 peak in-flight。
-- KTX2 cache lookup/hit/miss/invalid、读取字节与耗时、transcode 耗时、BC7/RGBA32 fallback 数量和 prebuilt mip 数量。
+- KTX2 cache lookup/hit/miss/invalid、Native BC7/UASTC 命中数、Native payload 读取字节与耗时、Basis transcode 次数/耗时、BC7/RGBA32 fallback 数量和 prebuilt mip 数量。
 - 场景资源创建前后的 VMA allocation count、allocation bytes 与 block bytes。
 
 VMA 快照在 SceneGpuBuilder 和 staging 销毁后采集，不把临时 staging 计入场景常驻差值。VMA 数值不等同于 Windows 任务管理器显示的专用显存。
@@ -193,15 +193,18 @@ packaged `main()` 在 Vulkan 初始化前强制以下契约：
 - Package project/profile 必须与 cooked Catalog 一致。
 - cache root 固定为包内 `runtime_assets`，asset mode 固定为 CookedOnly。
 - 不创建 AssetImportManager，不写 package ArtifactIndex，也不允许 source fallback、外部 cache/tool/project override 或纹理 profile 切换。
+- Windows package 的全部 scene texture artifact 必须是 Native BC7；目标设备不支持 BC7 sampled、linear filtering 和 transfer destination 时返回 `bc7_required`。
 - 关闭 validation layer，避免 Release 包依赖 Vulkan SDK 开发层。
 
 开发 CMake 的 `POST_BUILD` 只 stage project locator，不复制完整 `models/` 或 `textures/`。开发运行直接读取 `projectRoot`，正式运行目录由 `cook` 的闭包决定。
 
 ## Platform artifact 与 residency 决策
 
-Stage F 当前推迟。Release cooked Main Sponza 1024 的 72 张 KTX2 全部转为 BC7，总加载约 `1.36 s`，转码约 `0.79 s`，纹理 GPU estimate `96 MiB`，场景 VMA allocation delta `279.74 MiB`。现有场景替换会在新 GPU build 前释放旧 Scene，没有多场景 residency 累积，当前数据不足以支持 platform-final BC payload、streaming 或 LRU 的复杂度。
+Native BC7 是当前 Windows desktop platform artifact。采用它的直接原因是 Main Sponza 2048 Debug 基线约 `26.11 s`，其中 KTX2 读取约 `3.52 s`、UASTC 到 BC7 转码约 `21.64 s`，GPU build/upload 只有约 `0.31 s`。压缩现在只在首次离线 import 支付；重复加载只读取和上传 BC7。原有 UASTC loader 暂时保留给旧缓存和自定义 portable profile。
 
-重新评估条件为：代表场景 Release p95 超过 2 秒且转码占 CPU prepare 超过 40%；目标设备 allocation failure 或单 Scene 超过 device-local budget 的 50%；需要同时驻留多个大场景或 resident set 超过 budget 的 70%；或发布体积成为明确产品约束。memory gate 需要先接入 `VK_EXT_memory_budget`，不能把 VMA block bytes 当作可用预算。
+2026-07-31 在当前机器上的 Main Sponza 2048 结果为：Release AssetTool 首次用 4 workers 构建 72 张纹理约 `776.84 s`，复用扫描约 `3.15 s`；Debug runtime 两次加载分别约 `1.06 s` 和 `1.02 s`，Native KTX2 read 约 `146 ms`，`basisTranscodeCount=0`、transcode/decode/resize 都为 0。72 张纹理的 BC7 mip payload 与 blob 总量约 `384 MiB`，与原运行时转码后的 GPU payload 一致。
+
+这一步不同时引入 streaming 或 residency 系统。现有场景替换会在新 GPU build 前释放旧 Scene，没有多场景 residency 累积。重新评估 memory admission/streaming/LRU 的条件仍是：目标设备 allocation failure 或单 Scene 超过 device-local budget 的 50%；需要同时驻留多个大场景或 resident set 超过 budget 的 70%；或发布体积成为明确产品约束。memory gate 需要先接入 `VK_EXT_memory_budget`，不能把 VMA block bytes 当作可用预算。
 
 ## 当前限制
 
@@ -211,7 +214,7 @@ Stage F 当前推迟。Release cooked Main Sponza 1024 的 72 张 KTX2 全部转
 - 单个大 Texture/Mesh 仍是原子 pump，可能造成短帧尖峰。
 - 使用 graphics queue，没有专用 transfer queue 或 queue ownership transfer。
 - 开发模式中未生成或未命中 KTX2 profile 的图片仍可能运行时 decode/resize，并以 RGBA8 上传；CookedOnly 禁止该路径。
-- KTX2 v1 统一使用 BC7，不使用 BC5 normal 或 BC4 AO；无 BC7 设备使用 RGBA32，因此不会获得压缩显存收益。
+- Windows desktop profiles 统一使用 BC7，不使用 BC5 normal 或 BC4 AO，也不对 Native BC7 blob 使用 Zstd；开发设备无 BC7 时回退源 RGBA8，Cooked package 要求 BC7。
 - 环境只支持本地 RGBE `.hdr` 和单个全局环境；没有 EXR、runtime convolution、reflection probe、parallax correction、diffuse SH、BC6H 或 environment streaming。
-- 没有运行时自动编码、mip streaming、LRU residency、virtual texturing 或加载时保留旧大场景的显存预算策略。
+- 没有渲染进程内编码、mip streaming、LRU residency、virtual texturing 或加载时保留旧大场景的显存预算策略；OnDemand 重建由独立 AssetTool 进程完成。
 - Viking Room 仍使用同步 OBJ/PNG factory；开发模式从 `projectRoot` 读取，正式包使用 Cook 闭包。

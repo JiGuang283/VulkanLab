@@ -1,8 +1,8 @@
 # 构建与运行
 
 > Status: Current
-> Last verified: 2026-07-30
-> Verified against: `56b84b1`
+> Last verified: 2026-07-31
+> Verified against: `73285cd`
 
 ## 环境要求
 
@@ -11,7 +11,7 @@
 - CMake 3.22 或更高版本。
 - Vulkan SDK。CMake 需要能找到 Vulkan、`glslc`、`spirv-val` 和 SDK 中的 GLM 头文件。
 - 仓库内 `external/` 依赖完整，尤其是 `glfw/lib-vc2022`、ImGui、stb、VMA 和 glTF 头文件。
-- 运行时使用 KTX-Software v4.4.2，shader contract tests 使用固定提交的 SPIRV-Reflect；两者都是 submodule。首次克隆或更新后必须递归初始化：
+- 运行时使用 KTX-Software v4.4.2，AssetTool 使用 DirectXTex `may2026` 离线压缩 BC7，shader contract tests 使用固定提交的 SPIRV-Reflect；它们都是 submodule。首次克隆或更新后必须递归初始化：
 
 ```powershell
 git submodule update --init --recursive
@@ -69,7 +69,7 @@ cmake --build --preset windows-msvc-runtime
 - RenderTest 要求 Runtime Control 和 Capture 同时编译，否则 CMake 配置失败。
 - Runtime Control 服务端与 VulkanLabCtl 客户端可以独立构建。
 - Asset Authoring 可使用外部 `--asset-tool`；启用 authoring 但不构建本地 AssetTool 时 CMake 给出 warning。
-- 关闭 AssetTool 会同时关闭 KTX CLI 与 KTX1，只保留渲染器读取 KTX2 所需的 `ktx_read`。
+- 关闭 AssetTool 会同时关闭 DirectXTex、KTX CLI 与 KTX1，只保留渲染器读取 KTX2 所需的 `ktx_read`。
 - `BUILD_TESTING=OFF` 时不构建 SPIRV-Reflect。
 
 CMake 通过 `configure_file()` 生成 `BuildFeatures.h`。宏仅用于程序入口、模块装配和真实/空实现选择，不用于控制 IBL、Shadow 或任何 GPU ABI。`VulkanLab.exe --help`、启动日志、BuildInfo 和 Runtime Control 的 `system.info.build.features` 都会报告实际编译能力。
@@ -237,7 +237,7 @@ Catalog 当前包含以下初始 glTF 条目：
 
 ## KTX2 派生纹理缓存
 
-原始 glTF、GLB、PNG 和 JPEG 不会被修改。`VulkanLabAssetTool` 生成独立的 KTX2 缓存；既可显式调用，也可由 OnDemand admission 监督调用。默认共享根目录为 `%LOCALAPPDATA%/VulkanLab/DerivedAssets/<projectId>`，由 ProjectContext 和 Catalog 统一解析，因此 Debug、Release 和资产工具不再各自生成工作目录缓存。
+原始 glTF、GLB、PNG 和 JPEG 不会被修改。`VulkanLabAssetTool` 生成独立的 KTX2 缓存；既可显式调用，也可由 OnDemand admission 监督调用。当前 `desktop_512/1024/2048/full` profiles 使用 Native BC7：KTX-Software 负责缩放、Lanczos4 mipmap、wrap 和 normal normalize，DirectXTex 负责逐 mip BC7 压缩，libktx 负责写入 KTX2。默认共享根目录为 `%LOCALAPPDATA%/VulkanLab/DerivedAssets/<projectId>`，由 ProjectContext 和 Catalog 统一解析，因此 Debug、Release 和资产工具不再各自生成工作目录缓存。
 
 构建完成后，从 Debug 运行目录为 Main Sponza 生成 1024 和 2048 两个 profile：
 
@@ -273,12 +273,14 @@ Catalog 当前包含以下初始 glTF 条目：
 
 - `--workers N`：编码子进程上限；默认取逻辑 CPU 一半并限制到 4。
 - `--memory-budget-mib N`：估算编码工作集预算，默认 2048 MiB；预算优先于 worker 上限。
-- `--preset development|production`：显式覆盖 profile preset。development 保持兼容参数，production 使用更高 quality/Zstd 并生成不同 cache key。
+- `--preset development|production`：显式覆盖 profile preset。Native BC7 的 development 使用 quick 模式，production 使用完整搜索；v1 都不使用 Zstd，并生成不同 cache key。
 - `--progress ndjson` 或 `--progress-json`：stdout 只输出机器可读 NDJSON，普通诊断与 `ktx` 输出写 stderr。
 
 按 Ctrl+C 会取消整个 Job Object 中的 `ktx.exe`。已完成 blob 可在下次命令中复用，但取消时不会发布 scene manifest；命令正常取消返回 `130`。自动化脚本应以最终 `completed`、`failed` 或 `cancelled` 事件作为结果，不根据 artifact 完成数量推断 manifest 已发布。
 
-Stage B 的 Release/Main Sponza 1024 基准（2026-07-19，同一机器、clean 独立 cache root）为：单 worker `261.19 s`，四 worker `117.15 s`，约 `2.23x` 加速；两次生成的 72-entry manifest SHA-256 完全一致。cache hit 为 `encoded=0/reused=72`，约 `3.11 s`。这些数字用于回归趋势，不是跨机器性能门槛。
+首次 Native BC7 构建是离线 CPU 压缩任务，可能比旧 UASTC import 更慢；优先使用 `--workers 4`，并按可用内存设置 `--memory-budget-mib`。只有全部纹理成功后才发布 schema v3 manifest；已完成但未被 manifest 引用的 blob 可由 `cache prune` 清理。后续重复构建会复用匹配 encoder/version/quality/source/semantic/size/wrap 的 blob。
+
+旧 schema v1/v2 UASTC 缓存仍可读取，但当前 BC7 profile 会将它标记为 `Stale` 并要求重建，不能伪装成 Ready。需要保留 portable UASTC 时应使用显式 `textureEncoder: "uastc"` 的自定义 profile。
 
 迁移旧运行目录缓存不会重新编码 KTX2：
 
@@ -308,9 +310,9 @@ cd build-debug\Debug
 .\VulkanLab.exe --runtime-control
 ```
 
-cache hit 时，worker 读取预生成 mip chain，并优先转码为 BC7；设备不支持 BC7 时转为 RGBA32。场景加载前的 admission 会检查 manifest 身份、source stamp、blob 存在性和 KTX2 header。OnDemand 下的 Missing/Stale/Invalid 会先异步重建，失败时保留当前 Scene；只有用户显式选择 source fallback 才走 stb decode、CPU resize 和 GPU mip blit。ReadOnly/CookedOnly 不会静默启动编码器。
+Native BC7 cache hit 时，worker 读取完整 mip chain 后直接交给 staging/upload，不执行 Basis 转码、stb decode、CPU resize 或 GPU mip blit。旧 UASTC cache 仍使用 BC7/RGBA32 转码兼容路径。场景加载前的 admission 会检查 manifest schema/encoder、source stamp、blob 大小和 KTX2 header。OnDemand 下的 Missing/Stale/Invalid 会先异步重建，失败时保留当前 Scene；只有用户显式选择 source fallback 才走 RGBA8 路径。ReadOnly/CookedOnly 不会静默启动编码器。
 
-可在日志、`VulkanLab -> Diagnostics -> Load Stats` 或 Runtime Control 的加载统计中检查 cache lookup/hit/miss/invalid、KTX2 读取与转码耗时、BC7/RGBA32 数量、prebuilt mip 数量和实际上传字节。首次验证建议先加载 1024 profile，再与无缓存加载结果比较。
+可在日志、`VulkanLab -> Diagnostics -> Load Stats` 或 Runtime Control 的加载统计中检查 `nativeBc7CacheHits`、`basisUastcCacheHits`、`basisTranscodeCount`、Native/KTX2 读取字节与耗时、转码耗时、prebuilt mip 数量和实际上传字节。Native BC7 正常命中时 `basisTranscodeCount=0` 且 `derivedTextureTranscodeMs` 接近 0。
 
 ## HDR 环境与 IBL 派生缓存
 
@@ -404,16 +406,19 @@ cd .\dist\main-sponza
 .\VulkanLab.exe --runtime-control
 ```
 
-程序从可执行文件旁发现 `package_manifest.json`，在创建窗口/Vulkan 前校验所有列出文件的大小和 SHA-256，然后使用包内只读 Catalog 与 `runtime_assets`。此时自动强制 `CookedOnly`，纹理限制固定为 package profile，`--project`、`--cache-root`、`--asset-tool`、非 cooked asset mode 和运行时纹理档位修改都会被拒绝。KTX2 manifest、entry、blob、转码或 mip 数据出错会使加载失败，不会读取 PNG/JPEG fallback。Cooked package 也关闭开发 validation layer 依赖；目标机器仍需 Vulkan 显卡驱动和 MSVC Release Runtime。
+程序从可执行文件旁发现 `package_manifest.json`，在创建窗口/Vulkan 前校验所有列出文件的大小和 SHA-256，然后使用包内只读 Catalog 与 `runtime_assets`。此时自动强制 `CookedOnly`，纹理限制固定为 package profile，`--project`、`--cache-root`、`--asset-tool`、非 cooked asset mode 和运行时纹理档位修改都会被拒绝。Windows package 要求所有 scene texture manifest 都是 Native BC7；目标设备不支持 BC7 sampled、linear filtering 和 transfer destination 时返回 `bc7_required`。KTX2 manifest、entry、blob、format、payload 或 mip 数据出错会使加载失败，不会读取 PNG/JPEG fallback。Cooked package 也关闭开发 validation layer 依赖；目标机器仍需 Vulkan 显卡驱动和 MSVC Release Runtime。
 
 `package_manifest.json` 包含 `VulkanLab.exe` 本身的 hash。若发布流程还要进行代码签名，应先完成签名，再重新生成 package manifest；当前 `cook` 命令假定输入 executable 已经是最终字节。
 
-Stage F gate 的当前 Release/Main Sponza 1024 基线是总加载约 `1.36 s`、KTX2 read `167 ms`、BC7 transcode `787 ms`、纹理 GPU estimate `96 MiB` 和场景 VMA allocation delta `279.74 MiB`。这些结果暂不支持引入 platform-final BC payload 或 streaming；量化重开条件见 [资源加载](../architecture/resource_loading.md#platform-artifact-与-residency-决策)。
+Native BC7 的引入基线是 Main Sponza 2048 Debug 总加载约 `26.11 s`，其中 KTX2 read `3.52 s`、UASTC 到 BC7 转码 `21.64 s`、GPU build/upload 约 `0.31 s`。新路径把这段压缩成本移到首次 import；重复加载应只有 KTX2 I/O 与 GPU 上传。streaming/residency 的量化重开条件见[资源加载](../architecture/resource_loading.md#platform-artifact-与-residency-决策)。
+
+2026-07-31 的实际 Native BC7 结果：Main Sponza 2048 首次 Release import（72 张、4 workers）约 `776.84 s`，第二次全复用约 `3.15 s`；Debug runtime 连续两次加载约 `1.06 s`/`1.02 s`，Native read 约 `146 ms`，72/72 命中且 `basisTranscodeCount=0`。首次 import 是离线成本，不应拿它与场景切换时间相加。
 
 ## 运行注意事项
 
 - 开发模式的 glTF 纹理尺寸默认限制为 `2048`，可在 `VulkanLab -> Render -> Pipeline` 切换为 `Full`、`2048`、`1024` 或 `512`。切换会创建新的场景加载任务；CookedOnly 控件禁用。
 - 开发模式下，KTX2 编码由 `AssetImportManager` 监督的独立 `VulkanLabAssetTool` 进程执行；glTF prepare 在 SceneLoadManager worker 执行；GPU 创建和上传由主线程按帧推进。CookedOnly 不创建 AssetImportManager。资产导入显示在 `Scene -> Assets`，场景加载显示在窗口顶部及 `Scene -> Scenes`。
+- Native BC7 的首次 Build/Rebuild 可能持续数分钟；这是离线导入成本。正常重复加载不应出现 UASTC transcode，日志应显示 `cache=native-bc7 upload=direct`。
 - HDR 环境的首次 CPU bake 可能持续较长时间，应在资产导入阶段完成，而不是在场景切换时触发。运行时只读取已经发布的环境 KTX2；IBL 与 Skybox 默认关闭。
 - GPU build 前会释放旧 Scene 以控制大场景切换时的显存峰值，因此该阶段可能只显示统一工具窗口和空场景。活跃任务的紧凑进度位于窗口顶部，详细进度位于 `Scene -> Scenes`。
 - `Full` 对 Main Sponza 仍是高风险选项。开发模式的 KTX2 缓存只覆盖已经显式生成且精确匹配的 profile；未命中时仍可能回退 RGBA8。
