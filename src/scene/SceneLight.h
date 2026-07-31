@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #include <glm/glm.hpp>
 
@@ -13,6 +14,7 @@ enum class LightType : uint32_t {
 };
 
 struct SceneLight {
+    std::string debugName;
     LightType type = LightType::Directional;
 
     glm::vec3 positionWS{0.0f};

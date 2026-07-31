@@ -81,6 +81,11 @@ struct SceneLoadStats {
     uint64_t deviceWaitIdleCalls = 0;
     uint64_t materialCount = 0;
     uint64_t objectCount = 0;
+    uint64_t gltfLightDefinitionCount = 0;
+    uint64_t lightInstanceCount = 0;
+    uint64_t directionalLightCount = 0;
+    uint64_t pointLightCount = 0;
+    uint64_t spotLightCount = 0;
     uint64_t preparedCpuBytes = 0;
 
     AllocatorMemorySnapshot allocatorBefore;

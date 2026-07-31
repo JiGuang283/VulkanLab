@@ -3,6 +3,7 @@
 #include "render/MaterialInstance.h"
 #include "render/MaterialTextureSlot.h"
 #include "render/Vertex.h"
+#include "SceneLight.h"
 #include "SceneTypes.h"
 
 #include <array>
@@ -70,6 +71,7 @@ struct PreparedSceneData {
     std::vector<PreparedMaterial> materials;
     std::vector<PreparedMesh>     meshes;
     std::vector<PreparedObject>   objects;
+    std::vector<SceneLight>       lights;
     std::optional<CameraPose>     initialCamera;
 };
 

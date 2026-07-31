@@ -1,8 +1,8 @@
 # 资源加载
 
 > Status: Current
-> Last verified: 2026-07-26
-> Verified against: `9092755`
+> Last verified: 2026-07-30
+> Verified against: KHR_lights_punctual working tree
 
 ## 项目、Catalog 与导入
 
@@ -29,7 +29,7 @@ SceneRegistry 的 `SceneEntry` 可以提供两种入口：
 - `SceneFactory`：同步创建完整 GPU Scene，当前用于 Viking Room 和初始化兼容路径。
 - `ScenePrepareFactory`：只产生 `PreparedSceneData`，当前用于全部 glTF 场景。
 
-`PreparedSceneData` 保存纹理 payload、sampler/format 描述、材质参数、vertex/index、对象引用和相机建议，不包含 Vulkan handle、VMA allocation 或 descriptor set。纹理 payload 可以是运行时解码的 RGBA8 base level，也可以是 KTX2 转码后带完整 mip chain 的数据。主线程随后由 `SceneGpuBuilder` 把它转换为运行时 Scene。
+`PreparedSceneData` 保存纹理 payload、sampler/format 描述、材质参数、vertex/index、对象引用、静态世界空间灯光和相机建议，不包含 Vulkan handle、VMA allocation 或 descriptor set。纹理 payload 可以是运行时解码的 RGBA8 base level，也可以是 KTX2 转码后带完整 mip chain 的数据。主线程随后由 `SceneGpuBuilder` 把它转换为运行时 Scene。
 
 ## 异步 glTF Prepare
 
@@ -37,12 +37,15 @@ SceneRegistry 的 `SceneEntry` 可以提供两种入口：
 
 - 解析 `.gltf`/`.glb`、node hierarchy 和 world transform。
 - 读取 position、normal、UV0、UV1、tangent、COLOR_0 和 index；缺少 tangent 时生成稳定 fallback。
+- 读取 `KHR_lights_punctual` 定义，并按当前 scene 中的 node 引用实例化 Directional、Point 和 Spot。
 - 转换 metallic-roughness、alpha、double-sided、normal scale、AO、emissive strength、transmission 和 volume 基础参数。
 - 读取 embedded image 或 `.gltf` 相对路径下的本地图片，使用 stb 解码为 RGBA8。
 - 按 `SceneLoadContext::maxTextureSize` 在 CPU 侧执行等比 bilinear 缩放。
 - 生成 primitive、bounds、材质与对象的稳定索引关系。
 
 worker 在文件、图片、材质、primitive 和 hierarchy 等自然边界检查 cancellation token。异常写入任务的 Failed 状态，不跨线程调用 Vulkan，也不向 Application 抛异常。
+
+glTF 灯光与 mesh 使用同一套 node hierarchy 和 Y-up 到 Z-up 根变换。Point/Spot 的位置来自 node world translation；Directional/Spot 的发射方向来自 node 局部 `-Z`。同一个 glTF light definition 被多个 node 引用时会生成多个 `SceneLight` 实例。颜色保持线性，Directional intensity 保持 lux，Point/Spot intensity 保持 candela；loader 不执行强度归一化或自动曝光。灯光是 prepared CPU 数据，发布时直接移动进 Scene，不产生额外 GPU 上传批次。
 
 图片格式仍按语义选择：BaseColor/Emissive 使用 sRGB，Normal/MetallicRoughness/Occlusion 使用 linear。同一 glTF image 在不同语义下可以对应不同派生纹理，不能只按 image index 复用；sampler 映射 repeat、clamp、mirrored repeat、min/mag filter 和 mipmap mode。
 

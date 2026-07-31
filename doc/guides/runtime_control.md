@@ -118,6 +118,7 @@ cd build\windows-msvc-debug\Debug
 - 最近一个已完成 frame 的 `gpuTimings`，包含 available、frameSerial、DirectionalShadow/Skybox/MainForward、可选 Bloom、ToneMap + UI 分项与 totalMs；
 - 待上传 texture/mesh、in-flight upload batch；
 - 当前选择和已发布的 environment，以及环境加载任务；
+- 当前 Scene 的 Directional/Point/Spot 数量、实际上传数量和超限忽略数量；
 - capture queue 计数和 capture capability；
 - GUI 可见性、窗口最小化、swapchain recreate 和 rendering 状态。
 

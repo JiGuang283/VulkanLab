@@ -19,15 +19,18 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace vkr {
@@ -152,6 +155,128 @@ glm::mat4 nodeLocalMatrix(const tg3_node &node) {
                           static_cast<float>(node.scale[2])};
     return glm::translate(glm::mat4(1.0f), translation) *
            glm::mat4_cast(rotation) * glm::scale(glm::mat4(1.0f), scale);
+}
+
+bool finiteVec3(const glm::vec3 &value) {
+    return std::isfinite(value.x) && std::isfinite(value.y) &&
+           std::isfinite(value.z);
+}
+
+float sanitizeNonNegativeFloat(double value, float fallback,
+                               bool &corrected) {
+    if (!std::isfinite(value)) {
+        corrected = true;
+        return fallback;
+    }
+    if (value < 0.0) {
+        corrected = true;
+        return 0.0f;
+    }
+    if (value > static_cast<double>(std::numeric_limits<float>::max())) {
+        corrected = true;
+        return std::numeric_limits<float>::max();
+    }
+    return static_cast<float>(value);
+}
+
+std::optional<SceneLight>
+makeSceneLight(const tg3_light &source, uint32_t lightIndex,
+               const tg3_node &node, int nodeIndex, const glm::mat4 &world,
+               const std::string &path) {
+    SceneLight result{};
+    if (tg3_str_equals_cstr(source.type, "directional")) {
+        result.type = LightType::Directional;
+    } else if (tg3_str_equals_cstr(source.type, "point")) {
+        result.type = LightType::Point;
+    } else if (tg3_str_equals_cstr(source.type, "spot")) {
+        result.type = LightType::Spot;
+    } else {
+        VKR_LOG_WARN("Gltf",
+                     "{} light[{}] referenced by node[{}] has unknown type "
+                     "'{}'; skipping",
+                     path, lightIndex, nodeIndex, toString(source.type));
+        return std::nullopt;
+    }
+
+    std::string lightName = toString(source.name);
+    if (lightName.empty())
+        lightName = "Light #" + std::to_string(lightIndex);
+    const std::string nodeName = toString(node.name);
+    result.debugName =
+        nodeName.empty() || nodeName == lightName
+            ? lightName + " [node " + std::to_string(nodeIndex) + "]"
+            : lightName + " @ " + nodeName;
+
+    bool correctedProperties = false;
+    for (glm::length_t component = 0; component < 3; ++component) {
+        result.color[component] =
+            sanitizeNonNegativeFloat(source.color[component], 1.0f,
+                                     correctedProperties);
+    }
+    result.intensity = sanitizeNonNegativeFloat(
+        source.intensity, 1.0f, correctedProperties);
+
+    if (result.type != LightType::Directional) {
+        const glm::vec3 position = glm::vec3(world[3]);
+        if (!finiteVec3(position)) {
+            VKR_LOG_WARN("Gltf",
+                         "{} light[{}] node[{}] has a non-finite world "
+                         "position; skipping",
+                         path, lightIndex, nodeIndex);
+            return std::nullopt;
+        }
+        result.positionWS = position;
+        result.range = sanitizeNonNegativeFloat(
+            source.range, 0.0f, correctedProperties);
+    } else {
+        result.range = 0.0f;
+    }
+
+    if (result.type == LightType::Directional ||
+        result.type == LightType::Spot) {
+        const glm::vec3 emittedDirection =
+            glm::mat3(world) * glm::vec3(0.0f, 0.0f, -1.0f);
+        const float directionLengthSquared =
+            glm::dot(emittedDirection, emittedDirection);
+        if (!finiteVec3(emittedDirection) ||
+            !std::isfinite(directionLengthSquared) ||
+            directionLengthSquared <= 1.0e-8f) {
+            VKR_LOG_WARN("Gltf",
+                         "{} light[{}] node[{}] has an invalid world "
+                         "direction; skipping",
+                         path, lightIndex, nodeIndex);
+            return std::nullopt;
+        }
+        const glm::vec3 normalizedDirection =
+            emittedDirection / std::sqrt(directionLengthSquared);
+        result.directionWS =
+            result.type == LightType::Directional
+                ? -normalizedDirection
+                : normalizedDirection;
+    }
+
+    if (result.type == LightType::Spot) {
+        constexpr double halfPi = 1.57079632679489661923;
+        double inner = source.spot.inner_cone_angle;
+        double outer = source.spot.outer_cone_angle;
+        if (!std::isfinite(inner) || !std::isfinite(outer) || inner < 0.0 ||
+            outer <= 0.0 || outer > halfPi || inner >= outer) {
+            correctedProperties = true;
+            inner = 0.0;
+            outer = 0.78539816339744830962;
+        }
+        result.innerConeCos = static_cast<float>(std::cos(inner));
+        result.outerConeCos = static_cast<float>(std::cos(outer));
+    }
+
+    if (correctedProperties) {
+        VKR_LOG_WARN(
+            "Gltf",
+            "{} light[{}] node[{}] contains invalid properties; corrected "
+            "to safe values",
+            path, lightIndex, nodeIndex);
+    }
+    return result;
 }
 
 const tg3_extension *findExtension(const tg3_extras_ext &extensions,
@@ -353,6 +478,8 @@ PreparedSceneData GltfPreparer::prepare(
     PreparedSceneData prepared;
     prepared.sourcePath = path;
     prepared.initialCamera = options.cameraOverride;
+    if (options.loadStats)
+        options.loadStats->gltfLightDefinitionCount = gltf->lights_count;
 
     if (progress) {
         progress->totalTextures = gltf->textures_count;
@@ -797,6 +924,22 @@ PreparedSceneData GltfPreparer::prepare(
                         {primitive.meshIndex, primitive.materialIndex, world});
                 }
             }
+            if (node.light >= 0) {
+                if (node.light >= static_cast<int>(gltf->lights_count)) {
+                    VKR_LOG_WARN(
+                        "Gltf",
+                        "{} node[{}] references invalid light index {}; "
+                        "skipping",
+                        path, nodeIndex, node.light);
+                } else {
+                    auto light = makeSceneLight(
+                        gltf->lights[node.light],
+                        static_cast<uint32_t>(node.light), node, nodeIndex,
+                        world, path);
+                    if (light)
+                        prepared.lights.push_back(std::move(*light));
+                }
+            }
             for (uint32_t i = 0; i < node.children_count; ++i)
                 walkNode(node.children[i], world);
         };
@@ -827,11 +970,40 @@ PreparedSceneData GltfPreparer::prepare(
         }
     }
 
+    uint64_t directionalLightCount = 0;
+    uint64_t pointLightCount = 0;
+    uint64_t spotLightCount = 0;
+    for (const SceneLight &light : prepared.lights) {
+        switch (light.type) {
+        case LightType::Directional:
+            ++directionalLightCount;
+            break;
+        case LightType::Point:
+            ++pointLightCount;
+            break;
+        case LightType::Spot:
+            ++spotLightCount;
+            break;
+        }
+    }
     if (options.loadStats) {
         options.loadStats->hierarchyMs +=
             std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - hierarchyStart)
                 .count();
+        options.loadStats->lightInstanceCount = prepared.lights.size();
+        options.loadStats->directionalLightCount =
+            directionalLightCount;
+        options.loadStats->pointLightCount = pointLightCount;
+        options.loadStats->spotLightCount = spotLightCount;
+    }
+    if (gltf->lights_count > 0) {
+        VKR_LOG_INFO(
+            "Gltf",
+            "Imported punctual lights from '{}': {} definitions, {} scene "
+            "instances ({} directional, {} point, {} spot)",
+            path, gltf->lights_count, prepared.lights.size(),
+            directionalLightCount, pointLightCount, spotLightCount);
     }
     if (prepared.meshes.empty())
         throw std::runtime_error("No valid triangle primitives in '" + path +
@@ -844,6 +1016,8 @@ PreparedSceneData GltfPreparer::prepare(
             preparedBytes += mesh.vertices.size() * sizeof(Vertex);
             preparedBytes += mesh.indices.size() * sizeof(uint32_t);
         }
+        for (const SceneLight &light : prepared.lights)
+            preparedBytes += sizeof(SceneLight) + light.debugName.size();
         options.loadStats->preparedCpuBytes = preparedBytes;
     }
     throwIfCancelled(cancellation);

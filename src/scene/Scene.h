@@ -34,7 +34,7 @@ class Scene {
     }
     void addMesh(std::shared_ptr<Mesh> m) { meshes_.push_back(std::move(m)); }
     void addObject(SceneObject obj);
-    void addLight(SceneLight light) { lights_.push_back(light); }
+    void addLight(SceneLight light) { lights_.push_back(std::move(light)); }
 
     // ---- 渲染提交 ----
     void collectRenderCommands(RenderQueue &queue) const;

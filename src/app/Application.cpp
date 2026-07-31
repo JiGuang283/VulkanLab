@@ -119,6 +119,44 @@ const char *alphaModeName(AlphaMode mode) {
     return "Unknown";
 }
 
+const char *lightTypeName(LightType type) {
+    switch (type) {
+    case LightType::Directional:
+        return "Directional";
+    case LightType::Point:
+        return "Point";
+    case LightType::Spot:
+        return "Spot";
+    }
+    return "Unknown";
+}
+
+const char *lightIntensityUnit(LightType type) {
+    return type == LightType::Directional ? "lux" : "candela";
+}
+
+void populateSceneLightStats(SceneLoadStats &stats, const Scene *scene) {
+    stats.lightInstanceCount = scene ? scene->lights().size() : 0;
+    stats.directionalLightCount = 0;
+    stats.pointLightCount = 0;
+    stats.spotLightCount = 0;
+    if (!scene)
+        return;
+    for (const SceneLight &light : scene->lights()) {
+        switch (light.type) {
+        case LightType::Directional:
+            ++stats.directionalLightCount;
+            break;
+        case LightType::Point:
+            ++stats.pointLightCount;
+            break;
+        case LightType::Spot:
+            ++stats.spotLightCount;
+            break;
+        }
+    }
+}
+
 const char *slotName(MaterialTextureSlot slot) {
     switch (slot) {
     case MaterialTextureSlot::BaseColor:
@@ -286,6 +324,11 @@ ControlJson sceneLoadStatsToJson(const SceneLoadStats &stats) {
          {{"deviceWaitIdleCalls", stats.deviceWaitIdleCalls},
           {"materials", stats.materialCount},
           {"objects", stats.objectCount},
+          {"gltfLightDefinitions", stats.gltfLightDefinitionCount},
+          {"lightInstances", stats.lightInstanceCount},
+          {"directionalLights", stats.directionalLightCount},
+          {"pointLights", stats.pointLightCount},
+          {"spotLights", stats.spotLightCount},
           {"textureDecodes", r.textureDecodeCount},
           {"gpuTextures", r.gpuTextureCount},
           {"resizedTextures", r.resizedTextureCount},
@@ -495,7 +538,8 @@ void logSceneLoadStats(const SceneLoadStats &stats) {
     VKR_LOG_INFO(
         "LoadStats",
         "scene='{}' success={} limit={} total={:.2f}ms factory={:.2f}ms "
-        "textures={} meshes={} materials={} objects={} cache={}/{} "
+        "textures={} meshes={} materials={} objects={} "
+        "lights={}/{} (dir={} point={} spot={}) cache={}/{} "
         "upload={:.2f}MiB "
         "legacySubmits={} batchSubmits={} queueWaits={} fenceWaits={} "
         "fencePolls={} "
@@ -505,7 +549,9 @@ void logSceneLoadStats(const SceneLoadStats &stats) {
                                   : std::to_string(stats.maxTextureSize),
         stats.totalMs, stats.sceneFactoryMs,
         stats.resources.gpuTextureCount, stats.resources.gpuMeshCount,
-        stats.materialCount, stats.objectCount,
+        stats.materialCount, stats.objectCount, stats.lightInstanceCount,
+        stats.gltfLightDefinitionCount, stats.directionalLightCount,
+        stats.pointLightCount, stats.spotLightCount,
         stats.resources.derivedTextureHits,
         stats.resources.derivedTextureLookups,
         bytesToMiB(stats.resources.textureUploadBytes +
@@ -937,6 +983,7 @@ void Application::loadScene(int index, bool replaceCurrent) {
 
         stats.materialCount = loadedScene ? loadedScene->materials().size() : 0;
         stats.objectCount = loadedScene ? loadedScene->objects().size() : 0;
+        populateSceneLightStats(stats, loadedScene.get());
         stats.allocatorAfter = device_->allocatorMemorySnapshot();
         const UploadSyncCounters syncAfter = frameSync_->uploadSyncCounters();
         stats.resources.singleTimeSubmits +=
@@ -2269,6 +2316,24 @@ ControlJson Application::runtimeRenderStatus() {
     ControlJson gpuPasses = ControlJson::object();
     for (const GpuPassTiming &pass : gpuTimings.passes)
         gpuPasses[pass.name] = pass.milliseconds;
+    uint64_t directionalSceneLights = 0;
+    uint64_t pointSceneLights = 0;
+    uint64_t spotSceneLights = 0;
+    if (currentScene_) {
+        for (const SceneLight &light : currentScene_->lights()) {
+            switch (light.type) {
+            case LightType::Directional:
+                ++directionalSceneLights;
+                break;
+            case LightType::Point:
+                ++pointSceneLights;
+                break;
+            case LightType::Spot:
+                ++spotSceneLights;
+                break;
+            }
+        }
+    }
     return {
         {"scene", std::move(scene)},
         {"sceneGeneration", sceneGeneration_},
@@ -2285,6 +2350,15 @@ ControlJson Application::runtimeRenderStatus() {
           {"ready", renderer_->environmentReady()},
           {"loadTask",
            environmentLoadTaskToJson(latestEnvironmentLoadTask_)}}},
+        {"lighting",
+         {{"sceneLights",
+           currentScene_ ? currentScene_->lights().size() : 0},
+          {"sceneDirectional", directionalSceneLights},
+          {"scenePoint", pointSceneLights},
+          {"sceneSpot", spotSceneLights},
+          {"uploadedDirectional", lastUploadedDirectionalLights_},
+          {"uploadedPunctual", lastUploadedPunctualLights_},
+          {"ignored", lastIgnoredLights_}}},
         {"frameSerial", frameSync_->lastSubmittedSerial()},
         {"completedSubmissionSerial",
          frameSync_->completedSubmissionSerial()},
@@ -3883,6 +3957,49 @@ void Application::drawLightingPanel() {
                 lastUploadedDirectionalLights_, lastUploadedPunctualLights_);
     if (lastIgnoredLights_ > 0)
         ImGui::Text("Ignored: %u", lastIgnoredLights_);
+    if (currentScene_ && !currentScene_->lights().empty() &&
+        ImGui::CollapsingHeader("Scene Light Details")) {
+        const auto &lights = currentScene_->lights();
+        for (size_t index = 0; index < lights.size(); ++index) {
+            const SceneLight &light = lights[index];
+            const std::string name =
+                light.debugName.empty() ? "Light" : light.debugName;
+            const std::string label =
+                std::to_string(index) + "  " + name;
+            if (!ImGui::TreeNode(label.c_str()))
+                continue;
+            ImGui::Text("Type: %s", lightTypeName(light.type));
+            ImGui::Text("Color: %.3f %.3f %.3f", light.color.r,
+                        light.color.g, light.color.b);
+            ImGui::Text("Intensity: %.3f %s", light.intensity,
+                        lightIntensityUnit(light.type));
+            if (light.type != LightType::Directional) {
+                ImGui::Text("Position: %.3f %.3f %.3f",
+                            light.positionWS.x, light.positionWS.y,
+                            light.positionWS.z);
+                if (light.range > 0.0f)
+                    ImGui::Text("Range: %.3f", light.range);
+                else
+                    ImGui::TextUnformatted("Range: Infinite");
+            }
+            if (light.type == LightType::Directional) {
+                ImGui::Text("Surface-to-light: %.3f %.3f %.3f",
+                            light.directionWS.x, light.directionWS.y,
+                            light.directionWS.z);
+            } else if (light.type == LightType::Spot) {
+                ImGui::Text("Emission direction: %.3f %.3f %.3f",
+                            light.directionWS.x, light.directionWS.y,
+                            light.directionWS.z);
+                const float innerAngle = glm::degrees(std::acos(
+                    std::clamp(light.innerConeCos, -1.0f, 1.0f)));
+                const float outerAngle = glm::degrees(std::acos(
+                    std::clamp(light.outerConeCos, -1.0f, 1.0f)));
+                ImGui::Text("Cone: %.2f / %.2f deg", innerAngle,
+                            outerAngle);
+            }
+            ImGui::TreePop();
+        }
+    }
     if (sceneLightCount == 0) {
         ImGui::Separator();
         float sunAzimuth = 0.0f;
@@ -4219,6 +4336,16 @@ void Application::drawLoadStatsPanel() {
         ImGui::Text("Materials: %llu  Objects: %llu",
                     static_cast<unsigned long long>(stats.materialCount),
                     static_cast<unsigned long long>(stats.objectCount));
+        ImGui::Text(
+            "Lights: %llu instances / %llu definitions "
+            "(%llu directional, %llu point, %llu spot)",
+            static_cast<unsigned long long>(stats.lightInstanceCount),
+            static_cast<unsigned long long>(
+                stats.gltfLightDefinitionCount),
+            static_cast<unsigned long long>(
+                stats.directionalLightCount),
+            static_cast<unsigned long long>(stats.pointLightCount),
+            static_cast<unsigned long long>(stats.spotLightCount));
         ImGui::Text("Texture bytes: encoded %.2f, decoded %.2f MiB",
                     bytesToMiB(resources.encodedSourceBytes),
                     bytesToMiB(resources.decodedRgbaBytes));

@@ -315,9 +315,29 @@ void SceneGpuBuilder::pump(const Budget &budget) {
             scene_->addMaterial(fallbackMaterial_);
             for (auto &mesh : meshes_)
                 scene_->addMesh(mesh);
+            for (SceneLight &light : prepared_->lights)
+                scene_->addLight(std::move(light));
+            prepared_->lights.clear();
             scene_->initialCamera = prepared_->initialCamera;
             task_->stats.materialCount = materials_.size() + 1;
             task_->stats.objectCount = scene_->objects().size();
+            task_->stats.lightInstanceCount = scene_->lights().size();
+            task_->stats.directionalLightCount = 0;
+            task_->stats.pointLightCount = 0;
+            task_->stats.spotLightCount = 0;
+            for (const SceneLight &light : scene_->lights()) {
+                switch (light.type) {
+                case LightType::Directional:
+                    ++task_->stats.directionalLightCount;
+                    break;
+                case LightType::Point:
+                    ++task_->stats.pointLightCount;
+                    break;
+                case LightType::Spot:
+                    ++task_->stats.spotLightCount;
+                    break;
+                }
+            }
             task_->state = SceneLoadState::ReadyToPublish;
             phase_ = Phase::Ready;
             task_->stats.gpuBuildMs =

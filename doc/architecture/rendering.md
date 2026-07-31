@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-07-30
-> Verified against: Compute Bloom v1 working tree
+> Verified against: KHR_lights_punctual working tree
 
 ## 帧图与 Pass 顺序
 
@@ -144,7 +144,9 @@ Application 在创建 Window/Vulkan 前加载 `ShaderRegistry`。当前选择使
 
 ## 光源
 
-SceneLight 支持 Directional、Point 和 Spot。GlobalUBO 最多上传 1 个 directional light 和 8 个 punctual lights；Point 与 Spot 共用 punctual 配额。当前 glTF loader 不解析 `KHR_lights_punctual`。没有可用 IBL 时，环境项由 ambient color/intensity 提供；AO 只影响间接项。
+SceneLight 支持 Directional、Point 和 Spot。glTF loader 解析 `KHR_lights_punctual` 根定义和当前 scene 的 node 引用，应用完整 node world transform后生成静态世界空间灯光。同一 light definition 可以由多个 node 实例化。glTF Directional 的局部 `-Z` 发射方向会翻转为引擎使用的 surface-to-light 方向；Spot 保留 light-to-scene 发射方向。
+
+GlobalUBO 最多上传 1 个 directional light 和 8 个 punctual lights；Point 与 Spot 共用 punctual 配额，超出部分保留在 Scene 并计入 ignored。存在任意显式场景灯光时不注入 fallback Sun；第一盏实际上传的 Directional 继续驱动唯一的方向光 shadow map，Point/Spot 当前不投射阴影。颜色和 intensity 保持 glTF 物理单位，不做自动缩放；高强度场景通过 Exposure EV 和 Tone Mapping 调整。没有可用 IBL 时，环境项由 ambient color/intensity 提供；AO 只影响间接项。
 
 当前只支持一张全局环境和一张方向光 shadow map；没有 CSM、Point/Spot shadow、local reflection probe、parallax correction、deferred rendering 或 auto exposure。Bloom 是同步 compute 后处理，不使用异步 compute、lens dirt、anamorphic filter 或 temporal stabilization。
 
