@@ -15,6 +15,7 @@ struct ProjectContext {
     bool catalogWritable = false;
     bool cookedPackage = false;
     std::string packageProfileId;
+    std::string requiredTextureEncoder;
     std::string diagnostic;
 
     [[nodiscard]] std::filesystem::path resolveProjectPath(

@@ -48,13 +48,16 @@ Json toJson(const RuntimePackageManifest &manifest) {
             {"platform", manifest.platform},
             {"projectId", manifest.projectId},
             {"profileId", manifest.profileId},
+            {"requiredTextureEncoder", manifest.requiredTextureEncoder},
             {"catalog", manifest.catalogPath},
             {"cacheRoot", manifest.cacheRoot},
             {"files", std::move(files)}};
 }
 
 void validateManifest(const RuntimePackageManifest &manifest) {
-    if (manifest.schemaVersion != RuntimePackageManifest::kSchemaVersion)
+    if (manifest.schemaVersion != RuntimePackageManifest::kSchemaVersion &&
+        manifest.schemaVersion !=
+            RuntimePackageManifest::kLegacySchemaVersion)
         throw std::runtime_error("unsupported runtime package schema");
     if (manifest.platform != "windows-x64")
         throw std::runtime_error("unsupported runtime package platform: " +
@@ -63,6 +66,11 @@ void validateManifest(const RuntimePackageManifest &manifest) {
         !isStableAssetId(manifest.profileId)) {
         throw std::runtime_error(
             "runtime package project/profile ID is invalid");
+    }
+    if (manifest.schemaVersion == RuntimePackageManifest::kSchemaVersion &&
+        manifest.requiredTextureEncoder != "bc7") {
+        throw std::runtime_error(
+            "runtime package must declare the native BC7 texture requirement");
     }
     if (!isSafeRelativePath(manifest.catalogPath) ||
         !isSafeRelativePath(manifest.cacheRoot)) {
@@ -127,6 +135,8 @@ bool loadRuntimePackageManifest(const std::filesystem::path &path,
         loaded.platform = root.at("platform").get<std::string>();
         loaded.projectId = root.at("projectId").get<std::string>();
         loaded.profileId = root.at("profileId").get<std::string>();
+        loaded.requiredTextureEncoder =
+            root.value("requiredTextureEncoder", std::string{});
         loaded.catalogPath = root.at("catalog").get<std::string>();
         loaded.cacheRoot = root.at("cacheRoot").get<std::string>();
         for (const Json &item : root.at("files")) {

@@ -58,7 +58,8 @@ DerivedTextureCache::DerivedTextureCache(
                                      status_ + " (" + path.string() + ")");
         return;
     }
-    if (manifest.schemaVersion != DerivedTextureManifest::kSchemaVersion ||
+    if (manifest.schemaVersion <
+            DerivedTextureManifest::kUastcSchemaVersion ||
         manifest.projectId != projectId_ || manifest.sceneId != sceneId_ ||
         manifest.profileId != profileId_ ||
         manifest.textureLimit != textureLimit) {
@@ -140,6 +141,11 @@ DerivedTextureCache::load(int imageIndex, TextureSemantic semantic,
     {
         ScopedLoadTimer timer(stats_ ? &stats_->derivedTextureReadMs
                                      : nullptr);
+        ScopedLoadTimer nativeTimer(
+            stats_ && entry->payloadKind ==
+                          DerivedTexturePayloadKind::NativeBc7
+                ? &stats_->nativeTextureReadMs
+                : nullptr);
         result = ktxTexture2_CreateFromNamedFile(
             blobPath.string().c_str(), KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT,
             owner.put());
@@ -162,8 +168,7 @@ DerivedTextureCache::load(int imageIndex, TextureSemantic semantic,
     if (texture->numDimensions != 2 || texture->numLayers != 1 ||
         texture->numFaces != 1 || texture->numLevels == 0 ||
         texture->baseWidth != entry->width ||
-        texture->baseHeight != entry->height ||
-        !ktxTexture2_NeedsTranscoding(texture2)) {
+        texture->baseHeight != entry->height) {
         if (stats_) {
             ++stats_->derivedTextureMisses;
             ++stats_->derivedTextureInvalid;
@@ -176,33 +181,90 @@ DerivedTextureCache::load(int imageIndex, TextureSemantic semantic,
         return {};
     }
 
-    const ktx_transcode_fmt_e transcodeFormat =
-        target_ == TextureTranscodeTarget::Bc7 ? KTX_TTF_BC7_RGBA
-                                               : KTX_TTF_RGBA32;
-    {
-        ScopedLoadTimer timer(stats_ ? &stats_->derivedTextureTranscodeMs
-                                     : nullptr);
-        result = ktxTexture2_TranscodeBasis(texture2, transcodeFormat, 0);
-    }
-    if (result != KTX_SUCCESS) {
-        if (stats_) {
-            ++stats_->derivedTextureMisses;
-            ++stats_->derivedTextureInvalid;
+    const bool nativeBc7 =
+        entry->payloadKind == DerivedTexturePayloadKind::NativeBc7;
+    const bool srgb = semantic == TextureSemantic::SrgbColor;
+    const uint32_t expectedNativeFormat =
+        srgb ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC7_UNORM_BLOCK;
+    if (nativeBc7) {
+        if (target_ != TextureTranscodeTarget::Bc7) {
+            if (stats_)
+                ++stats_->derivedTextureMisses;
+            VKR_LOG_WARN(
+                "TextureCache",
+                "cache=native-bc7 fallback=source reason=native_bc7_unsupported "
+                "image={}",
+                imageIndex);
+            if (strict_) {
+                throw std::runtime_error(
+                    "bc7_required: cooked texture requires native BC7 "
+                    "support: " +
+                    blobPath.string());
+            }
+            return {};
         }
-        VKR_LOG_WARN("TextureCache", "Could not transcode '{}': {}",
-                     blobPath.string(), ktxErrorString(result));
-        if (strict_)
-            throw std::runtime_error("Could not transcode cooked KTX2 blob: " +
-                                     blobPath.string());
-        return {};
+        if (ktxTexture2_NeedsTranscoding(texture2) ||
+            texture2->vkFormat != expectedNativeFormat ||
+            (entry->vkFormat != 0 &&
+             entry->vkFormat != texture2->vkFormat) ||
+            texture2->supercompressionScheme != KTX_SS_NONE ||
+            (entry->mipLevels != 0 &&
+             entry->mipLevels != texture->numLevels)) {
+            if (stats_) {
+                ++stats_->derivedTextureMisses;
+                ++stats_->derivedTextureInvalid;
+            }
+            VKR_LOG_WARN("TextureCache", "Invalid native BC7 texture '{}'",
+                         blobPath.string());
+            if (strict_)
+                throw std::runtime_error(
+                    "Invalid cooked native BC7 texture: " +
+                    blobPath.string());
+            return {};
+        }
+    } else {
+        if (!ktxTexture2_NeedsTranscoding(texture2)) {
+            if (stats_) {
+                ++stats_->derivedTextureMisses;
+                ++stats_->derivedTextureInvalid;
+            }
+            if (strict_)
+                throw std::runtime_error(
+                    "Cooked UASTC entry contains a native texture: " +
+                    blobPath.string());
+            return {};
+        }
+        const ktx_transcode_fmt_e transcodeFormat =
+            target_ == TextureTranscodeTarget::Bc7 ? KTX_TTF_BC7_RGBA
+                                                   : KTX_TTF_RGBA32;
+        {
+            ScopedLoadTimer timer(stats_ ? &stats_->derivedTextureTranscodeMs
+                                         : nullptr);
+            result =
+                ktxTexture2_TranscodeBasis(texture2, transcodeFormat, 0);
+        }
+        if (stats_)
+            ++stats_->basisTranscodeCount;
+        if (result != KTX_SUCCESS) {
+            if (stats_) {
+                ++stats_->derivedTextureMisses;
+                ++stats_->derivedTextureInvalid;
+            }
+            VKR_LOG_WARN("TextureCache", "Could not transcode '{}': {}",
+                         blobPath.string(), ktxErrorString(result));
+            if (strict_)
+                throw std::runtime_error(
+                    "Could not transcode cooked KTX2 blob: " +
+                    blobPath.string());
+            return {};
+        }
     }
 
     auto prepared = std::make_shared<PreparedImage>();
     prepared->width = texture->baseWidth;
     prepared->height = texture->baseHeight;
     prepared->kind = PreparedTextureDataKind::PrebuiltMipChain;
-    const bool srgb = semantic == TextureSemantic::SrgbColor;
-    prepared->format = target_ == TextureTranscodeTarget::Bc7
+    prepared->format = nativeBc7 || target_ == TextureTranscodeTarget::Bc7
                            ? (srgb ? VK_FORMAT_BC7_SRGB_BLOCK
                                    : VK_FORMAT_BC7_UNORM_BLOCK)
                            : (srgb ? VK_FORMAT_R8G8B8A8_SRGB
@@ -231,17 +293,46 @@ DerivedTextureCache::load(int imageIndex, TextureSemantic semantic,
         prepared->mipLevels.push_back(mip);
     }
 
+    if (entry->payloadBytes != 0 &&
+        entry->payloadBytes != prepared->pixels.size()) {
+        if (stats_) {
+            ++stats_->derivedTextureMisses;
+            ++stats_->derivedTextureInvalid;
+        }
+        VKR_LOG_WARN(
+            "TextureCache",
+            "Derived texture payload size mismatch for '{}': expected {}, "
+            "found {}",
+            blobPath.string(), entry->payloadBytes, prepared->pixels.size());
+        if (strict_)
+            throw std::runtime_error(
+                "Cooked texture payload size mismatch: " +
+                blobPath.string());
+        return {};
+    }
+
     if (stats_) {
         ++stats_->derivedTextureHits;
         std::error_code sizeError;
         const uint64_t blobSize = std::filesystem::file_size(blobPath, sizeError);
         if (!sizeError)
             stats_->derivedTextureReadBytes += blobSize;
-        if (target_ == TextureTranscodeTarget::Bc7)
+        if (nativeBc7) {
+            ++stats_->nativeBc7CacheHits;
+            if (!sizeError)
+                stats_->nativeTextureReadBytes += blobSize;
+        } else {
+            ++stats_->basisUastcCacheHits;
+        }
+        if (nativeBc7 || target_ == TextureTranscodeTarget::Bc7)
             ++stats_->bc7TextureCount;
         else
             ++stats_->rgbaTranscodeFallbackCount;
     }
+    VKR_LOG_DEBUG("TextureCache", "cache={} upload={} image={} mips={}",
+                  nativeBc7 ? "native-bc7" : "uastc",
+                  nativeBc7 ? "direct" : "transcoded", imageIndex,
+                  prepared->mipLevels.size());
     return prepared;
 }
 

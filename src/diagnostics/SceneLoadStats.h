@@ -17,6 +17,7 @@ struct ResourceLoadStats {
     double textureUploadMs = 0.0;
     double meshUploadMs = 0.0;
     double derivedTextureReadMs = 0.0;
+    double nativeTextureReadMs = 0.0;
     double derivedTextureTranscodeMs = 0.0;
     double batchSubmitWaitMs = 0.0;
     double maxUploadPumpMs = 0.0;
@@ -29,6 +30,10 @@ struct ResourceLoadStats {
     uint64_t derivedTextureMisses = 0;
     uint64_t derivedTextureInvalid = 0;
     uint64_t derivedTextureReadBytes = 0;
+    uint64_t nativeTextureReadBytes = 0;
+    uint64_t nativeBc7CacheHits = 0;
+    uint64_t basisUastcCacheHits = 0;
+    uint64_t basisTranscodeCount = 0;
     uint64_t bc7TextureCount = 0;
     uint64_t rgbaTranscodeFallbackCount = 0;
     uint64_t prebuiltMipTextureCount = 0;

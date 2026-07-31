@@ -124,6 +124,7 @@ ProjectContext makePackageContext(const std::filesystem::path &root) {
     context.catalogWritable = false;
     context.cookedPackage = true;
     context.packageProfileId = manifest.profileId;
+    context.requiredTextureEncoder = manifest.requiredTextureEncoder;
     context.diagnostic = "verified cooked package (" +
                          std::to_string(verified.fileCount) + " files)";
     return context;

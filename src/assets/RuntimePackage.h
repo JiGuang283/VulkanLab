@@ -15,12 +15,14 @@ struct RuntimePackageFile {
 };
 
 struct RuntimePackageManifest {
-    static constexpr uint32_t kSchemaVersion = 1;
+    static constexpr uint32_t kLegacySchemaVersion = 1;
+    static constexpr uint32_t kSchemaVersion = 2;
 
     uint32_t schemaVersion = kSchemaVersion;
     std::string platform;
     std::string projectId;
     std::string profileId;
+    std::string requiredTextureEncoder;
     std::string catalogPath = "assets/catalog.json";
     std::string cacheRoot = "runtime_assets";
     std::vector<RuntimePackageFile> files;

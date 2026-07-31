@@ -308,6 +308,7 @@ ControlJson sceneLoadStatsToJson(const SceneLoadStats &stats) {
           {"textureDecode", stats.textureDecodeMs},
           {"textureResize", r.textureResizeMs},
           {"derivedTextureRead", r.derivedTextureReadMs},
+          {"nativeTextureRead", r.nativeTextureReadMs},
           {"derivedTextureTranscode", r.derivedTextureTranscodeMs},
           {"textureUpload", r.textureUploadMs},
           {"materialSetup", stats.materialSetupMs},
@@ -336,6 +337,9 @@ ControlJson sceneLoadStatsToJson(const SceneLoadStats &stats) {
           {"derivedTextureHits", r.derivedTextureHits},
           {"derivedTextureMisses", r.derivedTextureMisses},
           {"derivedTextureInvalid", r.derivedTextureInvalid},
+          {"nativeBc7CacheHits", r.nativeBc7CacheHits},
+          {"basisUastcCacheHits", r.basisUastcCacheHits},
+          {"basisTranscodeCount", r.basisTranscodeCount},
           {"bc7Textures", r.bc7TextureCount},
           {"rgbaTranscodeFallbacks", r.rgbaTranscodeFallbackCount},
           {"prebuiltMipTextures", r.prebuiltMipTextureCount},
@@ -346,6 +350,7 @@ ControlJson sceneLoadStatsToJson(const SceneLoadStats &stats) {
          {{"encodedSources", r.encodedSourceBytes},
           {"decodedRgba", r.decodedRgbaBytes},
           {"derivedTextureRead", r.derivedTextureReadBytes},
+          {"nativeTextureRead", r.nativeTextureReadBytes},
           {"textureUpload", r.textureUploadBytes},
           {"textureGpuEstimated", r.textureGpuBytesEstimated},
           {"vertexUpload", r.vertexUploadBytes},
@@ -540,6 +545,7 @@ void logSceneLoadStats(const SceneLoadStats &stats) {
         "scene='{}' success={} limit={} total={:.2f}ms factory={:.2f}ms "
         "textures={} meshes={} materials={} objects={} "
         "lights={}/{} (dir={} point={} spot={}) cache={}/{} "
+        "nativeBc7={} basis={} transcodes={} "
         "upload={:.2f}MiB "
         "legacySubmits={} batchSubmits={} queueWaits={} fenceWaits={} "
         "fencePolls={} "
@@ -554,6 +560,9 @@ void logSceneLoadStats(const SceneLoadStats &stats) {
         stats.pointLightCount, stats.spotLightCount,
         stats.resources.derivedTextureHits,
         stats.resources.derivedTextureLookups,
+        stats.resources.nativeBc7CacheHits,
+        stats.resources.basisUastcCacheHits,
+        stats.resources.basisTranscodeCount,
         bytesToMiB(stats.resources.textureUploadBytes +
                    stats.resources.vertexUploadBytes +
                    stats.resources.indexUploadBytes),
@@ -693,7 +702,9 @@ ControlJson artifactStatusToJson(const SceneEntry &entry,
             {"reason", status.reason},
             {"manifest", status.manifestPath.u8string()},
             {"artifactCount", status.entryCount},
-            {"blobBytes", status.blobBytes}};
+            {"blobBytes", status.blobBytes},
+            {"textureEncoder", status.textureEncoder},
+            {"payloadKind", status.payloadKind}};
 }
 #endif
 
@@ -876,6 +887,14 @@ void Application::init() {
     sceneLoadContext_.projectId = catalog_.projectId;
     sceneLoadContext_.textureTranscodeTarget =
         device_->textureTranscodeTarget();
+    if (projectContext_.cookedPackage &&
+        projectContext_.requiredTextureEncoder == "bc7" &&
+        sceneLoadContext_.textureTranscodeTarget !=
+            TextureTranscodeTarget::Bc7) {
+        throw std::runtime_error(
+            "bc7_required: this cooked package requires native BC7 texture "
+            "support");
+    }
     sceneLoadContext_.requireDerivedTextures =
         config_.assetImportMode == AssetImportMode::CookedOnly;
     reloadArtifactIndex();
@@ -1514,7 +1533,9 @@ void Application::refreshArtifactStatus(int sceneIndex, bool admission) {
                 sceneLoadContext_.derivedTextureCachePath),
             entry.sourcePath,
             catalog_.projectId, entry.id, profileId,
-            sceneLoadContext_.maxTextureSize};
+            sceneLoadContext_.maxTextureSize,
+            *textureEncoderFromName(
+                catalog_.profile(profileId).textureEncoder)};
         status = artifactIndex_
                      ? artifactIndex_->query(
                            request, admission ? ArtifactValidationMode::Admission
@@ -2911,6 +2932,10 @@ void Application::drawScenePanel() {
         ImGui::Text("Selected: %s", entry.name.c_str());
         ImGui::Text("ID: %s", entry.id.c_str());
         ImGui::Text("Profile: %s", profileId.c_str());
+        const auto selectedProfile = catalog_.importProfiles.find(profileId);
+        if (selectedProfile != catalog_.importProfiles.end())
+            ImGui::Text("Encoder: %s",
+                        selectedProfile->second.textureEncoder.c_str());
         if (!entry.sourcePath.empty())
             ImGui::TextWrapped("Source: %s", entry.sourcePath.c_str());
         ImGui::BeginDisabled(!entry.available);
@@ -3120,10 +3145,16 @@ void Application::drawAssetsPanel() {
         ImGui::Separator();
         ImGui::Text("Scene: %s", entry.name.c_str());
         ImGui::Text("Profile: %s", profileId.c_str());
+        const auto activeProfile = catalog_.importProfiles.find(profileId);
+        if (activeProfile != catalog_.importProfiles.end())
+            ImGui::Text("Encoder: %s",
+                        activeProfile->second.textureEncoder.c_str());
         if (found != sceneAssetOperations_->statuses.end()) {
             const ArtifactStatus &status = found->second;
             ImGui::Text("Artifacts: %s", artifactStateName(status.state));
             ImGui::TextWrapped("%s", status.reason.c_str());
+            if (!status.payloadKind.empty())
+                ImGui::Text("Payload: %s", status.payloadKind.c_str());
             if (status.entryCount > 0) {
                 ImGui::Text("Blobs: %llu (%.2f MiB)",
                             static_cast<unsigned long long>(status.entryCount),
@@ -4295,6 +4326,8 @@ void Application::drawLoadStatsPanel() {
         ImGui::Text("KTX Read: %.2f ms  Transcode: %.2f ms",
                     resources.derivedTextureReadMs,
                     resources.derivedTextureTranscodeMs);
+        ImGui::Text("Native BC7 Read: %.2f ms",
+                    resources.nativeTextureReadMs);
         ImGui::Text("Texture Upload: %.2f ms", resources.textureUploadMs);
         ImGui::Text("Material Setup: %.2f ms", stats.materialSetupMs);
         ImGui::Text("Mesh CPU: %.2f ms", stats.meshCpuMs);
@@ -4323,6 +4356,13 @@ void Application::drawLoadStatsPanel() {
                         resources.derivedTextureMisses),
                     static_cast<unsigned long long>(
                         resources.derivedTextureInvalid));
+        ImGui::Text("Native BC7: %llu  UASTC: %llu  Transcodes: %llu",
+                    static_cast<unsigned long long>(
+                        resources.nativeBc7CacheHits),
+                    static_cast<unsigned long long>(
+                        resources.basisUastcCacheHits),
+                    static_cast<unsigned long long>(
+                        resources.basisTranscodeCount));
         ImGui::Text("BC7: %llu  RGBA fallback: %llu  Prebuilt mip: %llu",
                     static_cast<unsigned long long>(resources.bc7TextureCount),
                     static_cast<unsigned long long>(
@@ -4352,6 +4392,8 @@ void Application::drawLoadStatsPanel() {
         ImGui::Text("Texture upload: %.2f MiB  GPU estimate: %.2f MiB",
                     bytesToMiB(resources.textureUploadBytes),
                     bytesToMiB(resources.textureGpuBytesEstimated));
+        ImGui::Text("Native BC7 read: %.2f MiB",
+                    bytesToMiB(resources.nativeTextureReadBytes));
         ImGui::Text("Mesh upload: %.2f MiB",
                     bytesToMiB(resources.vertexUploadBytes +
                                resources.indexUploadBytes));

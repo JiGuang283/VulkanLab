@@ -149,6 +149,7 @@ void Device::pickPhysicalDevice() {
         physicalDevice_, VK_FORMAT_BC7_SRGB_BLOCK, &bc7Srgb);
     const VkFormatFeatureFlags required =
         VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
         VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
     if (features.textureCompressionBC &&
         (bc7Unorm.optimalTilingFeatures & required) == required &&

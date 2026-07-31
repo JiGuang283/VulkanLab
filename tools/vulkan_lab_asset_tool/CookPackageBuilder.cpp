@@ -254,6 +254,7 @@ RuntimePackageManifest makePackageManifest(
     manifest.platform = platform;
     manifest.projectId = catalog.projectId;
     manifest.profileId = profile.id;
+    manifest.requiredTextureEncoder = "bc7";
     std::error_code error;
     for (std::filesystem::recursive_directory_iterator it(
              stagingRoot,
@@ -332,6 +333,10 @@ CookPackageReport buildCookPackage(const CookPackageOptions &options) {
     const SceneCatalog catalog =
         SceneCatalog::load(projectRoot / "assets/catalog.json", projectRoot);
     const ImportProfile &profile = catalog.profile(options.profileId);
+    if (profile.textureEncoder != "bc7") {
+        throw std::runtime_error(
+            "windows-x64 cooked packages require a native BC7 import profile");
+    }
     const std::vector<const CatalogScene *> scenes =
         selectScenes(catalog, options.sceneIds);
     const std::vector<const CatalogEnvironment *> environments =
@@ -368,7 +373,7 @@ CookPackageReport buildCookPackage(const CookPackageOptions &options) {
             const std::filesystem::path source = projectRoot / scene->source;
             const ArtifactStatus status = inspectTextureArtifacts(
                 {cacheRoot, source, catalog.projectId, scene->id, profile.id,
-                 profile.textureLimit});
+                 profile.textureLimit, TextureEncoder::Bc7});
             if (!status.ready())
                 throw std::runtime_error("artifacts are not Ready for '" +
                                          scene->id + "': " + status.reason);
