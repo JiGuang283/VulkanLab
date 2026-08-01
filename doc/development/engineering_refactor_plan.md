@@ -1,8 +1,8 @@
 # VulkanLab 工程结构与构建系统重构计划
 
 > Status: Active
-> Last verified: 2026-07-26
-> Verified against: `c1bcb14`
+> Last verified: 2026-08-01
+> Verified against: `86b809d`
 
 > Progress: target-based CMake、build-tree Shader、ProjectContext、RuntimeCommandDispatcher、Presets 和 BuildInfo 已由归档的 M0-M7 执行切片完成。Editor Panels、SceneWorkflowController 等剩余范围仍未实施。
 
@@ -513,7 +513,7 @@ VulkanLabAssetToolTests
 windows-msvc-debug
 windows-msvc-release
 windows-msvc-test
-windows-msvc-tracy        # Tracy 接入后启用
+windows-msvc-tracy        # Tracy 专用诊断配置
 ```
 
 - configure/build/test preset 使用固定 build 目录命名。

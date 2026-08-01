@@ -1,8 +1,8 @@
 # 开发文档工作区
 
 > Status: Current
-> Last verified: 2026-07-21
-> Verified against: `d6f17cf`
+> Last verified: 2026-08-01
+> Verified against: `86b809d`
 
 本目录只存放正在讨论或执行的开发计划。不要根据历史归档推断下一阶段目标。
 
@@ -10,7 +10,7 @@
 
 - [大型场景响应式加载路线图](async_scene_loading_plan.md)：从现有同步加载演进到后台准备、增量 GPU 上传、任务取消和压缩纹理资产管线。
 - [工程结构与构建系统重构计划](engineering_refactor_plan.md)：用 target-based CMake、build-tree Shader、ProjectContext 资源路径和 Application 职责拆分支撑后续工具开发。
-- [开发诊断与自动化工具链计划](development_toolchain_plan.md)：Stage 0-1 已完成，下一阶段从 RenderDoc labels 和 Validation profiles 继续。
+- [开发诊断与自动化工具链计划](development_toolchain_plan.md)：Stage 0-5 已完成，下一未完成阶段是 Windows CI 与质量门禁。
 
 ## Completed Records
 

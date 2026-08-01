@@ -1,8 +1,8 @@
 # 渲染流程
 
 > Status: Current
-> Last verified: 2026-07-30
-> Verified against: KHR_lights_punctual working tree
+> Last verified: 2026-08-01
+> Verified against: `86b809d`
 
 ## 帧图与 Pass 顺序
 
@@ -155,6 +155,16 @@ GlobalUBO 最多上传 1 个 directional light 和 8 个 punctual lights；Point
 Renderer 持有一个 `GpuPassProfiler` 和 timestamp query pool。每个 frame slot 为 `DirectionalShadow`、`Skybox`、`MainForward`、可选 `Bloom`、`ToneMap + UI` 分配 begin/end query；ToneMap 区间包含同一 render pass 内的 ImGui draw。总时间从第一个 Pass begin 到最后一个 Pass end 计算。
 
 `FrameSync::beginFrame()` 已等待对应 slot 的 fence 后，Profiler 才使用不带 `WAIT_BIT` 的 `vkGetQueryPoolResults()` 读取旧结果，然后在新 command buffer 中 reset 该 slot。计时不会增加 queue/device idle 或额外 fence wait。换算使用设备 `timestampPeriod`，并按 graphics queue 的 `timestampValidBits` 处理计数器回绕；不支持 timestamp 的设备返回 `available=false`，渲染继续运行。结果显示在 `VulkanLab -> Diagnostics -> Performance`，并由 `render.status.gpuTimings` 返回。
+
+## Tracy 统一时间线
+
+`VKL_ENABLE_TRACY` 只在 `windows-msvc-tracy` 专用配置中开启。Device 持有一个可选 `TracyProfiler`，其生命周期在 `VkDevice` 销毁前结束；关闭开关时链接 no-op 实现，不配置 Tracy submodule，也不创建网络线程或 Vulkan query 资源。
+
+Tracy Vulkan context 使用 graphics queue 和独立 transient command pool完成初始化。各 Pass 在现有 frame command buffer 中写入嵌套 GPU zone；`IncrementalUploadQueue` 和同步 `UploadContext` 在各自 batch command buffer 中写入 `SceneUpload` zone。所有 zone 结束后，每帧调用一次 `TracyVkCollect()`，没有增加 `WAIT_BIT`、queue idle、device idle 或额外 fence。
+
+GPU 层级覆盖 DirectionalShadow/ShadowCasters、Skybox、MainForward/Opaque/Transparent、可选 Bloom Downsample/Upsample、ToneMap/ImGui、ScreenshotCopy 和上传 batch。CPU 侧覆盖 Application frame、FrameSync、RenderView/RenderQueue、场景与环境 worker、glTF 各准备阶段、逐帧 GPU builder、资产工具监督、Capture encode 和 pipeline cache miss。单 draw、单纹理和单 mip 不创建 zone。
+
+Tracy 与 `GpuPassProfiler` 并行存在：后者是普通开发构建中的低成本数值统计，前者是按需连接的跨线程时间线。Tracy 编译和连接状态通过 `system.info.diagnostics.tracy` 与 `Diagnostics -> Performance` 显示；完整操作见 [Tracy 性能分析](../guides/tracy_profiling.md)。
 
 ## Swapchain 截图
 

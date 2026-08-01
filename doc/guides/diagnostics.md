@@ -1,12 +1,13 @@
 # 诊断与自动化启动配置
 
 > Status: Current
-> Last verified: 2026-07-30
-> Verified against: `56b84b1`
+> Last verified: 2026-08-01
+> Verified against: `86b809d`
 
 本文说明当前可用的构建诊断信息、确定性启动参数、独立 Runtime Control endpoint 和截图输出。端到端 smoke/golden 编排见[自动视觉回归](visual_regression.md)。
 
 Vulkan Validation、RenderDoc 标签与对象命名见 [RenderDoc 与 Vulkan Validation](renderdoc_validation.md)。
+CPU 与 Vulkan GPU 统一时间线见 [Tracy 性能分析](tracy_profiling.md)。
 
 ## CMake Presets
 
@@ -16,6 +17,7 @@ Windows MSVC 开发环境提供以下 presets：
 windows-msvc-debug
 windows-msvc-release
 windows-msvc-dev-fast
+windows-msvc-tracy
 windows-msvc-runtime
 windows-msvc-test
 ```
@@ -33,7 +35,7 @@ cmake --build --preset windows-msvc-release
 
 Debug 和 Release 分别写入 `build/windows-msvc-debug/` 与 `build/windows-msvc-release/`，不会共享生成的 Shader 或 BuildInfo。
 
-`windows-msvc-dev-fast` 保留全部运行时开发功能，但不生成测试、Ctl 或 RenderTest；`windows-msvc-runtime` 是只保留渲染功能和 KTX2 读取的精简 Release。完整开关矩阵见[构建与运行](build_and_run.md#编译期功能开关)。
+`windows-msvc-dev-fast` 保留全部运行时开发功能，但不生成测试、Ctl 或 RenderTest；`windows-msvc-tracy` 在同类 Debug 配置上启用 Tracy 并构建 Ctl；`windows-msvc-runtime` 是只保留渲染功能和 KTX2 读取的精简 Release。完整开关矩阵见[构建与运行](build_and_run.md#编译期功能开关)。
 
 ## BuildInfo
 
@@ -44,7 +46,9 @@ Debug 和 Release 分别写入 `build/windows-msvc-debug/` 与 `build/windows-ms
 - compiler 及版本；
 - Vulkan SDK 版本；
 - `glslc` 版本。
-- Editor、Runtime Control、Capture、Asset Authoring、Validation、GPU Debug Utils、GPU Profiling 和工具目标的编译状态。
+- Editor、Runtime Control、Capture、Asset Authoring、Validation、GPU Debug Utils、GPU Profiling、Tracy 和工具目标的编译状态。
+
+Tracy 运行状态位于 `result.diagnostics.tracy`，包含编译状态、版本、是否已连接、GPU timestamp 可用性和连接模式。该状态由渲染器主线程生成，不依赖 Profiler GUI。
 
 没有 Git 或对应工具时字段明确返回 `unknown`。启用 Runtime Control 后可读取完整信息：
 

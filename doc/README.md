@@ -1,8 +1,8 @@
 # VulkanLab 文档
 
 > Status: Current
-> Last verified: 2026-07-26
-> Verified against: `c9462cd`
+> Last verified: 2026-08-01
+> Verified against: `86b809d`
 
 本目录按文档有效性分为 Current、Active 和 Archived 三种状态。只有 `guides/` 与 `architecture/` 中标记为 Current 的文档可以作为当前实现依据；源码始终是最终事实来源。
 
@@ -12,6 +12,7 @@
 - [Runtime Control](guides/runtime_control.md)：通过 `VulkanLabCtl.exe` 在运行时控制渲染器。
 - [诊断与自动化启动配置](guides/diagnostics.md)：CMake Presets、BuildInfo 和确定性运行参数。
 - [RenderDoc 与 Vulkan Validation](guides/renderdoc_validation.md)：抓帧标签、对象命名、Validation Profiles 和 smoke workflow。
+- [Tracy 性能分析](guides/tracy_profiling.md)：专用构建、Profiler 安装、CPU/GPU 时间线、命令行 capture 和状态诊断。
 - [自动视觉回归](guides/visual_regression.md)：RenderTest、smoke/golden、结果报告和基线审核流程。
 - [Shader Registry](guides/shader_registry.md)：Manifest 驱动的 Shader 注册、构建、运行时选择与扩展流程。
 - [编辑器 UI 工作区](guides/editor_ui.md)：统一工具窗口、页面布局和各诊断入口。

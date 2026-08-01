@@ -1,8 +1,8 @@
 # 构建与运行
 
 > Status: Current
-> Last verified: 2026-07-31
-> Verified against: `73285cd`
+> Last verified: 2026-08-01
+> Verified against: `86b809d`
 
 ## 环境要求
 
@@ -11,7 +11,7 @@
 - CMake 3.22 或更高版本。
 - Vulkan SDK。CMake 需要能找到 Vulkan、`glslc`、`spirv-val` 和 SDK 中的 GLM 头文件。
 - 仓库内 `external/` 依赖完整，尤其是 `glfw/lib-vc2022`、ImGui、stb、VMA 和 glTF 头文件。
-- 运行时使用 KTX-Software v4.4.2，AssetTool 使用 DirectXTex `may2026` 离线压缩 BC7，shader contract tests 使用固定提交的 SPIRV-Reflect；它们都是 submodule。首次克隆或更新后必须递归初始化：
+- 运行时使用 KTX-Software v4.4.2，AssetTool 使用 DirectXTex `may2026` 离线压缩 BC7，shader contract tests 使用固定提交的 SPIRV-Reflect，Tracy 专用构建使用 v0.13.1；它们都是 submodule。首次克隆或更新后必须递归初始化：
 
 ```powershell
 git submodule update --init --recursive
@@ -21,13 +21,14 @@ git submodule update --init --recursive
 
 ## 构建配置
 
-Windows MSVC 提供四个 configure/build preset：
+Windows MSVC 提供五个 configure/build preset：
 
 | Preset | 配置 | 用途 | 主要产物 |
 |---|---|---|---|
 | `windows-msvc-debug` | Debug，全功能，`BUILD_TESTING=ON` | 完整开发与诊断 | VulkanLab、AssetTool、Ctl、RenderTest 和测试目标 |
 | `windows-msvc-release` | Release，全功能，`BUILD_TESTING=ON` | 完整 Release 验证与 Cook 输入 | 与 Debug 相同的功能和工具 |
 | `windows-msvc-dev-fast` | Debug，全运行时功能，`BUILD_TESTING=OFF` | 日常快速迭代 | VulkanLab 和 AssetTool |
+| `windows-msvc-tracy` | Debug，全运行时功能，Tracy ON，`BUILD_TESTING=OFF` | CPU/Vulkan GPU 深度性能分析 | VulkanLab、AssetTool 和 Ctl |
 | `windows-msvc-runtime` | Release，开发基础设施全部关闭 | 精简运行时 | 仅 VulkanLab |
 
 日常修改渲染器时优先使用快速配置：
@@ -37,6 +38,15 @@ cmake --preset windows-msvc-dev-fast
 cmake --build --preset windows-msvc-dev-fast
 ```
 
+需要统一 CPU/GPU 时间线时使用专用配置：
+
+```powershell
+cmake --preset windows-msvc-tracy
+cmake --build --preset windows-msvc-tracy
+```
+
+Profiler 安装、连接和 capture 工作流见 [Tracy 性能分析](tracy_profiling.md)。
+
 构建精简运行时：
 
 ```powershell
@@ -44,11 +54,11 @@ cmake --preset windows-msvc-runtime
 cmake --build --preset windows-msvc-runtime
 ```
 
-`windows-msvc-runtime` 仍保留 Forward、Directional Shadow、HDR/Tone Mapping、IBL、Skybox、场景加载和 KTX2 读取。它只裁剪编辑器、Runtime Control、截图、资产写入、Validation、GPU Debug Utils 和 GPU timestamp profiling，不改变 Shader ABI、材质布局或 descriptor layout。
+`windows-msvc-runtime` 仍保留 Forward、Directional Shadow、HDR/Tone Mapping、IBL、Skybox、场景加载和 KTX2 读取。它只裁剪编辑器、Runtime Control、截图、资产写入、Validation、GPU Debug Utils、GPU timestamp profiling 和 Tracy，不改变 Shader ABI、材质布局或 descriptor layout。
 
 ## 编译期功能开关
 
-所有选项默认均为 `ON`，可在自定义 CMake 配置中独立设置：
+除 `VKL_ENABLE_TRACY` 默认为 `OFF` 外，现有模块和工具选项默认均为 `ON`，可在自定义 CMake 配置中独立设置：
 
 | Option | 控制内容 |
 |---|---|
@@ -59,6 +69,7 @@ cmake --build --preset windows-msvc-runtime
 | `VKL_ENABLE_VALIDATION` | Validation profile 集成 |
 | `VKL_ENABLE_GPU_DEBUG_UTILS` | Vulkan 对象命名和 GPU command labels |
 | `VKL_ENABLE_GPU_PROFILING` | 每 Pass timestamp query |
+| `VKL_ENABLE_TRACY` | Tracy CPU 与 Vulkan GPU 统一时间线；仅建议专用开发配置启用 |
 | `VKL_BUILD_ASSET_TOOL` | `VulkanLabAssetTool.exe` |
 | `VKL_BUILD_CONTROL_TOOL` | `VulkanLabCtl.exe` |
 | `VKL_BUILD_RENDER_TEST` | `VulkanLabRenderTest.exe` |
@@ -71,6 +82,7 @@ cmake --build --preset windows-msvc-runtime
 - Asset Authoring 可使用外部 `--asset-tool`；启用 authoring 但不构建本地 AssetTool 时 CMake 给出 warning。
 - 关闭 AssetTool 会同时关闭 DirectXTex、KTX CLI 与 KTX1，只保留渲染器读取 KTX2 所需的 `ktx_read`。
 - `BUILD_TESTING=OFF` 时不构建 SPIRV-Reflect。
+- Tracy 与现有 GPU timestamp profiler 相互独立；`VKL_ENABLE_TRACY=OFF` 时不配置 Tracy submodule，也不链接 TracyClient。
 
 CMake 通过 `configure_file()` 生成 `BuildFeatures.h`。宏仅用于程序入口、模块装配和真实/空实现选择，不用于控制 IBL、Shadow 或任何 GPU ABI。`VulkanLab.exe --help`、启动日志、BuildInfo 和 Runtime Control 的 `system.info.build.features` 都会报告实际编译能力。
 

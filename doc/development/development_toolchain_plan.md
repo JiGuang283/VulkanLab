@@ -1,14 +1,14 @@
 # VulkanLab 开发诊断与自动化工具链计划
 
 > Status: Active
-> Last verified: 2026-07-26
-> Verified against: `c1bcb14`
+> Last verified: 2026-08-01
+> Verified against: `86b809d`
 
-> Progress: Stage 0-1 已完成。当前入口是 Stage 2：RenderDoc Labels And Validation Profiles；已完成切片保留为设计背景，当前操作以 guides/architecture 为准。
+> Progress: Stage 0-5 已完成。下一未完成入口是 Stage 6：Windows CI And Quality Gates；已完成切片保留为设计背景，当前操作以 guides/architecture 为准。
 
 ## Summary
 
-VulkanLab 已具备 Runtime Control v3、响应式场景加载、KTX2 派生纹理、Catalog、Cook/package、加载统计、确定性截图和初始自动视觉回归。当前下一项短板是 GPU 对象缺少稳定名称和 pass 标记、Validation 配置不可复现；后续还包括 glTF 导入校验、统一 CPU/GPU timeline 和 Shader 接口契约。
+VulkanLab 已具备 Runtime Control v3、响应式场景加载、KTX2 派生纹理、Catalog、Cook/package、加载统计、确定性截图、RenderDoc 标签、Validation Profiles、glTF Validator Import Gate、Tracy CPU/GPU 时间线和 Shader contract。下一项工具链短板是把现有能力固化为可重复的 Windows CI 与质量门禁。
 
 本计划建立一套分层工具链，使后续材质、光照、阴影、后处理和资源管理开发具备以下闭环：
 
@@ -27,12 +27,13 @@ VulkanLab 已具备 Runtime Control v3、响应式场景加载、KTX2 派生纹�
 
 前置工作由[工程结构与构建系统重构计划](engineering_refactor_plan.md)负责。该计划完成 target 化、build-tree Shader 和开发资源布局后，本计划 Stage 0 直接复用其 CMake Presets/build metadata，Stage 1 再接入截图服务；两份计划不重复实现同一构建基础。
 
-Stage 0-1 的具体提交和验收见[工程基础到自动视觉回归执行记录](../archive/plans/engineering/engineering_to_visual_regression_execution_plan.md)。后续从本文 Stage 2 顺序继续。
+Stage 0-1 的具体提交和验收见[工程基础到自动视觉回归执行记录](../archive/plans/engineering/engineering_to_visual_regression_execution_plan.md)。Stage 2-5 已进入当前 guides/architecture；后续从本文 Stage 6 顺序继续。
 
 当前实现依据：
 
 - [构建与运行](../guides/build_and_run.md)
 - [Runtime Control](../guides/runtime_control.md)
+- [Tracy 性能分析](../guides/tracy_profiling.md)
 - [系统概览](../architecture/overview.md)
 - [渲染流程](../architecture/rendering.md)
 - [资源加载](../architecture/resource_loading.md)
@@ -354,13 +355,15 @@ VulkanLabAssetTool validate scene `
 
 ## Stage 4: Tracy CPU And Vulkan GPU Profiling
 
+> Completion: Implemented in `57d8e22` and `86b809d`. Current usage is documented in [Tracy 性能分析](../guides/tracy_profiling.md).
+
 ### Build Integration
 
 - 以固定 commit 添加 `external/tracy` submodule。
 - CMake option：
 
 ```text
-VULKANLAB_ENABLE_TRACY=OFF
+VKL_ENABLE_TRACY=OFF
 ```
 
 - 只有 `windows-msvc-tracy` preset 默认开启；普通 Debug/Release/Cook 关闭。
@@ -386,8 +389,8 @@ worker 设置稳定线程名；scene/task ID 作为 zone text，但避免每帧�
 
 ### Vulkan GPU Instrumentation
 
-- 每个 frame-in-flight 建立正确生命周期的 Tracy Vulkan context/query 资源。
-- GPU zone 对应 MainForwardPass、Opaque、Transparent、ImGui 和 upload batch。
+- Device 建立一个生命周期早于 `VkDevice` 结束的 Tracy Vulkan context；官方 context 管理内部 query 资源。
+- GPU zone 覆盖 Shadow、Skybox、MainForward、Bloom、ToneMap/ImGui、ScreenshotCopy 和 upload batch。
 - query result 只在对应 fence 完成后读取，不增加 `vkQueueWaitIdle()`。
 - swapchain recreate 和 Device 销毁顺序覆盖 context/query 回收。
 - GPU timestamp 不可用时只保留 CPU profile，并记录能力降级。
@@ -405,6 +408,8 @@ worker 设置稳定线程名；scene/task ID 作为 zone text，但避免每帧�
 - Main Sponza load 中不再依靠日志推断线程空洞或长帧来源。
 - Tracy 关闭的 Release 与当前基准相比无可测的额外线程和明显二进制增长。
 - Tracy 开启后小场景 CPU frame overhead 目标低于 2%，超过时减少高频 zone。
+
+实现验收已完成 Viking Room 稳定帧和 Main Sponza 2048 加载 capture。后者在同一 trace 中显示 worker prepare、77 次 `SceneGpuBuilder::pump` 和 5 个 GPU upload batch；性能数字只作为本机链路基线，不替代后续按机器记录的 benchmark。
 
 ## Stage 5: SPIR-V Validation And Shader Contract Tests
 
