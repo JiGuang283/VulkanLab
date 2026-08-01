@@ -259,6 +259,7 @@ ControlJson assetImportTaskToJson(
         {"assetId", task->sceneId},
         {"sceneId", task->sceneId},
         {"profileId", task->profileId},
+        {"source", task->sourcePath.u8string()},
         {"state", assetImportStateName(state)},
         {"phase", isTerminalAssetImportState(state) ? "complete" : "importing"},
         {"terminal", isTerminalAssetImportState(state)},
@@ -279,7 +280,65 @@ ControlJson assetImportTaskToJson(
             result["error"] = task->error;
         if (!task->manifestPath.empty())
             result["manifest"] = task->manifestPath;
+        if (task->kind == AssetImportKind::SceneValidation) {
+            result["validation"] = {
+                {"state",
+                 assetValidationStateName(task->validationState.load())},
+                {"errors", task->validationErrors.load()},
+                {"warnings", task->validationWarnings.load()},
+                {"reportKey", task->validationReportKey},
+                {"inputFingerprint", task->validationInputFingerprint},
+                {"failureReason", task->validationFailureReason}};
+        }
     }
+    return result;
+}
+
+ControlJson validationQueryToJson(const AssetValidationQuery &query,
+                                  size_t issueLimit) {
+    const auto bounded = [](const std::string &value, size_t limit) {
+        return value.size() <= limit ? value : value.substr(0, limit);
+    };
+    ControlJson result = {
+        {"state", assetValidationStateName(query.state)},
+        {"reason", query.reason},
+        {"reportPath", query.reportPath.u8string()}};
+    if (!query.report)
+        return result;
+
+    const AssetValidationReport &report = *query.report;
+    result["validator"] = {{"name", report.validatorName},
+                           {"version", report.validatorVersion}};
+    result["reportKey"] = report.reportKey;
+    result["inputFingerprint"] = report.inputFingerprint;
+    result["counts"] = {{"errors", report.errorCount},
+                         {"warnings", report.warningCount},
+                         {"infos", report.infoCount},
+                         {"hints", report.hintCount}};
+    result["truncated"] = report.truncated;
+    result["failureReason"] = report.failureReason;
+
+    ControlJson extensions = ControlJson::array();
+    for (const GltfExtensionDiagnostic &extension : report.extensions) {
+        extensions.push_back(
+            {{"name", extension.name},
+             {"support", gltfExtensionSupportName(extension.support)},
+             {"required", extension.required},
+             {"note", extension.note}});
+    }
+    result["extensions"] = std::move(extensions);
+
+    ControlJson issues = ControlJson::array();
+    const size_t count = std::min(issueLimit, report.issues.size());
+    for (size_t i = 0; i < count; ++i) {
+        const AssetValidationIssue &issue = report.issues[i];
+        issues.push_back({{"code", bounded(issue.code, 128)},
+                          {"message", bounded(issue.message, 1024)},
+                          {"pointer", bounded(issue.pointer, 512)},
+                          {"severity", issue.severity}});
+    }
+    result["issues"] = std::move(issues);
+    result["issueCount"] = report.issues.size();
     return result;
 }
 
@@ -614,9 +673,11 @@ struct SceneImportWorkerState {
 };
 
 struct SceneImportUiState {
-    std::future<SceneImportPreflight> preflightFuture;
     std::future<SceneImportResult> importFuture;
+    std::shared_ptr<AssetImportTask> validationTask;
     std::optional<SceneImportPreflight> preflight;
+    std::optional<AssetValidationReport> validationReport;
+    std::filesystem::path validationReportPath;
     std::shared_ptr<SceneImportWorkerState> worker;
     std::array<char, 192> displayName{};
     std::array<char, 128> sceneId{};
@@ -626,6 +687,7 @@ struct SceneImportUiState {
     bool referenceExisting = false;
     bool loadAfterImport = true;
     bool loadAfterActiveImport = true;
+    bool allowUnvalidated = false;
     std::string status;
     std::string error;
 };
@@ -635,6 +697,8 @@ struct SceneAssetOperationState {
     std::unordered_map<uint64_t, uint64_t> importToLoadTask;
     std::unordered_set<uint64_t> processedImports;
     std::unordered_map<std::string, ArtifactStatus> statuses;
+    std::unordered_map<std::string, AssetValidationQuery>
+        validationStatuses;
     int selectedSceneIndex = -1;
     std::array<char, 128> search{};
     std::string status;
@@ -742,8 +806,9 @@ Application::~Application() {
     if (sceneImportUi_) {
         if (sceneImportUi_->worker)
             sceneImportUi_->worker->cancel = true;
-        if (sceneImportUi_->preflightFuture.valid())
-            sceneImportUi_->preflightFuture.wait();
+        if (sceneImportUi_->validationTask && assetImportManager_)
+            assetImportManager_->cancel(
+                sceneImportUi_->validationTask->id);
         if (sceneImportUi_->importFuture.valid())
             sceneImportUi_->importFuture.wait();
     }
@@ -878,7 +943,8 @@ void Application::init() {
                     config_.derivedTextureCachePath),
                 std::filesystem::u8path(config_.assetToolPath),
                 config_.assetImportWorkers,
-                config_.assetImportMemoryBudgetMiB});
+                config_.assetImportMemoryBudgetMiB,
+                std::filesystem::u8path(config_.gltfValidatorPath)});
     }
 #endif
     sceneLoadContext_.maxTextureSize = config_.gltfMaxTextureSize;
@@ -899,6 +965,7 @@ void Application::init() {
         config_.assetImportMode == AssetImportMode::CookedOnly;
     reloadArtifactIndex();
     refreshAllArtifactStatuses();
+    refreshAllValidationStatuses();
     if (catalog_.defaultEnvironment &&
         catalog_.findEnvironment(*catalog_.defaultEnvironment)) {
         try {
@@ -1566,6 +1633,34 @@ void Application::refreshAllArtifactStatuses() {
         artifactUsage_ = artifactIndex_->usage();
 }
 
+void Application::refreshValidationStatus(int sceneIndex) {
+    if (!sceneAssetOperations_ || sceneIndex < 0 ||
+        sceneIndex >= static_cast<int>(sceneRegistry_.size()))
+        return;
+
+    const SceneEntry &entry = sceneRegistry_[sceneIndex];
+    AssetValidationQuery query;
+    const CatalogScene *catalogScene = catalog_.findScene(entry.id);
+    if (entry.builtin || !catalogScene || catalogScene->type != "gltf") {
+        query.state = AssetValidationState::NotApplicable;
+        query.reason = "validation applies only to Catalog glTF scenes";
+    } else {
+        query = querySceneValidation(
+            std::filesystem::u8path(
+                sceneLoadContext_.derivedTextureCachePath),
+            projectContext_.projectRoot, entry.id);
+    }
+    sceneAssetOperations_->validationStatuses[entry.id] = std::move(query);
+}
+
+void Application::refreshAllValidationStatuses() {
+    if (!sceneAssetOperations_)
+        return;
+    sceneAssetOperations_->validationStatuses.clear();
+    for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i)
+        refreshValidationStatus(i);
+}
+
 uint64_t Application::requestSceneOperation(int index, bool sourceFallback,
                                             bool loadAfter,
                                             ImportReason reason,
@@ -1645,6 +1740,26 @@ void Application::updateAssetImports() {
             }
         }
         const AssetImportState state = task->state.load();
+        if (task->kind == AssetImportKind::SceneValidation) {
+            if (sceneIndex >= 0)
+                refreshValidationStatus(sceneIndex);
+            const AssetValidationState validationState =
+                task->validationState.load();
+            if (state == AssetImportState::Completed) {
+                sceneAssetOperations_->status =
+                    "Validation " + task->sceneId + ": " +
+                    assetValidationStateName(validationState);
+                sceneAssetOperations_->error.clear();
+            } else if (state == AssetImportState::Failed) {
+                std::lock_guard<std::mutex> lock(task->mutex);
+                sceneAssetOperations_->error =
+                    task->error.empty() ? "Scene validation failed"
+                                        : task->error;
+            } else if (state == AssetImportState::Cancelled) {
+                sceneAssetOperations_->status = "Scene validation cancelled";
+            }
+            continue;
+        }
         if (task->kind == AssetImportKind::Environment) {
             if (state == AssetImportState::Completed) {
                 reloadArtifactIndex();
@@ -2078,6 +2193,30 @@ ControlJson Application::runtimeAssetStatus(
         index, profileId,
         sceneAssetOperations_->statuses.at(
             artifactStatusKey(entry.id, profileId)));
+}
+
+ControlJson Application::runtimeAssetValidation(const std::string &name) {
+    const int index = runtimeAssetSceneIndex(name);
+    if (index < 0)
+        throw RuntimeCommandError("scene_not_found",
+                                  "Catalog scene was not found.");
+    const SceneEntry &entry = sceneRegistry_[index];
+    const CatalogScene *catalogScene = catalog_.findScene(entry.id);
+    if (!catalogScene)
+        throw RuntimeCommandError(
+            "scene_not_catalog",
+            "Validation queries accept Catalog scene IDs only.");
+
+    refreshValidationStatus(index);
+    const auto found =
+        sceneAssetOperations_->validationStatuses.find(entry.id);
+    if (found == sceneAssetOperations_->validationStatuses.end())
+        throw RuntimeCommandError("validation_unavailable",
+                                  "Validation status is unavailable.");
+    ControlJson result = validationQueryToJson(found->second, 32);
+    result["sceneId"] = entry.id;
+    result["scene"] = entry.name;
+    return result;
 }
 
 ControlJson Application::runtimeAssetImport(const std::string &name,
@@ -2736,6 +2875,7 @@ void Application::refreshSceneRegistry(const std::string &selectSceneId) {
         }
     }
     refreshAllArtifactStatuses();
+    refreshAllValidationStatuses();
 }
 
 #if VKL_ENABLE_EDITOR_UI
@@ -2744,11 +2884,32 @@ void Application::updateSceneImport() {
     return;
 #else
     SceneImportUiState &ui = *sceneImportUi_;
-    if (ui.preflightFuture.valid() &&
-        ui.preflightFuture.wait_for(std::chrono::seconds(0)) ==
-            std::future_status::ready) {
+    if (ui.validationTask &&
+        isTerminalAssetImportState(ui.validationTask->state.load())) {
+        const std::shared_ptr<AssetImportTask> task = ui.validationTask;
+        ui.validationTask.reset();
         try {
-            ui.preflight = ui.preflightFuture.get();
+            std::filesystem::path reportPath;
+            std::string taskError;
+            {
+                std::lock_guard<std::mutex> lock(task->mutex);
+                reportPath = std::filesystem::u8path(task->manifestPath);
+                taskError = task->error;
+            }
+            if (reportPath.empty()) {
+                throw std::runtime_error(
+                    taskError.empty() ? "Validator produced no report"
+                                      : taskError);
+            }
+            AssetValidationReport report;
+            std::string reportError;
+            if (!loadAssetValidationReport(reportPath, report, reportError)) {
+                throw std::runtime_error("Could not load validation report: " +
+                                         reportError);
+            }
+            ui.preflight = SceneImportService::preflight(task->sourcePath);
+            ui.validationReport = std::move(report);
+            ui.validationReportPath = std::move(reportPath);
             std::snprintf(ui.displayName.data(), ui.displayName.size(), "%s",
                           ui.preflight->suggestedDisplayName.c_str());
             std::snprintf(ui.sceneId.data(), ui.sceneId.size(), "%s",
@@ -2767,6 +2928,7 @@ void Application::updateSceneImport() {
             ui.referenceExisting =
                 pathIsWithin(projectContext_.projectRoot,
                              ui.preflight->sourcePath);
+            ui.allowUnvalidated = false;
             ui.requestOpenModal = true;
             ui.status.clear();
             ui.error.clear();
@@ -2784,6 +2946,8 @@ void Application::updateSceneImport() {
             const bool loadAfter = ui.loadAfterActiveImport;
             ui.worker.reset();
             ui.preflight.reset();
+            ui.validationReport.reset();
+            ui.validationReportPath.clear();
             ui.status = "Imported " + result.scene.displayName;
             ui.error.clear();
             refreshSceneRegistry(result.scene.id);
@@ -2813,7 +2977,10 @@ void Application::drawScenePanel() {
     SceneImportUiState &ui = *sceneImportUi_;
 
 #if VKL_ENABLE_ASSET_AUTHORING
-    const bool busy = ui.preflightFuture.valid() || ui.importFuture.valid();
+    const bool busy =
+        (ui.validationTask &&
+         !isTerminalAssetImportState(ui.validationTask->state.load())) ||
+        ui.importFuture.valid();
     const bool canImportSource =
         config_.assetImportMode == AssetImportMode::OnDemand &&
         projectContext_.catalogWritable;
@@ -2825,11 +2992,16 @@ void Application::drawScenePanel() {
                     openGltfFileDialog(window_->nativeHandle());
                 if (selected) {
                     ui.error.clear();
-                    ui.status = "Inspecting scene dependencies...";
-                    ui.preflightFuture = std::async(
-                        std::launch::async, [path = *selected] {
-                            return SceneImportService::preflight(path);
-                        });
+                    ui.preflight.reset();
+                    ui.validationReport.reset();
+                    ui.validationReportPath.clear();
+                    AssetImportRequest request;
+                    request.kind = AssetImportKind::SceneValidation;
+                    request.profileId = "validation";
+                    request.sourcePath = *selected;
+                    ui.validationTask =
+                        assetImportManager_->request(request);
+                    ui.status = "Validating scene and local dependencies...";
                 }
             } catch (const std::exception &error) {
                 ui.error = error.what();
@@ -2938,6 +3110,16 @@ void Application::drawScenePanel() {
                         selectedProfile->second.textureEncoder.c_str());
         if (!entry.sourcePath.empty())
             ImGui::TextWrapped("Source: %s", entry.sourcePath.c_str());
+        const auto validation =
+            sceneAssetOperations_->validationStatuses.find(entry.id);
+        if (validation !=
+            sceneAssetOperations_->validationStatuses.end()) {
+            ImGui::Text("Validation: %s",
+                        assetValidationStateName(validation->second.state));
+            if (!validation->second.reason.empty())
+                ImGui::TextWrapped("Validation detail: %s",
+                                   validation->second.reason.c_str());
+        }
         ImGui::BeginDisabled(!entry.available);
         if (ImGui::Button("Load")) {
             try {
@@ -2957,6 +3139,45 @@ void Application::drawScenePanel() {
                                           ImportReason::ManualReimport, true);
                 } catch (const std::exception &error) {
                     sceneAssetOperations_->error = error.what();
+                }
+            }
+
+            const CatalogScene *catalogScene = catalog_.findScene(entry.id);
+            if (catalogScene && catalogScene->type == "gltf") {
+                if (ImGui::Button(
+                        validation != sceneAssetOperations_
+                                              ->validationStatuses.end() &&
+                                validation->second.state !=
+                                    AssetValidationState::NotChecked
+                            ? "Revalidate"
+                            : "Validate")) {
+                    try {
+                        AssetImportRequest request;
+                        request.sceneId = entry.id;
+                        request.profileId = "validation";
+                        request.kind = AssetImportKind::SceneValidation;
+                        request.force = true;
+                        const auto task =
+                            assetImportManager_->request(request);
+                        sceneAssetOperations_->status =
+                            "Validating " + entry.name + " (task " +
+                            std::to_string(task->id) + ")";
+                        sceneAssetOperations_->error.clear();
+                    } catch (const std::exception &error) {
+                        sceneAssetOperations_->error = error.what();
+                    }
+                }
+                if (validation != sceneAssetOperations_
+                                      ->validationStatuses.end() &&
+                    !validation->second.reportPath.empty() &&
+                    std::filesystem::is_regular_file(
+                        validation->second.reportPath)) {
+                    ImGui::SameLine();
+                    if (ImGui::Button("Open Validation Report")) {
+                        ShellExecuteW(nullptr, L"open",
+                                      validation->second.reportPath.c_str(),
+                                      nullptr, nullptr, SW_SHOWNORMAL);
+                    }
                 }
             }
         }
@@ -3037,6 +3258,82 @@ void Application::drawScenePanel() {
             ImGui::Text("Dependencies: %llu",
                         static_cast<unsigned long long>(
                             ui.preflight->dependencies.size()));
+            bool validationAllowsImport = false;
+            if (ui.validationReport) {
+                const AssetValidationReport &report = *ui.validationReport;
+                ImGui::SeparatorText("glTF Validation");
+                ImGui::Text("State: %s",
+                            assetValidationStateName(report.state));
+                ImGui::Text("Errors %llu  Warnings %llu  Info %llu  Hints %llu",
+                            static_cast<unsigned long long>(report.errorCount),
+                            static_cast<unsigned long long>(
+                                report.warningCount),
+                            static_cast<unsigned long long>(report.infoCount),
+                            static_cast<unsigned long long>(report.hintCount));
+                if (!report.failureReason.empty())
+                    ImGui::TextWrapped("Validator: %s",
+                                       report.failureReason.c_str());
+                if (!report.extensions.empty() &&
+                    ImGui::TreeNode("Renderer Extension Compatibility")) {
+                    for (const auto &extension : report.extensions) {
+                        if (extension.note.empty()) {
+                            ImGui::TextWrapped(
+                                "%s: %s%s", extension.name.c_str(),
+                                gltfExtensionSupportName(extension.support),
+                                extension.required ? " (required)" : "");
+                        } else {
+                            ImGui::TextWrapped(
+                                "%s: %s%s - %s", extension.name.c_str(),
+                                gltfExtensionSupportName(extension.support),
+                                extension.required ? " (required)" : "",
+                                extension.note.c_str());
+                        }
+                    }
+                    ImGui::TreePop();
+                }
+                if (!report.issues.empty() &&
+                    ImGui::TreeNode("Validator Issues")) {
+                    ImGui::BeginChild("ValidationIssues", ImVec2(640.0f, 220.0f),
+                                      ImGuiChildFlags_Borders);
+                    const size_t issueCount =
+                        std::min<size_t>(report.issues.size(), 50);
+                    for (size_t i = 0; i < issueCount; ++i) {
+                        const AssetValidationIssue &issue = report.issues[i];
+                        ImGui::PushID(static_cast<int>(i));
+                        ImGui::TextWrapped("[%u] %s: %s", issue.severity,
+                                           issue.code.c_str(),
+                                           issue.message.c_str());
+                        if (!issue.pointer.empty())
+                            ImGui::TextDisabled("%s", issue.pointer.c_str());
+                        ImGui::Separator();
+                        ImGui::PopID();
+                    }
+                    if (report.issues.size() > issueCount)
+                        ImGui::TextDisabled("Showing first 50 issues.");
+                    ImGui::EndChild();
+                    ImGui::TreePop();
+                }
+                if (!ui.validationReportPath.empty() &&
+                    std::filesystem::is_regular_file(
+                        ui.validationReportPath) &&
+                    ImGui::Button("Open Report")) {
+                    ShellExecuteW(nullptr, L"open",
+                                  ui.validationReportPath.c_str(), nullptr,
+                                  nullptr, SW_SHOWNORMAL);
+                }
+                validationAllowsImport =
+                    report.state == AssetValidationState::Valid ||
+                    report.state == AssetValidationState::Warnings;
+                if (report.state == AssetValidationState::Unavailable) {
+                    ImGui::Checkbox("Import without validation",
+                                    &ui.allowUnvalidated);
+                    validationAllowsImport = ui.allowUnvalidated;
+                }
+                if (report.state == AssetValidationState::Invalid)
+                    ImGui::TextDisabled(
+                        "Import is blocked until all validator errors are fixed.");
+            }
+            ImGui::SeparatorText("Import Settings");
             ImGui::InputText("Name", ui.displayName.data(),
                              ui.displayName.size());
             ImGui::InputText("Scene ID", ui.sceneId.data(),
@@ -3066,7 +3363,9 @@ void Application::drawScenePanel() {
                 ui.referenceExisting = false;
             ImGui::Checkbox("Load scene after import", &ui.loadAfterImport);
 
-            const bool valid = ui.displayName[0] != '\0' &&
+            const bool valid = validationAllowsImport &&
+                               ui.validationReport.has_value() &&
+                               ui.displayName[0] != '\0' &&
                                isStableAssetId(ui.sceneId.data()) &&
                                !ui.profileIds.empty();
             ImGui::BeginDisabled(!valid);
@@ -3080,11 +3379,16 @@ void Application::drawScenePanel() {
                     ui.referenceExisting
                         ? SceneImportPlacement::ReferenceExisting
                         : SceneImportPlacement::CopyIntoProject;
+                request.validation =
+                    sceneValidationReceipt(*ui.validationReport);
+                request.allowUnvalidated = ui.allowUnvalidated;
                 ui.loadAfterActiveImport = ui.loadAfterImport;
                 ui.worker = std::make_shared<SceneImportWorkerState>();
                 ui.worker->totalBytes = ui.preflight->totalBytes;
                 const auto worker = ui.worker;
-                const ProjectContext project = projectContext_;
+                ProjectContext project = projectContext_;
+                project.cacheRoot = std::filesystem::u8path(
+                    sceneLoadContext_.derivedTextureCachePath);
                 ui.importFuture = std::async(
                     std::launch::async,
                     [project, request, worker] {
@@ -3106,6 +3410,9 @@ void Application::drawScenePanel() {
             ImGui::SameLine();
             if (ImGui::Button("Cancel")) {
                 ui.preflight.reset();
+                ui.validationReport.reset();
+                ui.validationReportPath.clear();
+                ui.allowUnvalidated = false;
                 ImGui::CloseCurrentPopup();
             }
         }
@@ -3494,10 +3801,8 @@ void Application::drawAssetsPanel() {
         ImGui::Text("Task: %llu  %s",
                     static_cast<unsigned long long>(active->id),
                     assetImportStateName(active->state.load()));
-        ImGui::Text("%s/Profile: %s / %s",
-                    active->kind == AssetImportKind::Environment
-                        ? "Environment"
-                        : "Scene",
+        ImGui::Text("%s: %s / %s",
+                    assetImportKindName(active->kind),
                     active->sceneId.c_str(), active->profileId.c_str());
         ImGui::ProgressBar(std::clamp(fraction, 0.0f, 1.0f));
         ImGui::Text("Artifacts: %llu/%llu  encoded %llu  reused %llu  failed %llu",
@@ -3511,6 +3816,15 @@ void Application::drawAssetsPanel() {
                         active->failedArtifacts.load()));
         ImGui::Text("Workers: %u  elapsed: %.1f s", active->workers.load(),
                     elapsedMs / 1000.0);
+        if (active->kind == AssetImportKind::SceneValidation) {
+            ImGui::Text("Validation: %s  errors %llu  warnings %llu",
+                        assetValidationStateName(
+                            active->validationState.load()),
+                        static_cast<unsigned long long>(
+                            active->validationErrors.load()),
+                        static_cast<unsigned long long>(
+                            active->validationWarnings.load()));
+        }
         ImGui::BeginDisabled(
             isTerminalAssetImportState(active->state.load()));
         if (ImGui::Button("Cancel Asset Import"))
@@ -3548,15 +3862,39 @@ void Application::drawAssetsPanel() {
                             task->reusedArtifacts.load()),
                         static_cast<unsigned long long>(
                             task->failedArtifacts.load()));
+            std::filesystem::path validationReportPath;
             {
                 std::lock_guard<std::mutex> lock(task->mutex);
                 if (!task->error.empty())
                     ImGui::TextWrapped("Error: %s", task->error.c_str());
+                if (task->kind == AssetImportKind::SceneValidation) {
+                    ImGui::Text("Validation: %s  errors %llu  warnings %llu",
+                                assetValidationStateName(
+                                    task->validationState.load()),
+                                static_cast<unsigned long long>(
+                                    task->validationErrors.load()),
+                                static_cast<unsigned long long>(
+                                    task->validationWarnings.load()));
+                    if (!task->validationFailureReason.empty())
+                        ImGui::TextWrapped("Tool: %s",
+                                           task->validationFailureReason.c_str());
+                    validationReportPath =
+                        std::filesystem::u8path(task->manifestPath);
+                }
             }
             if (std::filesystem::is_regular_file(task->logPath) &&
                 ImGui::Button("Open Log")) {
                 ShellExecuteW(nullptr, L"open", task->logPath.c_str(),
                               nullptr, nullptr, SW_SHOWNORMAL);
+            }
+            if (!validationReportPath.empty() &&
+                std::filesystem::is_regular_file(validationReportPath)) {
+                ImGui::SameLine();
+                if (ImGui::Button("Open Report")) {
+                    ShellExecuteW(nullptr, L"open",
+                                  validationReportPath.c_str(), nullptr,
+                                  nullptr, SW_SHOWNORMAL);
+                }
             }
             ImGui::TreePop();
         }

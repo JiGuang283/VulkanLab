@@ -30,7 +30,15 @@ struct ArtifactPruneReport {
     uint64_t deferredBlobBytes = 0;
     uint64_t deletedBlobFiles = 0;
     uint64_t deletedBlobBytes = 0;
+    uint64_t scannedValidationReports = 0;
+    uint64_t scannedValidationReportBytes = 0;
+    uint64_t protectedValidationReports = 0;
+    uint64_t deferredValidationReports = 0;
+    uint64_t deferredValidationReportBytes = 0;
+    uint64_t deletedValidationReports = 0;
+    uint64_t deletedValidationReportBytes = 0;
     std::vector<ArtifactPruneCandidate> candidates;
+    std::vector<ArtifactPruneCandidate> validationCandidates;
 };
 
 ArtifactPruneReport pruneArtifactCache(const ArtifactPruneOptions &options);

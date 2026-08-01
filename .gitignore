@@ -61,6 +61,7 @@ run_*.log
 run_*.txt
 derived_assets/
 artifacts/
+/external/tools/
 
 # ---------- OS files ----------
 .DS_Store

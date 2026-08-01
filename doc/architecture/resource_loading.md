@@ -10,15 +10,20 @@
 
 开发模式下 Catalog scene、glTF/GLB、外部 buffer/image 以及 Viking Room 的 OBJ/PNG 从 `projectRoot` 读取，SPIR-V 和 sibling 工具从 executable 所在的 `runtimeRoot` 读取。Cooked package 中 `projectRoot` 与 `runtimeRoot` 都是 package root，`cacheRoot` 固定为包内 `runtime_assets`。
 
-`VulkanLab -> Scene -> Scenes` 的 `Import Scene...` 通过 Win32 `IFileOpenDialog` 选择 `.gltf/.glb`。可测试的 `SceneImportService` 在 worker 中执行以下事务：
+`VulkanLab -> Scene -> Scenes` 的 `Import Scene...` 通过 Win32 `IFileOpenDialog` 选择 `.gltf/.glb`。新源文件先由 `SceneImportService::preflight` 检查本地 URI 与依赖闭包，再由独立 `VulkanLabAssetTool validate scene` 进程运行固定版本 Khronos glTF Validator。只有 `Valid/Warnings` 才能继续；`Unavailable` 需要用户显式勾选未校验导入；`Invalid/Stale/Failed/NotChecked` 都会阻止复制、Catalog 写入和后续 BC7 构建。
+
+验证报告位于 `<cacheRoot>/validation/reports/2.0.0-dev.3.10/`，`validation/index.json` 只保存 scene ID、项目相对 source 和内容寻址 report key。报告记录 source SHA-256、依赖 size/mtime、完整 issues、资产统计和 renderer extension 兼容性，不写入 Catalog、源模型或 Cooked package。已有 Catalog 场景不在启动时扫描，可从 Scenes 页执行 `Validate/Revalidate`；source 或依赖 stamp 变化后查询结果为 `Stale`。
+
+验证通过后，可测试的 `SceneImportService` 在 worker 中执行以下事务：
 
 1. 解析 glTF JSON（GLB 只读取 JSON chunk），收集本地 buffer/image URI。
 2. 接受 data URI，拒绝远程 scheme、绝对路径、缺失文件、路径逃逸和 symlink 逃逸。
-3. Copy 模式把主文件与依赖闭包写入 `models/imported/.staging-*`，保持 URI 相对结构并从 staging 二次 preflight。
-4. 原子重命名为 `models/imported/<scene-id>/`。
-5. 用临时文件验证新 Catalog，检查磁盘版本未变化，再以 atomic replace 发布。
+3. 重新读取缓存 validation receipt，并用当前 source/dependency stamp 防止 UI 与 worker 之间的 TOCTOU。
+4. Copy 模式把主文件与依赖闭包写入 `models/imported/.staging-*`，保持 URI 相对结构并从 staging 二次 preflight。
+5. 原子重命名为 `models/imported/<scene-id>/`，将验证报告绑定到最终 scene ID。
+6. 用临时文件验证新 Catalog，检查磁盘版本未变化，再以 atomic replace 发布。
 
-任何步骤失败或取消都会删除本次 staging；目录已发布但 Catalog 未发布时会回滚新目录。项目内源文件也可选择 Reference Existing，只在 Catalog 中保存项目相对路径。`VulkanLabAssetTool catalog add` 调用相同服务，供自动化使用。
+任何步骤失败或取消都会删除本次 staging；目录已发布但 Catalog 未发布时会回滚新目录。项目内源文件也可选择 Reference Existing，只在 Catalog 中保存项目相对路径。`VulkanLabAssetTool catalog add` 调用相同验证门和导入服务，供自动化使用。Validator warning 与 renderer capability warning 分开保存；后者不阻止开发导入或 Cook。
 
 HDR 环境导入只接受本地 2:1 equirectangular `.hdr`。UI 或 `VulkanLabAssetTool catalog add-environment` 将源文件复制到 `assets/environments/<environment-id>/`，再原子更新 Catalog。已存在的 ID 或目标路径不会被覆盖；v1 不接受 EXR、远程 URI 或非 2:1 HDR。
 

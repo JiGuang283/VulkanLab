@@ -47,6 +47,7 @@ class RuntimeControlHost {
     virtual ControlJson runtimeAssetCatalog() = 0;
     virtual ControlJson
     runtimeAssetStatus(const std::optional<std::string> &name) = 0;
+    virtual ControlJson runtimeAssetValidation(const std::string &name) = 0;
     virtual ControlJson runtimeAssetImport(const std::string &name,
                                            bool force,
                                            bool loadAfter) = 0;

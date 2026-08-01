@@ -59,6 +59,8 @@ void printUsage(std::ostream &out) {
            "catalog at <path>.\n"
         << "  --asset-mode <mode>  ondemand, readonly, or cooked-only.\n"
         << "  --asset-tool <path>  Override VulkanLabAssetTool.exe path.\n"
+        << "  --gltf-validator <path>  Override Khronos glTF Validator "
+           "2.0.0-dev.3.10 path.\n"
         << "  --cache-root <path>  Override the derived asset cache root.\n"
         << "  --validation <profile>  Use off, core, sync, or gpu "
            "validation (default: core).\n"
@@ -173,6 +175,18 @@ bool parseArguments(int argc, wchar_t **argv, vkr::Config &config) {
                 std::filesystem::path(argv[i]).u8string();
             config.assetToolPathExplicit = true;
 #endif
+        } else if (argument == L"--gltf-validator") {
+#if !VKL_ENABLE_ASSET_AUTHORING
+            throw std::invalid_argument(
+                "--gltf-validator is not compiled into this build");
+#else
+            if (++i >= argc)
+                throw std::invalid_argument(
+                    "--gltf-validator requires a path");
+            config.gltfValidatorPath =
+                std::filesystem::path(argv[i]).u8string();
+            config.gltfValidatorPathExplicit = true;
+#endif
         } else if (argument == L"--cache-root") {
             if (++i >= argc)
                 throw std::invalid_argument("--cache-root requires a path");
@@ -245,9 +259,11 @@ int wmain(int argc, wchar_t **argv) {
         const bool captureRootExplicit =
             !config.diagnostics.captureRoot.empty();
         if (projectContext.cookedPackage) {
-            if (config.cachePathExplicit || config.assetToolPathExplicit)
+            if (config.cachePathExplicit || config.assetToolPathExplicit ||
+                config.gltfValidatorPathExplicit)
                 throw std::runtime_error(
-                    "A cooked package cannot use external cache or asset tool paths");
+                    "A cooked package cannot use external cache, asset tool, "
+                    "or validator paths");
             if (captureRootExplicit)
                 throw std::runtime_error(
                     "A cooked package cannot override the diagnostics capture root");
@@ -280,6 +296,13 @@ int wmain(int argc, wchar_t **argv) {
                 config.assetToolPath =
                     std::filesystem::absolute(std::filesystem::u8path(
                                                   config.assetToolPath))
+                        .lexically_normal()
+                        .u8string();
+            }
+            if (config.gltfValidatorPathExplicit) {
+                config.gltfValidatorPath =
+                    std::filesystem::absolute(std::filesystem::u8path(
+                                                  config.gltfValidatorPath))
                         .lexically_normal()
                         .u8string();
             }

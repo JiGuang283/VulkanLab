@@ -129,6 +129,8 @@ class Application final
     std::string profileIdForTextureLimit(const SceneEntry &entry) const;
     void refreshArtifactStatus(int sceneIndex, bool admission = false);
     void refreshAllArtifactStatuses();
+    void refreshValidationStatus(int sceneIndex);
+    void refreshAllValidationStatuses();
 
 #if VKL_ENABLE_RUNTIME_CONTROL
     ControlJson runtimeSystemInfo() override;
@@ -143,6 +145,7 @@ class Application final
     ControlJson runtimeAssetCatalog() override;
     ControlJson
     runtimeAssetStatus(const std::optional<std::string> &name) override;
+    ControlJson runtimeAssetValidation(const std::string &name) override;
     ControlJson runtimeAssetImport(const std::string &name, bool force,
                                    bool loadAfter) override;
     ControlJson runtimeAssetCancel(std::optional<uint64_t> taskId) override;

@@ -4,6 +4,7 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <chrono>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -95,8 +96,12 @@ Win32JobProcessRunner::~Win32JobProcessRunner() {
 ProcessResult
 Win32JobProcessRunner::run(const ProcessRequest &request,
                            const std::atomic_bool &cancelRequested) {
-    if (cancelRequested.load())
-        return {ERROR_CANCELLED, true, {}};
+    ProcessResult result;
+    if (cancelRequested.load()) {
+        result.exitCode = ERROR_CANCELLED;
+        result.cancelled = true;
+        return result;
+    }
 
     std::wstring commandLine =
         quoteWindowsArgument(request.executable.wstring());
@@ -107,16 +112,20 @@ Win32JobProcessRunner::run(const ProcessRequest &request,
     std::vector<wchar_t> mutableCommand(commandLine.begin(), commandLine.end());
     mutableCommand.push_back(L'\0');
 
-    ScopedHandle pipeRead;
-    ScopedHandle pipeWrite;
+    ScopedHandle stdoutRead;
+    ScopedHandle stdoutWrite;
+    ScopedHandle stderrRead;
+    ScopedHandle stderrWrite;
     ScopedHandle nullInput;
     SECURITY_ATTRIBUTES pipeSecurity{sizeof(SECURITY_ATTRIBUTES), nullptr,
                                      TRUE};
-    if (!CreatePipe(&pipeRead.value, &pipeWrite.value, &pipeSecurity, 0) ||
-        !SetHandleInformation(pipeRead.value, HANDLE_FLAG_INHERIT, 0)) {
+    if (!CreatePipe(&stdoutRead.value, &stdoutWrite.value, &pipeSecurity, 0) ||
+        !CreatePipe(&stderrRead.value, &stderrWrite.value, &pipeSecurity, 0) ||
+        !SetHandleInformation(stdoutRead.value, HANDLE_FLAG_INHERIT, 0) ||
+        !SetHandleInformation(stderrRead.value, HANDLE_FLAG_INHERIT, 0)) {
         throw std::system_error(static_cast<int>(GetLastError()),
                                 std::system_category(),
-                                "could not create ktx output pipe");
+                                "could not create child process output pipes");
     }
     nullInput.value = CreateFileW(
         L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &pipeSecurity,
@@ -140,7 +149,8 @@ Win32JobProcessRunner::run(const ProcessRequest &request,
                                 std::system_category(),
                                 "could not initialize ktx handle list");
     }
-    HANDLE inheritedHandles[]{nullInput.value, pipeWrite.value};
+    HANDLE inheritedHandles[]{nullInput.value, stdoutWrite.value,
+                              stderrWrite.value};
     if (!UpdateProcThreadAttribute(
             attributes.value, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
             inheritedHandles, sizeof(inheritedHandles), nullptr, nullptr)) {
@@ -154,8 +164,8 @@ Win32JobProcessRunner::run(const ProcessRequest &request,
     startup.lpAttributeList = attributes.value;
     startup.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
     startup.StartupInfo.hStdInput = nullInput.value;
-    startup.StartupInfo.hStdOutput = pipeWrite.value;
-    startup.StartupInfo.hStdError = pipeWrite.value;
+    startup.StartupInfo.hStdOutput = stdoutWrite.value;
+    startup.StartupInfo.hStdError = stderrWrite.value;
     PROCESS_INFORMATION process{};
     if (!CreateProcessW(request.executable.c_str(), mutableCommand.data(),
                         nullptr, nullptr, TRUE,
@@ -164,29 +174,46 @@ Win32JobProcessRunner::run(const ProcessRequest &request,
                         nullptr, nullptr, &startup.StartupInfo, &process)) {
         throw std::system_error(static_cast<int>(GetLastError()),
                                 std::system_category(),
-                                "could not start ktx tool");
+                                "could not start child process");
     }
     ScopedHandle processHandle{process.hProcess};
     ScopedHandle threadHandle{process.hThread};
-    CloseHandle(pipeWrite.value);
-    pipeWrite.value = nullptr;
+    CloseHandle(stdoutWrite.value);
+    stdoutWrite.value = nullptr;
+    CloseHandle(stderrWrite.value);
+    stderrWrite.value = nullptr;
 
-    std::string processOutput;
-    std::thread outputReader([&] {
+    const auto readOutput = [](HANDLE handle, size_t limit,
+                               std::string &output, bool &truncated) {
         char buffer[4096];
         DWORD read = 0;
-        while (
-            ReadFile(pipeRead.value, buffer, sizeof(buffer), &read, nullptr) &&
-            read != 0) {
-            if (processOutput.size() < 1024 * 1024) {
-                const size_t remaining = 1024 * 1024 - processOutput.size();
-                processOutput.append(buffer, std::min<size_t>(read, remaining));
+        while (ReadFile(handle, buffer, sizeof(buffer), &read, nullptr) &&
+               read != 0) {
+            if (output.size() < limit) {
+                const size_t remaining = limit - output.size();
+                const size_t copied = std::min<size_t>(read, remaining);
+                output.append(buffer, copied);
+                truncated = truncated || copied != read;
+            } else {
+                truncated = true;
             }
         }
+    };
+    std::thread stdoutReader([&] {
+        readOutput(stdoutRead.value, request.maxStdoutBytes,
+                   result.stdoutText, result.stdoutTruncated);
     });
-    const auto joinOutputReader = [&] {
-        if (outputReader.joinable())
-            outputReader.join();
+    std::thread stderrReader([&] {
+        readOutput(stderrRead.value, request.maxStderrBytes,
+                   result.stderrText, result.stderrTruncated);
+    });
+    const auto joinOutputReaders = [&] {
+        if (stdoutReader.joinable())
+            stdoutReader.join();
+        if (stderrReader.joinable())
+            stderrReader.join();
+        result.output = result.stdoutText;
+        result.output += result.stderrText;
     };
 
     {
@@ -194,14 +221,16 @@ Win32JobProcessRunner::run(const ProcessRequest &request,
         if (state_->cancelled || cancelRequested.load()) {
             TerminateProcess(process.hProcess, ERROR_CANCELLED);
             WaitForSingleObject(process.hProcess, INFINITE);
-            joinOutputReader();
-            return {ERROR_CANCELLED, true, std::move(processOutput)};
+            joinOutputReaders();
+            result.exitCode = ERROR_CANCELLED;
+            result.cancelled = true;
+            return result;
         }
         if (!AssignProcessToJobObject(state_->job, process.hProcess)) {
             const DWORD error = GetLastError();
             TerminateProcess(process.hProcess, error);
             WaitForSingleObject(process.hProcess, INFINITE);
-            joinOutputReader();
+            joinOutputReaders();
             throw std::system_error(static_cast<int>(error),
                                     std::system_category(),
                                     "could not assign ktx tool to job object");
@@ -211,18 +240,19 @@ Win32JobProcessRunner::run(const ProcessRequest &request,
         const DWORD error = GetLastError();
         TerminateProcess(process.hProcess, error);
         WaitForSingleObject(process.hProcess, INFINITE);
-        joinOutputReader();
+        joinOutputReaders();
         throw std::system_error(static_cast<int>(error), std::system_category(),
                                 "could not resume ktx tool");
     }
 
+    const auto startedAt = std::chrono::steady_clock::now();
     while (true) {
         const DWORD wait = WaitForSingleObject(process.hProcess, 100);
         if (wait == WAIT_OBJECT_0)
             break;
         if (wait == WAIT_FAILED) {
             cancelAll();
-            joinOutputReader();
+            joinOutputReaders();
             throw std::system_error(static_cast<int>(GetLastError()),
                                     std::system_category(),
                                     "waiting for ktx tool failed");
@@ -230,11 +260,24 @@ Win32JobProcessRunner::run(const ProcessRequest &request,
         if (cancelRequested.load()) {
             cancelAll();
             WaitForSingleObject(process.hProcess, INFINITE);
-            joinOutputReader();
-            return {ERROR_CANCELLED, true, std::move(processOutput)};
+            joinOutputReaders();
+            result.exitCode = ERROR_CANCELLED;
+            result.cancelled = true;
+            return result;
+        }
+        if (request.timeoutMs != 0 &&
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - startedAt)
+                    .count() >= request.timeoutMs) {
+            TerminateProcess(process.hProcess, ERROR_TIMEOUT);
+            WaitForSingleObject(process.hProcess, INFINITE);
+            joinOutputReaders();
+            result.exitCode = ERROR_TIMEOUT;
+            result.timedOut = true;
+            return result;
         }
     }
-    joinOutputReader();
+    joinOutputReaders();
 
     DWORD exitCode = 1;
     if (!GetExitCodeProcess(process.hProcess, &exitCode)) {
@@ -242,7 +285,9 @@ Win32JobProcessRunner::run(const ProcessRequest &request,
                                 std::system_category(),
                                 "reading ktx tool exit code failed");
     }
-    return {exitCode, exitCode == ERROR_CANCELLED, std::move(processOutput)};
+    result.exitCode = exitCode;
+    result.cancelled = exitCode == ERROR_CANCELLED;
+    return result;
 }
 
 void Win32JobProcessRunner::cancelAll() noexcept {

@@ -24,8 +24,10 @@ struct Config {
     std::string derivedTextureCachePath;
     std::filesystem::path projectPath;
     std::string assetToolPath;
+    std::string gltfValidatorPath;
     bool cachePathExplicit = false;
     bool assetToolPathExplicit = false;
+    bool gltfValidatorPathExplicit = false;
 
     // ---- 渲染设置 ----
     ValidationProfile validationProfile =

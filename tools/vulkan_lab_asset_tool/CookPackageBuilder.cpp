@@ -1,5 +1,8 @@
 #include "CookPackageBuilder.h"
 
+#include "GltfValidator.h"
+
+#include "assets/AssetValidation.h"
 #include "assets/ArtifactIndex.h"
 #include "assets/ArtifactStatus.h"
 #include "assets/ContentHash.h"
@@ -371,6 +374,20 @@ CookPackageReport buildCookPackage(const CookPackageOptions &options) {
             }
 
             const std::filesystem::path source = projectRoot / scene->source;
+            const AssetValidationQuery validation = querySceneValidation(
+                cacheRoot, projectRoot, scene->id);
+            if (!validation.report ||
+                (validation.state != AssetValidationState::Valid &&
+                 validation.state != AssetValidationState::Warnings) ||
+                validation.report->validatorVersion !=
+                    kGltfValidatorVersion) {
+                throw std::runtime_error(
+                    "validation is not current for '" + scene->id +
+                    "': " + assetValidationStateName(validation.state) +
+                    (validation.reason.empty()
+                         ? std::string{}
+                         : " (" + validation.reason + ")"));
+            }
             const ArtifactStatus status = inspectTextureArtifacts(
                 {cacheRoot, source, catalog.projectId, scene->id, profile.id,
                  profile.textureLimit, TextureEncoder::Bc7});

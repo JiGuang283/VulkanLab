@@ -33,6 +33,8 @@ const char *assetImportKindName(AssetImportKind kind) {
         return "SceneTextures";
     case AssetImportKind::Environment:
         return "Environment";
+    case AssetImportKind::SceneValidation:
+        return "SceneValidation";
     }
     return "Unknown";
 }

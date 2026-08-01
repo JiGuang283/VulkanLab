@@ -225,6 +225,15 @@ Tone Mapping policy 由 Shader Manifest 决定：两个 PBR-lite 和 `Debug IBL 
 
 这些 scene 写操作只在 `--asset-mode ondemand` 下可用。ReadOnly/CookedOnly 返回 `asset_import_disabled`；查询 Catalog、状态和 cache 仍可用。Runtime Control 不接收任意本地模型/HDR 路径，注册新源文件仍使用 ImGui 导入器或 `VulkanLabAssetTool catalog add`/`catalog add-environment`。Environment 派生缓存的 Build/Rebuild 目前由 Assets UI 或 AssetTool 完成，不由 Runtime Control 自动 bake。
 
+Catalog glTF 的最近验证报告可只读查询；响应最多包含 32 条 issue，完整报告仍从 Assets/Scenes UI 打开：
+
+```powershell
+.\VulkanLabCtl.exe asset validation main-sponza
+.\VulkanLabCtl.exe --json asset validation sheen-chair
+```
+
+响应包含 `Valid/Warnings/Invalid/Stale/Unavailable/Failed/NotChecked/NotApplicable` 状态、Validator 版本、四级计数、renderer extension 诊断和 report path。该方法只接受 Catalog scene ID 或完整显示名，不接受任意外部文件路径。
+
 ### 加载统计
 
 ```powershell

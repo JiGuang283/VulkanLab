@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AssetValidation.h"
+
 #include <json.hpp>
 
 #include <atomic>
@@ -19,7 +21,7 @@
 namespace vkr {
 
 enum class ImportReason { SceneLoad, SceneRegistration, ManualReimport };
-enum class AssetImportKind { SceneTextures, Environment };
+enum class AssetImportKind { SceneTextures, Environment, SceneValidation };
 enum class AssetImportState {
     Queued,
     Scanning,
@@ -41,6 +43,7 @@ struct AssetImportRequest {
     ImportReason reason = ImportReason::SceneLoad;
     bool force = false;
     AssetImportKind kind = AssetImportKind::SceneTextures;
+    std::filesystem::path sourcePath;
 };
 
 struct AssetImportTask {
@@ -50,6 +53,7 @@ struct AssetImportTask {
     ImportReason reason = ImportReason::SceneLoad;
     bool force = false;
     AssetImportKind kind = AssetImportKind::SceneTextures;
+    std::filesystem::path sourcePath;
     std::atomic<AssetImportState> state{AssetImportState::Queued};
     std::shared_ptr<std::atomic_bool> cancellation =
         std::make_shared<std::atomic_bool>(false);
@@ -61,6 +65,10 @@ struct AssetImportTask {
     std::atomic<uint32_t> workers{0};
     std::atomic<uint64_t> estimatedMemoryBytes{0};
     std::atomic<uint64_t> activeImage{UINT64_MAX};
+    std::atomic<AssetValidationState> validationState{
+        AssetValidationState::NotChecked};
+    std::atomic<uint64_t> validationErrors{0};
+    std::atomic<uint64_t> validationWarnings{0};
     std::chrono::steady_clock::time_point requestedAt =
         std::chrono::steady_clock::now();
     std::chrono::steady_clock::time_point completedAt{};
@@ -68,6 +76,9 @@ struct AssetImportTask {
     mutable std::mutex mutex;
     std::string error;
     std::string manifestPath;
+    std::string validationReportKey;
+    std::string validationInputFingerprint;
+    std::string validationFailureReason;
     uint32_t processExitCode = 0;
     bool completedEventReceived = false;
     bool protocolValidated = false;
@@ -79,6 +90,7 @@ struct AssetImportManagerOptions {
     std::filesystem::path assetToolPath;
     uint32_t workers = 0;
     uint64_t memoryBudgetMiB = 2048;
+    std::filesystem::path gltfValidatorPath;
 };
 
 struct AssetImportExecutionResult {

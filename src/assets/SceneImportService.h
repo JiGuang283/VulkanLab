@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AssetValidation.h"
 #include "ProjectContext.h"
 #include "SceneCatalog.h"
 
@@ -23,6 +24,8 @@ struct SceneImportPreflight {
     std::string suggestedDisplayName;
     std::string suggestedSceneId;
     std::vector<SceneImportDependency> dependencies;
+    std::vector<std::string> extensionsUsed;
+    std::vector<std::string> extensionsRequired;
     uint64_t totalBytes = 0;
 };
 
@@ -32,6 +35,8 @@ struct SceneImportRequest {
     std::string sceneId;
     std::string profileId;
     SceneImportPlacement placement = SceneImportPlacement::CopyIntoProject;
+    std::optional<SceneValidationReceipt> validation;
+    bool allowUnvalidated = false;
 };
 
 struct SceneImportProgress {

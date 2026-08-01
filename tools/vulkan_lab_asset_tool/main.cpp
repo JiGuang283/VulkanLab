@@ -1,6 +1,8 @@
 #include "TextureCacheBuilder.h"
 #include "CookPackageBuilder.h"
 #include "EnvironmentCacheBuilder.h"
+#include "GltfValidator.h"
+#include "ProcessRunner.h"
 
 #include "assets/DerivedAssetPaths.h"
 #include "assets/CacheMutationLock.h"
@@ -72,6 +74,8 @@ void printUsage(std::ostream &output) {
         << "  VulkanLabAssetTool texture-cache migrate "
            "--legacy-cache-root <path> [options]\n\n"
         << "  VulkanLabAssetTool catalog add --source <path> [options]\n\n"
+        << "  VulkanLabAssetTool validate scene "
+           "(--source <path> | --scene-id <id>) [options]\n\n"
         << "  VulkanLabAssetTool catalog add-environment --source <file.hdr> "
            "[options]\n"
         << "  VulkanLabAssetTool environment-cache build "
@@ -108,6 +112,11 @@ void printUsage(std::ostream &output) {
         << "  --progress ndjson    Emit machine-readable progress on stdout\n"
         << "  --progress-json      Alias for --progress ndjson\n"
         << "  --ktx-tool <path>    Path to the KTX 4.4.2 `ktx` executable\n"
+        << "  --gltf-validator <path>  Path to glTF Validator "
+           "2.0.0-dev.3.10\n"
+        << "  --report <path>      Copy a validation report to this path\n"
+        << "  --allow-unvalidated  Allow catalog add only when Validator is "
+           "unavailable\n"
         << "  --help                Show this help\n";
 }
 
@@ -171,6 +180,32 @@ std::string stableIdFromStem(std::string value) {
     return result;
 }
 
+nlohmann::json validationSummaryJson(
+    const vkr::assettool::GltfValidationResult &result) {
+    const vkr::AssetValidationReport &report = result.report;
+    nlohmann::json extensions = nlohmann::json::array();
+    for (const auto &extension : report.extensions) {
+        extensions.push_back(
+            {{"name", extension.name},
+             {"support", vkr::gltfExtensionSupportName(extension.support)},
+             {"required", extension.required},
+             {"note", extension.note}});
+    }
+    return {{"state", vkr::assetValidationStateName(report.state)},
+            {"validatorVersion", report.validatorVersion},
+            {"reportKey", report.reportKey},
+            {"inputFingerprint", report.inputFingerprint},
+            {"reportPath", result.reportPath.generic_string()},
+            {"reused", result.reused},
+            {"errors", report.errorCount},
+            {"warnings", report.warningCount},
+            {"infos", report.infoCount},
+            {"hints", report.hintCount},
+            {"truncated", report.truncated},
+            {"failureReason", report.failureReason},
+            {"extensions", std::move(extensions)}};
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -182,6 +217,147 @@ int main(int argc, char **argv) {
         if (argc < 3) {
             printUsage(std::cerr);
             return 2;
+        }
+
+        if (std::string(argv[1]) == "validate" &&
+            std::string(argv[2]) == "scene") {
+            std::optional<std::filesystem::path> explicitProject;
+            std::filesystem::path source;
+            std::filesystem::path cacheRoot;
+            std::filesystem::path validatorPath;
+            std::filesystem::path requestedReport;
+            std::string sceneId;
+            bool force = false;
+            bool progressNdjson = false;
+            for (int i = 3; i < argc; ++i) {
+                const std::string argument = argv[i];
+                if (argument == "--project") {
+                    explicitProject = requireValue(i, argc, argv, argument);
+                } else if (argument == "--source") {
+                    source = requireValue(i, argc, argv, argument);
+                } else if (argument == "--scene-id") {
+                    sceneId = requireValue(i, argc, argv, argument);
+                } else if (argument == "--cache-root") {
+                    cacheRoot = requireValue(i, argc, argv, argument);
+                } else if (argument == "--gltf-validator") {
+                    validatorPath = requireValue(i, argc, argv, argument);
+                } else if (argument == "--report") {
+                    requestedReport = requireValue(i, argc, argv, argument);
+                } else if (argument == "--force") {
+                    force = true;
+                } else if (argument == "--progress-json") {
+                    progressNdjson = true;
+                } else if (argument == "--progress") {
+                    const std::string mode =
+                        requireValue(i, argc, argv, argument);
+                    if (mode != "ndjson")
+                        throw std::invalid_argument(
+                            "--progress currently accepts only ndjson");
+                    progressNdjson = true;
+                } else if (argument == "--help") {
+                    printUsage(std::cout);
+                    return EXIT_SUCCESS;
+                } else {
+                    throw std::invalid_argument("unknown option: " +
+                                                argument);
+                }
+            }
+            if (source.empty() == sceneId.empty())
+                throw std::invalid_argument(
+                    "exactly one of --source or --scene-id is required");
+            vkr::ProjectContext project =
+                vkr::ProjectContextResolver::resolve(explicitProject);
+            const vkr::SceneCatalog catalog = vkr::SceneCatalog::load(
+                project.catalogPath, project.projectRoot);
+            if (!sceneId.empty()) {
+                const vkr::CatalogScene *scene = catalog.findScene(sceneId);
+                if (!scene)
+                    throw std::invalid_argument(
+                        "unknown Catalog scene: " + sceneId);
+                if (scene->type != "gltf")
+                    throw std::invalid_argument(
+                        "scene is not a glTF asset: " + sceneId);
+                source = project.projectRoot / scene->source;
+            }
+            if (cacheRoot.empty())
+                cacheRoot = vkr::DerivedAssetPaths::defaultCacheRoot(
+                    catalog.projectId);
+            project.cacheRoot =
+                std::filesystem::absolute(cacheRoot).lexically_normal();
+
+            std::atomic_bool cancelRequested{false};
+            ConsoleCancellationHandler cancellationHandler(cancelRequested);
+            vkr::assettool::Win32JobProcessRunner processRunner;
+            vkr::assettool::GltfValidationOptions options;
+            options.sourcePath = source;
+            options.cacheRoot = cacheRoot;
+            options.validatorPath = validatorPath;
+            options.force = force;
+            const auto result = vkr::assettool::validateGltf(
+                options, cancelRequested, processRunner);
+            if (!sceneId.empty()) {
+                (void)vkr::bindSceneValidation(
+                    cacheRoot, project.projectRoot, sceneId,
+                    catalog.findScene(sceneId)->source,
+                    vkr::sceneValidationReceipt(result.report));
+            }
+            if (!requestedReport.empty()) {
+                requestedReport = std::filesystem::absolute(requestedReport)
+                                      .lexically_normal();
+                if (requestedReport.has_parent_path())
+                    std::filesystem::create_directories(
+                        requestedReport.parent_path());
+                std::filesystem::copy_file(
+                    result.reportPath, requestedReport,
+                    std::filesystem::copy_options::overwrite_existing);
+            }
+            const nlohmann::json summary = validationSummaryJson(result);
+            if (progressNdjson) {
+                std::cout
+                    << nlohmann::json(
+                           {{"event", "started"},
+                            {"protocolVersion", 1},
+                            {"assetKind", "SceneValidation"},
+                            {"total", 1},
+                            {"workers", 1}})
+                           .dump()
+                    << '\n'
+                    << nlohmann::json(
+                           {{"event", "validation"},
+                            {"validation", summary}})
+                           .dump()
+                    << '\n'
+                    << nlohmann::json(
+                           {{"event", "completed"},
+                            {"assetKind", "SceneValidation"},
+                            {"completed", 1},
+                            {"encoded", 0},
+                            {"reused", result.reused ? 1 : 0},
+                            {"failed", 0},
+                            {"manifest",
+                             result.reportPath.generic_string()}})
+                           .dump()
+                    << '\n'
+                    << std::flush;
+            } else {
+                std::cout
+                    << "glTF validation: "
+                    << vkr::assetValidationStateName(result.report.state)
+                    << "\n  validator: " << result.report.validatorVersion
+                    << "\n  errors: " << result.report.errorCount
+                    << "\n  warnings: " << result.report.warningCount
+                    << "\n  infos: " << result.report.infoCount
+                    << "\n  hints: " << result.report.hintCount
+                    << "\n  report: " << result.reportPath.string()
+                    << '\n';
+                if (!result.report.failureReason.empty())
+                    std::cout << "  reason: "
+                              << result.report.failureReason << '\n';
+            }
+            return result.report.state ==
+                           vkr::AssetValidationState::Failed
+                       ? EXIT_FAILURE
+                       : EXIT_SUCCESS;
         }
 
         if (std::string(argv[1]) == "catalog" &&
@@ -405,6 +581,10 @@ int main(int argc, char **argv) {
             std::string(argv[2]) == "add") {
             std::optional<std::filesystem::path> explicitProject;
             vkr::SceneImportRequest request;
+            std::filesystem::path cacheRoot;
+            std::filesystem::path validatorPath;
+            bool allowUnvalidated = false;
+            bool forceValidation = false;
             bool hasSource = false;
             for (int i = 3; i < argc; ++i) {
                 const std::string argument = argv[i];
@@ -419,6 +599,14 @@ int main(int argc, char **argv) {
                     request.sceneId = requireValue(i, argc, argv, argument);
                 } else if (argument == "--profile") {
                     request.profileId = requireValue(i, argc, argv, argument);
+                } else if (argument == "--cache-root") {
+                    cacheRoot = requireValue(i, argc, argv, argument);
+                } else if (argument == "--gltf-validator") {
+                    validatorPath = requireValue(i, argc, argv, argument);
+                } else if (argument == "--allow-unvalidated") {
+                    allowUnvalidated = true;
+                } else if (argument == "--force") {
+                    forceValidation = true;
                 } else if (argument == "--reference") {
                     request.placement =
                         vkr::SceneImportPlacement::ReferenceExisting;
@@ -432,6 +620,11 @@ int main(int argc, char **argv) {
                 vkr::ProjectContextResolver::resolve(explicitProject);
             const vkr::SceneCatalog catalog = vkr::SceneCatalog::load(
                 project.catalogPath, project.projectRoot);
+            if (cacheRoot.empty())
+                cacheRoot = vkr::DerivedAssetPaths::defaultCacheRoot(
+                    catalog.projectId);
+            project.cacheRoot =
+                std::filesystem::absolute(cacheRoot).lexically_normal();
             const vkr::SceneImportPreflight preflight =
                 vkr::SceneImportService::preflight(request.sourcePath);
             if (request.displayName.empty())
@@ -440,6 +633,37 @@ int main(int argc, char **argv) {
                 request.sceneId = preflight.suggestedSceneId;
             if (request.profileId.empty())
                 request.profileId = catalog.defaultImportProfile;
+            std::atomic_bool cancelRequested{false};
+            ConsoleCancellationHandler cancellationHandler(cancelRequested);
+            vkr::assettool::Win32JobProcessRunner processRunner;
+            vkr::assettool::GltfValidationOptions validationOptions;
+            validationOptions.sourcePath = request.sourcePath;
+            validationOptions.cacheRoot = cacheRoot;
+            validationOptions.validatorPath = validatorPath;
+            validationOptions.force = forceValidation;
+            const auto validation = vkr::assettool::validateGltf(
+                validationOptions, cancelRequested, processRunner);
+            const bool accepted =
+                validation.report.state ==
+                    vkr::AssetValidationState::Valid ||
+                validation.report.state ==
+                    vkr::AssetValidationState::Warnings;
+            const bool unavailableBypass =
+                validation.report.state ==
+                    vkr::AssetValidationState::Unavailable &&
+                allowUnvalidated;
+            if (!accepted && !unavailableBypass) {
+                throw std::runtime_error(
+                    "Scene validation rejected catalog add: " +
+                    std::string(vkr::assetValidationStateName(
+                        validation.report.state)) +
+                    (validation.report.failureReason.empty()
+                         ? std::string{}
+                         : " (" + validation.report.failureReason + ")"));
+            }
+            request.validation =
+                vkr::sceneValidationReceipt(validation.report);
+            request.allowUnvalidated = unavailableBypass;
             const vkr::SceneImportResult result =
                 vkr::SceneImportService::importScene(
                     project, request, {},
@@ -452,6 +676,10 @@ int main(int argc, char **argv) {
                       << "  id: " << result.scene.id << "\n"
                       << "  name: " << result.scene.displayName << "\n"
                       << "  source: " << result.scene.source.generic_string()
+                      << "\n  validation: "
+                      << vkr::assetValidationStateName(
+                             validation.report.state)
+                      << "\n  report: " << validation.reportPath.string()
                       << '\n';
             return EXIT_SUCCESS;
         }
@@ -560,12 +788,27 @@ int main(int argc, char **argv) {
                       << report.deferredBlobFiles
                       << "\n  deleted blobs: " << report.deletedBlobFiles
                       << "\n  deleted bytes: " << report.deletedBlobBytes
+                      << "\n  validation reports: "
+                      << report.scannedValidationReports
+                      << "\n  protected validation reports: "
+                      << report.protectedValidationReports
+                      << "\n  deferred validation reports: "
+                      << report.deferredValidationReports
+                      << "\n  deleted validation reports: "
+                      << report.deletedValidationReports
                       << '\n';
             for (const auto &candidate : report.candidates)
                 std::cout << "  candidate: " << candidate.path.string()
                           << " (" << candidate.bytes << " bytes, age "
+                           << candidate.ageSeconds << " s)\n";
+            for (const auto &candidate : report.validationCandidates)
+                std::cout << "  validation candidate: "
+                          << candidate.path.string() << " ("
+                          << candidate.bytes << " bytes, age "
                           << candidate.ageSeconds << " s)\n";
-            if (!execute && !report.candidates.empty())
+            if (!execute &&
+                (!report.candidates.empty() ||
+                 !report.validationCandidates.empty()))
                 std::cout << "Re-run with --execute to remove candidates.\n";
             return EXIT_SUCCESS;
         }
@@ -574,6 +817,7 @@ int main(int argc, char **argv) {
             std::optional<std::filesystem::path> explicitProject;
             vkr::assettool::CookPackageOptions cook;
             vkr::assettool::TextureCacheBuildOptions build;
+            std::filesystem::path validatorPath;
             bool buildMissing = false;
             for (int i = 2; i < argc; ++i) {
                 const std::string argument = argv[i];
@@ -601,6 +845,8 @@ int main(int argc, char **argv) {
                     buildMissing = true;
                 } else if (argument == "--ktx-tool") {
                     build.ktxTool = requireValue(i, argc, argv, argument);
+                } else if (argument == "--gltf-validator") {
+                    validatorPath = requireValue(i, argc, argv, argument);
                 } else if (argument == "--workers") {
                     build.maxWorkers = parsePositiveUint32(
                         requireValue(i, argc, argv, argument), argument);
@@ -637,6 +883,43 @@ int main(int argc, char **argv) {
 
             std::atomic_bool cancelRequested{false};
             ConsoleCancellationHandler cancellationHandler(cancelRequested);
+            vkr::assettool::Win32JobProcessRunner validatorRunner;
+            std::unordered_set<std::string> validationRequested(
+                cook.sceneIds.begin(), cook.sceneIds.end());
+            for (const vkr::CatalogScene &scene : catalog.scenes) {
+                const bool selected =
+                    cook.sceneIds.empty()
+                        ? !scene.optional
+                        : validationRequested.count(scene.id) > 0;
+                if (!selected || scene.type != "gltf")
+                    continue;
+                vkr::assettool::GltfValidationOptions validationOptions;
+                validationOptions.sourcePath =
+                    project.projectRoot / scene.source;
+                validationOptions.cacheRoot = cook.cacheRoot;
+                validationOptions.validatorPath = validatorPath;
+                validationOptions.requireExecutable = true;
+                const auto validation = vkr::assettool::validateGltf(
+                    validationOptions, cancelRequested, validatorRunner);
+                if (validation.report.state !=
+                        vkr::AssetValidationState::Valid &&
+                    validation.report.state !=
+                        vkr::AssetValidationState::Warnings) {
+                    throw std::runtime_error(
+                        "Cook rejected scene '" + scene.id +
+                        "' because validation is " +
+                        vkr::assetValidationStateName(
+                            validation.report.state) +
+                        (validation.report.failureReason.empty()
+                             ? std::string{}
+                             : ": " +
+                                   validation.report.failureReason));
+                }
+                (void)vkr::bindSceneValidation(
+                    cook.cacheRoot, project.projectRoot, scene.id,
+                    scene.source,
+                    vkr::sceneValidationReceipt(validation.report));
+            }
             if (buildMissing) {
                 std::unordered_set<std::string> requested(
                     cook.sceneIds.begin(), cook.sceneIds.end());

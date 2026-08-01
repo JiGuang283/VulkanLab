@@ -126,6 +126,8 @@ const char *assetImportKindName(AssetImportKind kind) {
         return "SceneTextures";
     case AssetImportKind::Environment:
         return "Environment";
+    case AssetImportKind::SceneValidation:
+        return "SceneValidation";
     }
     return "Unknown";
 }
@@ -150,8 +152,13 @@ AssetImportManager::~AssetImportManager() { shutdown(); }
 
 std::shared_ptr<AssetImportTask>
 AssetImportManager::request(const AssetImportRequest &request) {
-    if (request.sceneId.empty() || request.profileId.empty())
+    if (request.kind == AssetImportKind::SceneValidation) {
+        if (request.sceneId.empty() && request.sourcePath.empty())
+            throw std::invalid_argument(
+                "scene validation requires sceneId or sourcePath");
+    } else if (request.sceneId.empty() || request.profileId.empty()) {
         throw std::invalid_argument("sceneId and profileId are required");
+    }
     std::lock_guard lock(mutex_);
     if (stopping_)
         throw std::runtime_error("AssetImportManager is shutting down");
@@ -160,6 +167,7 @@ AssetImportManager::request(const AssetImportRequest &request) {
         if (existing->sceneId == request.sceneId &&
             existing->profileId == request.profileId &&
             existing->kind == request.kind &&
+            existing->sourcePath == request.sourcePath &&
             !isTerminalAssetImportState(existing->state.load())) {
             return existing;
         }
@@ -172,11 +180,14 @@ AssetImportManager::request(const AssetImportRequest &request) {
     task->reason = request.reason;
     task->force = request.force;
     task->kind = request.kind;
+    task->sourcePath = request.sourcePath;
     task->logPath =
         options_.cacheRoot / "logs" /
         ((request.kind == AssetImportKind::Environment
               ? "environment-"
-              : "import-") +
+              : request.kind == AssetImportKind::SceneValidation
+                    ? "validation-"
+                    : "import-") +
          std::to_string(task->id) + ".log");
     tasks_.emplace(task->id, task);
     historyIds_.push_back(task->id);
@@ -274,6 +285,27 @@ void AssetImportManager::applyEvent(
         task->failedArtifacts = unsignedValue(event, "failed");
     } else if (type == "publishing") {
         task->state = AssetImportState::Publishing;
+    } else if (type == "validation") {
+        const auto found = event.find("validation");
+        if (found == event.end() || !found->is_object())
+            throw std::runtime_error(
+                "asset validation event is malformed");
+        const nlohmann::json &validation = *found;
+        const auto state = assetValidationStateFromName(
+            validation.value("state", std::string{}));
+        if (!state)
+            throw std::runtime_error(
+                "asset validation state is invalid");
+        task->validationState = *state;
+        task->validationErrors = unsignedValue(validation, "errors");
+        task->validationWarnings = unsignedValue(validation, "warnings");
+        std::lock_guard lock(task->mutex);
+        task->validationReportKey =
+            validation.value("reportKey", std::string{});
+        task->validationInputFingerprint =
+            validation.value("inputFingerprint", std::string{});
+        task->validationFailureReason =
+            validation.value("failureReason", std::string{});
     } else if (type == "completed") {
         task->completedArtifacts =
             unsignedValue(event, "completed",
@@ -318,7 +350,7 @@ void AssetImportManager::workerLoop() {
         std::mutex logMutex;
         const AssetImportRequest request{
             task->sceneId, task->profileId, task->reason,
-            task->force, task->kind};
+            task->force, task->kind, task->sourcePath};
         AssetImportExecutionResult execution;
         try {
             execution = executor_(
@@ -409,6 +441,22 @@ AssetImportExecutionResult runAssetImportProcess(
             std::filesystem::path(request.profileId).wstring(),
             L"--cache-root", options.cacheRoot.wstring(), L"--progress",
             L"ndjson"};
+    } else if (request.kind == AssetImportKind::SceneValidation) {
+        arguments = {L"validate", L"scene", L"--project",
+                     options.projectRoot.wstring(), L"--cache-root",
+                     options.cacheRoot.wstring(), L"--progress", L"ndjson"};
+        if (!request.sourcePath.empty()) {
+            arguments.push_back(L"--source");
+            arguments.push_back(request.sourcePath.wstring());
+        } else {
+            arguments.push_back(L"--scene-id");
+            arguments.push_back(
+                std::filesystem::path(request.sceneId).wstring());
+        }
+        if (!options.gltfValidatorPath.empty()) {
+            arguments.push_back(L"--gltf-validator");
+            arguments.push_back(options.gltfValidatorPath.wstring());
+        }
     } else {
         arguments = {
             L"import", L"scene", L"--project",
@@ -419,7 +467,8 @@ AssetImportExecutionResult runAssetImportProcess(
             L"ndjson", L"--memory-budget-mib",
             std::to_wstring(options.memoryBudgetMiB)};
     }
-    if (options.workers != 0) {
+    if (options.workers != 0 &&
+        request.kind != AssetImportKind::SceneValidation) {
         arguments.push_back(L"--workers");
         arguments.push_back(std::to_wstring(options.workers));
     }
@@ -535,7 +584,8 @@ AssetImportExecutionResult runAssetImportProcess(
             std::string pending;
             std::array<char, 4096> buffer{};
             DWORD read = 0;
-            while (ReadFile(stdoutRead.value, buffer.data(), buffer.size(),
+            while (ReadFile(stdoutRead.value, buffer.data(),
+                            static_cast<DWORD>(buffer.size()),
                             &read, nullptr) &&
                    read != 0) {
                 pending.append(buffer.data(), read);
@@ -574,8 +624,8 @@ AssetImportExecutionResult runAssetImportProcess(
     std::thread stderrReader([&] {
         std::array<char, 4096> buffer{};
         DWORD read = 0;
-        while (ReadFile(stderrRead.value, buffer.data(), buffer.size(), &read,
-                        nullptr) &&
+        while (ReadFile(stderrRead.value, buffer.data(),
+                        static_cast<DWORD>(buffer.size()), &read, nullptr) &&
                read != 0) {
             logCallback(std::string(buffer.data(), read));
         }

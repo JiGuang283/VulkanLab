@@ -1,5 +1,6 @@
 #include "SceneCatalogEditor.h"
 
+#include "AssetValidation.h"
 #include "DerivedTextureManifest.h"
 #include "SceneCatalog.h"
 
@@ -109,6 +110,7 @@ void SceneCatalogEditor::saveCamera(const ProjectContext &project,
 
 void SceneCatalogEditor::removeScene(const ProjectContext &project,
                                      const std::string &sceneId) {
+    removeSceneValidationBinding(project.cacheRoot, sceneId);
     editCatalog(project, [&](Json &root) {
         Json &scenes = root.at("scenes");
         const auto before = scenes.size();

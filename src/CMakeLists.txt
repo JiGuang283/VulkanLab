@@ -30,6 +30,7 @@ target_link_libraries(vkl_shader_catalog
 )
 
 set(VKL_ASSET_CORE_SOURCES
+    assets/AssetValidation.cpp
     assets/ArtifactCachePruner.cpp
     assets/ArtifactIndex.cpp
     assets/ArtifactStatus.cpp

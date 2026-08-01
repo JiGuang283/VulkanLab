@@ -294,11 +294,11 @@ SceneUpload task=<id> batch=<n>
 - 三种 validation profile 均能启动小场景，协议返回实际 profile。
 - 人为制造 image layout 或 descriptor 越界测试时，sync/GPU profile 能产生预期错误；测试代码不得留在正常路径。
 
-## Stage 3: glTF Validator Import Gate
+## Stage 3: glTF Validator Import Gate（已完成，2026-07-31）
 
 ### Tool Integration
 
-- 固定并记录 Khronos glTF Validator 版本。
+- 固定使用 Khronos glTF Validator `2.0.0-dev.3.10`，由校验 SHA-256 的安装脚本放入忽略目录，不提交第三方二进制。
 - 新增工具发现顺序：显式 `--gltf-validator`、与 `VulkanLabAssetTool.exe` 同目录、PATH。
 - 统一由 `VulkanLabAssetTool` 托管外部进程：
 

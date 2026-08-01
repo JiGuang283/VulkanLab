@@ -42,6 +42,7 @@ void printUsage() {
         << "  VulkanLabCtl [--json] load cancel [task-id]\n"
         << "  VulkanLabCtl [--json] asset catalog\n"
         << "  VulkanLabCtl [--json] asset status [scene]\n"
+        << "  VulkanLabCtl [--json] asset validation <scene-id>\n"
         << "  VulkanLabCtl [--json] [--no-wait] [--force] "
            "[--load-after] asset import <scene>\n"
         << "  VulkanLabCtl [--json] asset cancel [task-id]\n"
@@ -299,6 +300,10 @@ ParsedCommand parseCommand(int argc, char **argv) {
         parsed.method = "asset.status";
         if (args.size() == 3)
             parsed.params = {{"name", args[2]}};
+    } else if (args.size() == 3 && args[0] == "asset" &&
+               args[1] == "validation") {
+        parsed.method = "asset.validation";
+        parsed.params = {{"name", args[2]}};
     } else if (args.size() == 3 && args[0] == "asset" &&
                args[1] == "import") {
         parsed.method = "asset.import";
@@ -649,6 +654,23 @@ void printHuman(const std::string &method, const Json &result) {
         std::cout << result.at("scene").get<std::string>() << ": "
                   << result.at("state").get<std::string>() << " ("
                   << result.at("profileId").get<std::string>() << ")\n";
+        if (!result.value("reason", std::string{}).empty())
+            std::cout << result.at("reason").get<std::string>() << '\n';
+    } else if (method == "asset.validation") {
+        std::cout << result.at("scene").get<std::string>() << ": "
+                  << result.at("state").get<std::string>() << '\n';
+        if (result.contains("validator")) {
+            std::cout << "validator: "
+                      << result.at("validator").value("version", "unknown")
+                      << '\n';
+        }
+        if (result.contains("counts")) {
+            const Json &counts = result.at("counts");
+            std::cout << "errors " << counts.value("errors", 0)
+                      << ", warnings " << counts.value("warnings", 0)
+                      << ", infos " << counts.value("infos", 0)
+                      << ", hints " << counts.value("hints", 0) << '\n';
+        }
         if (!result.value("reason", std::string{}).empty())
             std::cout << result.at("reason").get<std::string>() << '\n';
     } else if (method == "asset.import") {

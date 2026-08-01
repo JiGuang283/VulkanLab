@@ -204,11 +204,42 @@ Vulkan Validation 默认使用 `core`，也可以显式选择 `off/core/sync/gpu
 
 未知参数会打印用法并返回非零退出码。控制工具的完整命令见 [Runtime Control](runtime_control.md)。
 
+## glTF Validator
+
+新 glTF/GLB 导入使用 Khronos glTF Validator `2.0.0-dev.3.10` 作为规范门禁。固定版本安装到 Git 忽略目录：
+
+```powershell
+.\tools\setup\Install-GltfValidator.ps1
+```
+
+脚本下载官方 Win64 zip，校验 SHA-256 `c5068f51205deedc28acc3529ee7e11ee60e853454f673093398eba80142202c`，并安装到 `external/tools/gltf-validator/2.0.0-dev.3.10/`。CMake 发现后会把 executable、LICENSE 和 NOTICES stage 到 `VulkanLabAssetTool.exe` 旁。也可以在启动或资产命令中显式覆盖：
+
+```powershell
+.\VulkanLab.exe --gltf-validator D:\Tools\gltf_validator.exe
+.\VulkanLabAssetTool.exe validate scene `
+  --project C:\Project\vulkan_learn `
+  --scene-id sheen-chair `
+  --gltf-validator D:\Tools\gltf_validator.exe
+```
+
+工具发现顺序为显式参数、AssetTool 同目录、`PATH`，只接受精确版本。报告默认写入 `%LOCALAPPDATA%/VulkanLab/DerivedAssets/<projectId>/validation/`；`--cache-root` 可覆盖。`Valid` 和 `Warnings` 允许导入，`Invalid` 不能绕过；工具不可用时开发 UI 只有在显式勾选 `Import without validation` 后才允许继续。Cook 必须能发现正确版本，并要求全部选中 glTF scene 没有 Error。
+
+```powershell
+.\VulkanLabAssetTool.exe validate scene `
+  --project C:\Project\vulkan_learn `
+  --source D:\Assets\Example\scene.glb
+
+.\VulkanLabAssetTool.exe validate scene `
+  --project C:\Project\vulkan_learn `
+  --scene-id main-sponza `
+  --force
+```
+
 ## 场景资产
 
 场景由源码项目的 `assets/catalog.json` 注册，新增可选 glTF 不需要修改或重新编译 `main.cpp`。`Viking Room` 使用内建 factory；其余条目由项目相对 `source` 创建 glTF prepare factory。可选源文件缺失时仍显示为 `Unavailable`，但不阻止启动。
 
-`VulkanLab -> Scene -> Scenes` 提供搜索、单击选择、双击/`Load`、`Reimport`、显式 source fallback、保存当前相机和从 Catalog 移除条目。`Import Scene...` 选择 `.glb/.gltf` 后确认名称、稳定 scene ID、profile、Copy/Reference 和是否自动加载。`.gltf` 的本地 `.bin` 与图片依赖会一起复制到 `models/imported/<scene-id>/`；远程、缺失或逃逸依赖不会写入 Catalog。Catalog 注册成功后会自动提交 KTX2 import，勾选自动加载时再连续执行 CPU prepare 和 GPU upload。
+`VulkanLab -> Scene -> Scenes` 提供搜索、单击选择、双击/`Load`、`Reimport`、显式 source fallback、保存当前相机和从 Catalog 移除条目。`Import Scene...` 选择 `.glb/.gltf` 后先执行本地依赖安全检查和 Validator，再显示名称、稳定 scene ID、profile、Copy/Reference、验证 issues/扩展兼容性和是否自动加载。`.gltf` 的本地 `.bin` 与图片依赖会一起复制到 `models/imported/<scene-id>/`；远程、缺失、逃逸依赖或 Validator Error 不会写入 Catalog。Catalog 注册成功后会自动提交 Native BC7 import，勾选自动加载时再连续执行 CPU prepare 和 GPU upload。已有 Catalog glTF 可在场景详情中按需 `Validate/Revalidate` 和打开完整报告。
 
 `VulkanLab -> Scene -> Assets` 显示当前项目、Catalog、cache root、运行模式、索引 Ready 记录数、cache/unreferenced blob 用量、选中 scene/profile 的 `Ready/Missing/Stale/Invalid/Importing` 状态、最近失败，以及资产任务的真实纹理进度、encoded/reused/failed、worker、耗时、日志和最近历史。长任务不会停留在 modal 中，页面不会逐帧扫描全部 manifest。
 
@@ -301,7 +332,7 @@ Catalog 当前包含以下初始 glTF 条目：
   --older-than-days 7
 ```
 
-`cache prune` 默认是 dry-run，只列出候选。确认列表后才使用 `--execute`；执行时会与 import/migration 互斥，并在锁内重新计算保护闭包。任何已发布 manifest 引用的 blob、正在导入的 blob 和保留期内的孤立 blob 都不会删除。若任一 manifest 损坏或包含非法 blob 路径，命令会 fail closed 并保持 cache 不变。测试隔离 cache 可以用 `--older-than-days 0 --execute` 立即删除全部无引用 blob，正常共享 cache 不建议这样使用。
+`cache prune` 默认是 dry-run，只列出候选。确认列表后才使用 `--execute`；执行时会与 import/migration/validation 互斥，并在锁内重新计算保护闭包。任何已发布 scene/environment manifest 引用的 blob、Catalog validation index 引用的报告、正在导入的 blob 和保留期内的孤立文件都不会删除。Catalog 删除只解除 validation report 绑定，报告经过保留期后由这里清理。若任一 manifest 损坏或包含非法 blob 路径，命令会 fail closed 并保持 cache 不变。测试隔离 cache 可以用 `--older-than-days 0 --execute` 立即删除全部无引用 blob 和 validation report，正常共享 cache 不建议这样使用。
 
 使用输出目录启动渲染器时，locator 仍会选择相同的用户级共享缓存：
 

@@ -305,6 +305,22 @@ SceneImportService::preflight(const std::filesystem::path &sourcePath) {
     std::set<std::filesystem::path> seen;
     collectUris(root, "buffers", sourceRoot, result.dependencies, seen);
     collectUris(root, "images", sourceRoot, result.dependencies, seen);
+    const auto collectExtensions = [&](const char *name,
+                                       std::vector<std::string> &output) {
+        if (!root.contains(name))
+            return;
+        if (!root.at(name).is_array())
+            throw std::runtime_error(std::string(name) +
+                                     " must be an array");
+        for (const Json &extension : root.at(name)) {
+            if (!extension.is_string())
+                throw std::runtime_error(std::string(name) +
+                                         " must contain strings");
+            output.push_back(extension.get<std::string>());
+        }
+    };
+    collectExtensions("extensionsUsed", result.extensionsUsed);
+    collectExtensions("extensionsRequired", result.extensionsRequired);
 
     result.totalBytes = std::filesystem::file_size(result.sourcePath);
     for (const auto &dependency : result.dependencies)
@@ -329,11 +345,30 @@ SceneImportResult SceneImportService::importScene(
         throw std::runtime_error("Scene ID already exists: " + request.sceneId);
 
     const SceneImportPreflight checked = preflight(request.sourcePath);
+    if (!request.validation)
+        throw std::runtime_error(
+            "Scene import requires a validation receipt");
+    const AssetValidationQuery validation = queryValidationReceipt(
+        project.cacheRoot, *request.validation, checked.sourcePath);
+    const bool validated =
+        validation.state == AssetValidationState::Valid ||
+        validation.state == AssetValidationState::Warnings;
+    const bool explicitlyUnvalidated =
+        validation.state == AssetValidationState::Unavailable &&
+        request.allowUnvalidated;
+    if (!validated && !explicitlyUnvalidated) {
+        throw std::runtime_error(
+            "Scene validation gate rejected import: " +
+            std::string(assetValidationStateName(validation.state)) +
+            (validation.reason.empty() ? std::string{}
+                                       : " (" + validation.reason + ")"));
+    }
     checkCancelled(cancel);
 
     std::filesystem::path projectRelativeSource;
     std::filesystem::path publishedDirectory;
     std::filesystem::path stagingDirectory;
+    bool validationBound = false;
     try {
         if (request.placement == SceneImportPlacement::ReferenceExisting) {
             if (!pathIsWithin(project.projectRoot, checked.sourcePath))
@@ -366,6 +401,21 @@ SceneImportResult SceneImportService::importScene(
             }
             checkCancelled(cancel);
             (void)preflight(stagedScene);
+            const AssetValidationQuery afterCopy = queryValidationReceipt(
+                project.cacheRoot, *request.validation, checked.sourcePath);
+            const bool sourceStillValidated =
+                afterCopy.state == AssetValidationState::Valid ||
+                afterCopy.state == AssetValidationState::Warnings ||
+                (afterCopy.state == AssetValidationState::Unavailable &&
+                 request.allowUnvalidated);
+            if (!sourceStillValidated) {
+                throw std::runtime_error(
+                    "Scene source or dependencies changed during import: " +
+                    std::string(assetValidationStateName(afterCopy.state)) +
+                    (afterCopy.reason.empty()
+                         ? std::string{}
+                         : " (" + afterCopy.reason + ")"));
+            }
             std::filesystem::rename(stagingDirectory, publishedDirectory);
             stagingDirectory.clear();
             projectRelativeSource = std::filesystem::relative(
@@ -374,8 +424,20 @@ SceneImportResult SceneImportService::importScene(
         }
 
         checkCancelled(cancel);
+        (void)bindSceneValidation(project.cacheRoot, project.projectRoot,
+                                  request.sceneId, projectRelativeSource,
+                                  *request.validation);
+        validationBound = true;
+        checkCancelled(cancel);
         appendCatalogScene(project, request, projectRelativeSource);
     } catch (...) {
+        if (validationBound) {
+            try {
+                removeSceneValidationBinding(project.cacheRoot,
+                                             request.sceneId);
+            } catch (...) {
+            }
+        }
         std::error_code ignored;
         if (!stagingDirectory.empty())
             std::filesystem::remove_all(stagingDirectory, ignored);

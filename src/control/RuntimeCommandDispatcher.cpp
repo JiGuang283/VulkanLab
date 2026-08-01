@@ -244,6 +244,9 @@ RuntimeDispatchResult RuntimeCommandDispatcher::dispatch(
             result = host.runtimeAssetCatalog();
         } else if (command.method == "asset.status") {
             result = host.runtimeAssetStatus(optionalString(command, "name"));
+        } else if (command.method == "asset.validation") {
+            result = host.runtimeAssetValidation(
+                requiredString(command, "name"));
         } else if (command.method == "asset.import") {
             result = host.runtimeAssetImport(
                 requiredString(command, "name"),

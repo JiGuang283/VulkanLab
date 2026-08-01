@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -12,11 +13,19 @@ namespace vkr::assettool {
 struct ProcessRequest {
     std::filesystem::path executable;
     std::vector<std::wstring> arguments;
+    uint32_t timeoutMs = 0;
+    size_t maxStdoutBytes = 1024 * 1024;
+    size_t maxStderrBytes = 1024 * 1024;
 };
 
 struct ProcessResult {
     uint32_t exitCode = 0;
     bool cancelled = false;
+    bool timedOut = false;
+    bool stdoutTruncated = false;
+    bool stderrTruncated = false;
+    std::string stdoutText;
+    std::string stderrText;
     std::string output;
 };
 

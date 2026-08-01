@@ -79,6 +79,10 @@ class FakeRuntimeHost final : public vkr::RuntimeControlHost {
                                                     ? vkr::ControlJson(*taskId)
                                                     : vkr::ControlJson(nullptr)}});
     }
+    vkr::ControlJson
+    runtimeAssetValidation(const std::string &name) override {
+        return reply("asset.validation", {{"name", name}});
+    }
     vkr::ControlJson runtimeAssetCacheInfo() override {
         return reply("asset.cache_info");
     }
