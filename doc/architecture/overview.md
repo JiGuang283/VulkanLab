@@ -1,8 +1,8 @@
 # 系统架构概览
 
 > Status: Current
-> Last verified: 2026-07-30
-> Verified against: Compute Bloom v1 working tree
+> Last verified: 2026-08-01
+> Verified against: Docking v1 working tree
 
 VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Application` 为组合根，场景、渲染提交、GPU 资源和调试控制之间保持显式所有权，不使用全局引擎服务定位器。
 
@@ -10,7 +10,8 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 
 | 目录 | 职责 |
 |---|---|
-| `src/app/` | 应用生命周期、场景注册与切换、相机、统一 ImGui 工作区、RenderView 输入和命令执行。 |
+| `src/app/` | 应用生命周期、场景注册与切换、相机、RenderView 输入和命令执行。 |
+| `src/editor/` | ImGui DockSpace、默认工具窗口布局、窗口可见性和中央交互区域。 |
 | `src/assets/` | ProjectContext、Scene/Environment Catalog、编辑事务、RuntimePackage、ArtifactIndex/依赖校验、cache prune、资产工具进程监督、manifest 和 KTX2 cache 读取。 |
 | `src/control/` | Windows Named Pipe 服务、运行时命令队列和 JSON 协议。 |
 | `src/core/` | Vulkan instance/device、SwapChain、FrameSync、Buffer/Image、Descriptor、Pipeline、VMA、同步与增量上传。 |
@@ -83,7 +84,7 @@ CaptureService 的主线程部分创建 readback buffer、记录 image copy 并�
 1. 轮询窗口和输入，收割 asset import 结果，执行一条待处理控制命令。
 2. 轮询 worker 结果与 upload fence，在软预算内推进 SceneGpuBuilder 和 EnvironmentGpuBuilder。
 3. 应用待切换场景，更新计时、输入模式、相机和 Scene tick。
-4. 轮询场景导入 future，构建唯一的 `VulkanLab` 工具窗口；Scene、Render、Materials 和 Diagnostics 页面只读取或修改 Application 已有状态。
+4. 轮询场景导入 future，构建全屏 DockSpace 及 Scenes、Assets、Render、Materials 和 Diagnostics 工具窗口；中央节点透出当前 swapchain 场景。
 5. `FrameSync::beginFrame()` 获取 frame index、swapchain image 和 command buffer。
 6. Application 组装 `RenderViewInput`；纯函数 `buildRenderView()` 完成默认 Sun、灯光截断/GPU 打包和阴影拟合，生成不可变 `RenderView`。
 7. Scene 生成 RenderCommand，RenderQueue 分别排序 opaque 与 transparent 命令。
