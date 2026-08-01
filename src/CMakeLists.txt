@@ -190,7 +190,10 @@ else()
 endif()
 
 if(VKL_ENABLE_EDITOR_UI)
-    list(APPEND VKL_ENGINE_SOURCES render/GuiSystem.cpp)
+    list(APPEND VKL_ENGINE_SOURCES
+        editor/EditorDockWorkspace.cpp
+        render/GuiSystem.cpp
+    )
 else()
     list(APPEND VKL_ENGINE_SOURCES render/GuiSystemDisabled.cpp)
 endif()

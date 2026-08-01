@@ -41,6 +41,7 @@ GuiSystem::GuiSystem(VkInstance instance, Device &device,
     // --- ImGui context ---
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     ImGui::StyleColorsDark();
 
     // --- GLFW backend (install_callbacks=true chains existing callbacks) ---

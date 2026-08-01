@@ -29,6 +29,9 @@
 #include "diagnostics/CaptureService.h"
 #include "diagnostics/Profiling.h"
 #include "diagnostics/TracyProfiler.h"
+#if VKL_ENABLE_EDITOR_UI
+#include "editor/EditorDockWorkspace.h"
+#endif
 #include "render/GuiSystem.h"
 #include "render/DirectionalShadow.h"
 #include "render/EnvironmentGpuBuilder.h"
@@ -792,6 +795,9 @@ Application::Application(const Config &config, ProjectContext projectContext,
     sceneImportUi_ = std::make_unique<SceneImportUiState>();
     sceneAssetOperations_ = std::make_unique<SceneAssetOperationState>();
     editorUi_ = std::make_unique<EditorUiState>();
+#if VKL_ENABLE_EDITOR_UI
+    editorDockWorkspace_ = std::make_unique<EditorDockWorkspace>();
+#endif
 #if VKL_ENABLE_RUNTIME_CONTROL
     runtimeControlPipeName_ =
         control::makeRuntimeControlEndpoint(
@@ -2820,8 +2826,13 @@ void Application::updateInputMode() {
         bool overUI = gui_ && gui_->wantCaptureMouse();
 #if VKL_ENABLE_EDITOR_UI
         overUI = overUI || (io && ImGui::IsAnyItemActive());
+        const bool overSceneArea =
+            !gui_ || !editorDockWorkspace_ ||
+            editorDockWorkspace_->sceneAreaHovered();
+#else
+        constexpr bool overSceneArea = true;
 #endif
-        if (pressed && !overUI) {
+        if (pressed && overSceneArea && !overUI) {
             savedCursor_ = input_->cursorPos();
             input_->setCursorCaptured(true);
 #if VKL_ENABLE_EDITOR_UI
@@ -4811,44 +4822,19 @@ void Application::drawLoadStatsPanel() {
 void Application::drawGui() {
     VKL_PROFILE_ZONE("Build Editor UI");
     updateSceneImport();
-
-    const ImGuiViewport *viewport = ImGui::GetMainViewport();
-    const float initialWidth =
-        std::clamp(viewport->WorkSize.x * 0.32f, 320.0f, 420.0f);
-    const float initialHeight =
-        std::max(240.0f, viewport->WorkSize.y - 16.0f);
-    const ImVec2 initialPosition{
-        viewport->WorkPos.x +
-            std::max(0.0f, viewport->WorkSize.x - initialWidth - 8.0f),
-        viewport->WorkPos.y + 8.0f};
-    ImGui::SetNextWindowPos(initialPosition, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(initialWidth, initialHeight),
-                             ImGuiCond_FirstUseEver);
-
-    if (!ImGui::Begin("VulkanLab")) {
-        ImGui::End();
+    if (!editorDockWorkspace_)
         return;
-    }
 
     std::string sceneName = "No Scene";
     if (currentSceneIndex_ >= 0 &&
         currentSceneIndex_ < static_cast<int>(sceneRegistry_.size()))
         sceneName = sceneRegistry_[currentSceneIndex_].name;
-    if (ImGui::BeginTable("WorkspaceStatus", 2,
-                          ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("Scene",
-                                ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("FPS", ImGuiTableColumnFlags_WidthFixed,
-                                ImGui::CalcTextSize("999 FPS").x);
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted(sceneName.c_str());
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", sceneName.c_str());
-        ImGui::TableSetColumnIndex(1);
-        ImGui::Text("%.0f FPS", ImGui::GetIO().Framerate);
-        ImGui::EndTable();
-    }
+    EditorFrameStatus status{};
+    status.sceneName = sceneName;
+    status.fps = ImGui::GetIO().Framerate;
+    const GpuPassTimings &gpuTimings = renderer_->gpuPassTimings();
+    if (gpuTimings.available)
+        status.gpuFrameMs = static_cast<float>(gpuTimings.totalMs);
 
     bool hasActiveLoad = false;
     if (latestSceneLoadTask_) {
@@ -4872,119 +4858,77 @@ void Application::drawGui() {
                     : std::clamp(static_cast<float>(completed) /
                                      static_cast<float>(total),
                                  0.0f, 1.0f);
-            char overlay[96]{};
-            std::snprintf(overlay, sizeof(overlay), "%s",
-                          sceneLoadStateName(state));
-            ImGui::ProgressBar(
-                fraction,
-                ImVec2(-std::numeric_limits<float>::min(), 0.0f), overlay);
+            status.loading = true;
+            status.loadingLabel = sceneLoadStateName(state);
+            status.loadingProgress = fraction;
         }
     }
 
-    if (ImGui::BeginTabBar("WorkspaceTabs")) {
-        if (ImGui::BeginTabItem("Scene")) {
-            ImGui::PushID("ScenePage");
-            ImGui::BeginChild("ScenePageContent");
-            if (ImGui::BeginTabBar("SceneTabs")) {
-                if (ImGui::BeginTabItem("Scenes")) {
-                    ImGui::PushID("ScenesTab");
-                    drawScenePanel();
-                    if (hasActiveLoad) {
-                        ImGui::SeparatorText("Loading");
-                        drawSceneLoadingPanel();
-                    }
-                    ImGui::PopID();
-                    ImGui::EndTabItem();
-                }
-                if (ImGui::BeginTabItem("Assets")) {
-                    ImGui::PushID("AssetsTab");
-                    drawAssetsPanel();
-                    ImGui::PopID();
-                    ImGui::EndTabItem();
-                }
-                ImGui::EndTabBar();
-            }
-            ImGui::EndChild();
-            ImGui::PopID();
-            ImGui::EndTabItem();
+    EditorPanelCallbacks panels{};
+    panels.scenes = [this, hasActiveLoad]() {
+        drawScenePanel();
+        if (hasActiveLoad) {
+            ImGui::SeparatorText("Loading");
+            drawSceneLoadingPanel();
         }
-
-        if (ImGui::BeginTabItem("Render")) {
-            ImGui::PushID("RenderPage");
-            ImGui::BeginChild("RenderPageContent");
-            if (ImGui::CollapsingHeader(
-                    "Pipeline", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::PushID("Pipeline");
-                drawRenderPanel();
-                ImGui::PopID();
-            }
-            if (ImGui::CollapsingHeader(
-                    "Post Processing",
-                    ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::PushID("PostProcessing");
-                drawPostProcessingPanel();
-                ImGui::PopID();
-            }
-            if (ImGui::CollapsingHeader(
-                    "Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::PushID("Lighting");
-                drawLightingPanel();
-                ImGui::PopID();
-            }
-            if (ImGui::CollapsingHeader(
-                    "Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::PushID("Camera");
-                drawCameraPanel();
-                ImGui::PopID();
-            }
-            ImGui::EndChild();
+    };
+    panels.assets = [this]() { drawAssetsPanel(); };
+    panels.render = [this]() {
+        ImGui::PushItemWidth(-160.0f);
+        if (ImGui::CollapsingHeader("Pipeline",
+                                    ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::PushID("Pipeline");
+            drawRenderPanel();
             ImGui::PopID();
-            ImGui::EndTabItem();
         }
-
-        if (ImGui::BeginTabItem("Materials")) {
-            ImGui::PushID("MaterialsPage");
-            ImGui::BeginChild("MaterialsPageContent");
-            drawMaterialsPanel();
-            ImGui::EndChild();
+        if (ImGui::CollapsingHeader("Post Processing",
+                                    ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::PushID("PostProcessing");
+            drawPostProcessingPanel();
             ImGui::PopID();
-            ImGui::EndTabItem();
         }
-
-        if (ImGui::BeginTabItem("Diagnostics")) {
-            ImGui::PushID("DiagnosticsPage");
-            ImGui::BeginChild("DiagnosticsPageContent");
-            if (ImGui::BeginTabBar("DiagnosticsTabs")) {
-                if (ImGui::BeginTabItem("Performance")) {
-                    ImGui::PushID("PerformanceTab");
-                    drawPerformancePanel();
-                    ImGui::PopID();
-                    ImGui::EndTabItem();
-                }
-                if (ImGui::BeginTabItem("Load Stats")) {
-                    ImGui::PushID("LoadStatsTab");
-                    drawLoadStatsPanel();
-                    ImGui::PopID();
-                    ImGui::EndTabItem();
-                }
+        if (ImGui::CollapsingHeader("Lighting",
+                                    ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::PushID("Lighting");
+            drawLightingPanel();
+            ImGui::PopID();
+        }
+        if (ImGui::CollapsingHeader("Camera",
+                                    ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::PushID("Camera");
+            drawCameraPanel();
+            ImGui::PopID();
+        }
+        ImGui::PopItemWidth();
+    };
+    panels.materials = [this]() { drawMaterialsPanel(); };
+    panels.diagnostics = [this]() {
+        if (ImGui::BeginTabBar("DiagnosticsTabs")) {
+            if (ImGui::BeginTabItem("Performance")) {
+                ImGui::PushID("PerformanceTab");
+                drawPerformancePanel();
+                ImGui::PopID();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Load Stats")) {
+                ImGui::PushID("LoadStatsTab");
+                drawLoadStatsPanel();
+                ImGui::PopID();
+                ImGui::EndTabItem();
+            }
 #if VKL_ENABLE_CAPTURE
-                if (ImGui::BeginTabItem("Capture")) {
-                    ImGui::PushID("CaptureTab");
-                    drawCapturePanel();
-                    ImGui::PopID();
-                    ImGui::EndTabItem();
-                }
-#endif
-                ImGui::EndTabBar();
+            if (ImGui::BeginTabItem("Capture")) {
+                ImGui::PushID("CaptureTab");
+                drawCapturePanel();
+                ImGui::PopID();
+                ImGui::EndTabItem();
             }
-            ImGui::EndChild();
-            ImGui::PopID();
-            ImGui::EndTabItem();
+#endif
+            ImGui::EndTabBar();
         }
-        ImGui::EndTabBar();
-    }
+    };
 
-    ImGui::End();
+    editorDockWorkspace_->draw(status, panels);
 }
 #else
 void Application::drawGui() {}

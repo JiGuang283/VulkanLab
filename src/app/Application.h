@@ -35,6 +35,9 @@ class FrameSync;
 class Renderer;
 class PipelineCache;
 class GuiSystem;
+#if VKL_ENABLE_EDITOR_UI
+class EditorDockWorkspace;
+#endif
 class CaptureService;
 struct RuntimeCommand;
 class RuntimeCommandQueue;
@@ -194,6 +197,9 @@ class Application final
     std::unique_ptr<Renderer>            renderer_;
     std::unique_ptr<PipelineCache>       pipelineCache_;
     std::unique_ptr<GuiSystem>           gui_;
+#if VKL_ENABLE_EDITOR_UI
+    std::unique_ptr<EditorDockWorkspace> editorDockWorkspace_;
+#endif
     std::unique_ptr<CaptureService>      captureService_;
     RenderQueue                          renderQueue_;
     ShaderRegistry                       shaderRegistry_;
