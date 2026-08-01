@@ -12,6 +12,7 @@
 #include "render/MaterialTemplate.h"
 #include "render/Mesh.h"
 #include "render/Texture.h"
+#include "diagnostics/Profiling.h"
 
 #include <algorithm>
 #include <array>
@@ -85,6 +86,8 @@ SceneGpuBuilder::SceneGpuBuilder(
 SceneGpuBuilder::~SceneGpuBuilder() = default;
 
 void SceneGpuBuilder::pump(const Budget &budget) {
+    VKL_PROFILE_ZONE("SceneGpuBuilder::pump");
+    VKL_PROFILE_TEXT(task_->sceneName);
     if (finished())
         return;
     uint64_t recordedBytes = 0;
@@ -348,6 +351,12 @@ void SceneGpuBuilder::pump(const Budget &budget) {
     } catch (const std::exception &error) {
         fail(error);
     }
+}
+
+uint64_t SceneGpuBuilder::stagingBytesInUse() const {
+    return uploadQueue_
+               ? static_cast<uint64_t>(uploadQueue_->stagingBytesInUse())
+               : 0;
 }
 
 void SceneGpuBuilder::cancel() {

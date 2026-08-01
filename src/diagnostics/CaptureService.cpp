@@ -1,5 +1,7 @@
 #include "CaptureService.h"
 
+#include "Profiling.h"
+
 #include "CaptureTaskQueue.h"
 #include "assets/ContentHash.h"
 #include "core/Buffer.h"
@@ -467,6 +469,7 @@ class CaptureService::Impl {
     }
 
     void workerLoop() {
+        profileSetThreadName("CaptureEncode");
         while (true) {
             EncodeJob job;
             {
@@ -480,6 +483,7 @@ class CaptureService::Impl {
                 encodeJobs_.pop_front();
             }
 
+            VKL_PROFILE_ZONE("Capture Encode");
             EncodeResult result = encodeCapture(std::move(job));
             {
                 std::lock_guard lock(workerMutex_);

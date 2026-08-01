@@ -15,6 +15,7 @@
 namespace vkr {
 
 class GpuDebugUtils;
+class TracyProfiler;
 
 struct ComputeBloomSupport {
     bool available = false;
@@ -53,6 +54,8 @@ class Device {
     AllocatorMemorySnapshot allocatorMemorySnapshot() const;
     GpuDebugUtils &debugUtils() { return *debugUtils_; }
     const GpuDebugUtils &debugUtils() const { return *debugUtils_; }
+    TracyProfiler &tracyProfiler() { return *tracyProfiler_; }
+    const TracyProfiler &tracyProfiler() const { return *tracyProfiler_; }
 
   private:
     void pickPhysicalDevice();
@@ -78,6 +81,7 @@ class Device {
     ComputeBloomSupport computeBloomSupport_{};
     VmaAllocator          allocator_ = VK_NULL_HANDLE;
     std::unique_ptr<GpuDebugUtils> debugUtils_;
+    std::unique_ptr<TracyProfiler> tracyProfiler_;
 };
 
 } // namespace vkr

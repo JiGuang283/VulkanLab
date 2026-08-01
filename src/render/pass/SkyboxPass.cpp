@@ -10,6 +10,8 @@
 #include "render/RenderFrame.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/RenderView.h"
+#include "diagnostics/Profiling.h"
+#include "diagnostics/TracyProfiler.h"
 
 #include <array>
 #include <utility>
@@ -72,6 +74,8 @@ void SkyboxPass::onResize(
 void SkyboxPass::execute(const RenderFrameContext &frame,
                          const RenderResourceRegistry &resources,
                          const RenderQueue &) {
+    VKL_PROFILE_ZONE("Record Skybox");
+    VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "Skybox");
     const RenderImageHandle target =
         resourceHandles_.hdrMsaaColor.valid()
             ? resourceHandles_.hdrMsaaColor

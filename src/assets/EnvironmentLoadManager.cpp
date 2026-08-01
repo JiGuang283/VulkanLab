@@ -2,6 +2,7 @@
 
 #include "DerivedEnvironmentCache.h"
 #include "core/Log.h"
+#include "diagnostics/Profiling.h"
 
 #include <stdexcept>
 #include <utility>
@@ -128,6 +129,7 @@ void EnvironmentLoadManager::shutdown() {
 }
 
 void EnvironmentLoadManager::workerLoop() {
+    profileSetThreadName("EnvironmentPrepare");
     for (;;) {
         std::unique_ptr<WorkItem> work;
         {
@@ -140,6 +142,8 @@ void EnvironmentLoadManager::workerLoop() {
             active_ = work->task;
         }
         auto &task = *work->task;
+        VKL_PROFILE_ZONE("Environment Prepare Task");
+        VKL_PROFILE_TEXT(task.environmentId);
         task.state = EnvironmentLoadState::PreparingCpu;
         try {
             DerivedEnvironmentCache cache(

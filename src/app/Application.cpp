@@ -27,6 +27,8 @@
 #include "core/VulkanContext.h"
 #include "diagnostics/BuildInfo.h"
 #include "diagnostics/CaptureService.h"
+#include "diagnostics/Profiling.h"
+#include "diagnostics/TracyProfiler.h"
 #include "render/GuiSystem.h"
 #include "render/DirectionalShadow.h"
 #include "render/EnvironmentGpuBuilder.h"
@@ -836,7 +838,11 @@ Application::~Application() {
 }
 
 void Application::run() {
-    init();
+    profileSetThreadName("Main");
+    {
+        VKL_PROFILE_ZONE("Application Init");
+        init();
+    }
 #if VKL_ENABLE_RUNTIME_CONTROL
     if (config_.enableRuntimeControl) {
         runtimeCommandQueue_ = std::make_unique<RuntimeCommandQueue>();
@@ -1316,6 +1322,7 @@ uint64_t Application::reloadCurrentEnvironment() {
 }
 
 void Application::updateEnvironmentLoading() {
+    VKL_PROFILE_ZONE("Environment Load Update");
     if (environmentGpuBuilder_) {
         environmentGpuBuilder_->pump();
         const auto task = environmentGpuBuilder_->task();
@@ -1353,6 +1360,7 @@ void Application::updateEnvironmentLoading() {
 }
 
 void Application::updateSceneLoading() {
+    VKL_PROFILE_ZONE("Scene Load Update");
     if (sceneGpuBuilder_) {
         sceneGpuBuilder_->pump();
         const auto task = sceneGpuBuilder_->task();
@@ -1723,6 +1731,7 @@ uint64_t Application::requestSceneOperation(int index, bool sourceFallback,
 }
 
 void Application::updateAssetImports() {
+    VKL_PROFILE_ZONE("Asset Import Update");
     if (!assetImportManager_)
         return;
     const auto tasks = assetImportManager_->history();
@@ -1850,6 +1859,7 @@ bool Application::cancelLoadOperation(uint64_t taskId) {
 
 #if VKL_ENABLE_RUNTIME_CONTROL
 void Application::processRuntimeCommand() {
+    VKL_PROFILE_ZONE("Runtime Command Dispatch");
     if (!runtimeCommandQueue_)
         return;
     std::shared_ptr<RuntimeCommand> command = runtimeCommandQueue_->popNext();
@@ -1914,6 +1924,7 @@ ControlJson Application::runtimeSystemInfo() {
             {"validation", build.features.validation},
             {"gpuDebugUtils", build.features.gpuDebugUtils},
             {"gpuProfiling", build.features.gpuProfiling},
+            {"tracy", build.features.tracy},
             {"assetTool", build.features.assetTool},
             {"controlTool", build.features.controlTool},
             {"renderTest", build.features.renderTest}}}}},
@@ -1942,7 +1953,18 @@ ControlJson Application::runtimeSystemInfo() {
             {"debugUtilsEnabled", validation.debugUtilsEnabled},
             {"fallbackReason", validationFallback},
             {"warningCount", validation.warningCount},
-            {"errorCount", validation.errorCount}}}}},
+            {"errorCount", validation.errorCount}}},
+          {"tracy",
+           {{"compiled", device_->tracyProfiler().compiled()},
+            {"version",
+             std::string(device_->tracyProfiler().version())},
+            {"connected", device_->tracyProfiler().connected()},
+            {"gpuAvailable",
+             device_->tracyProfiler().gpuAvailable()},
+            {"connectionMode",
+             device_->tracyProfiler().compiled()
+                 ? "on-demand-localhost"
+                 : "disabled"}}}}},
         {"projectRoot", projectContext_.projectRoot.u8string()},
         {"runtimeRoot", projectContext_.runtimeRoot.u8string()},
         {"assetMode", assetImportModeName(config_.assetImportMode)},
@@ -3392,6 +3414,8 @@ void Application::drawScenePanel() {
                 ui.importFuture = std::async(
                     std::launch::async,
                     [project, request, worker] {
+                        profileSetThreadName("SceneImportCopy");
+                        VKL_PROFILE_ZONE("Scene Catalog Import");
                         return SceneImportService::importScene(
                             project, request,
                             [worker] { return worker->cancel.load(); },
@@ -4608,6 +4632,15 @@ void Application::drawPerformancePanel() {
         ImGui::Text("Objects: %zu", currentScene_->objects().size());
     else
         ImGui::Text("Objects: 0");
+    if (build::kTracy) {
+        ImGui::Text("Tracy: %s (GPU %s)",
+                    device_->tracyProfiler().connected() ? "Connected"
+                                                         : "Waiting",
+                    device_->tracyProfiler().gpuAvailable() ? "Available"
+                                                            : "Unavailable");
+    } else {
+        ImGui::TextUnformatted("Tracy: Not compiled");
+    }
     if (ImGui::CollapsingHeader("GPU Pass Timings",
                                 ImGuiTreeNodeFlags_DefaultOpen)) {
         const GpuPassTimings &timings = renderer_->gpuPassTimings();
@@ -4776,6 +4809,7 @@ void Application::drawLoadStatsPanel() {
 }
 
 void Application::drawGui() {
+    VKL_PROFILE_ZONE("Build Editor UI");
     updateSceneImport();
 
     const ImGuiViewport *viewport = ImGui::GetMainViewport();
@@ -4957,6 +4991,7 @@ void Application::drawGui() {}
 #endif
 
 void Application::handleSwapChainRecreate() {
+    VKL_PROFILE_ZONE("Swapchain Recreate");
     const VkExtent2D framebufferExtent = window_->framebufferExtent();
     if (framebufferExtent.width == 0 || framebufferExtent.height == 0)
         return;
@@ -4985,9 +5020,17 @@ const ShaderVariant &Application::currentShaderVariant() const {
 void Application::mainLoop() {
     auto startTime = std::chrono::high_resolution_clock::now();
     auto lastTime = startTime;
+    auto lastProfilerMemorySample = std::chrono::steady_clock::now() -
+                                    std::chrono::seconds(1);
+    AllocatorMemorySnapshot profilerMemory{};
+    profileConfigureMemoryPlot("SceneLoad/StagingBytes");
+    profileConfigureMemoryPlot("SceneLoad/ProcessedBytes");
+    profileConfigureMemoryPlot("VMA/AllocationBytes");
+    profileConfigureMemoryPlot("VMA/BlockBytes");
     float simulationTime = 0.0f;
 
     while (!window_->shouldClose()) {
+        VKL_PROFILE_ZONE("Application Frame");
         window_->pollEvents();
         input_->update();
 
@@ -5053,7 +5096,11 @@ void Application::mainLoop() {
             drawGui();
 
         // 7. 渲染
-        auto ctx = frameSync_->beginFrame();
+        std::optional<FrameSync::FrameContext> ctx;
+        {
+            VKL_PROFILE_ZONE("Begin Render Frame");
+            ctx = frameSync_->beginFrame();
+        }
         if (!ctx) {
             if (frameSync_->swapChainNeedsRecreation())
                 handleSwapChainRecreate();
@@ -5106,11 +5153,60 @@ void Application::mainLoop() {
             }
             lastIgnoredLights_ = renderView.lightStats.ignoredLights;
         }
-        renderQueue_.clear();
-        if (currentScene_)
-            currentScene_->collectRenderCommands(renderQueue_);
-        renderQueue_.sortOpaque();
-        renderQueue_.sortTransparent(camera_.position());
+        {
+            VKL_PROFILE_ZONE("RenderQueue Collect");
+            renderQueue_.clear();
+            if (currentScene_)
+                currentScene_->collectRenderCommands(renderQueue_);
+        }
+        {
+            VKL_PROFILE_ZONE("RenderQueue Sort");
+            renderQueue_.sortOpaque();
+            renderQueue_.sortTransparent(camera_.position());
+        }
+
+        if constexpr (build::kTracy) {
+            profilePlotNumber(
+                "Frame/DrawCount",
+                static_cast<int64_t>(renderQueue_.drawCount()));
+            profilePlotNumber(
+                "Frame/OpaqueDrawCount",
+                static_cast<int64_t>(renderQueue_.opaque().size()));
+            profilePlotNumber(
+                "Frame/TransparentDrawCount",
+                static_cast<int64_t>(renderQueue_.transparent().size()));
+            profilePlotNumber(
+                "Frame/GraphicsPipelines",
+                static_cast<int64_t>(pipelineCache_->graphicsPipelineCount()));
+            profilePlotNumber(
+                "Frame/ComputePipelines",
+                static_cast<int64_t>(pipelineCache_->computePipelineCount()));
+            profilePlotMemory(
+                "SceneLoad/StagingBytes",
+                static_cast<int64_t>(
+                    sceneGpuBuilder_
+                        ? sceneGpuBuilder_->stagingBytesInUse()
+                        : 0));
+            if (latestSceneLoadTask_) {
+                profilePlotMemory(
+                    "SceneLoad/ProcessedBytes",
+                    static_cast<int64_t>(
+                        latestSceneLoadTask_->progress.processedBytes.load()));
+            }
+            const auto profilerNow = std::chrono::steady_clock::now();
+            if (profileConnected() &&
+                profilerNow - lastProfilerMemorySample >=
+                    std::chrono::seconds(1)) {
+                profilerMemory = device_->allocatorMemorySnapshot();
+                lastProfilerMemorySample = profilerNow;
+            }
+            profilePlotMemory(
+                "VMA/AllocationBytes",
+                static_cast<int64_t>(profilerMemory.allocationBytes));
+            profilePlotMemory(
+                "VMA/BlockBytes",
+                static_cast<int64_t>(profilerMemory.blockBytes));
+        }
 
         GuiSystem *frameGui = gui_.get();
         if (captureSelection && !captureSelection->includeGui && gui_) {
@@ -5125,12 +5221,16 @@ void Application::mainLoop() {
                                    frameGui, currentShaderVariant(),
                                    renderView);
             if (captureSelection) {
+                VKL_PROFILE_GPU_ZONE(device_->tracyProfiler(), ctx->cmd,
+                                     "ScreenshotCopy");
                 captureService_->recordCopy(
                     ctx->cmd, swapChain_->image(ctx->imageIndex));
             }
         }
+        device_->tracyProfiler().collect(ctx->cmd);
         const uint64_t submissionSerial = frameSync_->endFrame(*ctx);
         ++presentedFrameCount_;
+        profileFrameMark();
         if (captureSelection)
             captureService_->frameSubmitted(submissionSerial);
 

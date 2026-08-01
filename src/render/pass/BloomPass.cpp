@@ -13,6 +13,8 @@
 #include "render/RenderResourceRegistry.h"
 #include "render/RenderView.h"
 #include "render/ShaderVariant.h"
+#include "diagnostics/Profiling.h"
+#include "diagnostics/TracyProfiler.h"
 
 #include <algorithm>
 #include <array>
@@ -126,6 +128,7 @@ void BloomPass::onResize(const SwapChain &,
 void BloomPass::execute(const RenderFrameContext &frame,
                         const RenderResourceRegistry &resources,
                         const RenderQueue &) {
+    VKL_PROFILE_ZONE("Record Bloom");
     if (!frame.pipelineCache || !frame.view || !frame.shaderVariant)
         return;
 
@@ -134,6 +137,7 @@ void BloomPass::execute(const RenderFrameContext &frame,
                         frame.shaderVariant->supportsBloom;
     if (!active)
         return;
+    VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "Bloom");
 
     prepareImagesForCompute(frame, resources);
 
@@ -161,44 +165,51 @@ void BloomPass::execute(const RenderFrameContext &frame,
     vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                       downsamplePipeline.handle());
     const uint32_t levels = activeLevelCount(resources);
-    for (uint32_t level = 0; level < levels; ++level) {
-        ScopedGpuLabel label(device_->debugUtils(), frame.cmd,
-                             "Downsample L" + std::to_string(level));
-        const VkDescriptorSet set =
-            downsampleSets_[frame.frameIndex][level];
-        vkCmdBindDescriptorSets(
-            frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-            downsamplePipeline.layout(), 0, 1, &set, 0, nullptr);
+    {
+        VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd,
+                             "Bloom Downsample");
+        for (uint32_t level = 0; level < levels; ++level) {
+            ScopedGpuLabel label(device_->debugUtils(), frame.cmd,
+                                 "Downsample L" +
+                                     std::to_string(level));
+            const VkDescriptorSet set =
+                downsampleSets_[frame.frameIndex][level];
+            vkCmdBindDescriptorSets(
+                frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                downsamplePipeline.layout(), 0, 1, &set, 0, nullptr);
 
-        BloomPushConstants push{};
-        push.threshold = frame.view->settings.bloomThreshold;
-        push.softKnee = frame.view->settings.bloomSoftKnee;
-        push.applyThreshold = level == 0 ? 1u : 0u;
-        vkCmdPushConstants(frame.cmd, downsamplePipeline.layout(),
-                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push),
-                           &push);
+            BloomPushConstants push{};
+            push.threshold = frame.view->settings.bloomThreshold;
+            push.softKnee = frame.view->settings.bloomSoftKnee;
+            push.applyThreshold = level == 0 ? 1u : 0u;
+            vkCmdPushConstants(frame.cmd, downsamplePipeline.layout(),
+                               VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push),
+                               &push);
 
-        const VkExtent2D extent =
-            resources.extent(resourceHandles_.bloomLevels[level]);
-        vkCmdDispatch(frame.cmd, dispatchCount(extent.width),
-                      dispatchCount(extent.height), 1);
+            const VkExtent2D extent =
+                resources.extent(resourceHandles_.bloomLevels[level]);
+            vkCmdDispatch(frame.cmd, dispatchCount(extent.width),
+                          dispatchCount(extent.height), 1);
 
-        VkImageMemoryBarrier barrier = imageBarrier(
-            resources
-                .image(resourceHandles_.bloomLevels[level],
-                       frame.frameIndex)
-                .handle(),
-            VK_ACCESS_SHADER_WRITE_BIT,
-            VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-            VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
-        vkCmdPipelineBarrier(
-            frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_DEPENDENCY_BY_REGION_BIT, 0, nullptr, 0, nullptr, 1,
-            &barrier);
+            VkImageMemoryBarrier barrier = imageBarrier(
+                resources
+                    .image(resourceHandles_.bloomLevels[level],
+                           frame.frameIndex)
+                    .handle(),
+                VK_ACCESS_SHADER_WRITE_BIT,
+                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
+            vkCmdPipelineBarrier(
+                frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_DEPENDENCY_BY_REGION_BIT, 0, nullptr, 0, nullptr, 1,
+                &barrier);
+        }
     }
 
     if (levels > 1) {
+        VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd,
+                             "Bloom Upsample");
         ComputePipelineConfig upsampleConfig{};
         upsampleConfig.debugName = "Pipeline/Bloom/Upsample";
         upsampleConfig.computeShaderPath = upsampleShaderPath_;

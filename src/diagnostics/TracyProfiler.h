@@ -2,6 +2,7 @@
 
 #include <BuildFeatures.h>
 
+#include <cstdint>
 #include <memory>
 #include <string_view>
 #include <vulkan/vulkan.h>
@@ -43,7 +44,9 @@ class TracyProfiler {
 
     void collect(VkCommandBuffer commandBuffer) const;
     TracyGpuZone beginGpuZone(VkCommandBuffer commandBuffer,
-                              std::string_view name) const;
+                              std::string_view name, uint32_t line,
+                              const char *source,
+                              const char *function) const;
 
   private:
     struct Impl;
@@ -58,7 +61,8 @@ class TracyProfiler {
 #if VKL_ENABLE_TRACY
 #define VKL_PROFILE_GPU_ZONE(profiler, commandBuffer, name)                 \
     auto VKL_PROFILE_DETAIL_CONCAT(vklTracyGpuZone_, __LINE__) =            \
-        (profiler).beginGpuZone((commandBuffer), (name))
+        (profiler).beginGpuZone((commandBuffer), (name), __LINE__,          \
+                                __FILE__, __func__)
 #else
 #define VKL_PROFILE_GPU_ZONE(profiler, commandBuffer, name) ((void)0)
 #endif

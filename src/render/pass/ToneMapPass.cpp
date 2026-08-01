@@ -16,6 +16,8 @@
 #include "render/RenderResourceRegistry.h"
 #include "render/RenderView.h"
 #include "render/ShaderVariant.h"
+#include "diagnostics/Profiling.h"
+#include "diagnostics/TracyProfiler.h"
 
 #include <array>
 #include <utility>
@@ -101,6 +103,9 @@ void ToneMapPass::onResize(const SwapChain &,
 void ToneMapPass::execute(const RenderFrameContext &frame,
                           const RenderResourceRegistry &,
                           const RenderQueue &) {
+    VKL_PROFILE_ZONE("Record ToneMap And UI");
+    VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd,
+                         "ToneMap + UI");
     if (!frame.pipelineCache || !frame.view || !frame.shaderVariant)
         return;
 
@@ -124,6 +129,8 @@ void ToneMapPass::execute(const RenderFrameContext &frame,
     vkCmdSetScissor(frame.cmd, 0, 1, &scissor);
 
     {
+        VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd,
+                             "FullscreenToneMap");
         ScopedGpuLabel label(device_->debugUtils(), frame.cmd,
                              "FullscreenToneMap");
         PipelineConfig config =
@@ -172,6 +179,7 @@ void ToneMapPass::execute(const RenderFrameContext &frame,
     }
 
     if (frame.gui) {
+        VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "ImGui");
         ScopedGpuLabel label(device_->debugUtils(), frame.cmd, "ImGui");
         frame.gui->render(frame.cmd);
     }

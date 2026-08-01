@@ -13,10 +13,11 @@ namespace vkr {
 
 struct TracyGpuZone::Impl {
     Impl(TracyVkCtx context, VkCommandBuffer commandBuffer,
-         std::string_view name)
-        : scope(context, __LINE__, __FILE__, std::strlen(__FILE__),
-                __func__, std::strlen(__func__), name.data(), name.size(),
-                commandBuffer, true) {}
+         std::string_view name, uint32_t line, const char *source,
+         const char *function)
+        : scope(context, line, source, std::strlen(source), function,
+                std::strlen(function), name.data(), name.size(), commandBuffer,
+                true) {}
 
     tracy::VkCtxScope scope;
 };
@@ -99,11 +100,12 @@ void TracyProfiler::collect(VkCommandBuffer commandBuffer) const {
 }
 
 TracyGpuZone TracyProfiler::beginGpuZone(
-    VkCommandBuffer commandBuffer, std::string_view name) const {
+    VkCommandBuffer commandBuffer, std::string_view name, uint32_t line,
+    const char *source, const char *function) const {
     if (!gpuAvailable())
         return {};
     return TracyGpuZone(std::make_unique<TracyGpuZone::Impl>(
-        impl_->gpuContext, commandBuffer, name));
+        impl_->gpuContext, commandBuffer, name, line, source, function));
 }
 
 } // namespace vkr

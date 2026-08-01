@@ -1,4 +1,5 @@
 #include "render/RenderView.h"
+#include "diagnostics/Profiling.h"
 
 #include <algorithm>
 #include <utility>
@@ -53,6 +54,7 @@ GpuLight makeGpuLight(const SceneLight &light) {
 } // namespace
 
 RenderView buildRenderView(const RenderViewInput &input) {
+    VKL_PROFILE_ZONE("Build RenderView");
     RenderView result{};
     result.settings = input.settings;
     result.globalUbo.view = input.view;

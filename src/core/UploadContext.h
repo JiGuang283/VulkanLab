@@ -1,6 +1,7 @@
 #pragma once
 
 #include "UploadRecorder.h"
+#include "diagnostics/TracyProfiler.h"
 
 #include <cstdint>
 #include <memory>
@@ -62,6 +63,7 @@ class UploadContext : public UploadRecorder {
     bool                    labelActive_ = false;
     uint64_t                batchIndex_ = 0;
     std::string             debugName_;
+    TracyGpuZone            tracyZone_;
 };
 
 } // namespace vkr

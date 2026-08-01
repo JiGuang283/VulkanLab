@@ -2,6 +2,7 @@
 
 #include "core/ComputePipeline.h"
 #include "core/Pipeline.h"
+#include "diagnostics/Profiling.h"
 
 namespace vkr {
 
@@ -21,6 +22,8 @@ Pipeline &PipelineCache::getOrCreate(VkRenderPass renderPass,
     if (it != pipelines_.end())
         return *it->second;
 
+    VKL_PROFILE_ZONE("Create Graphics Pipeline");
+    VKL_PROFILE_TEXT(key.config.debugName);
     auto pipeline =
         std::make_unique<Pipeline>(*device_, key.renderPass, key.config);
     auto *result = pipeline.get();
@@ -35,6 +38,8 @@ PipelineCache::getOrCreateCompute(ComputePipelineConfig config) {
     if (it != computePipelines_.end())
         return *it->second;
 
+    VKL_PROFILE_ZONE("Create Compute Pipeline");
+    VKL_PROFILE_TEXT(key.config.debugName);
     auto pipeline = std::make_unique<ComputePipeline>(*device_, key.config);
     auto *result = pipeline.get();
     computePipelines_.emplace(std::move(key), std::move(pipeline));

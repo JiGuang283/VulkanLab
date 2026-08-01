@@ -2,6 +2,7 @@
 #include "GpuDebugUtils.h"
 #include "Log.h"
 #include "VulkanCheck.h"
+#include "diagnostics/TracyProfiler.h"
 
 #include <set>
 #include <string>
@@ -25,10 +26,22 @@ Device::Device(VulkanContext &ctx) : ctx_(ctx) {
                                "Queue/Graphics");
     debugUtils_->setObjectName(VK_OBJECT_TYPE_QUEUE, presentQueue_,
                                "Queue/Present");
+    const QueueFamilyIndices families = queueFamilies();
+    tracyProfiler_ = std::make_unique<TracyProfiler>(
+        ctx_.instance(), physicalDevice_, device_, graphicsQueue_,
+        families.graphicsFamily.value());
+    if (tracyProfiler_->compiled()) {
+        VKR_LOG_INFO("Tracy",
+                     "Tracy {} enabled (on-demand localhost, GPU={})",
+                     tracyProfiler_->version(),
+                     tracyProfiler_->gpuAvailable() ? "available"
+                                                     : "unavailable");
+    }
     createAllocator();
 }
 Device::~Device() {
     vmaDestroyAllocator(allocator_);
+    tracyProfiler_.reset();
     debugUtils_.reset();
     vkDestroyDevice(device_, nullptr);
 }

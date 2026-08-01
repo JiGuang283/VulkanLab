@@ -5,6 +5,7 @@
 #include "GpuDebugUtils.h"
 #include "VulkanCheck.h"
 #include "diagnostics/SceneLoadStats.h"
+#include "diagnostics/Profiling.h"
 
 #include <algorithm>
 #include <cstring>
@@ -61,6 +62,7 @@ UploadContext::~UploadContext() {
     if (!device_)
         return;
 
+    tracyZone_ = {};
     if (staging_ && mapped_) {
         staging_->unmap();
         mapped_ = nullptr;
@@ -182,15 +184,19 @@ VkCommandBuffer UploadContext::commandBuffer() {
 void UploadContext::beginCommands() {
     if (recording_)
         return;
+    VKL_PROFILE_ZONE("Begin Synchronous Upload Batch");
 
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VK_CHECK(vkBeginCommandBuffer(commandBuffer_, &beginInfo));
-    labelActive_ = device_->debugUtils().beginLabel(
-        commandBuffer_,
+    const std::string batchName =
         "SceneUpload scene=" + debugName_ +
-            " batch=" + std::to_string(batchIndex_));
+        " batch=" + std::to_string(batchIndex_);
+    tracyZone_ = device_->tracyProfiler().beginGpuZone(
+        commandBuffer_, batchName, __LINE__, __FILE__, __func__);
+    labelActive_ = device_->debugUtils().beginLabel(
+        commandBuffer_, batchName);
     recording_ = true;
 }
 
@@ -200,11 +206,13 @@ void UploadContext::flushAndWait() {
         oversizedBatch_ = false;
         return;
     }
+    VKL_PROFILE_ZONE("Flush Synchronous Upload Batch");
 
     if (labelActive_) {
         device_->debugUtils().endLabel(commandBuffer_);
         labelActive_ = false;
     }
+    tracyZone_ = {};
     VK_CHECK(vkEndCommandBuffer(commandBuffer_));
     recording_ = false;
 

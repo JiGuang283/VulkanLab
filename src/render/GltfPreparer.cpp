@@ -7,6 +7,7 @@
 #include "assets/DerivedTextureManifest.h"
 #include "core/Log.h"
 #include "diagnostics/SceneLoadStats.h"
+#include "diagnostics/Profiling.h"
 
 #include "tiny_gltf_v3.h"
 
@@ -445,6 +446,8 @@ uint64_t textureKey(int textureIndex, TextureSemantic semantic) {
 PreparedSceneData GltfPreparer::prepare(
     const std::string &path, const Options &options,
     const CancellationToken &cancellation, SceneLoadProgress *progress) {
+    VKL_PROFILE_ZONE("GltfPreparer::prepare");
+    VKL_PROFILE_TEXT(path);
     throwIfCancelled(cancellation);
 
     tinygltf3::Model model;
@@ -455,6 +458,7 @@ PreparedSceneData GltfPreparer::prepare(
 
     tg3_error_code parseResult = TG3_OK;
     {
+        VKL_PROFILE_ZONE("glTF Parse");
         ScopedLoadTimer timer(options.loadStats
                                   ? &options.loadStats->gltfParseMs
                                   : nullptr);
@@ -666,6 +670,7 @@ PreparedSceneData GltfPreparer::prepare(
         return index;
     };
 
+    VKL_PROFILE_BEGIN(materialsProfile, "glTF Materials And Textures");
     prepared.materials.reserve(gltf->materials_count);
     for (uint32_t i = 0; i < gltf->materials_count; ++i) {
         throwIfCancelled(cancellation);
@@ -736,6 +741,7 @@ PreparedSceneData GltfPreparer::prepare(
                         MaterialTextureSlot::Emissive);
         prepared.materials.push_back(std::move(result));
     }
+    VKL_PROFILE_END(materialsProfile);
 
     struct PrimitiveReference {
         uint32_t meshIndex = 0;
@@ -744,6 +750,7 @@ PreparedSceneData GltfPreparer::prepare(
     std::vector<std::vector<PrimitiveReference>> primitivesByMesh(
         gltf->meshes_count);
 
+    VKL_PROFILE_BEGIN(meshProfile, "glTF Mesh Conversion");
     for (uint32_t meshIndex = 0; meshIndex < gltf->meshes_count;
          ++meshIndex) {
         const tg3_mesh &mesh = gltf->meshes[meshIndex];
@@ -905,7 +912,9 @@ PreparedSceneData GltfPreparer::prepare(
                 ++progress->completedMeshes;
         }
     }
+    VKL_PROFILE_END(meshProfile);
 
+    VKL_PROFILE_BEGIN(hierarchyProfile, "glTF Hierarchy Finalize");
     const auto hierarchyStart = std::chrono::steady_clock::now();
     std::function<void(int, const glm::mat4 &)> walkNode =
         [&](int nodeIndex, const glm::mat4 &parent) {
@@ -1021,6 +1030,7 @@ PreparedSceneData GltfPreparer::prepare(
         options.loadStats->preparedCpuBytes = preparedBytes;
     }
     throwIfCancelled(cancellation);
+    VKL_PROFILE_END(hierarchyProfile);
     return prepared;
 }
 

@@ -22,6 +22,8 @@
 #include "render/pass/SkyboxPass.h"
 #include "render/pass/ToneMapPass.h"
 #include "render/pass/BloomPass.h"
+#include "diagnostics/TracyProfiler.h"
+#include "diagnostics/Profiling.h"
 
 #include <cstring>
 #include <memory>
@@ -75,6 +77,7 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
                            GuiSystem *gui,
                            const ShaderVariant &shaderVariant,
                            const RenderView &view) {
+    VKL_PROFILE_ZONE("Renderer::renderFrame");
     std::memcpy(uniformBuffers_[frame.frameIndex]->mappedData(),
                 &view.globalUbo, sizeof(view.globalUbo));
     collectRetiredLightingGenerations();
@@ -92,6 +95,7 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
         lightingDescriptorSetLayout_;
     renderFrame.pipelineCache = &pipelineCache;
     renderFrame.debugUtils = &device_->debugUtils();
+    renderFrame.tracyProfiler = &device_->tracyProfiler();
     renderFrame.gui = gui;
     renderFrame.shaderVariant = &shaderVariant;
     renderFrame.view = &view;

@@ -25,7 +25,8 @@ bool TracyProfiler::gpuAvailable() const { return false; }
 std::string_view TracyProfiler::version() const { return {}; }
 void TracyProfiler::collect(VkCommandBuffer) const {}
 TracyGpuZone TracyProfiler::beginGpuZone(VkCommandBuffer,
-                                          std::string_view) const {
+                                          std::string_view, uint32_t,
+                                          const char *, const char *) const {
     return {};
 }
 

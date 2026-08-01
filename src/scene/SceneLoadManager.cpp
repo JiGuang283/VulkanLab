@@ -2,6 +2,7 @@
 
 #include "PreparedSceneData.h"
 #include "core/Log.h"
+#include "diagnostics/Profiling.h"
 
 #include <chrono>
 #include <exception>
@@ -114,6 +115,7 @@ void SceneLoadManager::shutdown() {
 }
 
 void SceneLoadManager::workerLoop() {
+    profileSetThreadName("ScenePrepare");
     for (;;) {
         std::unique_ptr<WorkItem> work;
         {
@@ -128,6 +130,8 @@ void SceneLoadManager::workerLoop() {
 
         const auto start = std::chrono::steady_clock::now();
         auto &task = *work->task;
+        VKL_PROFILE_ZONE("Scene Prepare Task");
+        VKL_PROFILE_TEXT(task.sceneName);
         task.stats.workerQueueWaitMs =
             std::chrono::duration<double, std::milli>(start - task.requestedAt)
                 .count();

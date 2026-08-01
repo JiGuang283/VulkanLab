@@ -17,6 +17,8 @@
 #include "render/RenderQueue.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/RenderView.h"
+#include "diagnostics/Profiling.h"
+#include "diagnostics/TracyProfiler.h"
 
 #include <glm/glm.hpp>
 #include <utility>
@@ -56,6 +58,9 @@ DirectionalShadowPass::resourceUsages() const {
 void DirectionalShadowPass::execute(const RenderFrameContext &frame,
                                     const RenderResourceRegistry &,
                                     const RenderQueue &queue) {
+    VKL_PROFILE_ZONE("Record DirectionalShadow");
+    VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd,
+                         "DirectionalShadow");
     VkClearValue clear{};
     clear.depthStencil = {1.0f, 0};
     VkRenderPassBeginInfo beginInfo{};
@@ -80,6 +85,8 @@ void DirectionalShadowPass::execute(const RenderFrameContext &frame,
     vkCmdSetScissor(frame.cmd, 0, 1, &scissor);
 
     {
+        VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd,
+                             "ShadowCasters");
         ScopedGpuLabel label(device_->debugUtils(), frame.cmd,
                              "ShadowCasters");
         if (frame.view && frame.view->directionalShadow.enabled)

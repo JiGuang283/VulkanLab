@@ -3,6 +3,7 @@
 #include "GpuDebugUtils.h"
 #include "SwapChain.h"
 #include "VulkanCheck.h"
+#include "diagnostics/Profiling.h"
 
 #include <stdexcept>
 #include <string>
@@ -39,14 +40,22 @@ std::optional<FrameSync::FrameContext> FrameSync::beginFrame() {
 
     VkDevice d = device_->logicalDevice();
 
-    VK_CHECK(vkWaitForFences(d, 1, &frames_[currentFrame_].inFlight, VK_TRUE,
-                             UINT64_MAX));
+    {
+        VKL_PROFILE_ZONE("Frame Fence Wait");
+        VK_CHECK(vkWaitForFences(d, 1, &frames_[currentFrame_].inFlight,
+                                 VK_TRUE, UINT64_MAX));
+    }
     submissionSerials_.completeFrameSlot(currentFrame_);
 
     uint32_t imageIndex;
-    VkResult result = vkAcquireNextImageKHR(
-        d, swapChain_->handle(), UINT64_MAX,
-        frames_[currentFrame_].imageAvailable, VK_NULL_HANDLE, &imageIndex);
+    VkResult result = VK_SUCCESS;
+    {
+        VKL_PROFILE_ZONE("Swapchain Acquire");
+        result = vkAcquireNextImageKHR(
+            d, swapChain_->handle(), UINT64_MAX,
+            frames_[currentFrame_].imageAvailable, VK_NULL_HANDLE,
+            &imageIndex);
+    }
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         swapChainOutOfDate_ = true;
@@ -69,6 +78,7 @@ std::optional<FrameSync::FrameContext> FrameSync::beginFrame() {
 }
 
 uint64_t FrameSync::endFrame(const FrameContext &ctx) {
+    VKL_PROFILE_ZONE("Frame Submit And Present");
     VK_CHECK(vkEndCommandBuffer(ctx.cmd));
 
     // Submit
@@ -87,8 +97,11 @@ uint64_t FrameSync::endFrame(const FrameContext &ctx) {
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = signalSems;
 
-    VK_CHECK(vkQueueSubmit(device_->graphicsQueue(), 1, &submitInfo,
-                           frames_[ctx.frameIndex].inFlight));
+    {
+        VKL_PROFILE_ZONE("Graphics Queue Submit");
+        VK_CHECK(vkQueueSubmit(device_->graphicsQueue(), 1, &submitInfo,
+                               frames_[ctx.frameIndex].inFlight));
+    }
     const uint64_t submissionSerial =
         submissionSerials_.recordSubmission(ctx.frameIndex);
 
@@ -102,7 +115,11 @@ uint64_t FrameSync::endFrame(const FrameContext &ctx) {
     presentInfo.pSwapchains = swapChains;
     presentInfo.pImageIndices = &ctx.imageIndex;
 
-    VkResult result = vkQueuePresentKHR(device_->presentQueue(), &presentInfo);
+    VkResult result = VK_SUCCESS;
+    {
+        VKL_PROFILE_ZONE("Queue Present");
+        result = vkQueuePresentKHR(device_->presentQueue(), &presentInfo);
+    }
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR ||
         framebufferResized_) {

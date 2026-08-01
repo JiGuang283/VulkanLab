@@ -1,5 +1,7 @@
 #include "AssetImportManager.h"
 
+#include "diagnostics/Profiling.h"
+
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <Windows.h>
@@ -326,6 +328,7 @@ void AssetImportManager::applyEvent(
 }
 
 void AssetImportManager::workerLoop() {
+    profileSetThreadName("AssetImport");
     for (;;) {
         std::shared_ptr<AssetImportTask> task;
         {
@@ -343,6 +346,8 @@ void AssetImportManager::workerLoop() {
         }
 
         std::error_code directoryError;
+        VKL_PROFILE_ZONE("Asset Import Task");
+        VKL_PROFILE_TEXT(task->sceneId);
         std::filesystem::create_directories(task->logPath.parent_path(),
                                             directoryError);
         std::ofstream log(task->logPath,
@@ -580,6 +585,7 @@ AssetImportExecutionResult runAssetImportProcess(
     std::mutex readerErrorMutex;
     std::string readerError;
     std::thread stdoutReader([&] {
+        profileSetThreadName("AssetToolStdout");
         try {
             std::string pending;
             std::array<char, 4096> buffer{};
@@ -622,6 +628,7 @@ AssetImportExecutionResult runAssetImportProcess(
         }
     });
     std::thread stderrReader([&] {
+        profileSetThreadName("AssetToolStderr");
         std::array<char, 4096> buffer{};
         DWORD read = 0;
         while (ReadFile(stderrRead.value, buffer.data(),

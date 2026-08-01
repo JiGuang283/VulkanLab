@@ -16,6 +16,8 @@
 #include "render/RenderQueue.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/ShaderVariant.h"
+#include "diagnostics/Profiling.h"
+#include "diagnostics/TracyProfiler.h"
 
 #include <array>
 #include <glm/glm.hpp>
@@ -97,6 +99,8 @@ void MainForwardPass::onResize(
 void MainForwardPass::execute(const RenderFrameContext &frame,
                               const RenderResourceRegistry &resources,
                               const RenderQueue &queue) {
+    VKL_PROFILE_ZONE("Record MainForward");
+    VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "MainForward");
     begin(frame.cmd, frame.frameIndex, resources);
     drawQueue(frame, resources, queue);
     vkCmdEndRenderPass(frame.cmd);
@@ -216,8 +220,15 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
         }
     };
 
-    drawCommands(queue.opaque(), RenderQueueType::Opaque);
-    drawCommands(queue.transparent(), RenderQueueType::Transparent);
+    {
+        VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "Opaque");
+        drawCommands(queue.opaque(), RenderQueueType::Opaque);
+    }
+    {
+        VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd,
+                             "Transparent");
+        drawCommands(queue.transparent(), RenderQueueType::Transparent);
+    }
 }
 
 void MainForwardPass::createRenderPass(

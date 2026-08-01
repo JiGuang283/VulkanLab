@@ -47,6 +47,7 @@ class SceneGpuBuilder {
     uint64_t pendingTextureCount() const;
     uint64_t pendingMeshCount() const;
     uint32_t inFlightUploadBatches() const;
+    uint64_t stagingBytesInUse() const;
 
   private:
     enum class Phase {

@@ -6,6 +6,8 @@
 #include "UploadRecorder.h"
 #include "VulkanCheck.h"
 #include "diagnostics/SceneLoadStats.h"
+#include "diagnostics/Profiling.h"
+#include "diagnostics/TracyProfiler.h"
 
 #include <algorithm>
 #include <chrono>
@@ -77,6 +79,7 @@ class IncrementalUploadQueue::Slot final : public UploadRecorder {
     }
 
     ~Slot() override {
+        tracyZone_ = {};
         if (mapped_)
             staging_->unmap();
         staging_.reset();
@@ -136,6 +139,8 @@ class IncrementalUploadQueue::Slot final : public UploadRecorder {
             beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
             beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
             VK_CHECK(vkBeginCommandBuffer(commandBuffer_, &beginInfo));
+            tracyZone_ = device_->tracyProfiler().beginGpuZone(
+                commandBuffer_, batchLabel_, __LINE__, __FILE__, __func__);
             labelActive_ = device_->debugUtils().beginLabel(
                 commandBuffer_, batchLabel_);
             recording_ = true;
@@ -148,6 +153,7 @@ class IncrementalUploadQueue::Slot final : public UploadRecorder {
 
     bool hasCommands() const { return hasCommands_; }
     bool inFlight() const { return inFlight_; }
+    VkDeviceSize stagedBytes() const { return cursor_; }
     void setBatchLabel(std::string label) {
         if (hasCommands_ || recording_ || inFlight_)
             throw std::logic_error("Cannot relabel an active upload slot");
@@ -157,10 +163,12 @@ class IncrementalUploadQueue::Slot final : public UploadRecorder {
     void submit() {
         if (!hasCommands_)
             return;
+        VKL_PROFILE_ZONE("Scene Upload Submit");
         if (labelActive_) {
             device_->debugUtils().endLabel(commandBuffer_);
             labelActive_ = false;
         }
+        tracyZone_ = {};
         VK_CHECK(vkEndCommandBuffer(commandBuffer_));
         recording_ = false;
         VkSubmitInfo submitInfo{};
@@ -177,6 +185,7 @@ class IncrementalUploadQueue::Slot final : public UploadRecorder {
     bool poll() {
         if (!inFlight_)
             return false;
+        VKL_PROFILE_ZONE("Scene Upload Fence Poll");
         if (stats_)
             ++stats_->fencePollCalls;
         const VkResult result =
@@ -193,6 +202,7 @@ class IncrementalUploadQueue::Slot final : public UploadRecorder {
     void wait() {
         if (!inFlight_)
             return;
+        VKL_PROFILE_ZONE("Scene Upload Fence Wait");
         const auto start = std::chrono::steady_clock::now();
         VK_CHECK(vkWaitForFences(device_->logicalDevice(), 1, &fence_,
                                  VK_TRUE, UINT64_MAX));
@@ -255,6 +265,7 @@ class IncrementalUploadQueue::Slot final : public UploadRecorder {
     uint32_t slotIndex_ = 0;
     std::string debugPrefix_;
     std::string batchLabel_;
+    TracyGpuZone tracyZone_;
 };
 
 IncrementalUploadQueue::IncrementalUploadQueue(
@@ -335,6 +346,13 @@ uint32_t IncrementalUploadQueue::inFlightCount() const {
     for (const auto &slot : slots_)
         count += slot->inFlight() ? 1u : 0u;
     return count;
+}
+
+VkDeviceSize IncrementalUploadQueue::stagingBytesInUse() const {
+    VkDeviceSize bytes = 0;
+    for (const auto &slot : slots_)
+        bytes += slot->stagedBytes();
+    return bytes;
 }
 
 void IncrementalUploadQueue::drain() {

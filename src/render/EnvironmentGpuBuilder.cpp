@@ -5,6 +5,7 @@
 #include "core/Device.h"
 #include "core/IncrementalUploadQueue.h"
 #include "render/Texture.h"
+#include "diagnostics/Profiling.h"
 
 #include <algorithm>
 #include <array>
@@ -37,6 +38,8 @@ EnvironmentGpuBuilder::EnvironmentGpuBuilder(
 EnvironmentGpuBuilder::~EnvironmentGpuBuilder() = default;
 
 void EnvironmentGpuBuilder::pump(const Budget &budget) {
+    VKL_PROFILE_ZONE("EnvironmentGpuBuilder::pump");
+    VKL_PROFILE_TEXT(task_->environmentId);
     if (finished())
         return;
     try {

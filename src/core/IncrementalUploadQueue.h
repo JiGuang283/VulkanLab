@@ -32,6 +32,7 @@ class IncrementalUploadQueue {
     void poll();
     bool idle() const;
     uint32_t inFlightCount() const;
+    VkDeviceSize stagingBytesInUse() const;
     VkDeviceSize copyAlignment() const { return copyAlignment_; }
     void drain();
 

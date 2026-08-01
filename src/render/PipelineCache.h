@@ -26,6 +26,8 @@ class PipelineCache {
 
     Pipeline &getOrCreate(VkRenderPass renderPass, PipelineConfig config);
     ComputePipeline &getOrCreateCompute(ComputePipelineConfig config);
+    size_t graphicsPipelineCount() const { return pipelines_.size(); }
+    size_t computePipelineCount() const { return computePipelines_.size(); }
 
   private:
     Device *device_ = nullptr;
