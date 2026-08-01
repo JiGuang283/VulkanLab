@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-01
-> Verified against: Docking v1 working tree
+> Verified against: Viewport v2 working tree
 
 VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Application` 为组合根，场景、渲染提交、GPU 资源和调试控制之间保持显式所有权，不使用全局引擎服务定位器。
 
@@ -11,12 +11,12 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 | 目录 | 职责 |
 |---|---|
 | `src/app/` | 应用生命周期、场景注册与切换、相机、RenderView 输入和命令执行。 |
-| `src/editor/` | ImGui DockSpace、默认工具窗口布局、窗口可见性和中央交互区域。 |
+| `src/editor/` | ImGui DockSpace、默认工具窗口布局、独立 Scene Viewport 和输入区域。 |
 | `src/assets/` | ProjectContext、Scene/Environment Catalog、编辑事务、RuntimePackage、ArtifactIndex/依赖校验、cache prune、资产工具进程监督、manifest 和 KTX2 cache 读取。 |
 | `src/control/` | Windows Named Pipe 服务、运行时命令队列和 JSON 协议。 |
 | `src/core/` | Vulkan instance/device、SwapChain、FrameSync、Buffer/Image、Descriptor、Pipeline、VMA、同步与增量上传。 |
 | `src/render/` | Mesh、Texture、材质、纯 CPU glTF prepare、Environment GPU build、RenderView、RenderQueue、RenderResourceRegistry、PipelineCache、Renderer、GPU profiler 和 Shader variant。 |
-| `src/render/pass/` | RenderPipeline 中的具体 pass；当前为 DirectionalShadow、Skybox、MainForward、Bloom 和 ToneMap。 |
+| `src/render/pass/` | RenderPipeline 中的具体 pass；当前为 DirectionalShadow、Skybox、MainForward、Bloom、ToneMap 和 Present。 |
 | `src/scene/` | Scene、SceneObject、SceneLight、Camera、prepared data、加载任务、GPU builder、SceneFactory 和内建场景。 |
 | `src/window/` | GLFW 窗口和输入状态。 |
 | `src/platform/` | Win32 原生文件选择等平台适配。 |
@@ -50,12 +50,12 @@ Cooked package 中 `projectRoot == runtimeRoot == package root`，cache 固定�
 
 ## UI 所有权
 
-`Application::drawGui()` 是唯一创建顶层 ImGui 窗口的入口。它构建一个
-`VulkanLab` 工作区，并把 Scene、Render、Materials 和 Diagnostics 页面分派
-给内容函数；这些函数不再各自调用顶层 `Begin/End`。`EditorUiState` 只保存
-材质筛选和选中 index 等纯 UI 状态，不持有 Scene、Device、Vulkan handle 或
-异步任务。窗口位置和尺寸继续由 ImGui ini 管理，页面控件直接复用 Application
-已有的场景、相机、灯光和渲染设置。
+`Application::drawGui()` 是 DockSpace 与编辑器窗口的组合入口。`EditorDockWorkspace`
+创建 Viewport、Scenes、Assets、Render、Materials 和 Diagnostics 顶层窗口，再把
+具体内容分派给 Application 的页面函数。`EditorUiState` 只保存材质筛选和选中
+index 等纯 UI 状态；`EditorViewportState` 只报告图像矩形、逻辑/物理尺寸以及
+visible、hovered、focused，不持有 Scene、Device 或图像所有权。窗口位置、尺寸
+和 docking 状态继续由 ImGui ini 管理。
 
 具体页面入口见 [编辑器 UI 工作区](../guides/editor_ui.md)。
 
@@ -75,7 +75,7 @@ ArtifactIndex 由 Application 主线程持有；Fast/Admission 查询和 UI 快�
 
 Named Pipe 线程只读取带长度前缀的 JSON 请求，把 `RuntimeCommand` 放入队列并等待主线程填写响应。它不能读取 Scene、Camera、Shader、统计数据，也不能调用 Vulkan 或 GLFW。Runtime Control v3 的 scene/capture 请求快速返回 taskId；加载等待和稳定帧等待都由 VulkanLabCtl 使用短连接轮询 `load.status`、`render.status` 或 `capture.status`，服务端不会阻塞等待未来帧。每个自动化实例可以使用独立 pipe suffix。
 
-CaptureService 的主线程部分创建 readback buffer、记录 image copy 并按 FrameSync completed submission serial 收割 GPU 结果。惰性启动的编码 worker 只处理已复制到 CPU 的 RGBA bytes、PNG 和 SHA-256，不访问 Vulkan、GLFW、ImGui 或 Scene。
+CaptureService 的主线程部分按请求从最终 Swapchain Workspace 或 per-frame Viewport Color 创建 readback buffer、记录 image copy，并按 FrameSync completed submission serial 收割 GPU 结果。惰性启动的编码 worker 只处理已复制到 CPU 的 RGBA bytes、PNG 和 SHA-256，不访问 Vulkan、GLFW、ImGui 或 Scene。
 
 `VulkanLabRenderTest` 是渲染器进程外的测试工具，不链接 Application、Renderer 或 Vulkan。它使用唯一 Named Pipe 和 Win32 Job Object 启动并监督 `VulkanLab.exe`，通过 Runtime Control 完成场景加载、稳定帧等待和异步截图，再在 CPU 上比较 PNG。Runner 崩溃或超时关闭 Job 时会终止完整子进程树。
 
@@ -84,12 +84,12 @@ CaptureService 的主线程部分创建 readback buffer、记录 image copy 并�
 1. 轮询窗口和输入，收割 asset import 结果，执行一条待处理控制命令。
 2. 轮询 worker 结果与 upload fence，在软预算内推进 SceneGpuBuilder 和 EnvironmentGpuBuilder。
 3. 应用待切换场景，更新计时、输入模式、相机和 Scene tick。
-4. 轮询场景导入 future，构建全屏 DockSpace 及 Scenes、Assets、Render、Materials 和 Diagnostics 工具窗口；中央节点透出当前 swapchain 场景。
+4. 轮询场景导入 future，构建全屏 DockSpace 及 Viewport、Scenes、Assets、Render、Materials 和 Diagnostics 窗口；Viewport 报告内容区尺寸和交互状态，并显示对应 frame slot 的 Viewport Color。
 5. `FrameSync::beginFrame()` 获取 frame index、swapchain image 和 command buffer。
 6. Application 组装 `RenderViewInput`；纯函数 `buildRenderView()` 完成默认 Sun、灯光截断/GPU 打包和阴影拟合，生成不可变 `RenderView`。
 7. Scene 生成 RenderCommand，RenderQueue 分别排序 opaque 与 transparent 命令。
-8. Renderer 上传 `RenderView::globalUbo`、读取已完成 frame slot 的 timestamp，并组装 RenderFrameContext；RenderPipeline 依次执行 DirectionalShadowPass、清除/绘制 HDR 背景的 SkyboxPass、以 `LOAD` 叠加场景的 MainForwardPass、可选 Compute Bloom，以及 ToneMapPass；ImGui 在 tone mapping 后绘制，每个 Pass 由 timestamp query 包围。
-9. 若有截图任务，在同一个 frame command buffer 中把最终 swapchain image 复制到 readback buffer，然后恢复 present layout。
-10. `FrameSync::endFrame()` 提交和 present；需要时重建 SwapChain 相关资源。后续帧推进 completed submission serial，并把已完成截图交给 CPU worker。
+8. Renderer 上传 `RenderView::globalUbo`、读取已完成 frame slot 的 timestamp，并组装 RenderFrameContext；RenderPipeline 依次执行 DirectionalShadowPass、SkyboxPass、MainForwardPass、可选 Compute Bloom、写入 Viewport Color 的 ToneMapPass，以及写入 Swapchain 的 PresentPass + ImGui。每个 Pass 由 timestamp query 包围。
+9. 若有截图任务，在同一个 frame command buffer 中复制最终 Swapchain Workspace 或 Viewport Color，再恢复其 present/shader-read layout。
+10. `FrameSync::endFrame()` 提交和 present；操作系统窗口变化只重建 Swapchain/Present 资源，稳定后的 Viewport 内容区变化只重建 viewport-dependent Registry 资源。后续帧推进 completed submission serial，并把已完成截图交给 CPU worker。
 
 详细渲染行为见 [渲染流程](rendering.md)，场景创建与上传见 [资源加载](resource_loading.md)。

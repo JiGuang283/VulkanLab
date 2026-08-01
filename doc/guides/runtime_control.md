@@ -115,11 +115,12 @@ cd build\windows-msvc-debug\Debug
 
 - 当前 scene、scene generation 和最新 load operation；
 - submitted/completed frame serial 与累计 presented frame 数；
-- 最近一个已完成 frame 的 `gpuTimings`，包含 available、frameSerial、DirectionalShadow/Skybox/MainForward、可选 Bloom、ToneMap + UI 分项与 totalMs；
+- 最近一个已完成 frame 的 `gpuTimings`，包含 available、frameSerial、DirectionalShadow/Skybox/MainForward、可选 Bloom、ToneMap、Present + UI 分项与 totalMs；
 - 待上传 texture/mesh、in-flight upload batch；
 - 当前选择和已发布的 environment，以及环境加载任务；
 - 当前 Scene 的 Directional/Point/Spot 数量、实际上传数量和超限忽略数量；
-- capture queue 计数和 capture capability；
+- capture queue 计数，以及 Workspace/Viewport 各自的 capture capability；
+- `viewport` 的模式、可见/hover 状态、display extent、render extent 和 resize pending；
 - GUI 可见性、窗口最小化、swapchain recreate 和 rendering 状态。
 
 `render.wait` 不是服务端阻塞命令。控制工具反复请求 `render.status` 和必要的 `load.status`，要求同一 generation 已完成加载、pending upload 为 0、窗口可渲染，并观察指定数量的新 presented frames。默认等待 8 帧、超时 30 秒；超时返回 `render_wait_timeout`，持续最小化时返回 `window_not_rendering`。
@@ -138,16 +139,20 @@ GPU timing 在对应 frame slot 的正常 fence 已完成后读取，不使用 q
 
 `capture screenshot` 校验请求后立即返回 task ID，不等待未来帧、GPU 完成或 PNG 编码。调用者应轮询 `capture status`，直到 `terminal=true`。状态包括 `Queued`、`Recording`、`WaitingForGpu`、`Encoding`、`Cancelling`、`Completed`、`Cancelled` 和 `Failed`。
 
+`--include-gui` 从最终 Swapchain 截取完整 Workspace；`--no-gui` 从 per-frame
+Viewport Color 截取纯场景，输出尺寸是实际 Viewport render extent。后者不会丢弃
+当前 ImGui frame，因此交互窗口不会闪烁。
+
 完成结果包含：
 
-- width、height、swapchain format 和 frame serial；
+- source（`Workspace` 或 `Viewport`）、width、height、实际 image format 和 frame serial；
 - capture root 下的最终绝对 output path；
 - PNG SHA-256；
 - recording、GPU wait、CPU copy、encode 和 total timing。
 
 截图路径必须是 capture root 下的非空相对 `.png` 路径。绝对路径、`..` 逃逸、其他扩展名和解析后落在根目录外的路径都会以 `invalid_capture_path` 拒绝。PNG 先写临时文件再原子发布；取消或失败不会留下最终文件。
 
-开发运行默认 capture root 位于 runtime 旁的 `artifacts/captures/`，可通过 `--capture-root <path>` 覆盖。Cooked package 不创建 CaptureService，也不允许覆盖 capture root，因此截图命令返回 `capture_disabled`。设备或 swapchain 不支持 8-bit RGBA/BGRA transfer-source 时返回 `capture_unsupported`。
+开发运行默认 capture root 位于 runtime 旁的 `artifacts/captures/`，可通过 `--capture-root <path>` 覆盖。Cooked package 不创建 CaptureService，也不允许覆盖 capture root，因此截图命令返回 `capture_disabled`。Viewport Color 或 Swapchain source 不支持 8-bit RGBA/BGRA transfer-source 时返回 `capture_unsupported`；另一个来源仍可独立保持可用。
 
 常见截图错误码还有 `capture_queue_full`、`capture_not_found`、`capture_not_cancellable` 和 `capture_failed`。截图路径不会调用 `vkQueueWaitIdle()` 或 `vkDeviceWaitIdle()`；完成状态由正常 frame fence 的 submission serial 推进。
 

@@ -17,13 +17,15 @@ MainForwardPass
         -> linear HDR color
 BloomPass
         -> half-resolution bloom pyramid
-ToneMapPass + ImGui
-        -> swapchain / capture
+ToneMapPass
+        -> per-frame Viewport Color
+PresentPass + ImGui
+        -> swapchain / Workspace capture
 ```
 
-`RenderResourceRegistry` 使用稳定的类型化 handle 管理内部 render target 和 sampler。资源描述明确指定 fixed/swapchain-relative extent、相对尺寸除数、single/per-frame multiplicity、format、sample count、usage 与 aspect。当前注册 HDR resolve、可选 HDR MSAA、main depth、2048x2048 directional shadow depth、最多六级 Bloom 图像，以及 HDR/shadow/Bloom sampler。每个 per-frame image 按 `MAX_FRAMES_IN_FLIGHT` 分配；HDR 优先使用 `R16G16B16A16_SFLOAT`，不满足 color attachment 与 sampled 要求时回退到 `R32G32B32A32_SFLOAT`。HDR sample count 取 color/depth format 和设备能力的交集，Shadow、Bloom 与 ToneMap 固定为 1x。
+`RenderResourceRegistry` 使用稳定的类型化 handle 管理内部 render target 和 sampler。资源描述明确指定 fixed/viewport-relative extent、相对尺寸除数、single/per-frame multiplicity、format、sample count、usage 与 aspect。当前注册 HDR resolve、可选 HDR MSAA、main depth、2048x2048 directional shadow depth、最多六级 Bloom 图像、LDR Viewport Color，以及 HDR/shadow/Bloom/Viewport sampler。每个 per-frame image 按 `MAX_FRAMES_IN_FLIGHT` 分配；HDR 优先使用 `R16G16B16A16_SFLOAT`，不满足 color attachment 与 sampled 要求时回退到 `R32G32B32A32_SFLOAT`。Viewport Color 使用 Swapchain format，以延续既有 sRGB/gamma 行为。HDR sample count 取 color/depth format 和设备能力的交集，Shadow、Bloom、ToneMap 与 Present 固定为 1x。
 
-每个 Pass 通过 `resourceUsages()` 声明 attachment write、attachment read/write、sampled read、storage write/read-write、required/final layout。`RenderPipeline` 在初始化和 resize 后验证 handle、usage flag、sample/aspect、read-before-write 与相邻 layout 契约。Registry 不插入 barrier、不推导 lifetime、不重排 Pass；`RenderPipeline` 仍按 Shadow、Skybox、Forward、Bloom、ToneMap 顺序记录到同一个 frame command buffer。Render pass 之间使用 final/initial layout 和 dependency，同步 Compute Bloom 时由 BloomPass 记录显式 image barrier。
+每个 Pass 通过 `resourceUsages()` 声明 attachment write、attachment read/write、sampled read、storage write/read-write、required/final layout。`RenderPipeline` 在初始化和 resize 后验证 handle、usage flag、sample/aspect、read-before-write 与相邻 layout 契约。Registry 不插入 barrier、不推导 lifetime、不重排 Pass；`RenderPipeline` 仍按 Shadow、Skybox、Forward、Bloom、ToneMap、Present 顺序记录到同一个 frame command buffer。Render pass 之间使用 final/initial layout 和 dependency，同步 Compute Bloom 时由 BloomPass 记录显式 image barrier。
 
 Application 每帧只组装 `RenderViewInput`。纯函数 `buildRenderView()` 负责默认 Sun 规则、灯光截断与 GPU 打包、阴影矩阵计算，输出不可变 `RenderView`。Renderer 接收该对象并上传其中的 `GlobalFrameUbo`；Pass 通过 `RenderFrameContext::view` 读取同一份 settings 和 shadow 数据。
 
@@ -60,16 +62,16 @@ PBR-lite Forward 与 PBR-lite NormalMapped 使用 comparison sampler 和 3x3 PCF
 
 `Debug Shadow` 输出最终 visibility 灰度，用于检查投影范围、bias 和 PCF；它使用 PassThrough tone mapping。
 
-## HDR 与 Tone Mapping
+## HDR、Viewport Color 与 Present
 
-MainForwardPass 输出线性 HDR；MSAA 开启时 resolve 到单采样 HDR image，并转换为 `SHADER_READ_ONLY_OPTIMAL`。ToneMapPass 使用无 vertex buffer 的 fullscreen triangle 采样当前 frame slot 的 HDR image，并可同时采样 Bloom 第 0 级。
+MainForwardPass 输出线性 HDR；MSAA 开启时 resolve 到单采样 HDR image，并转换为 `SHADER_READ_ONLY_OPTIMAL`。ToneMapPass 使用无 vertex buffer 的 fullscreen triangle 采样当前 frame slot 的 HDR image，并可同时采样 Bloom 第 0 级。其输出写入与当前 Scene Viewport 物理像素一致的 per-frame Viewport Color，而不是 Swapchain。
 
 - PBR-lite 两个 variant 先合成 `hdr + bloom * intensity`，再应用 `color *= exp2(exposureEv)`，最后按设置执行 ACES fitted、Reinhard 或 PassThrough。
 - Legacy 和材质通道/Shadow Debug variant 强制 PassThrough，以维持基线和材质通道语义；两个 Debug IBL variant 使用可配置 tone mapping，因为其输出是线性 HDR。
-- sRGB swapchain 由硬件进行线性到 sRGB 编码；非 sRGB UNORM swapchain 由 ToneMap shader 显式 gamma encode。
-- ImGui 在 fullscreen draw 之后写入同一个 ToneMap render pass，因此 UI 不受曝光和 tone mapping 影响。
+- Viewport Color 与 Swapchain 使用同一 format：sRGB format 由硬件编码，非 sRGB UNORM format 由 ToneMap shader 显式 gamma encode。
+- ToneMapPass 不绘制 ImGui；UI 因此不受曝光或 tone mapping 影响。
 
-ToneMapPass 最终 layout 为 `PRESENT_SRC_KHR`。异步截图继续复制最终 swapchain image，因此捕获结果包含 tone mapping，并可按请求包含或排除 ImGui。
+ToneMapPass 将 Viewport Color 转为 `SHADER_READ_ONLY_OPTIMAL`。Editor 构建通过每个 frame slot 对应的 ImGui descriptor 在 `Viewport` 窗口显示该图像；PresentPass 随后只绘制 ImGui 到 Swapchain。无 GUI 或 Editor 未编译时，PresentPass 使用 fullscreen triangle 直接采样 Viewport Color。PresentPass 负责最终 `PRESENT_SRC_KHR` layout。
 
 ## Compute Bloom
 
@@ -126,15 +128,15 @@ Forward descriptor 约定为：
   - binding 4：Radiance cubemap。
 - 128 字节 push constant：model matrix 和材质因子。
 
-Lighting 的五个 binding 始终绑定真实资源或合法 fallback，不依赖 partially-bound descriptor。ToneMap 使用独立的 pass-local descriptor layout：binding 0 为 HDR，binding 1 为 Bloom。Bloom 不可用时 binding 1 绑定 HDR 作为合法占位，但 push constant 会禁止采样。
+Lighting 的五个 binding 始终绑定真实资源或合法 fallback，不依赖 partially-bound descriptor。ToneMap 使用独立的 pass-local descriptor layout：binding 0 为 HDR，binding 1 为 Bloom。Bloom 不可用时 binding 1 绑定 HDR 作为合法占位，但 push constant 会禁止采样。Present 使用另一个 pass-local descriptor，只包含当前 frame slot 的 Viewport Color。
 
 ## Shader Variant
 
 `shader/manifest.json` 是 Shader program 和 selectable variant 的唯一权威清单。CMake 在配置阶段读取 Manifest、去重所有 stage 源文件，并为 `glslc` 配置 include 路径和依赖；每个产物必须先通过 `spirv-val`，再从 `generated/<Config>/shader/` stage 到 runtime `shader/`。Manifest 本身也进入开发 runtime 和 Cook package。
 
-Application 在创建 Window/Vulkan 前加载 `ShaderRegistry`。当前选择使用稳定 variant ID，UI 使用 display name；ToneMap 和 Bloom 兼容性由 variant metadata 决定。Shadow、Bloom 与 ToneMap 通过稳定 program ID 查询，不再维护 C++ 路径常量。MaterialTemplate 的基础 PipelineConfig 不携带默认 Shader，MainForwardPass 在创建 pipeline 前必须写入当前 variant 路径。
+Application 在创建 Window/Vulkan 前加载 `ShaderRegistry`。当前选择使用稳定 variant ID，UI 使用 display name；ToneMap 和 Bloom 兼容性由 variant metadata 决定。Shadow、Bloom、ToneMap 与 Present 通过稳定 program ID 查询，不再维护 C++ 路径常量。MaterialTemplate 的基础 PipelineConfig 不携带默认 Shader，MainForwardPass 在创建 pipeline 前必须写入当前 variant 路径。
 
-测试目标静态链接固定版本的 SPIRV-Reflect，按 Manifest program contract 遍历全部 Forward、Shadow、Skybox、Bloom 与 ToneMap program，校验 stage、descriptor、UBO/push size 和 member offset、vertex location/format、跨阶段 varying及 fragment output。反射不进入 VulkanLab 运行时，也不自动生成 DescriptorSetLayout；生产布局仍由显式 C++ 代码创建。
+测试目标静态链接固定版本的 SPIRV-Reflect，按 Manifest program contract 遍历全部 Forward、Shadow、Skybox、Bloom、ToneMap 与 Present program，校验 stage、descriptor、UBO/push size 和 member offset、vertex location/format、跨阶段 varying及 fragment output。反射不进入 VulkanLab 运行时，也不自动生成 DescriptorSetLayout；生产布局仍由显式 C++ 代码创建。
 
 当前 variant 包含 Legacy、两个 PBR-lite、BaseColor/Normal/Roughness/Metallic/Occlusion/Emissive/Alpha/Transmission 调试视图，以及 `Debug Shadow`、`Debug IBL Diffuse` 和 `Debug IBL Specular`。启动默认使用 `PBR-lite NormalMapped`；Legacy 保留为显式基线和兼容性检查。只有两个 PBR-lite variant 在 Manifest 中声明 `bloom: true`。PBR-lite 使用 baseColor、metallicRoughness、AO、emissive 和可选 IBL；NormalMapped 额外使用 tangent/TBN 与 normal scale。Transmission 当前仍是 alpha 与 Fresnel 轮廓近似，不采样场景颜色。
 
@@ -152,7 +154,7 @@ GlobalUBO 最多上传 1 个 directional light 和 8 个 punctual lights；Point
 
 ## GPU Pass 计时
 
-Renderer 持有一个 `GpuPassProfiler` 和 timestamp query pool。每个 frame slot 为 `DirectionalShadow`、`Skybox`、`MainForward`、可选 `Bloom`、`ToneMap + UI` 分配 begin/end query；ToneMap 区间包含同一 render pass 内的 ImGui draw。总时间从第一个 Pass begin 到最后一个 Pass end 计算。
+Renderer 持有一个 `GpuPassProfiler` 和 timestamp query pool。每个 frame slot 为 `DirectionalShadow`、`Skybox`、`MainForward`、可选 `Bloom`、`ToneMap` 和 `Present + UI` 分配 begin/end query。总时间从第一个 Pass begin 到最后一个 Pass end 计算。
 
 `FrameSync::beginFrame()` 已等待对应 slot 的 fence 后，Profiler 才使用不带 `WAIT_BIT` 的 `vkGetQueryPoolResults()` 读取旧结果，然后在新 command buffer 中 reset 该 slot。计时不会增加 queue/device idle 或额外 fence wait。换算使用设备 `timestampPeriod`，并按 graphics queue 的 `timestampValidBits` 处理计数器回绕；不支持 timestamp 的设备返回 `available=false`，渲染继续运行。结果显示在 `VulkanLab -> Diagnostics -> Performance`，并由 `render.status.gpuTimings` 返回。
 
@@ -162,26 +164,22 @@ Renderer 持有一个 `GpuPassProfiler` 和 timestamp query pool。每个 frame 
 
 Tracy Vulkan context 使用 graphics queue 和独立 transient command pool完成初始化。各 Pass 在现有 frame command buffer 中写入嵌套 GPU zone；`IncrementalUploadQueue` 和同步 `UploadContext` 在各自 batch command buffer 中写入 `SceneUpload` zone。所有 zone 结束后，每帧调用一次 `TracyVkCollect()`，没有增加 `WAIT_BIT`、queue idle、device idle 或额外 fence。
 
-GPU 层级覆盖 DirectionalShadow/ShadowCasters、Skybox、MainForward/Opaque/Transparent、可选 Bloom Downsample/Upsample、ToneMap/ImGui、ScreenshotCopy 和上传 batch。CPU 侧覆盖 Application frame、FrameSync、RenderView/RenderQueue、场景与环境 worker、glTF 各准备阶段、逐帧 GPU builder、资产工具监督、Capture encode 和 pipeline cache miss。单 draw、单纹理和单 mip 不创建 zone。
+GPU 层级覆盖 DirectionalShadow/ShadowCasters、Skybox、MainForward/Opaque/Transparent、可选 Bloom Downsample/Upsample、ToneMap、Present/ImGui、ScreenshotCopy 和上传 batch。CPU 侧覆盖 Application frame、FrameSync、RenderView/RenderQueue、场景与环境 worker、glTF 各准备阶段、逐帧 GPU builder、资产工具监督、Capture encode 和 pipeline cache miss。单 draw、单纹理和单 mip 不创建 zone。
 
 Tracy 与 `GpuPassProfiler` 并行存在：后者是普通开发构建中的低成本数值统计，前者是按需连接的跨线程时间线。Tracy 编译和连接状态通过 `system.info.diagnostics.tracy` 与 `Diagnostics -> Performance` 显示；完整操作见 [Tracy 性能分析](../guides/tracy_profiling.md)。
 
-## Swapchain 截图
+## Workspace 与 Viewport 截图
 
-开发运行时提供异步 PNG 截图，入口为 `VulkanLab -> Diagnostics -> Capture`、F12 或 Runtime Control v3。ToneMapPass 结束后，截图在同一个 frame command buffer 中执行 `PRESENT -> TRANSFER_SRC`、image-to-buffer copy 和 `TRANSFER_SRC -> PRESENT`。
+开发运行时提供异步 PNG 截图，入口为 `VulkanLab -> Diagnostics -> Capture`、F12 或 Runtime Control v3。`includeGui=true` 选择最终 Swapchain，输出完整 Workspace；`includeGui=false` 选择当前 frame slot 的 Viewport Color，输出实际 Viewport 原生分辨率。两种来源都在同一个 frame command buffer 中转换到 `TRANSFER_SRC`、执行 image-to-buffer copy，并恢复为 present 或 shader-read layout。
 
 FrameSync 使用单调 submission serial 和正常 frame fence 管理 readback 生命周期。CPU worker 只处理 RGBA bytes、PNG 和 SHA-256，不访问 Vulkan、GLFW、ImGui 或 Scene。截图路径不调用 `vkQueueWaitIdle()` 或 `vkDeviceWaitIdle()`。
 
-## Resize 生命周期
+## Viewport 与 Swapchain Resize 生命周期
 
-resize 时 Renderer 等待 device idle，然后按以下顺序处理：
+Viewport 内容区变化与操作系统窗口 resize 使用两条独立生命周期。
 
-1. 逆序调用 pass 的 `releaseSwapChainResources()`，先释放 ToneMap、Bloom、MainForward 和 Skybox 持有的 swapchain/HDR/Bloom image view 引用。
-2. 重建 SwapChain。
-3. 由 Registry 重建 extent-dependent HDR color、MSAA color、depth targets 和 Bloom 金字塔；fixed 2048 的 shadow map 不重建。
-4. 调用 pass `onResize()` 重建 Skybox/MainForward framebuffer、Bloom descriptor 和 ToneMap source descriptor。
-5. 清空 PipelineCache，更新 GuiSystem、FrameSync 与相机 aspect ratio。
+Viewport resize 采用 120 ms debounce；首次有效尺寸立即在下一帧应用。Application 调用 `FrameSync::waitForAllFrames()` 后移除 ImGui viewport descriptors，Pass 释放 viewport-dependent framebuffer/descriptor，Registry 重建 HDR、MSAA、depth、Bloom 与 Viewport Color，随后 Pass 和 ImGui descriptors 重新绑定。该路径不重建 Swapchain、不清空 PipelineCache，也不调用 `vkDeviceWaitIdle()`。
 
-窗口最小化导致 framebuffer extent 为 0 时会延迟重建，并以短暂 sleep 保持主循环和 Runtime Control 可响应。
+Swapchain resize 只释放 PresentPass 的 swapchain framebuffer，重建 Swapchain、FrameSync 和 Present framebuffer；无 GUI 路径同时把 viewport extent 更新为新的 Swapchain extent。窗口最小化导致 framebuffer extent 为 0 时会延迟重建，并以短暂 sleep 保持主循环和 Runtime Control 可响应。
 
-Environment cubemap/LUT 不属于 swapchain-relative Registry，窗口 resize 时不会重建。
+Fixed shadow map和 Environment cubemap/LUT 不属于 viewport-relative Registry，Viewport 或窗口 resize 时都不会重建。

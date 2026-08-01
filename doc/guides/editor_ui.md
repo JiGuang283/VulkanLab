@@ -1,12 +1,12 @@
-# 编辑器 Docking 工作区
+# 编辑器 Docking 与 Scene Viewport
 
 > Status: Current
 > Last verified: 2026-08-01
-> Verified against: Docking v1 working tree
+> Verified against: Viewport v2 working tree
 
 VulkanLab 的开发 UI 使用 Dear ImGui `v1.92.7-docking`，在主 GLFW
-窗口内创建一个全屏 DockSpace。Scene、Assets、Render、Materials 和
-Diagnostics 是可以停靠、合并为 Tab、浮动或隐藏的独立工具窗口。
+窗口内创建一个全屏 DockSpace。Viewport、Scenes、Assets、Render、Materials
+和 Diagnostics 是可以停靠、合并为 Tab、浮动或隐藏的独立窗口。
 
 当前没有启用 ImGui Multi-viewports，不会为工具窗口创建额外的操作系统窗口。
 
@@ -16,7 +16,7 @@ Diagnostics 是可以停靠、合并为 Tab、浮动或隐藏的独立工具窗�
 
 ```text
 ┌ View / Layout ─── Scene ─── FPS / GPU / Loading ┐
-│ Scenes + Assets │   Scene pass-through │ Render  │
+│ Scenes + Assets │      Viewport        │ Render  │
 │                 │                      │ Material│
 ├─────────────────┴──────────────────────┴─────────┤
 │                  Diagnostics                     │
@@ -26,7 +26,7 @@ Diagnostics 是可以停靠、合并为 Tab、浮动或隐藏的独立工具窗�
 - Scenes 和 Assets 默认停靠在左侧同一节点。
 - Render 和 Materials 默认停靠在右侧同一节点。
 - Diagnostics 默认位于中央区域下方。
-- 中央节点不创建 ImGui 内容窗口，而是透出 Vulkan 场景。
+- Viewport 默认停靠在中央节点，显示 Renderer 生成的 per-frame Viewport Color。
 - 窗口宽度小于 `1200px` 时使用紧凑布局，Diagnostics 与 Scenes/Assets
   合并到左侧节点，不再占用底部空间。
 
@@ -41,7 +41,7 @@ Diagnostics 是可以停靠、合并为 Tab、浮动或隐藏的独立工具窗�
 
 DockSpace 顶部菜单栏提供：
 
-- `View`：显示或隐藏 Scenes、Assets、Render、Materials 和 Diagnostics。
+- `View`：显示或隐藏 Viewport、Scenes、Assets、Render、Materials 和 Diagnostics。
 - `Layout -> Reset Layout`：重新打开全部工具窗口并恢复默认节点结构。
 - 状态区：当前 Scene、FPS、可用时的 GPU frame time，以及活跃加载任务的
   阶段和完成百分比。
@@ -92,22 +92,31 @@ Diagnostics 保留内部 Tabs：
 - `Load Stats`：最近加载的阶段耗时、资源、上传、cache 和 VMA 数据。
 - `Capture`：截图请求、GUI inclusion、任务状态、输出路径和错误。
 
-## 中央区域与相机输入
+## Viewport 与相机输入
 
-Docking v1 的中央区域只是透明 DockNode，不是独立 Scene Viewport。场景仍按
-整个 swapchain 尺寸和宽高比渲染，停靠面板覆盖场景边缘；中央区域只决定用户
-可以看到和操作哪一部分背景画面。
+Viewport 是独立的场景渲染目标，不是 Swapchain 背景的透传区域。HDR、Depth、
+Bloom 和 tone-mapped Viewport Color 按 Viewport 内容区的物理像素 1:1 创建；
+相机 aspect ratio 每帧直接使用当前内容区比例。
 
-右键相机模式只能从中央透传区域启动。在工具窗口、菜单、Tab、modal 或 docking
-拖动目标上按右键不会进入相机模式。进入 CameraDrag 后仍使用现有 GLFW 鼠标
-捕获和 `W/S/A/D/Q/E` 移动逻辑。
+拖动 Dock 分隔线时，ImGui 临时缩放上一张有效图像。尺寸稳定 120 ms 后，Renderer
+等待全部 frame fence，重新创建 viewport-dependent image、framebuffer 和 descriptor；
+该过程不重建 Swapchain、不清空 Pipeline Cache，也不调用 `vkDeviceWaitIdle()`。
+首次出现有效尺寸会在下一帧立即应用。隐藏、折叠或零尺寸时继续使用最后一个
+有效 render extent。
+
+右键相机模式只能从实际 Viewport 图像区域启动。在标题栏、Tab、工具窗口、菜单、
+modal 或 docking 拖动目标上按右键不会进入相机模式。进入 CameraDrag 后仍使用
+现有 GLFW 鼠标捕获和 `W/S/A/D/Q/E` 移动逻辑。
 
 ## 截图与无 UI 构建
 
-- `includeGui=true` 截图包含菜单栏和当前 Docking 工作区。
-- `includeGui=false` 会丢弃该帧 ImGui draw data，仍得到原始全屏场景。
-- `--no-gui` 不创建 ImGui Context 或 DockSpace。
-- `VKL_ENABLE_EDITOR_UI=OFF` 不编译 EditorDockWorkspace，也不链接 ImGui。
+- `includeGui=true` 从最终 Swapchain 截图，包含菜单栏和当前 Docking 工作区。
+- `includeGui=false` 从 Viewport Color 截图，输出纯场景和实际 Viewport 原生分辨率；
+  当前 ImGui frame 不会被丢弃，用户窗口不会闪烁。
+- `--no-gui` 不创建 ImGui Context 或 DockSpace，PresentPass 将 Viewport Color
+  fullscreen 显示到 Swapchain。
+- `VKL_ENABLE_EDITOR_UI=OFF` 不编译 EditorDockWorkspace，也不链接 ImGui，仍保留
+  同一条离屏 Viewport 渲染和 fullscreen present 路径。
 
-独立、按窗口尺寸渲染的 Scene Viewport、对象拾取、Gizmo、Viewport-only 截图和
-Multi-viewports 不属于 Docking v1。
+当前只支持一个 Scene Viewport。对象拾取、Gizmo、可调 render scale 和 ImGui
+Multi-viewports 尚未实现。
