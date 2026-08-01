@@ -72,14 +72,14 @@ std::set<std::string> gltfBufferUris(const std::filesystem::path &scene) {
 }
 
 void copySceneGeometry(const std::filesystem::path &projectRoot,
-                       const CatalogScene &scene,
+                       const CatalogModel &scene,
                        const std::filesystem::path &stagingRoot) {
     const std::filesystem::path source = projectRoot / scene.source;
     copyFile(source, stagingRoot / scene.source);
     if (scene.source.extension() != ".gltf")
         return;
     const SceneImportPreflight preflight =
-        SceneImportService::preflight(source);
+        ModelImportService::preflight(source);
     const std::set<std::string> buffers = gltfBufferUris(source);
     for (const SceneImportDependency &dependency : preflight.dependencies) {
         if (buffers.count(dependency.uri) == 0)
@@ -110,11 +110,11 @@ Json cameraJson(const CameraPose &camera) {
 
 void saveCookedCatalog(const std::filesystem::path &path,
                        const SceneCatalog &catalog,
-                       const std::vector<const CatalogScene *> &scenes,
+                       const std::vector<const CatalogModel *> &scenes,
                        const std::vector<const CatalogEnvironment *> &environments,
                        const ImportProfile &profile) {
     Json sceneArray = Json::array();
-    for (const CatalogScene *scene : scenes) {
+    for (const CatalogModel *scene : scenes) {
         Json item = {{"id", scene->id},
                      {"displayName", scene->displayName},
                      {"importProfile", profile.id}};
@@ -124,8 +124,8 @@ void saveCookedCatalog(const std::filesystem::path &path,
         } else {
             item["source"] = generic(scene->source);
         }
-        if (scene->camera)
-            item["camera"] = cameraJson(*scene->camera);
+        if (scene->previewCamera)
+            item["previewCamera"] = cameraJson(*scene->previewCamera);
         sceneArray.push_back(std::move(item));
     }
     Json environmentArray = Json::array();
@@ -161,7 +161,8 @@ void saveCookedCatalog(const std::filesystem::path &path,
            {{"textureLimit", profile.textureLimit},
             {"textureEncoder", profile.textureEncoder},
             {"qualityPreset", profile.qualityPreset}}}}},
-        {"scenes", std::move(sceneArray)},
+        {"models", std::move(sceneArray)},
+        {"scenes", Json::array()},
         {"environmentProfiles", std::move(environmentProfiles)},
         {"environments", std::move(environmentArray)}};
     if (catalog.defaultEnvironment &&
@@ -181,15 +182,15 @@ void saveCookedCatalog(const std::filesystem::path &path,
         throw std::runtime_error("could not write cooked catalog");
 }
 
-std::vector<const CatalogScene *>
+std::vector<const CatalogModel *>
 selectScenes(const SceneCatalog &catalog,
              const std::vector<std::string> &requested) {
     std::unordered_set<std::string> selectedIds(requested.begin(),
                                                 requested.end());
     if (selectedIds.size() != requested.size())
         throw std::invalid_argument("cook scene IDs must be unique");
-    std::vector<const CatalogScene *> result;
-    for (const CatalogScene &scene : catalog.scenes) {
+    std::vector<const CatalogModel *> result;
+    for (const CatalogModel &scene : catalog.models) {
         const bool selected = requested.empty() ? !scene.optional
                                                 : selectedIds.erase(scene.id) > 0;
         if (selected)
@@ -340,7 +341,7 @@ CookPackageReport buildCookPackage(const CookPackageOptions &options) {
         throw std::runtime_error(
             "windows-x64 cooked packages require a native BC7 import profile");
     }
-    const std::vector<const CatalogScene *> scenes =
+    const std::vector<const CatalogModel *> scenes =
         selectScenes(catalog, options.sceneIds);
     const std::vector<const CatalogEnvironment *> environments =
         selectEnvironments(catalog, options.environmentIds);
@@ -360,7 +361,7 @@ CookPackageReport buildCookPackage(const CookPackageOptions &options) {
         }
         copyShaders(runtimeDirectory, staging);
 
-        for (const CatalogScene *scene : scenes) {
+        for (const CatalogModel *scene : scenes) {
             ++report.sceneCount;
             if (scene->type == "builtin") {
                 if (scene->builtinFactory != "viking_room")

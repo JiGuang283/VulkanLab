@@ -238,7 +238,7 @@ GltfValidationResult validateGltf(
     const std::atomic_bool &cancelRequested,
     IProcessRunner &processRunner) {
     GltfValidationResult result;
-    result.preflight = SceneImportService::preflight(options.sourcePath);
+    result.preflight = ModelImportService::preflight(options.sourcePath);
     result.report = baseReport(result.preflight);
     result.reportPath = assetValidationReportPath(
         options.cacheRoot, result.report.validatorVersion,

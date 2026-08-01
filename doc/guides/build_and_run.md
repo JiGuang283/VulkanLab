@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-01
-> Verified against: `86b809d`
+> Verified against: Scene Authoring Stage 0-1 working tree
 
 ## 环境要求
 
@@ -230,7 +230,7 @@ Vulkan Validation 默认使用 `core`，也可以显式选择 `off/core/sync/gpu
 .\VulkanLab.exe --gltf-validator D:\Tools\gltf_validator.exe
 .\VulkanLabAssetTool.exe validate scene `
   --project C:\Project\vulkan_learn `
-  --scene-id sheen-chair `
+  --model-id sheen-chair `
   --gltf-validator D:\Tools\gltf_validator.exe
 ```
 
@@ -243,17 +243,17 @@ Vulkan Validation 默认使用 `core`，也可以显式选择 `off/core/sync/gpu
 
 .\VulkanLabAssetTool.exe validate scene `
   --project C:\Project\vulkan_learn `
-  --scene-id main-sponza `
+  --model-id main-sponza `
   --force
 ```
 
-## 场景资产
+## 模型预览资产
 
-场景由源码项目的 `assets/catalog.json` 注册，新增可选 glTF 不需要修改或重新编译 `main.cpp`。`Viking Room` 使用内建 factory；其余条目由项目相对 `source` 创建 glTF prepare factory。可选源文件缺失时仍显示为 `Unavailable`，但不阻止启动。
+模型由源码项目的 `assets/catalog.json` 注册，新增可选 glTF 不需要修改或重新编译 `main.cpp`。`Viking Room` 使用内建 factory；其余 model 条目由项目相对 `source` 创建单模型预览 factory。可选源文件缺失时仍显示为 `Unavailable`，但不阻止启动。
 
-`VulkanLab -> Scene -> Scenes` 提供搜索、单击选择、双击/`Load`、`Reimport`、显式 source fallback、保存当前相机和从 Catalog 移除条目。`Import Scene...` 选择 `.glb/.gltf` 后先执行本地依赖安全检查和 Validator，再显示名称、稳定 scene ID、profile、Copy/Reference、验证 issues/扩展兼容性和是否自动加载。`.gltf` 的本地 `.bin` 与图片依赖会一起复制到 `models/imported/<scene-id>/`；远程、缺失、逃逸依赖或 Validator Error 不会写入 Catalog。Catalog 注册成功后会自动提交 Native BC7 import，勾选自动加载时再连续执行 CPU prepare 和 GPU upload。已有 Catalog glTF 可在场景详情中按需 `Validate/Revalidate` 和打开完整报告。
+`VulkanLab -> Scene -> Scenes` 显示 `Model Previews`，提供搜索、单击选择、双击/`Load`、`Reimport`、显式 source fallback、保存预览相机和从 Catalog 移除 model。`Import Model...` 选择 `.glb/.gltf` 后先执行本地依赖安全检查和 Validator，再显示名称、稳定 model ID、profile、Copy/Reference、验证 issues/扩展兼容性和是否自动加载。`.gltf` 的本地 `.bin` 与图片依赖会一起复制到 `models/imported/<model-id>/`；远程、缺失、逃逸依赖或 Validator Error 不会写入 Catalog。Catalog 注册成功后会自动提交 Native BC7 import，勾选自动加载时再连续执行 CPU prepare 和 GPU upload。已有 Catalog glTF 可在模型详情中按需 `Validate/Revalidate` 和打开完整报告。
 
-`VulkanLab -> Scene -> Assets` 显示当前项目、Catalog、cache root、运行模式、索引 Ready 记录数、cache/unreferenced blob 用量、选中 scene/profile 的 `Ready/Missing/Stale/Invalid/Importing` 状态、最近失败，以及资产任务的真实纹理进度、encoded/reused/failed、worker、耗时、日志和最近历史。长任务不会停留在 modal 中，页面不会逐帧扫描全部 manifest。
+`VulkanLab -> Scene -> Assets` 显示当前项目、Catalog、cache root、运行模式、索引 Ready 记录数、cache/unreferenced blob 用量、选中 model/profile 的 `Ready/Missing/Stale/Invalid/Importing` 状态、最近失败，以及资产任务的真实纹理进度、encoded/reused/failed、worker、耗时、日志和最近历史。长任务不会停留在 modal 中，页面不会逐帧扫描全部 manifest。
 
 同一导入事务也可通过 CLI 自动执行：
 
@@ -261,12 +261,12 @@ Vulkan Validation 默认使用 `core`，也可以显式选择 `off/core/sync/gpu
 .\VulkanLabAssetTool.exe catalog add `
   --project C:\Project\vulkan_learn `
   --source D:\Assets\Example\scene.gltf `
-  --display-name "Example Scene" `
-  --scene-id example-scene `
+  --display-name "Example Model" `
+  --model-id example-model `
   --profile desktop_1024
 ```
 
-Catalog 当前包含以下初始 glTF 条目：
+Catalog 当前包含以下初始 glTF model 条目：
 
 - `A Beautiful Game`
 - `Anisotropy Barn Lamp`
@@ -287,14 +287,14 @@ Catalog 当前包含以下初始 glTF 条目：
 ```powershell
 .\VulkanLabAssetTool.exe texture-cache build `
   --project C:\Project\vulkan_learn `
-  --scene-id main-sponza `
+  --model-id main-sponza `
   --profile desktop_1024 `
   --workers 4 `
   --memory-budget-mib 2048
 
 .\VulkanLabAssetTool.exe texture-cache build `
   --project C:\Project\vulkan_learn `
-  --scene-id main-sponza `
+  --model-id main-sponza `
   --profile desktop_2048
 ```
 
@@ -303,14 +303,14 @@ Catalog 当前包含以下初始 glTF 条目：
 ```powershell
 .\VulkanLabAssetTool.exe import scene `
   --project C:\Project\vulkan_learn `
-  --scene-id main-sponza `
+  --model-id main-sponza `
   --profile desktop_1024 `
   --progress ndjson
 ```
 
 `--project` 可省略，此时资产工具与渲染器一样查找 executable locator 或当前目录祖先中的 Catalog。需要把缓存放到其他位置时可显式使用 `--cache-root`。`--scene models/... --texture-limit 1024` 旧参数仍可按 Catalog source/profile 匹配，但新脚本应使用稳定 ID。
 
-缓存按 scene ID 和 profile ID 精确匹配。`desktop_1024` 不会复用 `desktop_2048` manifest。重新执行命令会复用有效 blob，`--force` 用于强制重新编码。工具必须完整成功后才发布新 manifest，失败不会修改源资产。
+缓存按 model ID 和 profile ID 精确匹配。现有 manifest 内仍使用兼容字段 `sceneId`，字符串值不变，因此 Catalog v3 不会使缓存失效。`desktop_1024` 不会复用 `desktop_2048` manifest。重新执行命令会复用有效 blob，`--force` 用于强制重新编码。工具必须完整成功后才发布新 manifest，失败不会修改源资产。
 
 并行导入参数：
 
@@ -359,7 +359,7 @@ Native BC7 cache hit 时，worker 读取完整 mip chain 后直接交给 staging
 
 ## HDR 环境与 IBL 派生缓存
 
-环境光照不在运行时卷积源 HDR。Catalog schema v2 使用稳定 environment ID 和 `EnvironmentProfile` 管理本地 `.hdr`；schema v1 Catalog 仍可读取，并获得内建的 `ibl_desktop_v1` profile。当前 profile 固定输出：
+环境光照不在运行时卷积源 HDR。Catalog schema v3 使用稳定 environment ID 和 `EnvironmentProfile` 管理本地 `.hdr`；schema v1 Catalog 仍可读取，并获得内建的 `ibl_desktop_v1` profile。当前 profile 固定输出：
 
 - 512 cubemap Radiance，`RGBA16F`，完整普通 mip chain。
 - 32 cubemap Irradiance，`RGBA16F`，单 mip，已包含 diffuse convolution 并除以 π。
@@ -411,11 +411,11 @@ cmake --build build-release --config Release
   --output .\dist\main-sponza `
   --platform windows-x64 `
   --profile desktop_1024 `
-  --scene-id main-sponza `
+  --model-id main-sponza `
   --environment-id studio
 ```
 
-可以重复传入 `--scene-id` 和 `--environment-id`。省略 scene ID 时选择 Catalog 中 `optional=false` 的场景；省略 environment ID 时包含 Catalog 中所有环境。默认要求所有选中 artifact 已经 Ready；需要在 cook 前自动补建时显式增加 `--build-missing`，也可以用 `--workers` 和 `--memory-budget-mib` 控制编码器。省略 `--cache-root` 时使用项目共享缓存。
+可以重复传入 `--model-id` 和 `--environment-id`；`--scene-id` 仍是 model ID 的兼容别名。省略 model ID 时选择 Catalog 中 `optional=false` 的模型预览；省略 environment ID 时包含 Catalog 中所有环境。Stage 1 尚不把原生 SceneDocument 纳入 Cook。默认要求所有选中 artifact 已经 Ready；需要在 cook 前自动补建时显式增加 `--build-missing`，也可以用 `--workers` 和 `--memory-budget-mib` 控制编码器。省略 `--cache-root` 时使用项目共享缓存。
 
 交付前使用同一套 hash 校验：
 

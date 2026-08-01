@@ -268,7 +268,7 @@ ArtifactIndex ArtifactIndex::loadOrRebuild(
         for (const Json &item : root.at("records")) {
             ArtifactIndexRecord record = recordFromJson(item);
             if (record.assetKind == ArtifactKind::Scene) {
-                if (!catalog.findScene(record.assetId) ||
+                if (!catalog.findModel(record.assetId) ||
                     catalog.importProfiles.count(record.profileId) == 0)
                     continue;
             } else {
@@ -302,7 +302,7 @@ ArtifactIndex ArtifactIndex::rebuild(const std::filesystem::path &cacheRoot,
                                      const SceneCatalog &catalog) {
     ArtifactIndex index(cacheRoot, projectRoot, catalog.projectId);
     index.replaceAllOnSave_ = true;
-    for (const CatalogScene &scene : catalog.scenes) {
+    for (const CatalogModel &scene : catalog.models) {
         if (scene.type != "gltf")
             continue;
         for (const auto &profile : catalog.importProfiles) {
@@ -323,7 +323,7 @@ ArtifactIndex ArtifactIndex::rebuild(const std::filesystem::path &cacheRoot,
     return index;
 }
 
-void ArtifactIndex::refreshRecord(const CatalogScene &scene,
+void ArtifactIndex::refreshRecord(const CatalogModel &scene,
                                   const ImportProfile &profile) {
     const std::string key = artifactIndexKey(scene.id, profile.id);
     const auto existing = records_.find(key);
@@ -493,7 +493,7 @@ void ArtifactIndex::refreshEnvironmentRecord(
 void ArtifactIndex::refresh(const SceneCatalog &catalog,
                             const std::string &sceneId,
                             const std::string &profileId) {
-    const CatalogScene *scene = catalog.findScene(sceneId);
+    const CatalogModel *scene = catalog.findModel(sceneId);
     if (!scene || scene->type != "gltf")
         throw std::runtime_error("Cannot index unknown glTF scene: " + sceneId);
     refreshRecord(*scene, catalog.profile(profileId));

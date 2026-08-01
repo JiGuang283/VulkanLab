@@ -33,10 +33,10 @@ void testCatalogEdits() {
     vkr::SceneCatalogEditor::saveCamera(project, "temporary", pose);
     auto catalog = vkr::SceneCatalog::load(catalogPath, root);
     const auto *scene = catalog.findScene("temporary");
-    requireEditor(scene && scene->camera &&
-                      scene->camera->position == glm::vec3(1.0f, 2.0f, 3.0f) &&
-                      scene->camera->yaw == 45.0f &&
-                      scene->camera->pitch == -10.0f,
+    requireEditor(scene && scene->previewCamera &&
+                      scene->previewCamera->position == glm::vec3(1.0f, 2.0f, 3.0f) &&
+                      scene->previewCamera->yaw == 45.0f &&
+                      scene->previewCamera->pitch == -10.0f,
                   "camera edit was not persisted");
     vkr::SceneCatalogEditor::removeScene(project, "temporary");
     catalog = vkr::SceneCatalog::load(catalogPath, root);

@@ -29,6 +29,21 @@ target_link_libraries(vkl_shader_catalog
         vkl_json
 )
 
+add_library(vkl_scene_data STATIC
+    scene_data/SceneDocument.cpp
+    scene_data/SceneIds.cpp
+)
+add_library(VulkanLab::SceneData ALIAS vkl_scene_data)
+target_include_directories(vkl_scene_data PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(vkl_scene_data
+    PUBLIC
+        vkl_build_options
+        vkl_glm
+    PRIVATE
+        vkl_json
+        bcrypt
+)
+
 set(VKL_ASSET_CORE_SOURCES
     assets/AssetValidation.cpp
     assets/ArtifactCachePruner.cpp
@@ -46,6 +61,7 @@ set(VKL_ASSET_CORE_SOURCES
 if(VKL_ENABLE_ASSET_AUTHORING OR VKL_BUILD_ASSET_TOOL OR BUILD_TESTING)
     list(APPEND VKL_ASSET_CORE_SOURCES
         assets/SceneCatalogEditor.cpp
+        assets/SceneCatalogStore.cpp
         assets/SceneImportService.cpp
     )
 endif()
@@ -57,6 +73,7 @@ target_link_libraries(vkl_asset_core
     PUBLIC
         vkl_build_options
         vkl_glm
+        vkl_scene_data
     PRIVATE
         vkl_json
         bcrypt
@@ -195,6 +212,8 @@ if(VKL_ENABLE_EDITOR_UI)
         editor/EditorDockWorkspace.cpp
         editor/EditorTheme.cpp
         editor/EditorWidgets.cpp
+        editor/panels/AssetsPanel.cpp
+        editor/panels/ScenesPanel.cpp
         render/GuiSystem.cpp
     )
 else()
@@ -226,6 +245,7 @@ target_link_libraries(vkl_engine
         vkl_asset_runtime
         vkl_foundation
         vkl_shader_catalog
+        vkl_scene_data
         vkl_glm
         vkl_vma_headers
         vkl_tracy
@@ -247,6 +267,7 @@ endif()
 add_executable(VulkanLab
     main.cpp
     app/Application.cpp
+    app/SceneWorkflowController.cpp
 )
 target_include_directories(VulkanLab PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(VulkanLab PRIVATE

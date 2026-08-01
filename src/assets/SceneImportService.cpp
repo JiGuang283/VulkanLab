@@ -1,6 +1,7 @@
 #include "SceneImportService.h"
 
 #include "DerivedTextureManifest.h"
+#include "SceneCatalogStore.h"
 
 #include <json.hpp>
 
@@ -52,7 +53,7 @@ Json readSceneJson(const std::filesystem::path &path) {
         return root;
     }
     if (extension != ".glb")
-        throw std::runtime_error("Scene import only supports .gltf and .glb");
+        throw std::runtime_error("Model import only supports .gltf and .glb");
 
     std::ifstream input(path, std::ios::binary);
     std::vector<uint8_t> header(20);
@@ -124,17 +125,17 @@ std::filesystem::path normalizedExistingFile(
     std::error_code error;
     const auto absolute = std::filesystem::absolute(path, error);
     if (error || !std::filesystem::is_regular_file(absolute))
-        throw std::runtime_error("Scene source is missing: " + path.string());
+        throw std::runtime_error("Model source is missing: " + path.string());
     const auto canonical = std::filesystem::canonical(absolute, error);
     if (error)
-        throw std::runtime_error("Could not resolve scene source: " +
+        throw std::runtime_error("Could not resolve model source: " +
                                  path.string());
     return canonical;
 }
 
 void appendDependency(const std::string &uri,
                       const std::filesystem::path &sourceRoot,
-                      std::vector<SceneImportDependency> &dependencies,
+                      std::vector<ModelImportDependency> &dependencies,
                       std::set<std::filesystem::path> &seen) {
     if (uri.empty() || isDataUri(uri))
         return;
@@ -167,7 +168,7 @@ void appendDependency(const std::string &uri,
 
 void collectUris(const Json &root, const char *arrayName,
                  const std::filesystem::path &sourceRoot,
-                 std::vector<SceneImportDependency> &dependencies,
+                 std::vector<ModelImportDependency> &dependencies,
                  std::set<std::filesystem::path> &seen) {
     if (!root.contains(arrayName))
         return;
@@ -188,12 +189,12 @@ std::string displayNameFromStem(const std::filesystem::path &path) {
         if (character == '_' || character == '-')
             character = ' ';
     }
-    return value.empty() ? std::string("Imported Scene") : value;
+    return value.empty() ? std::string("Imported Model") : value;
 }
 
-void checkCancelled(const SceneImportCancel &cancel) {
+void checkCancelled(const ModelImportCancel &cancel) {
     if (cancel && cancel())
-        throw std::runtime_error("Scene import cancelled");
+        throw std::runtime_error("Model import cancelled");
 }
 
 std::string uniqueSuffix() {
@@ -205,8 +206,8 @@ std::string uniqueSuffix() {
 void copyFileWithProgress(const std::filesystem::path &source,
                           const std::filesystem::path &destination,
                           uint64_t &completedBytes, uint64_t totalBytes,
-                          const SceneImportCancel &cancel,
-                          const SceneImportProgressCallback &progress) {
+                          const ModelImportCancel &cancel,
+                          const ModelImportProgressCallback &progress) {
     checkCancelled(cancel);
     std::filesystem::create_directories(destination.parent_path());
     std::filesystem::copy_file(source, destination,
@@ -216,91 +217,19 @@ void copyFileWithProgress(const std::filesystem::path &source,
         progress({completedBytes, totalBytes, source.filename().string()});
 }
 
-bool sameStamp(const DerivedFileStamp &left, const DerivedFileStamp &right) {
-    return left.size == right.size && left.writeTime == right.writeTime;
-}
-
-void atomicReplace(const std::filesystem::path &temporary,
-                   const std::filesystem::path &destination) {
-#ifdef _WIN32
-    if (!MoveFileExW(temporary.c_str(), destination.c_str(),
-                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        throw std::runtime_error("Could not atomically replace Catalog (error " +
-                                 std::to_string(GetLastError()) + ")");
-    }
-#else
-    std::filesystem::rename(temporary, destination);
-#endif
-}
-
-void appendCatalogScene(const ProjectContext &project,
-                        const SceneImportRequest &request,
-                        const std::filesystem::path &projectRelativeSource) {
-    const DerivedFileStamp before = fileStamp(project.catalogPath);
-    std::ifstream input(project.catalogPath, std::ios::binary);
-    Json root;
-    input >> root;
-    input.close();
-
-    for (const Json &item : root.at("scenes")) {
-        if (item.value("id", std::string{}) == request.sceneId)
-            throw std::runtime_error("Scene ID already exists: " +
-                                     request.sceneId);
-        std::string existing = item.value("displayName", std::string{});
-        std::string requested = request.displayName;
-        std::transform(existing.begin(), existing.end(), existing.begin(),
-                       [](char c) { return static_cast<char>(std::tolower(
-                                              static_cast<unsigned char>(c))); });
-        std::transform(requested.begin(), requested.end(), requested.begin(),
-                       [](char c) { return static_cast<char>(std::tolower(
-                                              static_cast<unsigned char>(c))); });
-        if (existing == requested)
-            throw std::runtime_error("Scene display name already exists: " +
-                                     request.displayName);
-    }
-
-    root["scenes"].push_back({{"id", request.sceneId},
-                              {"displayName", request.displayName},
-                              {"source", projectRelativeSource.generic_string()},
-                              {"importProfile", request.profileId}});
-
-    const std::filesystem::path temporary =
-        project.catalogPath.string() + ".import-" + uniqueSuffix() + ".tmp";
-    try {
-        {
-            std::ofstream output(temporary,
-                                 std::ios::binary | std::ios::trunc);
-            if (!output)
-                throw std::runtime_error("Could not create temporary Catalog");
-            output << root.dump(2) << '\n';
-            output.flush();
-            if (!output)
-                throw std::runtime_error("Could not flush temporary Catalog");
-        }
-        (void)SceneCatalog::load(temporary, project.projectRoot);
-        if (!sameStamp(before, fileStamp(project.catalogPath)))
-            throw std::runtime_error(
-                "Catalog changed during import; refusing to overwrite it");
-        atomicReplace(temporary, project.catalogPath);
-    } catch (...) {
-        std::error_code ignored;
-        std::filesystem::remove(temporary, ignored);
-        throw;
-    }
-}
-
 } // namespace
 
-SceneImportPreflight
-SceneImportService::preflight(const std::filesystem::path &sourcePath) {
-    SceneImportPreflight result;
+ModelImportPreflight
+ModelImportService::preflight(const std::filesystem::path &sourcePath) {
+    ModelImportPreflight result;
     result.sourcePath = normalizedExistingFile(sourcePath);
     result.suggestedDisplayName = displayNameFromStem(result.sourcePath);
-    result.suggestedSceneId = suggestSceneId(result.suggestedDisplayName);
+    result.suggestedModelId = suggestModelId(result.suggestedDisplayName);
+    result.suggestedSceneId = result.suggestedModelId;
 
     const Json root = readSceneJson(result.sourcePath);
     if (!root.is_object() || !root.contains("asset"))
-        throw std::runtime_error("Scene does not contain glTF asset metadata");
+        throw std::runtime_error("Model does not contain glTF asset metadata");
     const std::filesystem::path sourceRoot = result.sourcePath.parent_path();
     std::set<std::filesystem::path> seen;
     collectUris(root, "buffers", sourceRoot, result.dependencies, seen);
@@ -328,26 +257,27 @@ SceneImportService::preflight(const std::filesystem::path &sourcePath) {
     return result;
 }
 
-SceneImportResult SceneImportService::importScene(
-    const ProjectContext &project, const SceneImportRequest &request,
-    const SceneImportCancel &cancel,
-    const SceneImportProgressCallback &progress) {
+ModelImportResult ModelImportService::importModel(
+    const ProjectContext &project, const ModelImportRequest &request,
+    const ModelImportCancel &cancel,
+    const ModelImportProgressCallback &progress) {
+    const std::string modelId = request.resolvedModelId();
     if (!project.catalogWritable)
         throw std::runtime_error("The project Catalog is read-only");
-    if (!isStableAssetId(request.sceneId))
-        throw std::runtime_error("Scene ID is not a stable lowercase ID");
+    if (!isStableAssetId(modelId))
+        throw std::runtime_error("Model ID is not a stable lowercase ID");
     if (request.displayName.empty())
-        throw std::runtime_error("Scene display name cannot be empty");
+        throw std::runtime_error("Model display name cannot be empty");
     const SceneCatalog catalog =
         SceneCatalog::load(project.catalogPath, project.projectRoot);
     (void)catalog.profile(request.profileId);
-    if (catalog.findScene(request.sceneId))
-        throw std::runtime_error("Scene ID already exists: " + request.sceneId);
+    if (catalog.findModel(modelId) || catalog.findSceneDocument(modelId))
+        throw std::runtime_error("Asset ID already exists: " + modelId);
 
-    const SceneImportPreflight checked = preflight(request.sourcePath);
+    const ModelImportPreflight checked = preflight(request.sourcePath);
     if (!request.validation)
         throw std::runtime_error(
-            "Scene import requires a validation receipt");
+            "Model import requires a validation receipt");
     const AssetValidationQuery validation = queryValidationReceipt(
         project.cacheRoot, *request.validation, checked.sourcePath);
     const bool validated =
@@ -358,7 +288,7 @@ SceneImportResult SceneImportService::importScene(
         request.allowUnvalidated;
     if (!validated && !explicitlyUnvalidated) {
         throw std::runtime_error(
-            "Scene validation gate rejected import: " +
+            "Model validation gate rejected import: " +
             std::string(assetValidationStateName(validation.state)) +
             (validation.reason.empty() ? std::string{}
                                        : " (" + validation.reason + ")"));
@@ -370,7 +300,7 @@ SceneImportResult SceneImportService::importScene(
     std::filesystem::path stagingDirectory;
     bool validationBound = false;
     try {
-        if (request.placement == SceneImportPlacement::ReferenceExisting) {
+        if (request.placement == ModelImportPlacement::ReferenceExisting) {
             if (!pathIsWithin(project.projectRoot, checked.sourcePath))
                 throw std::runtime_error(
                     "Reference Existing requires a project-local source");
@@ -379,19 +309,19 @@ SceneImportResult SceneImportService::importScene(
         } else {
             const std::filesystem::path importedRoot =
                 project.projectRoot / "models/imported";
-            publishedDirectory = importedRoot / request.sceneId;
+            publishedDirectory = importedRoot / modelId;
             if (std::filesystem::exists(publishedDirectory))
                 throw std::runtime_error("Import destination already exists: " +
                                          publishedDirectory.string());
             stagingDirectory =
-                importedRoot / (".staging-" + request.sceneId + "-" +
+                importedRoot / (".staging-" + modelId + "-" +
                                 uniqueSuffix());
             std::filesystem::create_directories(stagingDirectory);
 
             uint64_t completed = 0;
-            const std::filesystem::path stagedScene =
+            const std::filesystem::path stagedModel =
                 stagingDirectory / checked.sourcePath.filename();
-            copyFileWithProgress(checked.sourcePath, stagedScene, completed,
+            copyFileWithProgress(checked.sourcePath, stagedModel, completed,
                                  checked.totalBytes, cancel, progress);
             for (const auto &dependency : checked.dependencies) {
                 copyFileWithProgress(
@@ -400,7 +330,7 @@ SceneImportResult SceneImportService::importScene(
                     checked.totalBytes, cancel, progress);
             }
             checkCancelled(cancel);
-            (void)preflight(stagedScene);
+            (void)preflight(stagedModel);
             const AssetValidationQuery afterCopy = queryValidationReceipt(
                 project.cacheRoot, *request.validation, checked.sourcePath);
             const bool sourceStillValidated =
@@ -410,7 +340,7 @@ SceneImportResult SceneImportService::importScene(
                  request.allowUnvalidated);
             if (!sourceStillValidated) {
                 throw std::runtime_error(
-                    "Scene source or dependencies changed during import: " +
+                    "Model source or dependencies changed during import: " +
                     std::string(assetValidationStateName(afterCopy.state)) +
                     (afterCopy.reason.empty()
                          ? std::string{}
@@ -425,16 +355,21 @@ SceneImportResult SceneImportService::importScene(
 
         checkCancelled(cancel);
         (void)bindSceneValidation(project.cacheRoot, project.projectRoot,
-                                  request.sceneId, projectRelativeSource,
+                                  modelId, projectRelativeSource,
                                   *request.validation);
         validationBound = true;
         checkCancelled(cancel);
-        appendCatalogScene(project, request, projectRelativeSource);
+        CatalogModel model;
+        model.id = modelId;
+        model.displayName = request.displayName;
+        model.source = projectRelativeSource;
+        model.importProfile = request.profileId;
+        (void)SceneCatalogStore::addModel(project, std::move(model));
     } catch (...) {
         if (validationBound) {
             try {
                 removeSceneValidationBinding(project.cacheRoot,
-                                             request.sceneId);
+                                             modelId);
             } catch (...) {
             }
         }
@@ -448,13 +383,13 @@ SceneImportResult SceneImportService::importScene(
 
     const SceneCatalog updated =
         SceneCatalog::load(project.catalogPath, project.projectRoot);
-    const CatalogScene *scene = updated.findScene(request.sceneId);
-    if (!scene)
-        throw std::runtime_error("Imported scene was not published to Catalog");
-    return {*scene, project.projectRoot / scene->source};
+    const CatalogModel *model = updated.findModel(modelId);
+    if (!model)
+        throw std::runtime_error("Imported model was not published to Catalog");
+    return {*model, *model, project.projectRoot / model->source};
 }
 
-std::string SceneImportService::suggestSceneId(const std::string &name) {
+std::string ModelImportService::suggestModelId(const std::string &name) {
     std::string result;
     bool separator = false;
     for (const unsigned char byte : name) {
@@ -474,7 +409,7 @@ std::string SceneImportService::suggestSceneId(const std::string &name) {
     }
     while (!result.empty() && result.back() == '-')
         result.pop_back();
-    return result.empty() ? std::string("scene") : result;
+    return result.empty() ? std::string("model") : result;
 }
 
 } // namespace vkr

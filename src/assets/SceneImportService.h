@@ -11,61 +11,90 @@
 
 namespace vkr {
 
-enum class SceneImportPlacement { CopyIntoProject, ReferenceExisting };
+enum class ModelImportPlacement { CopyIntoProject, ReferenceExisting };
 
-struct SceneImportDependency {
+struct ModelImportDependency {
     std::string uri;
     std::filesystem::path sourcePath;
     std::filesystem::path relativePath;
 };
 
-struct SceneImportPreflight {
+struct ModelImportPreflight {
     std::filesystem::path sourcePath;
     std::string suggestedDisplayName;
-    std::string suggestedSceneId;
-    std::vector<SceneImportDependency> dependencies;
+    std::string suggestedModelId;
+    std::string suggestedSceneId; // Compatibility alias.
+    std::vector<ModelImportDependency> dependencies;
     std::vector<std::string> extensionsUsed;
     std::vector<std::string> extensionsRequired;
     uint64_t totalBytes = 0;
 };
 
-struct SceneImportRequest {
+struct ModelImportRequest {
     std::filesystem::path sourcePath;
     std::string displayName;
-    std::string sceneId;
+    std::string modelId;
+    std::string sceneId; // Compatibility alias.
     std::string profileId;
-    SceneImportPlacement placement = SceneImportPlacement::CopyIntoProject;
+    ModelImportPlacement placement = ModelImportPlacement::CopyIntoProject;
     std::optional<SceneValidationReceipt> validation;
     bool allowUnvalidated = false;
+
+    std::string resolvedModelId() const {
+        return modelId.empty() ? sceneId : modelId;
+    }
 };
 
-struct SceneImportProgress {
+struct ModelImportProgress {
     uint64_t completedBytes = 0;
     uint64_t totalBytes = 0;
     std::string currentFile;
 };
 
-struct SceneImportResult {
-    CatalogScene scene;
+struct ModelImportResult {
+    CatalogModel model;
+    CatalogModel scene; // Compatibility copy.
     std::filesystem::path projectSourcePath;
 };
 
-using SceneImportCancel = std::function<bool()>;
-using SceneImportProgressCallback =
-    std::function<void(const SceneImportProgress &)>;
+using ModelImportCancel = std::function<bool()>;
+using ModelImportProgressCallback =
+    std::function<void(const ModelImportProgress &)>;
 
-class SceneImportService {
+class ModelImportService {
   public:
-    static SceneImportPreflight
+    static ModelImportPreflight
     preflight(const std::filesystem::path &sourcePath);
 
-    static SceneImportResult
-    importScene(const ProjectContext &project,
-                const SceneImportRequest &request,
-                const SceneImportCancel &cancel = {},
-                const SceneImportProgressCallback &progress = {});
+    static ModelImportResult
+    importModel(const ProjectContext &project,
+                const ModelImportRequest &request,
+                const ModelImportCancel &cancel = {},
+                const ModelImportProgressCallback &progress = {});
 
-    static std::string suggestSceneId(const std::string &name);
+    static std::string suggestModelId(const std::string &name);
+
+    static ModelImportResult
+    importScene(const ProjectContext &project,
+                const ModelImportRequest &request,
+                const ModelImportCancel &cancel = {},
+                const ModelImportProgressCallback &progress = {}) {
+        return importModel(project, request, cancel, progress);
+    }
+
+    static std::string suggestSceneId(const std::string &name) {
+        return suggestModelId(name);
+    }
 };
+
+using SceneImportPlacement = ModelImportPlacement;
+using SceneImportDependency = ModelImportDependency;
+using SceneImportPreflight = ModelImportPreflight;
+using SceneImportRequest = ModelImportRequest;
+using SceneImportProgress = ModelImportProgress;
+using SceneImportResult = ModelImportResult;
+using SceneImportCancel = ModelImportCancel;
+using SceneImportProgressCallback = ModelImportProgressCallback;
+using SceneImportService = ModelImportService;
 
 } // namespace vkr

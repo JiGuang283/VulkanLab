@@ -1,27 +1,27 @@
 # 资源加载
 
 > Status: Current
-> Last verified: 2026-07-31
-> Verified against: `73285cd`
+> Last verified: 2026-08-01
+> Verified against: Scene Authoring Stage 0-1 working tree
 
 ## 项目、Catalog 与导入
 
-`ProjectContextResolver` 先检查可执行文件旁的 `package_manifest.json`。存在时完整校验 package 并返回只读 package root、Catalog、cache root 和 profile，禁止 `--project` 覆盖。否则按开发规则优先使用 `--project <path>`，再读取可执行文件旁由 CMake 生成的 `vulkanlab_project.json`，最后才从当前目录祖先查找 Catalog。解析结果明确区分 `projectRoot`、`runtimeRoot`、`cacheRoot` 和 `captureRoot`；后续 subsystem 只消费已经解析的路径，不再按当前工作目录拼接资源。Debug、Release 和资产工具因此指向同一个源码 `assets/catalog.json`。Catalog schema v2 使用稳定 `projectId`、scene/environment ID、import profile 和 environment profile；schema v1 继续可读，并自动获得内建的 `ibl_desktop_v1` profile。具体场景和环境不再硬编码在 `main.cpp`。
+`ProjectContextResolver` 先检查可执行文件旁的 `package_manifest.json`。存在时完整校验 package 并返回只读 package root、Catalog、cache root 和 profile，禁止 `--project` 覆盖。否则按开发规则优先使用 `--project <path>`，再读取可执行文件旁由 CMake 生成的 `vulkanlab_project.json`，最后才从当前目录祖先查找 Catalog。解析结果明确区分 `projectRoot`、`runtimeRoot`、`cacheRoot` 和 `captureRoot`；后续 subsystem 只消费已经解析的路径，不再按当前工作目录拼接资源。Debug、Release 和资产工具因此指向同一个源码 `assets/catalog.json`。Catalog schema v3 将 `models[]`、原生 `scenes[]` 和 `environments[]` 分开；schema v1/v2 的旧 `scenes[]` 继续按模型预览读取，且只读启动不会改写旧文件。具体模型和环境不再硬编码在 `main.cpp`。
 
-开发模式下 Catalog scene、glTF/GLB、外部 buffer/image 以及 Viking Room 的 OBJ/PNG 从 `projectRoot` 读取，SPIR-V 和 sibling 工具从 executable 所在的 `runtimeRoot` 读取。Cooked package 中 `projectRoot` 与 `runtimeRoot` 都是 package root，`cacheRoot` 固定为包内 `runtime_assets`。
+开发模式下 Catalog model、glTF/GLB、外部 buffer/image 以及 Viking Room 的 OBJ/PNG 从 `projectRoot` 读取，SPIR-V 和 sibling 工具从 executable 所在的 `runtimeRoot` 读取。Cooked package 中 `projectRoot` 与 `runtimeRoot` 都是 package root，`cacheRoot` 固定为包内 `runtime_assets`。Stage 1 的原生 `.vkscene.json` 只由数据服务解析和保存，尚不参与运行时加载。
 
-`VulkanLab -> Scene -> Scenes` 的 `Import Scene...` 通过 Win32 `IFileOpenDialog` 选择 `.gltf/.glb`。新源文件先由 `SceneImportService::preflight` 检查本地 URI 与依赖闭包，再由独立 `VulkanLabAssetTool validate scene` 进程运行固定版本 Khronos glTF Validator。只有 `Valid/Warnings` 才能继续；`Unavailable` 需要用户显式勾选未校验导入；`Invalid/Stale/Failed/NotChecked` 都会阻止复制、Catalog 写入和后续 BC7 构建。
+`VulkanLab -> Scene -> Scenes` 的 `Import Model...` 通过 Win32 `IFileOpenDialog` 选择 `.gltf/.glb`。新源文件先由 `ModelImportService::preflight` 检查本地 URI 与依赖闭包，再由独立 `VulkanLabAssetTool validate scene` 进程运行固定版本 Khronos glTF Validator。只有 `Valid/Warnings` 才能继续；`Unavailable` 需要用户显式勾选未校验导入；`Invalid/Stale/Failed/NotChecked` 都会阻止复制、Catalog 写入和后续 BC7 构建。
 
-验证报告位于 `<cacheRoot>/validation/reports/2.0.0-dev.3.10/`，`validation/index.json` 只保存 scene ID、项目相对 source 和内容寻址 report key。报告记录 source SHA-256、依赖 size/mtime、完整 issues、资产统计和 renderer extension 兼容性，不写入 Catalog、源模型或 Cooked package。已有 Catalog 场景不在启动时扫描，可从 Scenes 页执行 `Validate/Revalidate`；source 或依赖 stamp 变化后查询结果为 `Stale`。
+验证报告位于 `<cacheRoot>/validation/reports/2.0.0-dev.3.10/`，`validation/index.json` 继续保存兼容字段 `sceneId`、项目相对 source 和内容寻址 report key；在模型路径中该值就是 `modelId`，以避免旧报告和缓存失效。报告记录 source SHA-256、依赖 size/mtime、完整 issues、资产统计和 renderer extension 兼容性，不写入 Catalog、源模型或 Cooked package。已有 Catalog 模型不在启动时扫描，可从 Scenes 页执行 `Validate/Revalidate`；source 或依赖 stamp 变化后查询结果为 `Stale`。
 
-验证通过后，可测试的 `SceneImportService` 在 worker 中执行以下事务：
+验证通过后，`ModelImportService` 在 worker 中执行以下事务：
 
 1. 解析 glTF JSON（GLB 只读取 JSON chunk），收集本地 buffer/image URI。
 2. 接受 data URI，拒绝远程 scheme、绝对路径、缺失文件、路径逃逸和 symlink 逃逸。
 3. 重新读取缓存 validation receipt，并用当前 source/dependency stamp 防止 UI 与 worker 之间的 TOCTOU。
 4. Copy 模式把主文件与依赖闭包写入 `models/imported/.staging-*`，保持 URI 相对结构并从 staging 二次 preflight。
-5. 原子重命名为 `models/imported/<scene-id>/`，将验证报告绑定到最终 scene ID。
-6. 用临时文件验证新 Catalog，检查磁盘版本未变化，再以 atomic replace 发布。
+5. 原子重命名为 `models/imported/<model-id>/`，将验证报告绑定到最终 model ID。
+6. 由 `SceneCatalogStore` 用临时文件验证 schema v3 Catalog，检查磁盘版本未变化，再以 atomic replace 发布。
 
 任何步骤失败或取消都会删除本次 staging；目录已发布但 Catalog 未发布时会回滚新目录。项目内源文件也可选择 Reference Existing，只在 Catalog 中保存项目相对路径。`VulkanLabAssetTool catalog add` 调用相同验证门和导入服务，供自动化使用。Validator warning 与 renderer capability warning 分开保存；后者不阻止开发导入或 Cook。
 
@@ -29,12 +29,14 @@ HDR 环境导入只接受本地 2:1 equirectangular `.hdr`。UI 或 `VulkanLabAs
 
 ## 加载入口
 
-SceneRegistry 的 `SceneEntry` 可以提供两种入口：
+`SceneWorkflowController` 从 Catalog 的 `models[]` 构建 SceneRegistry；原生 `scenes[]` 当前被有意忽略，直到 RuntimeWorld 阶段。SceneRegistry 的 `SceneEntry` 可以提供两种入口：
 
 - `SceneFactory`：同步创建完整 GPU Scene，当前用于 Viking Room 和初始化兼容路径。
 - `ScenePrepareFactory`：只产生 `PreparedSceneData`，当前用于全部 glTF 场景。
 
 `PreparedSceneData` 保存纹理 payload、sampler/format 描述、材质参数、vertex/index、对象引用、静态世界空间灯光和相机建议，不包含 Vulkan handle、VMA allocation 或 descriptor set。纹理 payload 可以是运行时解码的 RGBA8 base level，也可以是 KTX2 转码后带完整 mip chain 的数据。主线程随后由 `SceneGpuBuilder` 把它转换为运行时 Scene。
+
+Catalog v3 与 `.vkscene.json` 的数据契约见[场景数据与 Catalog](scene_documents.md)。
 
 ## 异步 glTF Prepare
 

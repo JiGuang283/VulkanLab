@@ -102,8 +102,8 @@ void testCatalogLoadAndProjectResolution() {
         vkr::SceneCatalog::load(context.catalogPath, context.projectRoot);
     requireCatalog(catalog.projectId == "catalog-test",
                    "catalog project ID changed");
-    requireCatalog(catalog.scenes.size() == 1 &&
-                       catalog.scenes[0].id == "scene",
+    requireCatalog(catalog.models.size() == 1 &&
+                       catalog.models[0].id == "scene",
                    "catalog scene was not loaded");
     requireCatalog(catalog.profile("desktop_1024").textureLimit == 1024,
                    "catalog profile was not loaded");
@@ -114,11 +114,11 @@ void testCatalogLoadAndProjectResolution() {
             catalog.environments.empty() &&
             !catalog.defaultEnvironment,
         "schema v1 catalog did not receive the compatible environment profile");
-    requireCatalog(catalog.scenes[0].camera.has_value() &&
-                       catalog.scenes[0].camera->position ==
+    requireCatalog(catalog.models[0].previewCamera.has_value() &&
+                       catalog.models[0].previewCamera->position ==
                            glm::vec3(1.0f, 2.0f, 3.0f) &&
-                       catalog.scenes[0].camera->yaw == 45.0f &&
-                       catalog.scenes[0].camera->pitch == -10.0f,
+                       catalog.models[0].previewCamera->yaw == 45.0f &&
+                       catalog.models[0].previewCamera->pitch == -10.0f,
                    "catalog camera pose did not round trip");
     requireCatalog(
         vkr::DerivedAssetPaths::defaultCacheRoot(catalog.projectId)

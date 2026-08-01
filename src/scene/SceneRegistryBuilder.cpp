@@ -15,30 +15,30 @@ buildSceneRegistry(const SceneCatalog &catalog,
                    const ProjectContext &projectContext,
                    const Config &config) {
     std::vector<SceneEntry> entries;
-    entries.reserve(catalog.scenes.size());
-    for (const CatalogScene &scene : catalog.scenes) {
+    entries.reserve(catalog.models.size());
+    for (const CatalogModel &model : catalog.models) {
         SceneEntry entry;
-        entry.id = scene.id;
-        entry.name = scene.displayName;
-        entry.profileId = scene.importProfile;
-        entry.builtin = scene.type == "builtin";
+        entry.id = model.id;
+        entry.name = model.displayName;
+        entry.profileId = model.importProfile;
+        entry.builtin = model.type == "builtin";
 
         if (entry.builtin) {
-            if (scene.builtinFactory != "viking_room")
+            if (model.builtinFactory != "viking_room")
                 throw std::runtime_error("Unknown builtin scene factory: " +
-                                         scene.builtinFactory);
-            const std::filesystem::path model =
+                                         model.builtinFactory);
+            const std::filesystem::path modelPath =
                 projectContext.resolveProjectPath("models/viking_room.obj");
-            entry.sourcePath = model.string();
+            entry.sourcePath = modelPath.string();
             entry.factory = vikingRoomSceneFactory(
-                model.string(),
+                modelPath.string(),
                 projectContext.resolveProjectPath(config.texturePath).string());
             entries.push_back(std::move(entry));
             continue;
         }
 
         const std::filesystem::path source =
-            projectContext.resolveProjectPath(scene.source);
+            projectContext.resolveProjectPath(model.source);
         entry.sourcePath = source.string();
         entry.available = std::filesystem::is_regular_file(source);
         if (!entry.available) {
@@ -46,7 +46,7 @@ buildSceneRegistry(const SceneCatalog &catalog,
                                       source.string();
         } else {
             entry.prepareFactory =
-                gltfSceneFactory(source.string(), scene.camera);
+                gltfSceneFactory(source.string(), model.previewCamera);
         }
         entries.push_back(std::move(entry));
     }

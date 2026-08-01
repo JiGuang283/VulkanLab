@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-01
-> Verified against: `86b809d`
+> Verified against: Scene Authoring Stage 0-1 working tree
 
 本目录按文档有效性分为 Current、Active 和 Archived 三种状态。只有 `guides/` 与 `architecture/` 中标记为 Current 的文档可以作为当前实现依据；源码始终是最终事实来源。
 
@@ -19,6 +19,7 @@
 - [系统概览](architecture/overview.md)：模块边界、初始化顺序、线程所有权和每帧流程。
 - [渲染流程](architecture/rendering.md)：RenderQueue、Forward Pass、Pipeline、材质、Shader 和光源。
 - [资源加载](architecture/resource_loading.md)：SceneFactory、glTF、KTX2、Artifact Index、Cook/package、批量上传和加载统计。
+- [场景数据与 Catalog](architecture/scene_documents.md)：Catalog v3、持久 Entity ID、SceneDocument schema 与当前运行边界。
 
 ## 文档状态
 

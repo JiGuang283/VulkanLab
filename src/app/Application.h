@@ -38,6 +38,8 @@ class PipelineCache;
 class GuiSystem;
 #if VKL_ENABLE_EDITOR_UI
 class EditorDockWorkspace;
+class AssetsPanel;
+class ScenesPanel;
 #endif
 class CaptureService;
 struct RuntimeCommand;
@@ -49,7 +51,8 @@ struct SceneLoadTask;
 class EnvironmentLoadManager;
 class EnvironmentGpuBuilder;
 struct EnvironmentLoadTask;
-struct SceneImportUiState;
+class SceneWorkflowController;
+struct ModelImportUiState;
 struct SceneAssetOperationState;
 struct EditorUiState;
 
@@ -108,7 +111,7 @@ class Application final
     void drawLoadStatsPanel();
     void drawCapturePanel();
     void requestManualCapture(bool includeGui);
-    void updateSceneImport();
+    void updateModelImport();
     void refreshSceneRegistry(const std::string &selectSceneId = {});
     void reloadArtifactIndex();
     void persistArtifactIndex();
@@ -189,7 +192,9 @@ class Application final
 
     Config config_;
     ProjectContext projectContext_;
-    SceneCatalog catalog_;
+    std::unique_ptr<SceneWorkflowController> sceneWorkflow_;
+    SceneCatalog &catalog_;
+    std::vector<SceneEntry> &sceneRegistry_;
 
     // 基础设施（创建顺序 = 析构逆序）
     std::unique_ptr<Window>              window_;
@@ -204,6 +209,8 @@ class Application final
     std::unique_ptr<GuiSystem>           gui_;
 #if VKL_ENABLE_EDITOR_UI
     std::unique_ptr<EditorDockWorkspace> editorDockWorkspace_;
+    std::unique_ptr<AssetsPanel> assetsPanel_;
+    std::unique_ptr<ScenesPanel> scenesPanel_;
     struct ViewportResizeState {
         uint32_t desiredWidth = 0;
         uint32_t desiredHeight = 0;
@@ -223,7 +230,6 @@ class Application final
     std::string                          currentShaderVariantId_;
 
     // 场景切换
-    std::vector<SceneEntry> sceneRegistry_;
     SceneLoadContext        sceneLoadContext_;
     std::unique_ptr<Scene>  currentScene_;
     int                     currentSceneIndex_ = -1;
@@ -240,7 +246,7 @@ class Application final
     std::unique_ptr<AssetImportManager> assetImportManager_;
     std::unique_ptr<ArtifactIndex> artifactIndex_;
     std::optional<ArtifactIndexUsage> artifactUsage_;
-    std::unique_ptr<SceneAssetOperationState> sceneAssetOperations_;
+    SceneAssetOperationState *sceneAssetOperations_ = nullptr;
 
 #if VKL_ENABLE_RUNTIME_CONTROL
     std::unique_ptr<RuntimeCommandQueue> runtimeCommandQueue_;
@@ -249,7 +255,7 @@ class Application final
     std::shared_ptr<RuntimeCommand> pendingQuitCommand_;
     std::string runtimeControlPipeName_;
 #endif
-    std::unique_ptr<SceneImportUiState> sceneImportUi_;
+    ModelImportUiState *modelImportUi_ = nullptr;
     std::unique_ptr<EditorUiState> editorUi_;
     uint64_t lastCaptureTaskId_ = 0;
     bool captureIncludeGui_ = false;

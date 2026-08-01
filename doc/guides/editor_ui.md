@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-01
-> Verified against: Responsive Workspace v1 working tree
+> Verified against: Scene Authoring Stage 0-1 working tree
 
 VulkanLab 的开发 UI 使用 Dear ImGui `v1.92.7-docking`，在主 GLFW
 窗口内创建一个全屏 DockSpace。Viewport、Scenes、Assets、Render、Materials
@@ -68,17 +68,19 @@ Vulkan 对象。
 
 ### Scenes
 
-Scenes 使用独立的 Scene/Status 表格和 Selected Scene 属性区。状态不再拼入名称，
-而是使用语义状态点；双击列表项或点击 Load 都会加载场景。Reimport、Validate、
-source fallback、保存相机和移除操作集中在 `...` 菜单，避免窄面板下按钮截断。
-活跃场景任务的详细阶段、资源进度和 Cancel 位于同一窗口底部。
+Scenes 当前展示 `Model Previews`，使用独立的 Model/Status 表格和 Selected Model
+属性区。状态不再拼入名称，而是使用语义状态点；双击列表项或点击 Load 都会加载
+该模型的预览场景。Reimport、Validate、source fallback、保存 preview camera 和移除
+操作集中在 `...` 菜单，避免窄面板下按钮截断。活跃加载任务的详细阶段、资源进度
+和 Cancel 位于同一窗口底部。
 
-Import 和 Remove 继续使用 modal，Docking 不改变 Validator、Catalog
-transaction、Native BC7 import 或异步 Scene load 数据流。
+`Import Model` 和 Remove 继续使用 modal，Docking 不改变 Validator、Catalog
+transaction、Native BC7 import 或异步 preview load 数据流。Catalog v3 原生
+SceneDocument 尚未接入此窗口。
 
 ### Assets
 
-Assets 使用属性表显示项目、Catalog、cache 和当前 Scene artifact 状态，并保留
+Assets 使用属性表显示项目、Catalog、cache 和当前 Model artifact 状态，并保留
 资产导入进度、取消、日志和任务历史。该窗口也管理 HDR environment 的导入、
 派生资源 Build/Rebuild、Cancel 和 Remove。
 

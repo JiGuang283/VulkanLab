@@ -1,4 +1,5 @@
 #include "Application.h"
+#include "SceneWorkflowController.h"
 
 #include <BuildFeatures.h>
 
@@ -32,6 +33,8 @@
 #if VKL_ENABLE_EDITOR_UI
 #include "editor/EditorDockWorkspace.h"
 #include "editor/EditorWidgets.h"
+#include "editor/panels/AssetsPanel.h"
+#include "editor/panels/ScenesPanel.h"
 #endif
 #include "editor/EditorUiState.h"
 #include "render/GuiSystem.h"
@@ -672,47 +675,6 @@ void logSceneLoadStats(const SceneLoadStats &stats) {
 
 } // namespace
 
-struct SceneImportWorkerState {
-    std::atomic<bool> cancel{false};
-    std::atomic<uint64_t> completedBytes{0};
-    std::atomic<uint64_t> totalBytes{0};
-    std::mutex mutex;
-    std::string currentFile;
-};
-
-struct SceneImportUiState {
-    std::future<SceneImportResult> importFuture;
-    std::shared_ptr<AssetImportTask> validationTask;
-    std::optional<SceneImportPreflight> preflight;
-    std::optional<AssetValidationReport> validationReport;
-    std::filesystem::path validationReportPath;
-    std::shared_ptr<SceneImportWorkerState> worker;
-    std::array<char, 192> displayName{};
-    std::array<char, 128> sceneId{};
-    std::vector<std::string> profileIds;
-    int profileIndex = 0;
-    bool requestOpenModal = false;
-    bool referenceExisting = false;
-    bool loadAfterImport = true;
-    bool loadAfterActiveImport = true;
-    bool allowUnvalidated = false;
-    std::string status;
-    std::string error;
-};
-
-struct SceneAssetOperationState {
-    AssetLoadCoordinator coordinator;
-    std::unordered_map<uint64_t, uint64_t> importToLoadTask;
-    std::unordered_set<uint64_t> processedImports;
-    std::unordered_map<std::string, ArtifactStatus> statuses;
-    std::unordered_map<std::string, AssetValidationQuery>
-        validationStatuses;
-    int selectedSceneIndex = -1;
-    std::array<char, 128> search{};
-    std::string status;
-    std::string error;
-};
-
 namespace {
 
 #if VKL_ENABLE_RUNTIME_CONTROL
@@ -749,7 +711,9 @@ ControlJson loadOperationToJson(
 ControlJson artifactStatusToJson(const SceneEntry &entry,
                                  const std::string &profileId,
                                  const ArtifactStatus &status) {
-    return {{"sceneId", entry.id},
+    return {{"assetKind", "model"},
+            {"modelId", entry.id},
+            {"sceneId", entry.id},
             {"scene", entry.name},
             {"source", entry.sourcePath},
             {"profileId", profileId},
@@ -769,7 +733,10 @@ ControlJson artifactStatusToJson(const SceneEntry &entry,
 Application::Application(const Config &config, ProjectContext projectContext,
                          SceneCatalog catalog)
     : config_(config), projectContext_(std::move(projectContext)),
-      catalog_(std::move(catalog)) {
+      sceneWorkflow_(std::make_unique<SceneWorkflowController>(
+          config_, projectContext_, std::move(catalog))),
+      catalog_(sceneWorkflow_->catalog()),
+      sceneRegistry_(sceneWorkflow_->entries()) {
     if (config_.derivedTextureCachePath.empty())
         config_.derivedTextureCachePath = projectContext_.cacheRoot.u8string();
     shaderRegistry_ = ShaderRegistry::load(
@@ -778,12 +745,13 @@ Application::Application(const Config &config, ProjectContext projectContext,
     VKR_LOG_INFO("ShaderRegistry", "Loaded {} programs and {} variants; default={}",
                  shaderRegistry_.programs().size(),
                  shaderRegistry_.variants().size(), currentShaderVariantId_);
-    sceneRegistry_ = buildSceneRegistry(catalog_, projectContext_, config_);
-    sceneImportUi_ = std::make_unique<SceneImportUiState>();
-    sceneAssetOperations_ = std::make_unique<SceneAssetOperationState>();
+    modelImportUi_ = &sceneWorkflow_->modelImport();
+    sceneAssetOperations_ = &sceneWorkflow_->assetOperations();
     editorUi_ = std::make_unique<EditorUiState>();
 #if VKL_ENABLE_EDITOR_UI
     editorDockWorkspace_ = std::make_unique<EditorDockWorkspace>();
+    assetsPanel_ = std::make_unique<AssetsPanel>();
+    scenesPanel_ = std::make_unique<ScenesPanel>();
 #endif
 #if VKL_ENABLE_RUNTIME_CONTROL
     runtimeControlPipeName_ =
@@ -798,14 +766,14 @@ Application::~Application() {
     if (runtimeControlServer_)
         runtimeControlServer_->stop();
 #endif
-    if (sceneImportUi_) {
-        if (sceneImportUi_->worker)
-            sceneImportUi_->worker->cancel = true;
-        if (sceneImportUi_->validationTask && assetImportManager_)
+    if (modelImportUi_) {
+        if (modelImportUi_->worker)
+            modelImportUi_->worker->cancel = true;
+        if (modelImportUi_->validationTask && assetImportManager_)
             assetImportManager_->cancel(
-                sceneImportUi_->validationTask->id);
-        if (sceneImportUi_->importFuture.valid())
-            sceneImportUi_->importFuture.wait();
+                modelImportUi_->validationTask->id);
+        if (modelImportUi_->importFuture.valid())
+            modelImportUi_->importFuture.wait();
     }
     if (assetImportManager_)
         assetImportManager_->shutdown();
@@ -1506,11 +1474,7 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
 }
 
 int Application::findSceneIndexByName(const std::string &name) const {
-    for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
-        if (asciiEqualsIgnoreCase(sceneRegistry_[i].name, name))
-            return i;
-    }
-    return -1;
+    return sceneWorkflow_->findEntryByName(name);
 }
 
 const CatalogEnvironment *
@@ -1645,8 +1609,8 @@ void Application::refreshValidationStatus(int sceneIndex) {
 
     const SceneEntry &entry = sceneRegistry_[sceneIndex];
     AssetValidationQuery query;
-    const CatalogScene *catalogScene = catalog_.findScene(entry.id);
-    if (entry.builtin || !catalogScene || catalogScene->type != "gltf") {
+    const CatalogModel *catalogModel = catalog_.findModel(entry.id);
+    if (entry.builtin || !catalogModel || catalogModel->type != "gltf") {
         query.state = AssetValidationState::NotApplicable;
         query.reason = "validation applies only to Catalog glTF scenes";
     } else {
@@ -1905,6 +1869,9 @@ ControlJson Application::runtimeSystemInfo() {
         {"sceneId", currentScene_ && currentSceneIndex_ >= 0
                         ? ControlJson(sceneRegistry_[currentSceneIndex_].id)
                         : ControlJson(nullptr)},
+        {"modelId", currentScene_ && currentSceneIndex_ >= 0
+                        ? ControlJson(sceneRegistry_[currentSceneIndex_].id)
+                        : ControlJson(nullptr)},
         {"projectId", catalog_.projectId},
         {"build",
          {{"revision", build.revision},
@@ -1988,6 +1955,10 @@ ControlJson Application::runtimeSceneList() {
         scenes.push_back(entry.name);
     for (const auto &entry : sceneRegistry_) {
         entries.push_back({{"id", entry.id},
+                           {"sceneId", entry.id},
+                           {"modelId", entry.id},
+                           {"assetKind", "model"},
+                           {"kind", "modelPreview"},
                            {"name", entry.name},
                            {"profileId", entry.profileId},
                            {"textureLimit",
@@ -2000,12 +1971,19 @@ ControlJson Application::runtimeSceneList() {
 }
 
 ControlJson Application::runtimeSceneCurrent() {
-    return {{"name", currentScene_ && currentSceneIndex_ >= 0
-                         ? ControlJson(sceneRegistry_[currentSceneIndex_].name)
-                         : ControlJson(nullptr)},
-            {"id", currentScene_ && currentSceneIndex_ >= 0
-                       ? ControlJson(sceneRegistry_[currentSceneIndex_].id)
-                       : ControlJson(nullptr)}};
+    const ControlJson name =
+        currentScene_ && currentSceneIndex_ >= 0
+            ? ControlJson(sceneRegistry_[currentSceneIndex_].name)
+            : ControlJson(nullptr);
+    const ControlJson id =
+        currentScene_ && currentSceneIndex_ >= 0
+            ? ControlJson(sceneRegistry_[currentSceneIndex_].id)
+            : ControlJson(nullptr);
+    return {{"name", name},
+            {"id", id},
+            {"sceneId", id},
+            {"modelId", id},
+            {"assetKind", "model"}};
 }
 
 ControlJson Application::runtimeSceneOperationResult(int index,
@@ -2172,11 +2150,7 @@ int Application::runtimeAssetSceneIndex(const std::string &name) const {
     int index = findSceneIndexByName(name);
     if (index >= 0)
         return index;
-    for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
-        if (asciiEqualsIgnoreCase(sceneRegistry_[i].id, name))
-            return i;
-    }
-    return -1;
+    return sceneWorkflow_->findEntryById(name);
 }
 
 ControlJson Application::runtimeAssetCatalog() {
@@ -2220,8 +2194,8 @@ ControlJson Application::runtimeAssetValidation(const std::string &name) {
         throw RuntimeCommandError("scene_not_found",
                                   "Catalog scene was not found.");
     const SceneEntry &entry = sceneRegistry_[index];
-    const CatalogScene *catalogScene = catalog_.findScene(entry.id);
-    if (!catalogScene)
+    const CatalogModel *catalogModel = catalog_.findModel(entry.id);
+    if (!catalogModel)
         throw RuntimeCommandError(
             "scene_not_catalog",
             "Validation queries accept Catalog scene IDs only.");
@@ -2234,6 +2208,8 @@ ControlJson Application::runtimeAssetValidation(const std::string &name) {
                                   "Validation status is unavailable.");
     ControlJson result = validationQueryToJson(found->second, 32);
     result["sceneId"] = entry.id;
+    result["modelId"] = entry.id;
+    result["assetKind"] = "model";
     result["scene"] = entry.name;
     return result;
 }
@@ -2918,9 +2894,7 @@ void Application::refreshSceneRegistry(const std::string &selectSceneId) {
             sceneRegistry_[sceneAssetOperations_->selectedSceneIndex].id;
     }
 
-    catalog_ = SceneCatalog::load(projectContext_.catalogPath,
-                                  projectContext_.projectRoot);
-    sceneRegistry_ = buildSceneRegistry(catalog_, projectContext_, config_);
+    sceneWorkflow_->refresh(config_, projectContext_);
     reloadArtifactIndex();
     currentSceneIndex_ = -1;
     for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
@@ -2941,11 +2915,11 @@ void Application::refreshSceneRegistry(const std::string &selectSceneId) {
 }
 
 #if VKL_ENABLE_EDITOR_UI
-void Application::updateSceneImport() {
+void Application::updateModelImport() {
 #if !VKL_ENABLE_ASSET_AUTHORING
     return;
 #else
-    SceneImportUiState &ui = *sceneImportUi_;
+    ModelImportUiState &ui = *modelImportUi_;
     if (ui.validationTask &&
         isTerminalAssetImportState(ui.validationTask->state.load())) {
         const std::shared_ptr<AssetImportTask> task = ui.validationTask;
@@ -2969,13 +2943,13 @@ void Application::updateSceneImport() {
                 throw std::runtime_error("Could not load validation report: " +
                                          reportError);
             }
-            ui.preflight = SceneImportService::preflight(task->sourcePath);
+            ui.preflight = ModelImportService::preflight(task->sourcePath);
             ui.validationReport = std::move(report);
             ui.validationReportPath = std::move(reportPath);
             std::snprintf(ui.displayName.data(), ui.displayName.size(), "%s",
                           ui.preflight->suggestedDisplayName.c_str());
-            std::snprintf(ui.sceneId.data(), ui.sceneId.size(), "%s",
-                          ui.preflight->suggestedSceneId.c_str());
+            std::snprintf(ui.modelId.data(), ui.modelId.size(), "%s",
+                          ui.preflight->suggestedModelId.c_str());
             ui.profileIds.clear();
             for (const auto &profile : catalog_.importProfiles)
                 ui.profileIds.push_back(profile.first);
@@ -3004,24 +2978,24 @@ void Application::updateSceneImport() {
         ui.importFuture.wait_for(std::chrono::seconds(0)) ==
             std::future_status::ready) {
         try {
-            const SceneImportResult result = ui.importFuture.get();
+            const ModelImportResult result = ui.importFuture.get();
             const bool loadAfter = ui.loadAfterActiveImport;
             ui.worker.reset();
             ui.preflight.reset();
             ui.validationReport.reset();
             ui.validationReportPath.clear();
-            ui.status = "Imported " + result.scene.displayName;
+            ui.status = "Imported " + result.model.displayName;
             ui.error.clear();
-            refreshSceneRegistry(result.scene.id);
+            refreshSceneRegistry(result.model.id);
             const ImportProfile &profile =
-                catalog_.profile(result.scene.importProfile);
+                catalog_.profile(result.model.importProfile);
             sceneLoadContext_.maxTextureSize = profile.textureLimit;
             for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
-                if (sceneRegistry_[i].id == result.scene.id) {
+                if (sceneRegistry_[i].id == result.model.id) {
                     requestSceneOperation(
                         i, false, loadAfter,
                         ImportReason::SceneRegistration, false);
-                    ui.status = "Registered " + result.scene.displayName +
+                    ui.status = "Registered " + result.model.displayName +
                                 "; derived texture import queued";
                     break;
                 }
@@ -3036,1078 +3010,503 @@ void Application::updateSceneImport() {
 }
 
 void Application::drawScenePanel() {
-    SceneImportUiState &ui = *sceneImportUi_;
+    ModelImportUiState &ui = *modelImportUi_;
 
+    if (scenesPanel_) {
+        SceneWorkflowSnapshot snapshot = sceneWorkflow_->snapshot();
+        snapshot.showImport =
+            config_.assetImportMode != AssetImportMode::CookedOnly;
 #if VKL_ENABLE_ASSET_AUTHORING
-    const bool busy =
-        (ui.validationTask &&
-         !isTerminalAssetImportState(ui.validationTask->state.load())) ||
-        ui.importFuture.valid();
-    const bool canImportSource =
-        config_.assetImportMode == AssetImportMode::OnDemand &&
-        projectContext_.catalogWritable;
-    if (config_.assetImportMode != AssetImportMode::CookedOnly) {
-        ImGui::BeginDisabled(busy || !canImportSource);
-        if (ImGui::Button("Import Scene...")) {
+        snapshot.busy =
+            (ui.validationTask &&
+             !isTerminalAssetImportState(ui.validationTask->state.load())) ||
+            ui.importFuture.valid();
+        snapshot.canImport =
+            config_.assetImportMode == AssetImportMode::OnDemand &&
+            projectContext_.catalogWritable;
+#endif
+        snapshot.status = ui.status;
+        if (!sceneAssetOperations_->status.empty()) {
+            if (!snapshot.status.empty())
+                snapshot.status += " | ";
+            snapshot.status += sceneAssetOperations_->status;
+        }
+        snapshot.error = ui.error;
+        if (!sceneAssetOperations_->error.empty()) {
+            if (!snapshot.error.empty())
+                snapshot.error += " | ";
+            snapshot.error += sceneAssetOperations_->error;
+        }
+        if (ui.worker) {
+            const uint64_t total = ui.worker->totalBytes.load();
+            const uint64_t completed = ui.worker->completedBytes.load();
+            snapshot.copyActive = true;
+            snapshot.copyProgress =
+                total == 0
+                    ? 0.0f
+                    : static_cast<float>(completed) /
+                          static_cast<float>(total);
+            std::lock_guard<std::mutex> lock(ui.worker->mutex);
+            snapshot.copyFile = ui.worker->currentFile;
+        }
+        snapshot.openImportDialog = ui.requestOpenModal;
+        ui.requestOpenModal = false;
+        snapshot.importPreflight = ui.preflight;
+        snapshot.importValidation = ui.validationReport;
+        snapshot.importValidationReportPath = ui.validationReportPath;
+        snapshot.importProfileIds = ui.profileIds;
+        snapshot.defaultImportProfileIndex = ui.profileIndex;
+        snapshot.defaultReferenceExisting = ui.referenceExisting;
+        snapshot.defaultLoadAfterImport = ui.loadAfterImport;
+
+        for (SceneWorkflowItemSnapshot &item : snapshot.models) {
+            if (item.index < 0 ||
+                item.index >= static_cast<int>(sceneRegistry_.size()))
+                continue;
+            const SceneEntry &entry = sceneRegistry_[item.index];
+            item.profileId = profileIdForTextureLimit(entry);
+            const auto profile = catalog_.importProfiles.find(item.profileId);
+            if (profile != catalog_.importProfiles.end())
+                item.encoder = profile->second.textureEncoder;
+            const auto artifact = sceneAssetOperations_->statuses.find(
+                artifactStatusKey(entry.id, item.profileId));
+            if (artifact != sceneAssetOperations_->statuses.end()) {
+                item.artifactState = artifactStateName(artifact->second.state);
+                item.artifactReason = artifact->second.reason;
+            }
+            const auto validation =
+                sceneAssetOperations_->validationStatuses.find(entry.id);
+            if (validation !=
+                sceneAssetOperations_->validationStatuses.end()) {
+                item.validationState =
+                    assetValidationStateName(validation->second.state);
+                item.validationReason = validation->second.reason;
+                item.validationReportPath = validation->second.reportPath;
+            }
+            item.current = item.index == currentSceneIndex_;
+            item.canAuthor =
+                !entry.builtin &&
+                config_.assetImportMode == AssetImportMode::OnDemand;
+            item.canLoadSource =
+                !entry.builtin &&
+                config_.assetImportMode != AssetImportMode::CookedOnly;
+            item.canEditCatalog =
+                projectContext_.catalogWritable &&
+                config_.assetImportMode == AssetImportMode::OnDemand;
+        }
+
+        SceneWorkflowActions actions;
+#if VKL_ENABLE_ASSET_AUTHORING
+        actions.beginModelImport = [this, &ui] {
             try {
                 const auto selected =
                     openGltfFileDialog(window_->nativeHandle());
-                if (selected) {
-                    ui.error.clear();
-                    ui.preflight.reset();
-                    ui.validationReport.reset();
-                    ui.validationReportPath.clear();
-                    AssetImportRequest request;
-                    request.kind = AssetImportKind::SceneValidation;
-                    request.profileId = "validation";
-                    request.sourcePath = *selected;
-                    ui.validationTask =
-                        assetImportManager_->request(request);
-                    ui.status = "Validating scene and local dependencies...";
-                }
-            } catch (const std::exception &error) {
-                ui.error = error.what();
-            }
-        }
-        ImGui::EndDisabled();
-        if (!canImportSource &&
-            ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip(
-                config_.assetImportMode != AssetImportMode::OnDemand
-                    ? "Scene registration is disabled outside OnDemand mode."
-                    : "The source project Catalog is read-only.");
-        }
-        ImGui::SameLine();
-    }
-#else
-    constexpr bool busy = false;
-#endif
-
-    ImGui::BeginDisabled(busy);
-    if (ImGui::Button("Refresh")) {
-        try {
-            refreshSceneRegistry();
-            ui.status = "Catalog refreshed";
-            ui.error.clear();
-        } catch (const std::exception &error) {
-            ui.error = error.what();
-        }
-    }
-    ImGui::EndDisabled();
-
-    if (!ui.status.empty())
-        ImGui::TextWrapped("%s", ui.status.c_str());
-    if (!ui.error.empty())
-        ImGui::TextWrapped("Error: %s", ui.error.c_str());
-
-    if (ui.worker) {
-        const uint64_t total = ui.worker->totalBytes.load();
-        const uint64_t completed = ui.worker->completedBytes.load();
-        const float fraction =
-            total == 0 ? 0.0f
-                       : static_cast<float>(completed) /
-                             static_cast<float>(total);
-        ImGui::ProgressBar(std::clamp(fraction, 0.0f, 1.0f));
-        std::string current;
-        {
-            std::lock_guard<std::mutex> lock(ui.worker->mutex);
-            current = ui.worker->currentFile;
-        }
-        if (!current.empty())
-            ImGui::Text("Copying: %s", current.c_str());
-        if (ImGui::Button("Cancel Import"))
-            ui.worker->cancel = true;
-    }
-
-    ImGui::Separator();
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint("##SceneSearch", "Search scenes...",
-                             sceneAssetOperations_->search.data(),
-                             sceneAssetOperations_->search.size());
-    const std::string search = sceneAssetOperations_->search.data();
-    const float sceneListHeight = std::clamp(
-        ImGui::GetContentRegionAvail().y * 0.46f, 150.0f, 310.0f);
-    ImGui::BeginChild("SceneBrowser", ImVec2(0.0f, sceneListHeight),
-                      ImGuiChildFlags_Borders);
-    const ImGuiTableFlags sceneTableFlags =
-        ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg |
-        ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_ScrollY;
-    if (ImGui::BeginTable("SceneTable", 2, sceneTableFlags)) {
-        ImGui::TableSetupColumn("Scene", ImGuiTableColumnFlags_WidthStretch,
-                                0.72f);
-        ImGui::TableSetupColumn("Status",
-                                ImGuiTableColumnFlags_WidthFixed, 76.0f);
-        ImGui::TableHeadersRow();
-        for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
-            const SceneEntry &entry = sceneRegistry_[i];
-            if (!asciiContainsIgnoreCase(entry.name, search) &&
-                !asciiContainsIgnoreCase(entry.id, search))
-                continue;
-
-            const std::string profileId = profileIdForTextureLimit(entry);
-            const auto status = sceneAssetOperations_->statuses.find(
-                artifactStatusKey(entry.id, profileId));
-            const ArtifactStatus *artifact =
-                status == sceneAssetOperations_->statuses.end()
-                    ? nullptr
-                    : &status->second;
-            const char *state = artifact
-                                    ? artifactStateName(artifact->state)
-                                    : "Unknown";
-            editor::StatusTone tone = editor::StatusTone::Neutral;
-            if (!entry.available) {
-                tone = editor::StatusTone::Error;
-                state = "Blocked";
-            } else if (artifact) {
-                switch (artifact->state) {
-                case ArtifactState::Ready:
-                    tone = editor::StatusTone::Success;
-                    break;
-                case ArtifactState::Importing:
-                    tone = editor::StatusTone::Info;
-                    break;
-                case ArtifactState::Stale:
-                case ArtifactState::Missing:
-                    tone = editor::StatusTone::Warning;
-                    break;
-                case ArtifactState::Invalid:
-                    tone = editor::StatusTone::Error;
-                    break;
-                }
-            }
-
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            const bool selected =
-                i == sceneAssetOperations_->selectedSceneIndex;
-            const std::string label = entry.name + "###Scene" + entry.id;
-            ImGui::BeginDisabled(!entry.available);
-            if (ImGui::Selectable(label.c_str(), selected,
-                                  ImGuiSelectableFlags_SpanAllColumns)) {
-                sceneAssetOperations_->selectedSceneIndex = i;
-                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-                    try {
-                        requestSceneOperation(i);
-                    } catch (const std::exception &error) {
-                        sceneAssetOperations_->error = error.what();
-                    }
-                }
-            }
-            ImGui::EndDisabled();
-            if (ImGui::IsItemHovered(
-                    ImGuiHoveredFlags_AllowWhenDisabled)) {
-                if (entry.available)
-                    ImGui::SetTooltip("%s\nDouble-click to load",
-                                      entry.name.c_str());
-                else
-                    ImGui::SetTooltip("%s\n%s", entry.name.c_str(),
-                                      entry.unavailableReason.c_str());
-            }
-
-            ImGui::TableSetColumnIndex(1);
-            const char *reason = !entry.available
-                                     ? entry.unavailableReason.c_str()
-                                     : (artifact && !artifact->reason.empty()
-                                            ? artifact->reason.c_str()
-                                            : nullptr);
-            editor::statusIndicator(state, tone, reason);
-        }
-        ImGui::EndTable();
-    }
-    ImGui::EndChild();
-
-    const int selectedIndex = sceneAssetOperations_->selectedSceneIndex;
-    if (selectedIndex >= 0 &&
-        selectedIndex < static_cast<int>(sceneRegistry_.size())) {
-        const SceneEntry &entry = sceneRegistry_[selectedIndex];
-        const std::string profileId = profileIdForTextureLimit(entry);
-        ImGui::SeparatorText("Selected Scene");
-        const auto selectedProfile = catalog_.importProfiles.find(profileId);
-        const auto validation =
-            sceneAssetOperations_->validationStatuses.find(entry.id);
-        if (editor::beginPropertyGrid("SelectedSceneProperties", 0.34f)) {
-            editor::propertyLabel("Name");
-            ImGui::TextUnformatted(entry.name.c_str());
-            editor::propertyLabel("ID");
-            ImGui::TextUnformatted(entry.id.c_str());
-            editor::propertyLabel("Profile");
-            ImGui::TextUnformatted(profileId.c_str());
-            if (selectedProfile != catalog_.importProfiles.end()) {
-                editor::propertyLabel("Encoder");
-                ImGui::TextUnformatted(
-                    selectedProfile->second.textureEncoder.c_str());
-            }
-            if (!entry.sourcePath.empty()) {
-                editor::propertyLabel("Source");
-                editor::pathValue(entry.sourcePath);
-            }
-            if (validation !=
-                sceneAssetOperations_->validationStatuses.end()) {
-                const AssetValidationState state = validation->second.state;
-                editor::StatusTone tone = editor::StatusTone::Neutral;
-                if (state == AssetValidationState::Valid)
-                    tone = editor::StatusTone::Success;
-                else if (state == AssetValidationState::Warnings ||
-                         state == AssetValidationState::Stale ||
-                         state == AssetValidationState::Unavailable)
-                    tone = editor::StatusTone::Warning;
-                else if (state == AssetValidationState::Invalid ||
-                         state == AssetValidationState::Failed)
-                    tone = editor::StatusTone::Error;
-                editor::propertyLabel("Validation");
-                editor::statusIndicator(
-                    assetValidationStateName(state), tone,
-                    validation->second.reason.empty()
-                        ? nullptr
-                        : validation->second.reason.c_str());
-            }
-            editor::endPropertyGrid();
-        }
-
-        ImGui::BeginDisabled(!entry.available);
-        if (ImGui::Button("Load", ImVec2(88.0f, 0.0f))) {
-            try {
-                requestSceneOperation(selectedIndex);
-            } catch (const std::exception &error) {
-                sceneAssetOperations_->error = error.what();
-            }
-        }
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        if (ImGui::Button("..."))
-            ImGui::OpenPopup("SceneActions");
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Scene actions");
-
-        bool requestRemove = false;
-        if (ImGui::BeginPopup("SceneActions")) {
-#if VKL_ENABLE_ASSET_AUTHORING
-            const bool canAuthor = !entry.builtin &&
-                                   config_.assetImportMode ==
-                                       AssetImportMode::OnDemand;
-            if (ImGui::MenuItem("Reimport", nullptr, false, canAuthor)) {
-                try {
-                    requestSceneOperation(selectedIndex, false, false,
-                                          ImportReason::ManualReimport, true);
-                } catch (const std::exception &error) {
-                    sceneAssetOperations_->error = error.what();
-                }
-            }
-
-            const CatalogScene *catalogScene = catalog_.findScene(entry.id);
-            const bool canValidate = canAuthor && catalogScene &&
-                                     catalogScene->type == "gltf";
-            const char *validateLabel =
-                validation != sceneAssetOperations_->validationStatuses.end() &&
-                        validation->second.state !=
-                            AssetValidationState::NotChecked
-                    ? "Revalidate"
-                    : "Validate";
-            if (ImGui::MenuItem(validateLabel, nullptr, false,
-                                canValidate)) {
-                    try {
-                        AssetImportRequest request;
-                        request.sceneId = entry.id;
-                        request.profileId = "validation";
-                        request.kind = AssetImportKind::SceneValidation;
-                        request.force = true;
-                        const auto task =
-                            assetImportManager_->request(request);
-                        sceneAssetOperations_->status =
-                            "Validating " + entry.name + " (task " +
-                            std::to_string(task->id) + ")";
-                        sceneAssetOperations_->error.clear();
-                    } catch (const std::exception &error) {
-                        sceneAssetOperations_->error = error.what();
-                    }
-            }
-            const bool hasReport =
-                validation != sceneAssetOperations_->validationStatuses.end() &&
-                !validation->second.reportPath.empty() &&
-                std::filesystem::is_regular_file(
-                    validation->second.reportPath);
-            if (ImGui::MenuItem("Open Validation Report", nullptr, false,
-                                hasReport)) {
-                ShellExecuteW(nullptr, L"open",
-                              validation->second.reportPath.c_str(), nullptr,
-                              nullptr, SW_SHOWNORMAL);
-            }
-            ImGui::Separator();
-            const bool canLoadSource =
-                !entry.builtin &&
-                config_.assetImportMode != AssetImportMode::CookedOnly;
-            if (ImGui::MenuItem("Load Source Fallback", nullptr, false,
-                                canLoadSource)) {
-                try {
-                    requestSceneOperation(selectedIndex, true);
-                } catch (const std::exception &error) {
-                    sceneAssetOperations_->error = error.what();
-                }
-            }
-            const bool canEditCatalog = projectContext_.catalogWritable &&
-                                        config_.assetImportMode ==
-                                            AssetImportMode::OnDemand;
-            if (ImGui::MenuItem("Save Current Camera", nullptr, false,
-                                canEditCatalog)) {
-                try {
-                    SceneCatalogEditor::saveCamera(
-                        projectContext_, entry.id,
-                        CameraPose{camera_.position(), camera_.yaw(),
-                                   camera_.pitch()});
-                    sceneAssetOperations_->status =
-                        "Saved camera for " + entry.name;
-                    refreshSceneRegistry(entry.id);
-                } catch (const std::exception &error) {
-                    sceneAssetOperations_->error = error.what();
-                }
-            }
-            if (ImGui::MenuItem(
-                    "Remove From Catalog", nullptr, false,
-                    canEditCatalog && !entry.builtin &&
-                        selectedIndex != currentSceneIndex_))
-                requestRemove = true;
-#endif
-            ImGui::EndPopup();
-        }
-#if VKL_ENABLE_ASSET_AUTHORING
-        if (requestRemove)
-            ImGui::OpenPopup("Remove Scene");
-        if (ImGui::BeginPopupModal("Remove Scene", nullptr,
-                                   ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::TextWrapped(
-                "Remove '%s' from the Catalog? Source files and derived "
-                "artifacts will not be deleted.",
-                entry.name.c_str());
-            if (ImGui::Button("Remove")) {
-                try {
-                    SceneCatalogEditor::removeScene(projectContext_,
-                                                    entry.id);
-                    sceneAssetOperations_->status =
-                        "Removed " + entry.name + " from Catalog";
-                    refreshSceneRegistry();
-                } catch (const std::exception &error) {
-                    sceneAssetOperations_->error = error.what();
-                }
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel"))
-                ImGui::CloseCurrentPopup();
-            ImGui::EndPopup();
-        }
-#endif
-    }
-    if (!sceneAssetOperations_->status.empty())
-        editor::statusIndicator(sceneAssetOperations_->status.c_str(),
-                                editor::StatusTone::Info);
-    if (!sceneAssetOperations_->error.empty())
-        editor::statusIndicator(sceneAssetOperations_->error.c_str(),
-                                editor::StatusTone::Error);
-
-#if VKL_ENABLE_ASSET_AUTHORING
-    if (ui.requestOpenModal) {
-        ImGui::OpenPopup("Import Scene");
-        ui.requestOpenModal = false;
-    }
-    const ImGuiViewport *mainViewport = ImGui::GetMainViewport();
-    const float importAvailableWidth =
-        std::max(260.0f, mainViewport->WorkSize.x - 24.0f);
-    const float importMinimumWidth =
-        std::min(420.0f, importAvailableWidth);
-    ImGui::SetNextWindowSizeConstraints(
-        ImVec2(importMinimumWidth, 0.0f),
-        ImVec2(importAvailableWidth,
-               std::max(320.0f, mainViewport->WorkSize.y - 24.0f)));
-    if (ImGui::BeginPopupModal("Import Scene", nullptr,
-                               ImGuiWindowFlags_AlwaysAutoResize)) {
-        if (ui.preflight) {
-            ImGui::TextWrapped("Source: %s",
-                               ui.preflight->sourcePath.string().c_str());
-            ImGui::Text("Dependencies: %llu",
-                        static_cast<unsigned long long>(
-                            ui.preflight->dependencies.size()));
-            bool validationAllowsImport = false;
-            if (ui.validationReport) {
-                const AssetValidationReport &report = *ui.validationReport;
-                ImGui::SeparatorText("glTF Validation");
-                ImGui::Text("State: %s",
-                            assetValidationStateName(report.state));
-                ImGui::Text("Errors %llu  Warnings %llu  Info %llu  Hints %llu",
-                            static_cast<unsigned long long>(report.errorCount),
-                            static_cast<unsigned long long>(
-                                report.warningCount),
-                            static_cast<unsigned long long>(report.infoCount),
-                            static_cast<unsigned long long>(report.hintCount));
-                if (!report.failureReason.empty())
-                    ImGui::TextWrapped("Validator: %s",
-                                       report.failureReason.c_str());
-                if (!report.extensions.empty() &&
-                    ImGui::TreeNode("Renderer Extension Compatibility")) {
-                    for (const auto &extension : report.extensions) {
-                        if (extension.note.empty()) {
-                            ImGui::TextWrapped(
-                                "%s: %s%s", extension.name.c_str(),
-                                gltfExtensionSupportName(extension.support),
-                                extension.required ? " (required)" : "");
-                        } else {
-                            ImGui::TextWrapped(
-                                "%s: %s%s - %s", extension.name.c_str(),
-                                gltfExtensionSupportName(extension.support),
-                                extension.required ? " (required)" : "",
-                                extension.note.c_str());
-                        }
-                    }
-                    ImGui::TreePop();
-                }
-                if (!report.issues.empty() &&
-                    ImGui::TreeNode("Validator Issues")) {
-                    ImGui::BeginChild("ValidationIssues", ImVec2(0.0f, 220.0f),
-                                      ImGuiChildFlags_Borders);
-                    const size_t issueCount =
-                        std::min<size_t>(report.issues.size(), 50);
-                    for (size_t i = 0; i < issueCount; ++i) {
-                        const AssetValidationIssue &issue = report.issues[i];
-                        ImGui::PushID(static_cast<int>(i));
-                        ImGui::TextWrapped("[%u] %s: %s", issue.severity,
-                                           issue.code.c_str(),
-                                           issue.message.c_str());
-                        if (!issue.pointer.empty())
-                            ImGui::TextDisabled("%s", issue.pointer.c_str());
-                        ImGui::Separator();
-                        ImGui::PopID();
-                    }
-                    if (report.issues.size() > issueCount)
-                        ImGui::TextDisabled("Showing first 50 issues.");
-                    ImGui::EndChild();
-                    ImGui::TreePop();
-                }
-                if (!ui.validationReportPath.empty() &&
-                    std::filesystem::is_regular_file(
-                        ui.validationReportPath) &&
-                    ImGui::Button("Open Report")) {
-                    ShellExecuteW(nullptr, L"open",
-                                  ui.validationReportPath.c_str(), nullptr,
-                                  nullptr, SW_SHOWNORMAL);
-                }
-                validationAllowsImport =
-                    report.state == AssetValidationState::Valid ||
-                    report.state == AssetValidationState::Warnings;
-                if (report.state == AssetValidationState::Unavailable) {
-                    ImGui::Checkbox("Import without validation",
-                                    &ui.allowUnvalidated);
-                    validationAllowsImport = ui.allowUnvalidated;
-                }
-                if (report.state == AssetValidationState::Invalid)
-                    ImGui::TextDisabled(
-                        "Import is blocked until all validator errors are fixed.");
-            }
-            ImGui::SeparatorText("Import Settings");
-            ImGui::InputText("Name", ui.displayName.data(),
-                             ui.displayName.size());
-            ImGui::InputText("Scene ID", ui.sceneId.data(),
-                             ui.sceneId.size());
-            if (!ui.profileIds.empty()) {
-                const char *current = ui.profileIds[ui.profileIndex].c_str();
-                if (ImGui::BeginCombo("Import Profile", current)) {
-                    for (int i = 0;
-                         i < static_cast<int>(ui.profileIds.size()); ++i) {
-                        const bool selected = i == ui.profileIndex;
-                        if (ImGui::Selectable(ui.profileIds[i].c_str(),
-                                              selected))
-                            ui.profileIndex = i;
-                        if (selected)
-                            ImGui::SetItemDefaultFocus();
-                    }
-                    ImGui::EndCombo();
-                }
-            }
-            const bool projectLocal = pathIsWithin(
-                projectContext_.projectRoot, ui.preflight->sourcePath);
-            ImGui::BeginDisabled(!projectLocal);
-            ImGui::Checkbox("Reference existing project file",
-                            &ui.referenceExisting);
-            ImGui::EndDisabled();
-            if (!projectLocal)
-                ui.referenceExisting = false;
-            ImGui::Checkbox("Load scene after import", &ui.loadAfterImport);
-
-            const bool valid = validationAllowsImport &&
-                               ui.validationReport.has_value() &&
-                               ui.displayName[0] != '\0' &&
-                               isStableAssetId(ui.sceneId.data()) &&
-                               !ui.profileIds.empty();
-            ImGui::BeginDisabled(!valid);
-            if (ImGui::Button("Import")) {
-                SceneImportRequest request;
-                request.sourcePath = ui.preflight->sourcePath;
-                request.displayName = ui.displayName.data();
-                request.sceneId = ui.sceneId.data();
-                request.profileId = ui.profileIds[ui.profileIndex];
-                request.placement =
-                    ui.referenceExisting
-                        ? SceneImportPlacement::ReferenceExisting
-                        : SceneImportPlacement::CopyIntoProject;
-                request.validation =
-                    sceneValidationReceipt(*ui.validationReport);
-                request.allowUnvalidated = ui.allowUnvalidated;
-                ui.loadAfterActiveImport = ui.loadAfterImport;
-                ui.worker = std::make_shared<SceneImportWorkerState>();
-                ui.worker->totalBytes = ui.preflight->totalBytes;
-                const auto worker = ui.worker;
-                ProjectContext project = projectContext_;
-                project.cacheRoot = std::filesystem::u8path(
-                    sceneLoadContext_.derivedTextureCachePath);
-                ui.importFuture = std::async(
-                    std::launch::async,
-                    [project, request, worker] {
-                        profileSetThreadName("SceneImportCopy");
-                        VKL_PROFILE_ZONE("Scene Catalog Import");
-                        return SceneImportService::importScene(
-                            project, request,
-                            [worker] { return worker->cancel.load(); },
-                            [worker](const SceneImportProgress &progress) {
-                                worker->completedBytes = progress.completedBytes;
-                                worker->totalBytes = progress.totalBytes;
-                                std::lock_guard<std::mutex> lock(worker->mutex);
-                                worker->currentFile = progress.currentFile;
-                            });
-                    });
-                ui.status = "Importing source files...";
+                if (!selected)
+                    return;
                 ui.error.clear();
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndDisabled();
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel")) {
                 ui.preflight.reset();
                 ui.validationReport.reset();
                 ui.validationReportPath.clear();
-                ui.allowUnvalidated = false;
-                ImGui::CloseCurrentPopup();
+                AssetImportRequest request;
+                request.kind = AssetImportKind::SceneValidation;
+                request.profileId = "validation";
+                request.sourcePath = *selected;
+                ui.validationTask = assetImportManager_->request(request);
+                ui.status = "Validating model and local dependencies...";
+            } catch (const std::exception &error) {
+                ui.error = error.what();
             }
-        }
-        ImGui::EndPopup();
-    }
+        };
 #endif
+        actions.refresh = [this, &ui] {
+            try {
+                refreshSceneRegistry();
+                ui.status = "Catalog refreshed";
+                ui.error.clear();
+            } catch (const std::exception &error) {
+                ui.error = error.what();
+            }
+        };
+        actions.selectModel = [this](int index) {
+            sceneAssetOperations_->selectedSceneIndex = index;
+        };
+        actions.loadPreview = [this](int index) {
+            try {
+                requestSceneOperation(index);
+            } catch (const std::exception &error) {
+                sceneAssetOperations_->error = error.what();
+            }
+        };
+        actions.reimportModel = [this](int index) {
+            try {
+                requestSceneOperation(index, false, false,
+                                      ImportReason::ManualReimport, true);
+            } catch (const std::exception &error) {
+                sceneAssetOperations_->error = error.what();
+            }
+        };
+        actions.validateModel = [this](int index) {
+            try {
+                const SceneEntry &entry = sceneRegistry_.at(index);
+                AssetImportRequest request;
+                request.sceneId = entry.id;
+                request.profileId = "validation";
+                request.kind = AssetImportKind::SceneValidation;
+                request.force = true;
+                const auto task = assetImportManager_->request(request);
+                sceneAssetOperations_->status =
+                    "Validating " + entry.name + " (task " +
+                    std::to_string(task->id) + ")";
+                sceneAssetOperations_->error.clear();
+            } catch (const std::exception &error) {
+                sceneAssetOperations_->error = error.what();
+            }
+        };
+        actions.loadSourceFallback = [this](int index) {
+            try {
+                requestSceneOperation(index, true);
+            } catch (const std::exception &error) {
+                sceneAssetOperations_->error = error.what();
+            }
+        };
+        actions.savePreviewCamera = [this](int index) {
+            try {
+                const SceneEntry &entry = sceneRegistry_.at(index);
+                SceneCatalogEditor::saveModelPreviewCamera(
+                    projectContext_, entry.id,
+                    CameraPose{camera_.position(), camera_.yaw(),
+                               camera_.pitch()});
+                sceneAssetOperations_->status =
+                    "Saved preview camera for " + entry.name;
+                refreshSceneRegistry(entry.id);
+            } catch (const std::exception &error) {
+                sceneAssetOperations_->error = error.what();
+            }
+        };
+        actions.removeModel = [this](int index) {
+            try {
+                const SceneEntry entry = sceneRegistry_.at(index);
+                SceneCatalogEditor::removeModel(projectContext_, entry.id);
+                sceneAssetOperations_->status =
+                    "Removed " + entry.name + " from Catalog";
+                refreshSceneRegistry();
+            } catch (const std::exception &error) {
+                sceneAssetOperations_->error = error.what();
+            }
+        };
+        actions.openReport = [](const std::filesystem::path &path) {
+            if (!path.empty())
+                ShellExecuteW(nullptr, L"open", path.c_str(), nullptr,
+                              nullptr, SW_SHOWNORMAL);
+        };
+        actions.cancelImport = [&ui] {
+            if (ui.worker)
+                ui.worker->cancel = true;
+        };
+#if VKL_ENABLE_ASSET_AUTHORING
+        actions.confirmImport = [this, &ui](
+                                    const ModelImportPanelSubmission &input) {
+            if (!ui.preflight || !ui.validationReport)
+                return;
+            ModelImportRequest request;
+            request.sourcePath = ui.preflight->sourcePath;
+            request.displayName = input.displayName;
+            request.modelId = input.modelId;
+            request.profileId = input.profileId;
+            request.placement =
+                input.referenceExisting
+                    ? ModelImportPlacement::ReferenceExisting
+                    : ModelImportPlacement::CopyIntoProject;
+            request.validation =
+                sceneValidationReceipt(*ui.validationReport);
+            request.allowUnvalidated = input.allowUnvalidated;
+            ui.loadAfterActiveImport = input.loadAfterImport;
+            ui.worker = std::make_shared<ModelImportWorkerState>();
+            ui.worker->totalBytes = ui.preflight->totalBytes;
+            const auto worker = ui.worker;
+            ProjectContext project = projectContext_;
+            project.cacheRoot = std::filesystem::u8path(
+                sceneLoadContext_.derivedTextureCachePath);
+            ui.importFuture = std::async(
+                std::launch::async, [project, request, worker] {
+                    profileSetThreadName("ModelImportCopy");
+                    VKL_PROFILE_ZONE("Model Catalog Import");
+                    return ModelImportService::importModel(
+                        project, request,
+                        [worker] { return worker->cancel.load(); },
+                        [worker](const ModelImportProgress &progress) {
+                            worker->completedBytes = progress.completedBytes;
+                            worker->totalBytes = progress.totalBytes;
+                            std::lock_guard<std::mutex> lock(worker->mutex);
+                            worker->currentFile = progress.currentFile;
+                        });
+                });
+            ui.status = "Importing model source files...";
+            ui.error.clear();
+        };
+#endif
+        actions.dismissImport = [&ui] {
+            ui.preflight.reset();
+            ui.validationReport.reset();
+            ui.validationReportPath.clear();
+            ui.allowUnvalidated = false;
+        };
+        scenesPanel_->draw(snapshot, actions);
+        return;
+    }
 }
 
 void Application::drawAssetsPanel() {
-    ImGui::SeparatorText("Project Cache");
-    if (editor::beginPropertyGrid("AssetProjectSummary", 0.34f)) {
-        editor::propertyLabel("Project");
-        ImGui::TextUnformatted(catalog_.projectId.c_str());
-        editor::propertyLabel("Mode");
-        ImGui::TextUnformatted(assetImportModeName(config_.assetImportMode));
-        editor::propertyLabel("Catalog");
-        editor::pathValue(projectContext_.catalogPath.string());
-        editor::propertyLabel("Cache");
-        editor::pathValue(sceneLoadContext_.derivedTextureCachePath);
+    if (assetsPanel_) {
+        AssetsPanelSnapshot snapshot;
+        snapshot.projectId = catalog_.projectId;
+        snapshot.mode = assetImportModeName(config_.assetImportMode);
+        snapshot.catalogPath = projectContext_.catalogPath.string();
+        snapshot.cachePath = sceneLoadContext_.derivedTextureCachePath;
+        snapshot.authoringCompiled = build::kAssetAuthoring;
         if (artifactUsage_) {
-            editor::propertyLabel("Index");
-            ImGui::Text("%llu records / %llu ready",
-                        static_cast<unsigned long long>(
-                            artifactUsage_->records),
-                        static_cast<unsigned long long>(
-                            artifactUsage_->readyRecords));
-            editor::propertyLabel("Cache Blobs");
-            ImGui::Text("%llu / %.2f MiB",
-                        static_cast<unsigned long long>(
-                            artifactUsage_->cacheBlobFiles),
-                        bytesToMiB(artifactUsage_->cacheBlobBytes));
-            editor::propertyLabel("Unreferenced");
-            ImGui::Text("%llu / %.2f MiB",
-                        static_cast<unsigned long long>(
-                            artifactUsage_->unreferencedBlobFiles),
-                        bytesToMiB(artifactUsage_->unreferencedBlobBytes));
+            snapshot.hasUsage = true;
+            snapshot.indexRecords = artifactUsage_->records;
+            snapshot.readyRecords = artifactUsage_->readyRecords;
+            snapshot.cacheBlobFiles = artifactUsage_->cacheBlobFiles;
+            snapshot.cacheBlobBytes = artifactUsage_->cacheBlobBytes;
+            snapshot.unreferencedBlobFiles =
+                artifactUsage_->unreferencedBlobFiles;
+            snapshot.unreferencedBlobBytes =
+                artifactUsage_->unreferencedBlobBytes;
         }
-        editor::endPropertyGrid();
-    }
 
-    const int selected = sceneAssetOperations_->selectedSceneIndex;
-    if (selected >= 0 && selected < static_cast<int>(sceneRegistry_.size())) {
-        const SceneEntry &entry = sceneRegistry_[selected];
-        const std::string profileId = profileIdForTextureLimit(entry);
-        const auto found = sceneAssetOperations_->statuses.find(
-            artifactStatusKey(entry.id, profileId));
-        ImGui::SeparatorText("Selected Scene Artifacts");
-        const auto activeProfile = catalog_.importProfiles.find(profileId);
-        if (editor::beginPropertyGrid("SelectedArtifactSummary", 0.34f)) {
-            editor::propertyLabel("Scene");
-            ImGui::TextUnformatted(entry.name.c_str());
-            editor::propertyLabel("Profile");
-            ImGui::TextUnformatted(profileId.c_str());
-            if (activeProfile != catalog_.importProfiles.end()) {
-                editor::propertyLabel("Encoder");
-                ImGui::TextUnformatted(
-                    activeProfile->second.textureEncoder.c_str());
-            }
+        const int selectedModel =
+            sceneAssetOperations_->selectedSceneIndex;
+        if (selectedModel >= 0 &&
+            selectedModel < static_cast<int>(sceneRegistry_.size())) {
+            const SceneEntry &entry = sceneRegistry_[selectedModel];
+            const std::string profileId =
+                profileIdForTextureLimit(entry);
+            AssetArtifactSnapshot artifact;
+            artifact.modelName = entry.name;
+            artifact.profileId = profileId;
+            const auto profile = catalog_.importProfiles.find(profileId);
+            if (profile != catalog_.importProfiles.end())
+                artifact.encoder = profile->second.textureEncoder;
+            const auto found = sceneAssetOperations_->statuses.find(
+                artifactStatusKey(entry.id, profileId));
             if (found != sceneAssetOperations_->statuses.end()) {
-            const ArtifactStatus &status = found->second;
-                editor::StatusTone tone = editor::StatusTone::Neutral;
-                if (status.state == ArtifactState::Ready)
-                    tone = editor::StatusTone::Success;
-                else if (status.state == ArtifactState::Importing)
-                    tone = editor::StatusTone::Info;
-                else if (status.state == ArtifactState::Invalid)
-                    tone = editor::StatusTone::Error;
-                else
-                    tone = editor::StatusTone::Warning;
-                editor::propertyLabel("Artifacts");
-                editor::statusIndicator(
-                    artifactStateName(status.state), tone,
-                    status.reason.empty() ? nullptr : status.reason.c_str());
-                if (!status.payloadKind.empty()) {
-                    editor::propertyLabel("Payload");
-                    ImGui::TextUnformatted(status.payloadKind.c_str());
-                }
-                if (status.entryCount > 0) {
-                    editor::propertyLabel("Blobs");
-                    ImGui::Text("%llu / %.2f MiB",
-                            static_cast<unsigned long long>(status.entryCount),
-                            bytesToMiB(status.blobBytes));
+                const ArtifactStatus &status = found->second;
+                artifact.state = artifactStateName(status.state);
+                artifact.reason = status.reason;
+                artifact.payloadKind = status.payloadKind;
+                artifact.entryCount = status.entryCount;
+                artifact.blobBytes = status.blobBytes;
+            } else {
+                artifact.state = "Unknown";
+            }
+            if (artifactIndex_) {
+                const auto record = artifactIndex_->records().find(
+                    artifactIndexKey(entry.id, profileId));
+                if (record != artifactIndex_->records().end()) {
+                    artifact.failureCode = record->second.failureCode;
+                    artifact.failureMessage = record->second.failureMessage;
                 }
             }
-            editor::endPropertyGrid();
+            snapshot.selectedModel = std::move(artifact);
         }
-        if (artifactIndex_) {
-            const auto record = artifactIndex_->records().find(
-                artifactIndexKey(entry.id, profileId));
-            if (record != artifactIndex_->records().end() &&
-                !record->second.failureCode.empty()) {
-                ImGui::Text("Last Failure: %s",
-                            record->second.failureCode.c_str());
-                ImGui::TextWrapped("%s",
-                                   record->second.failureMessage.c_str());
-            }
-        }
-    }
 
-    ImGui::SeparatorText("Environments");
-    EditorUiState &environmentUi = *editorUi_;
-    environmentUi.selectedEnvironmentIndex = std::clamp(
-        environmentUi.selectedEnvironmentIndex, 0,
-        static_cast<int>(catalog_.environments.size()));
-    const char *selectedEnvironmentName =
-        environmentUi.selectedEnvironmentIndex == 0
-            ? "None"
-            : catalog_
-                  .environments[environmentUi.selectedEnvironmentIndex - 1]
-                  .displayName.c_str();
-    if (ImGui::BeginCombo("Environment Asset",
-                          selectedEnvironmentName)) {
-        const bool noneSelected =
-            environmentUi.selectedEnvironmentIndex == 0;
-        if (ImGui::Selectable("None", noneSelected))
-            environmentUi.selectedEnvironmentIndex = 0;
-        for (int index = 0;
-             index < static_cast<int>(catalog_.environments.size());
-             ++index) {
-            const bool selectedItem =
-                environmentUi.selectedEnvironmentIndex == index + 1;
-            if (ImGui::Selectable(
-                    catalog_.environments[index].displayName.c_str(),
-                    selectedItem)) {
-                environmentUi.selectedEnvironmentIndex = index + 1;
-            }
-            if (selectedItem)
-                ImGui::SetItemDefaultFocus();
-        }
-        ImGui::EndCombo();
-    }
-
-    std::optional<ArtifactStatus> environmentStatus;
-    const CatalogEnvironment *selectedEnvironment = nullptr;
-    if (environmentUi.selectedEnvironmentIndex > 0) {
-        selectedEnvironment =
-            &catalog_.environments[
-                environmentUi.selectedEnvironmentIndex - 1];
-        if (!projectContext_.cookedPackage) {
-            environmentStatus = inspectEnvironmentArtifacts(
-                {std::filesystem::u8path(
-                     config_.derivedTextureCachePath),
-                 projectContext_.resolveProjectPath(
-                     selectedEnvironment->source),
-                 catalog_.projectId, selectedEnvironment->id,
-                 selectedEnvironment->environmentProfile});
-        }
-        ImGui::Text("Profile: %s",
-                    selectedEnvironment->environmentProfile.c_str());
-        ImGui::TextWrapped(
-            "Source: %s",
-            selectedEnvironment->source.generic_string().c_str());
-        if (environmentStatus) {
-            ImGui::Text("Artifacts: %s",
-                        artifactStateName(environmentStatus->state));
-            ImGui::TextWrapped("%s",
-                               environmentStatus->reason.c_str());
-            if (environmentStatus->entryCount > 0) {
-                ImGui::Text(
-                    "Blobs: %llu (%.2f MiB)",
-                    static_cast<unsigned long long>(
-                        environmentStatus->entryCount),
-                    bytesToMiB(environmentStatus->blobBytes));
-            }
-        }
-    }
-
-#if VKL_ENABLE_ASSET_AUTHORING
-    const bool canEditEnvironments =
-        projectContext_.catalogWritable &&
-        config_.assetImportMode == AssetImportMode::OnDemand;
-    ImGui::BeginDisabled(!canEditEnvironments);
-    if (ImGui::Button("Import HDR")) {
-        try {
-            const auto source =
-                openHdrFileDialog(window_->nativeHandle());
-            if (source) {
-                environmentUi.environmentImportSource = *source;
-                const std::string displayName =
-                    source->stem().string();
-                const std::string environmentId =
-                    SceneImportService::suggestSceneId(displayName);
-                std::snprintf(
-                    environmentUi.environmentDisplayName.data(),
-                    environmentUi.environmentDisplayName.size(), "%s",
-                    displayName.c_str());
-                std::snprintf(
-                    environmentUi.environmentId.data(),
-                    environmentUi.environmentId.size(), "%s",
-                    environmentId.c_str());
-                environmentUi.environmentProfileIds.clear();
-                for (const auto &profile :
-                     catalog_.environmentProfiles) {
-                    environmentUi.environmentProfileIds.push_back(
-                        profile.first);
-                }
-                std::sort(
-                    environmentUi.environmentProfileIds.begin(),
-                    environmentUi.environmentProfileIds.end());
-                environmentUi.environmentProfileIndex = 0;
-                environmentUi.requestEnvironmentImportModal = true;
-                environmentUi.environmentError.clear();
-            }
-        } catch (const std::exception &error) {
-            environmentUi.environmentError = error.what();
-        }
-    }
-    ImGui::EndDisabled();
-
-    if (selectedEnvironment) {
-        ImGui::SameLine();
-        const bool canBuild =
-            assetImportManager_ && !projectContext_.cookedPackage;
-        ImGui::BeginDisabled(!canBuild);
-        const bool rebuild =
-            environmentStatus && environmentStatus->ready();
-        if (ImGui::Button(rebuild ? "Rebuild" : "Build")) {
-            try {
-                assetImportManager_->request(
-                    {selectedEnvironment->id,
-                     selectedEnvironment->environmentProfile,
-                     ImportReason::ManualReimport, rebuild,
-                     AssetImportKind::Environment});
-                environmentUi.environmentStatus =
-                    "Queued environment bake for " +
-                    selectedEnvironment->displayName;
-                environmentUi.environmentError.clear();
-            } catch (const std::exception &error) {
-                environmentUi.environmentError = error.what();
-            }
-        }
-        ImGui::EndDisabled();
-        if (canEditEnvironments) {
-            ImGui::SameLine();
-            if (ImGui::Button("Remove Environment"))
-                ImGui::OpenPopup("Remove Environment");
-        }
-        if (ImGui::BeginPopupModal(
-                "Remove Environment", nullptr,
-                ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::TextWrapped(
-                "Remove '%s' from the Catalog? Source and derived "
-                "artifacts will be retained.",
-                selectedEnvironment->displayName.c_str());
-            if (ImGui::Button("Remove")) {
+        for (const CatalogEnvironment &environment : catalog_.environments) {
+            EnvironmentAssetSnapshot item;
+            item.id = environment.id;
+            item.displayName = environment.displayName;
+            item.source = environment.source.generic_string();
+            item.profileId = environment.environmentProfile;
+            item.artifactState = "Unknown";
+            if (!projectContext_.cookedPackage) {
                 try {
-                    const std::string removedId =
-                        selectedEnvironment->id;
-                    if (selectedEnvironmentId_ == removedId)
-                        setEnvironment("None");
-                    SceneCatalogEditor::removeEnvironment(
-                        projectContext_, removedId);
-                    environmentUi.selectedEnvironmentIndex = 0;
-                    environmentUi.environmentStatus =
-                        "Removed " + removedId + " from Catalog";
-                    refreshSceneRegistry();
+                    const ArtifactStatus status = inspectEnvironmentArtifacts(
+                        {std::filesystem::u8path(
+                             config_.derivedTextureCachePath),
+                         projectContext_.resolveProjectPath(environment.source),
+                         catalog_.projectId, environment.id,
+                         environment.environmentProfile});
+                    item.artifactState = artifactStateName(status.state);
+                    item.artifactReason = status.reason;
+                    item.entryCount = status.entryCount;
+                    item.blobBytes = status.blobBytes;
+                    item.ready = status.ready();
                 } catch (const std::exception &error) {
-                    environmentUi.environmentError = error.what();
+                    item.artifactState = "Invalid";
+                    item.artifactReason = error.what();
                 }
-                ImGui::CloseCurrentPopup();
             }
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel"))
-                ImGui::CloseCurrentPopup();
-            ImGui::EndPopup();
+            snapshot.environments.push_back(std::move(item));
         }
-    }
-
-    if (environmentUi.requestEnvironmentImportModal) {
-        ImGui::OpenPopup("Import HDR Environment");
-        environmentUi.requestEnvironmentImportModal = false;
-    }
-    if (ImGui::BeginPopupModal(
-            "Import HDR Environment", nullptr,
-            ImGuiWindowFlags_AlwaysAutoResize)) {
-        if (environmentUi.environmentImportSource) {
-            ImGui::TextWrapped(
-                "Source: %s",
-                environmentUi.environmentImportSource->string().c_str());
-        }
-        ImGui::InputText(
-            "Name", environmentUi.environmentDisplayName.data(),
-            environmentUi.environmentDisplayName.size());
-        ImGui::InputText("Environment ID",
-                         environmentUi.environmentId.data(),
-                         environmentUi.environmentId.size());
-        if (!environmentUi.environmentProfileIds.empty()) {
-            const char *profile =
-                environmentUi
-                    .environmentProfileIds[
-                        environmentUi.environmentProfileIndex]
-                    .c_str();
-            if (ImGui::BeginCombo("IBL Profile", profile)) {
-                for (int index = 0;
-                     index < static_cast<int>(
-                                 environmentUi
-                                     .environmentProfileIds.size());
-                     ++index) {
-                    const bool selectedProfile =
-                        environmentUi.environmentProfileIndex ==
-                        index;
-                    if (ImGui::Selectable(
-                            environmentUi.environmentProfileIds[index]
-                                .c_str(),
-                            selectedProfile)) {
-                        environmentUi.environmentProfileIndex = index;
-                    }
-                }
-                ImGui::EndCombo();
-            }
-        }
-        const bool validEnvironmentImport =
-            environmentUi.environmentImportSource &&
-            environmentUi.environmentDisplayName[0] != '\0' &&
-            isStableAssetId(environmentUi.environmentId.data()) &&
-            !environmentUi.environmentProfileIds.empty();
-        ImGui::BeginDisabled(!validEnvironmentImport);
-        if (ImGui::Button("Import")) {
-            try {
-                const std::string id =
-                    environmentUi.environmentId.data();
-                const std::filesystem::path relative =
-                    std::filesystem::path("assets/environments") /
-                    id /
-                    environmentUi.environmentImportSource->filename();
-                const std::filesystem::path destination =
-                    (projectContext_.projectRoot / relative)
-                        .lexically_normal();
-                if (!pathIsWithin(projectContext_.projectRoot,
-                                  destination)) {
-                    throw std::runtime_error(
-                        "Environment destination escapes project root.");
-                }
-                if (catalog_.findEnvironment(id)) {
-                    throw std::runtime_error(
-                        "Environment ID already exists in the Catalog.");
-                }
-                if (std::filesystem::exists(destination)) {
-                    throw std::runtime_error(
-                        "Environment destination already exists: " +
-                        destination.string());
-                }
-                std::filesystem::create_directories(
-                    destination.parent_path());
-                std::filesystem::copy_file(
-                    *environmentUi.environmentImportSource, destination,
-                    std::filesystem::copy_options::none);
-                CatalogEnvironment environment;
-                environment.id = id;
-                environment.displayName =
-                    environmentUi.environmentDisplayName.data();
-                environment.source = relative;
-                environment.environmentProfile =
-                    environmentUi.environmentProfileIds[
-                        environmentUi.environmentProfileIndex];
-                try {
-                    SceneCatalogEditor::addEnvironment(
-                        projectContext_, environment);
-                } catch (...) {
-                    std::error_code ignored;
-                    std::filesystem::remove(destination, ignored);
-                    throw;
-                }
-                refreshSceneRegistry();
-                for (int index = 0;
-                     index < static_cast<int>(
-                                 catalog_.environments.size());
-                     ++index) {
-                    if (catalog_.environments[index].id == id) {
-                        environmentUi.selectedEnvironmentIndex =
-                            index + 1;
-                        break;
-                    }
-                }
-                environmentUi.environmentStatus =
-                    "Imported " + environment.displayName +
-                    "; build derived IBL artifacts next.";
-                environmentUi.environmentImportSource.reset();
-                ImGui::CloseCurrentPopup();
-            } catch (const std::exception &error) {
-                environmentUi.environmentError = error.what();
-            }
-        }
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel")) {
-            environmentUi.environmentImportSource.reset();
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
-#endif
-    if (!environmentUi.environmentStatus.empty())
-        ImGui::TextWrapped("%s",
-                           environmentUi.environmentStatus.c_str());
-    if (!environmentUi.environmentError.empty())
-        ImGui::TextWrapped("Error: %s",
-                           environmentUi.environmentError.c_str());
+        snapshot.canEditEnvironments =
+            projectContext_.catalogWritable &&
+            config_.assetImportMode == AssetImportMode::OnDemand;
+        snapshot.canBuildEnvironments =
+            assetImportManager_ && !projectContext_.cookedPackage;
+        snapshot.environmentStatus = editorUi_->environmentStatus;
+        snapshot.environmentError = editorUi_->environmentError;
 
 #if VKL_ENABLE_ASSET_AUTHORING
-    const auto active = assetImportManager_
-                            ? assetImportManager_->activeTask()
-                            : std::shared_ptr<AssetImportTask>{};
-    ImGui::Separator();
-    ImGui::TextUnformatted("Current Import");
-    if (active) {
-        const uint64_t total = active->totalArtifacts.load();
-        const uint64_t completed = active->completedArtifacts.load();
-        const float fraction =
-            total == 0
-                ? 0.0f
-                : static_cast<float>(completed) / static_cast<float>(total);
-        const double elapsedMs = std::chrono::duration<double, std::milli>(
-                                     std::chrono::steady_clock::now() -
-                                     active->requestedAt)
-                                     .count();
-        ImGui::Text("Task: %llu  %s",
-                    static_cast<unsigned long long>(active->id),
-                    assetImportStateName(active->state.load()));
-        ImGui::Text("%s: %s / %s",
-                    assetImportKindName(active->kind),
-                    active->sceneId.c_str(), active->profileId.c_str());
-        ImGui::ProgressBar(std::clamp(fraction, 0.0f, 1.0f));
-        ImGui::Text("Artifacts: %llu/%llu  encoded %llu  reused %llu  failed %llu",
-                    static_cast<unsigned long long>(completed),
-                    static_cast<unsigned long long>(total),
-                    static_cast<unsigned long long>(
-                        active->encodedArtifacts.load()),
-                    static_cast<unsigned long long>(
-                        active->reusedArtifacts.load()),
-                    static_cast<unsigned long long>(
-                        active->failedArtifacts.load()));
-        ImGui::Text("Workers: %u  elapsed: %.1f s", active->workers.load(),
-                    elapsedMs / 1000.0);
-        if (active->kind == AssetImportKind::SceneValidation) {
-            ImGui::Text("Validation: %s  errors %llu  warnings %llu",
-                        assetValidationStateName(
-                            active->validationState.load()),
-                        static_cast<unsigned long long>(
-                            active->validationErrors.load()),
-                        static_cast<unsigned long long>(
-                            active->validationWarnings.load()));
-        }
-        ImGui::BeginDisabled(
-            isTerminalAssetImportState(active->state.load()));
-        if (ImGui::Button("Cancel Asset Import"))
-            assetImportManager_->cancel(active->id);
-        ImGui::EndDisabled();
-        if (std::filesystem::is_regular_file(active->logPath)) {
-            ImGui::SameLine();
-            if (ImGui::Button("Open Log")) {
-                ShellExecuteW(nullptr, L"open", active->logPath.c_str(),
-                              nullptr, nullptr, SW_SHOWNORMAL);
-            }
-        }
-    } else {
-        ImGui::TextUnformatted("Idle");
-    }
-
-    ImGui::Separator();
-    ImGui::TextUnformatted("Recent Imports");
-    const auto history = assetImportManager_
-                             ? assetImportManager_->history()
-                             : std::vector<std::shared_ptr<AssetImportTask>>{};
-    const size_t visible = std::min<size_t>(history.size(), 8);
-    for (size_t i = 0; i < visible; ++i) {
-        const auto &task = history[i];
-        ImGui::PushID(static_cast<int>(i));
-        if (ImGui::TreeNode("Import", "%s: %s / %s  [%s]##%llu",
-                            assetImportKindName(task->kind),
-                            task->sceneId.c_str(), task->profileId.c_str(),
-                            assetImportStateName(task->state.load()),
-                            static_cast<unsigned long long>(task->id))) {
-            ImGui::Text("Encoded: %llu  Reused: %llu  Failed: %llu",
-                        static_cast<unsigned long long>(
-                            task->encodedArtifacts.load()),
-                        static_cast<unsigned long long>(
-                            task->reusedArtifacts.load()),
-                        static_cast<unsigned long long>(
-                            task->failedArtifacts.load()));
-            std::filesystem::path validationReportPath;
+        const auto taskSnapshot = [](const std::shared_ptr<AssetImportTask> &task) {
+            AssetTaskSnapshot result;
+            if (!task)
+                return result;
+            result.id = task->id;
+            result.kind = assetImportKindName(task->kind);
+            result.assetId = task->sceneId;
+            result.profileId = task->profileId;
+            result.state = assetImportStateName(task->state.load());
+            result.completed = task->completedArtifacts.load();
+            result.total = task->totalArtifacts.load();
+            result.encoded = task->encodedArtifacts.load();
+            result.reused = task->reusedArtifacts.load();
+            result.failed = task->failedArtifacts.load();
+            result.workers = task->workers.load();
+            result.elapsedSeconds =
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - task->requestedAt)
+                    .count();
+            result.terminal =
+                isTerminalAssetImportState(task->state.load());
+            result.logPath = task->logPath;
             {
                 std::lock_guard<std::mutex> lock(task->mutex);
-                if (!task->error.empty())
-                    ImGui::TextWrapped("Error: %s", task->error.c_str());
-                if (task->kind == AssetImportKind::SceneValidation) {
-                    ImGui::Text("Validation: %s  errors %llu  warnings %llu",
-                                assetValidationStateName(
-                                    task->validationState.load()),
-                                static_cast<unsigned long long>(
-                                    task->validationErrors.load()),
-                                static_cast<unsigned long long>(
-                                    task->validationWarnings.load()));
-                    if (!task->validationFailureReason.empty())
-                        ImGui::TextWrapped("Tool: %s",
-                                           task->validationFailureReason.c_str());
-                    validationReportPath =
+                result.error = task->error;
+                if (task->kind == AssetImportKind::SceneValidation)
+                    result.reportPath =
                         std::filesystem::u8path(task->manifestPath);
-                }
             }
-            if (std::filesystem::is_regular_file(task->logPath) &&
-                ImGui::Button("Open Log")) {
-                ShellExecuteW(nullptr, L"open", task->logPath.c_str(),
-                              nullptr, nullptr, SW_SHOWNORMAL);
-            }
-            if (!validationReportPath.empty() &&
-                std::filesystem::is_regular_file(validationReportPath)) {
-                ImGui::SameLine();
-                if (ImGui::Button("Open Report")) {
-                    ShellExecuteW(nullptr, L"open",
-                                  validationReportPath.c_str(), nullptr,
-                                  nullptr, SW_SHOWNORMAL);
-                }
-            }
-            ImGui::TreePop();
+            return result;
+        };
+        if (assetImportManager_) {
+            if (const auto active = assetImportManager_->activeTask())
+                snapshot.activeTask = taskSnapshot(active);
+            const auto history = assetImportManager_->history();
+            const size_t count = std::min<size_t>(history.size(), 8);
+            for (size_t index = 0; index < count; ++index)
+                snapshot.recentTasks.push_back(taskSnapshot(history[index]));
         }
-        ImGui::PopID();
-    }
-#else
-    ImGui::Separator();
-    ImGui::TextDisabled("Asset authoring is not compiled.");
 #endif
-}
 
+        AssetsPanelActions actions;
+#if VKL_ENABLE_ASSET_AUTHORING
+        actions.chooseEnvironment = [this]()
+            -> std::optional<EnvironmentImportDefaults> {
+            try {
+                const auto source =
+                    openHdrFileDialog(window_->nativeHandle());
+                if (!source)
+                    return std::nullopt;
+                EnvironmentImportDefaults result;
+                result.source = *source;
+                result.displayName = source->stem().string();
+                result.environmentId =
+                    ModelImportService::suggestModelId(result.displayName);
+                for (const auto &profile : catalog_.environmentProfiles)
+                    result.profileIds.push_back(profile.first);
+                std::sort(result.profileIds.begin(), result.profileIds.end());
+                editorUi_->environmentError.clear();
+                return result;
+            } catch (const std::exception &error) {
+                editorUi_->environmentError = error.what();
+                return std::nullopt;
+            }
+        };
+        actions.importEnvironment =
+            [this](const EnvironmentImportSubmission &input) {
+                try {
+                    const std::filesystem::path relative =
+                        std::filesystem::path("assets/environments") /
+                        input.environmentId / input.source.filename();
+                    const std::filesystem::path destination =
+                        (projectContext_.projectRoot / relative)
+                            .lexically_normal();
+                    if (!pathIsWithin(projectContext_.projectRoot,
+                                      destination))
+                        throw std::runtime_error(
+                            "Environment destination escapes project root");
+                    if (catalog_.findEnvironment(input.environmentId))
+                        throw std::runtime_error(
+                            "Environment ID already exists in the Catalog");
+                    if (std::filesystem::exists(destination))
+                        throw std::runtime_error(
+                            "Environment destination already exists: " +
+                            destination.string());
+                    std::filesystem::create_directories(
+                        destination.parent_path());
+                    std::filesystem::copy_file(
+                        input.source, destination,
+                        std::filesystem::copy_options::none);
+                    CatalogEnvironment environment;
+                    environment.id = input.environmentId;
+                    environment.displayName = input.displayName;
+                    environment.source = relative;
+                    environment.environmentProfile = input.profileId;
+                    try {
+                        SceneCatalogEditor::addEnvironment(projectContext_,
+                                                           environment);
+                    } catch (...) {
+                        std::error_code ignored;
+                        std::filesystem::remove(destination, ignored);
+                        throw;
+                    }
+                    refreshSceneRegistry();
+                    editorUi_->environmentStatus =
+                        "Imported " + input.displayName +
+                        "; build derived IBL artifacts next";
+                    editorUi_->environmentError.clear();
+                } catch (const std::exception &error) {
+                    editorUi_->environmentError = error.what();
+                }
+            };
+        actions.buildEnvironment =
+            [this](const std::string &id, bool force) {
+                try {
+                    const CatalogEnvironment *environment =
+                        catalog_.findEnvironment(id);
+                    if (!environment)
+                        throw std::runtime_error(
+                            "Environment is no longer present in Catalog");
+                    assetImportManager_->request(
+                        {environment->id, environment->environmentProfile,
+                         ImportReason::ManualReimport, force,
+                         AssetImportKind::Environment});
+                    editorUi_->environmentStatus =
+                        "Queued environment bake for " +
+                        environment->displayName;
+                    editorUi_->environmentError.clear();
+                } catch (const std::exception &error) {
+                    editorUi_->environmentError = error.what();
+                }
+            };
+        actions.removeEnvironment = [this](const std::string &id) {
+            try {
+                if (selectedEnvironmentId_ == id)
+                    setEnvironment("None");
+                SceneCatalogEditor::removeEnvironment(projectContext_, id);
+                editorUi_->environmentStatus =
+                    "Removed " + id + " from Catalog";
+                editorUi_->environmentError.clear();
+                refreshSceneRegistry();
+            } catch (const std::exception &error) {
+                editorUi_->environmentError = error.what();
+            }
+        };
+        actions.cancelTask = [this](uint64_t id) {
+            if (assetImportManager_)
+                assetImportManager_->cancel(id);
+        };
 #endif
+        actions.openPath = [](const std::filesystem::path &path) {
+            if (!path.empty())
+                ShellExecuteW(nullptr, L"open", path.c_str(), nullptr,
+                              nullptr, SW_SHOWNORMAL);
+        };
+        assetsPanel_->draw(snapshot, actions);
+        return;
+    }
+}
 
 void Application::requestManualCapture(bool includeGui) {
     captureUiError_.clear();
@@ -4127,7 +3526,6 @@ void Application::requestManualCapture(bool includeGui) {
     }
 }
 
-#if VKL_ENABLE_EDITOR_UI
 void Application::drawCapturePanel() {
     if (!captureService_) {
         editor::emptyState("Capture is unavailable in this package.");
@@ -5064,7 +4462,7 @@ void Application::drawLoadStatsPanel() {
 
 void Application::drawGui() {
     VKL_PROFILE_ZONE("Build Editor UI");
-    updateSceneImport();
+    updateModelImport();
     if (!editorDockWorkspace_)
         return;
 

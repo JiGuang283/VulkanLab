@@ -108,7 +108,7 @@ class ArtifactIndex {
   private:
     ArtifactIndex(std::filesystem::path cacheRoot,
                   std::filesystem::path projectRoot, std::string projectId);
-    void refreshRecord(const CatalogScene &scene,
+    void refreshRecord(const CatalogModel &scene,
                        const ImportProfile &profile);
     void refreshEnvironmentRecord(
         const CatalogEnvironment &environment,

@@ -1,10 +1,10 @@
 # VulkanLab Runtime Control 使用说明
 
 > Status: Current
-> Last verified: 2026-07-30
-> Verified against: Compute Bloom v1 working tree
+> Last verified: 2026-08-01
+> Verified against: Scene Authoring Stage 0-1 working tree
 
-Runtime Control 通过 Windows Named Pipe 控制已经运行的 VulkanLab。它面向本机开发、诊断和自动化，可以查询状态、加载场景和环境、设置相机、Shader 与渲染参数、等待渲染稳定、异步截图并安全退出程序。`scene.list.entries[]` 同时返回稳定 scene ID、Catalog profile ID 和该 profile 的纹理限制。
+Runtime Control 通过 Windows Named Pipe 控制已经运行的 VulkanLab。它面向本机开发、诊断和自动化，可以查询状态、加载模型预览和环境、设置相机、Shader 与渲染参数、等待渲染稳定、异步截图并安全退出程序。Stage 1 继续保留 `scene.*` 协议名称；`scene.list.entries[]` 是 Catalog model previews，同时返回 `kind: "modelPreview"`、稳定 `modelId`、兼容 `sceneId`、Catalog profile ID 和该 profile 的纹理限制。原生 SceneDocument 尚不出现在此接口。
 
 Runtime Control 默认关闭。启用时必须显式传入 `--runtime-control`；Named Pipe 拒绝远程客户端，不开放网络端口。
 
@@ -237,7 +237,7 @@ Catalog glTF 的最近验证报告可只读查询；响应最多包含 32 条 is
 .\VulkanLabCtl.exe --json asset validation sheen-chair
 ```
 
-响应包含 `Valid/Warnings/Invalid/Stale/Unavailable/Failed/NotChecked/NotApplicable` 状态、Validator 版本、四级计数、renderer extension 诊断和 report path。该方法只接受 Catalog scene ID 或完整显示名，不接受任意外部文件路径。
+响应包含 `Valid/Warnings/Invalid/Stale/Unavailable/Failed/NotChecked/NotApplicable` 状态、Validator 版本、四级计数、renderer extension 诊断和 report path。该方法只接受 Catalog model ID 或完整显示名，不接受原生 SceneDocument ID 或任意外部文件路径；响应同时保留 `sceneId` 并增加 `modelId` 与 `assetKind: "model"`。
 
 ### 加载统计
 

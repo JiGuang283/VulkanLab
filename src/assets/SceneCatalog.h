@@ -1,5 +1,6 @@
 #pragma once
 
+#include "scene_data/SceneIds.h"
 #include "scene/SceneTypes.h"
 
 #include <cstdint>
@@ -10,6 +11,8 @@
 #include <vector>
 
 namespace vkr {
+
+struct SceneDocumentReferences;
 
 struct ImportProfile {
     std::string id;
@@ -29,7 +32,7 @@ struct EnvironmentProfile {
     uint32_t brdfSamples = 1024;
 };
 
-struct CatalogScene {
+struct CatalogModel {
     std::string id;
     std::string displayName;
     std::string type = "gltf";
@@ -37,7 +40,17 @@ struct CatalogScene {
     std::filesystem::path source;
     std::string importProfile;
     bool optional = false;
-    std::optional<CameraPose> camera;
+    std::optional<CameraPose> previewCamera;
+};
+
+// Compatibility name for code that still treats a model as its preview scene.
+using CatalogScene = CatalogModel;
+
+struct CatalogSceneDocument {
+    std::string id;
+    std::string displayName;
+    std::filesystem::path source;
+    bool optional = false;
 };
 
 struct CatalogEnvironment {
@@ -51,7 +64,8 @@ struct CatalogEnvironment {
 class SceneCatalog {
   public:
     static constexpr uint32_t kLegacySchemaVersion = 1;
-    static constexpr uint32_t kSchemaVersion = 2;
+    static constexpr uint32_t kEnvironmentSchemaVersion = 2;
+    static constexpr uint32_t kSchemaVersion = 3;
 
     static SceneCatalog load(const std::filesystem::path &catalogPath,
                              const std::filesystem::path &projectRoot);
@@ -60,18 +74,26 @@ class SceneCatalog {
     std::string projectId;
     std::string defaultImportProfile;
     std::optional<std::string> defaultEnvironment;
-    std::vector<CatalogScene> scenes;
+    std::vector<CatalogModel> models;
+    std::vector<CatalogSceneDocument> sceneDocuments;
     std::vector<CatalogEnvironment> environments;
     std::unordered_map<std::string, ImportProfile> importProfiles;
     std::unordered_map<std::string, EnvironmentProfile> environmentProfiles;
 
     const ImportProfile &profile(const std::string &id) const;
     const EnvironmentProfile &environmentProfile(const std::string &id) const;
-    const CatalogScene *findScene(const std::string &id) const;
+    const CatalogModel *findModel(const std::string &id) const;
+    const CatalogSceneDocument *
+    findSceneDocument(const std::string &id) const;
+    const CatalogModel *findScene(const std::string &id) const {
+        return findModel(id);
+    }
     const CatalogEnvironment *findEnvironment(const std::string &id) const;
+
+    // Builds reference sets for strict SceneDocument validation.
+    SceneDocumentReferences documentReferences() const;
 };
 
-bool isStableAssetId(const std::string &value);
 bool pathIsWithin(const std::filesystem::path &root,
                   const std::filesystem::path &candidate);
 

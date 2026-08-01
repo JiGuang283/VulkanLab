@@ -67,15 +67,15 @@ class ConsoleCancellationHandler {
 void printUsage(std::ostream &output) {
     output
         << "Usage:\n"
-        << "  VulkanLabAssetTool import scene --scene-id <id> "
+        << "  VulkanLabAssetTool import model --model-id <id> "
            "[--profile <id>] [options]\n"
-        << "  VulkanLabAssetTool texture-cache build --scene-id <id> "
+        << "  VulkanLabAssetTool texture-cache build --model-id <id> "
            "[--profile <id>] [options]\n"
         << "  VulkanLabAssetTool texture-cache migrate "
            "--legacy-cache-root <path> [options]\n\n"
         << "  VulkanLabAssetTool catalog add --source <path> [options]\n\n"
         << "  VulkanLabAssetTool validate scene "
-           "(--source <path> | --scene-id <id>) [options]\n\n"
+           "(--source <path> | --model-id <id>) [options]\n\n"
         << "  VulkanLabAssetTool catalog add-environment --source <file.hdr> "
            "[options]\n"
         << "  VulkanLabAssetTool environment-cache build "
@@ -91,9 +91,10 @@ void printUsage(std::ostream &output) {
         << "  --project <path>     Source project root (otherwise use "
            "locator)\n"
         << "  --scene <path>       Legacy alias; match a Catalog source path\n"
-        << "  --scene-id <id>      Stable Catalog scene ID\n"
+        << "  --model-id <id>      Stable Catalog model ID\n"
+        << "  --scene-id <id>      Compatibility alias for --model-id\n"
         << "  --environment-id <id> Stable Catalog environment ID\n"
-        << "  --profile <id>       Import profile (default: scene profile)\n"
+        << "  --profile <id>       Import profile (default: model profile)\n"
         << "  --texture-limit <n>  Override profile limit: 0/512/1024/2048\n"
         << "  --cache-root <path>  Override the shared derived cache root\n"
         << "  --older-than-days <n>  Retain recent orphan blobs (default: 7)\n"
@@ -235,7 +236,8 @@ int main(int argc, char **argv) {
                     explicitProject = requireValue(i, argc, argv, argument);
                 } else if (argument == "--source") {
                     source = requireValue(i, argc, argv, argument);
-                } else if (argument == "--scene-id") {
+                } else if (argument == "--model-id" ||
+                           argument == "--scene-id") {
                     sceneId = requireValue(i, argc, argv, argument);
                 } else if (argument == "--cache-root") {
                     cacheRoot = requireValue(i, argc, argv, argument);
@@ -264,20 +266,20 @@ int main(int argc, char **argv) {
             }
             if (source.empty() == sceneId.empty())
                 throw std::invalid_argument(
-                    "exactly one of --source or --scene-id is required");
+                    "exactly one of --source or --model-id is required");
             vkr::ProjectContext project =
                 vkr::ProjectContextResolver::resolve(explicitProject);
             const vkr::SceneCatalog catalog = vkr::SceneCatalog::load(
                 project.catalogPath, project.projectRoot);
             if (!sceneId.empty()) {
-                const vkr::CatalogScene *scene = catalog.findScene(sceneId);
-                if (!scene)
+                const vkr::CatalogModel *model = catalog.findModel(sceneId);
+                if (!model)
                     throw std::invalid_argument(
-                        "unknown Catalog scene: " + sceneId);
-                if (scene->type != "gltf")
+                        "unknown Catalog model: " + sceneId);
+                if (model->type != "gltf")
                     throw std::invalid_argument(
-                        "scene is not a glTF asset: " + sceneId);
-                source = project.projectRoot / scene->source;
+                        "model is not a glTF asset: " + sceneId);
+                source = project.projectRoot / model->source;
             }
             if (cacheRoot.empty())
                 cacheRoot = vkr::DerivedAssetPaths::defaultCacheRoot(
@@ -298,7 +300,7 @@ int main(int argc, char **argv) {
             if (!sceneId.empty()) {
                 (void)vkr::bindSceneValidation(
                     cacheRoot, project.projectRoot, sceneId,
-                    catalog.findScene(sceneId)->source,
+                    catalog.findModel(sceneId)->source,
                     vkr::sceneValidationReceipt(result.report));
             }
             if (!requestedReport.empty()) {
@@ -580,7 +582,7 @@ int main(int argc, char **argv) {
         if (std::string(argv[1]) == "catalog" &&
             std::string(argv[2]) == "add") {
             std::optional<std::filesystem::path> explicitProject;
-            vkr::SceneImportRequest request;
+            vkr::ModelImportRequest request;
             std::filesystem::path cacheRoot;
             std::filesystem::path validatorPath;
             bool allowUnvalidated = false;
@@ -595,8 +597,9 @@ int main(int argc, char **argv) {
                     hasSource = true;
                 } else if (argument == "--display-name") {
                     request.displayName = requireValue(i, argc, argv, argument);
-                } else if (argument == "--scene-id") {
-                    request.sceneId = requireValue(i, argc, argv, argument);
+                } else if (argument == "--model-id" ||
+                           argument == "--scene-id") {
+                    request.modelId = requireValue(i, argc, argv, argument);
                 } else if (argument == "--profile") {
                     request.profileId = requireValue(i, argc, argv, argument);
                 } else if (argument == "--cache-root") {
@@ -609,7 +612,7 @@ int main(int argc, char **argv) {
                     forceValidation = true;
                 } else if (argument == "--reference") {
                     request.placement =
-                        vkr::SceneImportPlacement::ReferenceExisting;
+                        vkr::ModelImportPlacement::ReferenceExisting;
                 } else {
                     throw std::invalid_argument("unknown option: " + argument);
                 }
@@ -625,12 +628,12 @@ int main(int argc, char **argv) {
                     catalog.projectId);
             project.cacheRoot =
                 std::filesystem::absolute(cacheRoot).lexically_normal();
-            const vkr::SceneImportPreflight preflight =
-                vkr::SceneImportService::preflight(request.sourcePath);
+            const vkr::ModelImportPreflight preflight =
+                vkr::ModelImportService::preflight(request.sourcePath);
             if (request.displayName.empty())
                 request.displayName = preflight.suggestedDisplayName;
-            if (request.sceneId.empty())
-                request.sceneId = preflight.suggestedSceneId;
+            if (request.modelId.empty())
+                request.modelId = preflight.suggestedModelId;
             if (request.profileId.empty())
                 request.profileId = catalog.defaultImportProfile;
             std::atomic_bool cancelRequested{false};
@@ -654,7 +657,7 @@ int main(int argc, char **argv) {
                 allowUnvalidated;
             if (!accepted && !unavailableBypass) {
                 throw std::runtime_error(
-                    "Scene validation rejected catalog add: " +
+                    "Model validation rejected catalog add: " +
                     std::string(vkr::assetValidationStateName(
                         validation.report.state)) +
                     (validation.report.failureReason.empty()
@@ -664,18 +667,18 @@ int main(int argc, char **argv) {
             request.validation =
                 vkr::sceneValidationReceipt(validation.report);
             request.allowUnvalidated = unavailableBypass;
-            const vkr::SceneImportResult result =
-                vkr::SceneImportService::importScene(
+            const vkr::ModelImportResult result =
+                vkr::ModelImportService::importModel(
                     project, request, {},
-                    [](const vkr::SceneImportProgress &progress) {
+                    [](const vkr::ModelImportProgress &progress) {
                         std::cout << "Copied " << progress.completedBytes << '/'
                                   << progress.totalBytes
                                   << " bytes: " << progress.currentFile << '\n';
                     });
-            std::cout << "Scene imported\n"
-                      << "  id: " << result.scene.id << "\n"
-                      << "  name: " << result.scene.displayName << "\n"
-                      << "  source: " << result.scene.source.generic_string()
+            std::cout << "Model imported\n"
+                      << "  id: " << result.model.id << "\n"
+                      << "  name: " << result.model.displayName << "\n"
+                      << "  source: " << result.model.source.generic_string()
                       << "\n  validation: "
                       << vkr::assetValidationStateName(
                              validation.report.state)
@@ -835,7 +838,8 @@ int main(int argc, char **argv) {
                     cook.platform = requireValue(i, argc, argv, argument);
                 } else if (argument == "--profile") {
                     cook.profileId = requireValue(i, argc, argv, argument);
-                } else if (argument == "--scene-id") {
+                } else if (argument == "--model-id" ||
+                           argument == "--scene-id") {
                     cook.sceneIds.push_back(
                         requireValue(i, argc, argv, argument));
                 } else if (argument == "--environment-id") {
@@ -886,7 +890,7 @@ int main(int argc, char **argv) {
             vkr::assettool::Win32JobProcessRunner validatorRunner;
             std::unordered_set<std::string> validationRequested(
                 cook.sceneIds.begin(), cook.sceneIds.end());
-            for (const vkr::CatalogScene &scene : catalog.scenes) {
+            for (const vkr::CatalogModel &scene : catalog.models) {
                 const bool selected =
                     cook.sceneIds.empty()
                         ? !scene.optional
@@ -923,7 +927,7 @@ int main(int argc, char **argv) {
             if (buildMissing) {
                 std::unordered_set<std::string> requested(
                     cook.sceneIds.begin(), cook.sceneIds.end());
-                for (const vkr::CatalogScene &scene : catalog.scenes) {
+                for (const vkr::CatalogModel &scene : catalog.models) {
                     const bool selected = cook.sceneIds.empty()
                                               ? !scene.optional
                                               : requested.count(scene.id) > 0;
@@ -1012,18 +1016,19 @@ int main(int argc, char **argv) {
             return EXIT_SUCCESS;
         }
 
-        const bool importSceneCommand =
+        const bool importModelCommand =
             std::string(argv[1]) == "import" &&
-            std::string(argv[2]) == "scene";
+            (std::string(argv[2]) == "model" ||
+             std::string(argv[2]) == "scene");
         const bool textureCacheCommand =
             std::string(argv[1]) == "texture-cache";
-        if (!importSceneCommand && !textureCacheCommand) {
+        if (!importModelCommand && !textureCacheCommand) {
             printUsage(std::cerr);
             return 2;
         }
 
         const std::string operation =
-            importSceneCommand ? std::string("build") : std::string(argv[2]);
+            importModelCommand ? std::string("build") : std::string(argv[2]);
         if (operation != "build" && operation != "migrate") {
             printUsage(std::cerr);
             return 2;
@@ -1045,7 +1050,8 @@ int main(int argc, char **argv) {
             } else if (argument == "--scene") {
                 options.scene = requireValue(i, argc, argv, argument);
                 hasScene = true;
-            } else if (argument == "--scene-id") {
+            } else if (argument == "--model-id" ||
+                       argument == "--scene-id") {
                 sceneId = requireValue(i, argc, argv, argument);
             } else if (argument == "--profile") {
                 profileId = requireValue(i, argc, argv, argument);
@@ -1121,12 +1127,12 @@ int main(int argc, char **argv) {
             return result;
         }
 
-        const vkr::CatalogScene *scene = nullptr;
+        const vkr::CatalogModel *scene = nullptr;
         if (!sceneId.empty()) {
-            scene = catalog.findScene(sceneId);
+            scene = catalog.findModel(sceneId);
         } else if (hasScene) {
             const auto requested = options.scene.lexically_normal();
-            for (const auto &candidate : catalog.scenes) {
+            for (const auto &candidate : catalog.models) {
                 if (candidate.type == "gltf" &&
                     candidate.source.lexically_normal() == requested) {
                     scene = &candidate;
@@ -1136,7 +1142,7 @@ int main(int argc, char **argv) {
         }
         if (!scene)
             throw std::invalid_argument(
-                "--scene-id must name a glTF scene in assets/catalog.json");
+                "--model-id must name a glTF model in assets/catalog.json");
         if (scene->type != "gltf")
             throw std::invalid_argument("builtin scenes have no texture cache");
         if (profileId.empty()) {

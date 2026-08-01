@@ -11,6 +11,13 @@ namespace vkr {
 
 class SceneCatalogEditor {
   public:
+    static void saveModelPreviewCamera(const ProjectContext &project,
+                                       const std::string &modelId,
+                                       const CameraPose &camera);
+    static void removeModel(const ProjectContext &project,
+                            const std::string &modelId);
+
+    // Compatibility adapters for the former model-as-scene terminology.
     static void saveCamera(const ProjectContext &project,
                            const std::string &sceneId,
                            const CameraPose &camera);

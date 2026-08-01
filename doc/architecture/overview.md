@@ -10,9 +10,11 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 
 | 目录 | 职责 |
 |---|---|
-| `src/app/` | 应用生命周期、场景注册与切换、相机、RenderView 输入和命令执行。 |
-| `src/editor/` | ImGui DockSpace、响应式 workspace preset、独立 Scene Viewport、主题、共享控件和纯 UI 状态。 |
-| `src/assets/` | ProjectContext、Scene/Environment Catalog、编辑事务、RuntimePackage、ArtifactIndex/依赖校验、cache prune、资产工具进程监督、manifest 和 KTX2 cache 读取。 |
+| `src/app/` | 应用生命周期、SceneWorkflowController、模型预览切换、相机、RenderView 输入和命令执行。 |
+| `src/editor/` | ImGui DockSpace、独立 Scene Viewport、Scenes/Assets panel、主题、共享控件和纯 UI 状态。 |
+| `src/assets/` | ProjectContext、Model/SceneDocument/Environment Catalog、类型化存储事务、RuntimePackage、ArtifactIndex/依赖校验、cache prune、资产工具进程监督、manifest 和 KTX2 cache 读取。 |
+| `src/scene_data/` | 无 Renderer/ImGui 依赖的持久 Entity ID、SceneDocument DTO、严格验证和原子存储。 |
+| `src/workflows/` | UI 与 Application 之间的只读 workflow snapshot 和 action DTO。 |
 | `src/control/` | Windows Named Pipe 服务、运行时命令队列和 JSON 协议。 |
 | `src/core/` | Vulkan instance/device、SwapChain、FrameSync、Buffer/Image、Descriptor、Pipeline、VMA、同步与增量上传。 |
 | `src/render/` | Mesh、Texture、材质、纯 CPU glTF prepare、Environment GPU build、RenderView、RenderQueue、RenderResourceRegistry、PipelineCache、Renderer、GPU profiler 和 Shader variant。 |
@@ -31,13 +33,13 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 
 ## 启动与所有权
 
-`wmain()` 解析 `--help`、`--project`、`--runtime-control`、`--runtime-control-pipe`、`--asset-mode`、确定性诊断参数与可选 cache/tool override，入口和路径全程保留 Windows Unicode。`ProjectContextResolver` 优先识别 executable 旁的 runtime package；否则定位源码项目和 `assets/catalog.json`，并一次性确定 `projectRoot`、`runtimeRoot`、`cacheRoot` 与 `captureRoot`。Catalog/glTF/GLB、外部依赖和 builtin 源资产从 `projectRoot` 解析；executable、运行时工具、locator 和 SPIR-V 从 `runtimeRoot` 解析。package file hash、Catalog schema、稳定 ID、profile、路径和必需源文件都会在创建 Window/Vulkan 前验证。随后 `SceneRegistryBuilder` 把 Catalog 条目适配为现有 `SceneEntry`，`main.cpp` 不再逐个登记 glTF 场景。
+`wmain()` 解析 `--help`、`--project`、`--runtime-control`、`--runtime-control-pipe`、`--asset-mode`、确定性诊断参数与可选 cache/tool override，入口和路径全程保留 Windows Unicode。`ProjectContextResolver` 优先识别 executable 旁的 runtime package；否则定位源码项目和 `assets/catalog.json`，并一次性确定 `projectRoot`、`runtimeRoot`、`cacheRoot` 与 `captureRoot`。Catalog/glTF/GLB、外部依赖和 builtin 源资产从 `projectRoot` 解析；executable、运行时工具、locator 和 SPIR-V 从 `runtimeRoot` 解析。package file hash、Catalog schema、稳定 ID、profile、路径和必需源文件都会在创建 Window/Vulkan 前验证。随后 `SceneWorkflowController` 读取 Catalog，`SceneRegistryBuilder` 只把 `models[]` 适配为单模型预览 `SceneEntry`。Catalog v3 的原生 `scenes[]` 当前只作为数据读取，不进入运行时 registry；`main.cpp` 不再逐个登记 glTF 模型。
 
 Cooked package 中 `projectRoot == runtimeRoot == package root`，cache 固定为包内 `runtime_assets`；它使用只读 Catalog、强制 CookedOnly 和固定 profile，并关闭开发 validation layer。外部 project/cache/asset tool override 会在初始化前被拒绝。开发运行默认 OnDemand，保留 CMake locator、writable Catalog 和共享用户 cache。当前工作目录不参与 subsystem 的资源拼接。
 
 初始化顺序为：
 
-1. ProjectContext、SceneCatalog 和 SceneRegistry，此时尚未创建窗口。
+1. ProjectContext、SceneCatalog、SceneWorkflowController 和模型预览 SceneRegistry，此时尚未创建窗口。
 2. Window 和 InputManager。
 3. VulkanContext、Device 和 DescriptorAllocator。
 4. SwapChain 和 FrameSync。
@@ -58,7 +60,9 @@ Cooked package 中 `projectRoot == runtimeRoot == package root`，cache 固定�
 只报告图像矩形、逻辑/物理尺寸以及 visible、hovered、focused，不持有 Scene、
 Device 或图像所有权。窗口位置、尺寸和 docking 状态继续由 ImGui ini 管理。
 
-具体页面入口见 [编辑器 UI 工作区](../guides/editor_ui.md)。
+`ScenesPanel` 与 `AssetsPanel` 位于 `src/editor/panels/`，只消费 snapshot 和 action callback，不持有 Catalog、future、Application 或 Vulkan 对象。Catalog、registry、模型导入和资产任务状态由 `SceneWorkflowController` 统一持有；Application 只组装需要窗口、相机或 Vulkan 生命周期的 action。
+
+具体页面入口见 [编辑器 UI 工作区](../guides/editor_ui.md)，场景数据边界见[场景数据与 Catalog](scene_documents.md)。
 
 ## 线程模型
 
@@ -68,7 +72,7 @@ SceneLoadManager 持有一个长期 worker。worker 只执行 glTF 文件读取�
 
 EnvironmentLoadManager 持有独立 worker，只读取和校验已经离线 bake 的四个浮点 KTX2，输出 `PreparedEnvironment`。主线程使用 EnvironmentGpuBuilder 和增量上传队列创建 cubemap/LUT；完整新 generation 发布前保留旧环境，旧 descriptor/resources 按 submission serial 延迟销毁。
 
-`VulkanLab -> Scene -> Scenes` 的文件对话框在主线程打开；选定文件后的依赖 preflight 和 `SceneImportService` 事务由独立 `std::async` worker 执行。该 worker 可以读取/复制源文件并原子更新源码项目 Catalog，但不能访问 GLFW、ImGui 或 Vulkan。Application 只轮询 future 和进度；退出时先请求取消并等待导入 worker 收束。
+`VulkanLab -> Scene -> Scenes` 的文件对话框在主线程打开；选定文件后的依赖 preflight 和 `ModelImportService` 事务由独立 `std::async` worker 执行。该 worker 可以读取/复制源文件并通过 `SceneCatalogStore` 原子更新源码项目 Catalog，但不能访问 GLFW、ImGui 或 Vulkan。Application 只轮询 controller 中的 future 和进度；退出时先请求取消并等待导入 worker 收束。
 
 AssetImportManager 持有一个 supervisor thread，串行监督资产工具进程；scene texture 工具内部再按 worker/内存预算并行启动 `ktx.exe`，environment 工具执行确定性 CPU bake。supervisor 只读取 NDJSON、日志和进程状态，不解析 glTF/HDR、不访问 Application Scene，也不创建 Vulkan 对象。Windows Job Object 拥有完整子进程树，取消和退出会终止工具及其编码子进程。主线程轮询任务状态，并由 `AssetLoadCoordinator` 保证只有最新 operation generation 可以从 import 接续到 scene load。
 

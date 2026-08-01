@@ -126,7 +126,7 @@ void testUnsafeAndMissingUrisFailBeforePublication() {
     requireImport(missingRejected, "missing dependency was accepted");
     const auto catalog = vkr::SceneCatalog::load(
         fixture.project / "assets/catalog.json", fixture.project);
-    requireImport(catalog.scenes.size() == 1,
+    requireImport(catalog.models.size() == 1,
                   "failed preflight modified the Catalog");
 }
 

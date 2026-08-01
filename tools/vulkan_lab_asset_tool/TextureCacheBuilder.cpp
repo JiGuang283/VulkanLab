@@ -1076,7 +1076,7 @@ int migrateTextureCache(const TextureCacheMigrationOptions &options) {
     uint64_t migrated = 0;
     uint64_t copiedBlobs = 0;
     uint64_t skipped = 0;
-    for (const CatalogScene &scene : catalog.scenes) {
+    for (const CatalogModel &scene : catalog.models) {
         if (scene.type != "gltf")
             continue;
         const std::filesystem::path source = projectRoot / scene.source;
