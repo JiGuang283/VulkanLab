@@ -11,7 +11,7 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 | 目录 | 职责 |
 |---|---|
 | `src/app/` | 应用生命周期、场景注册与切换、相机、RenderView 输入和命令执行。 |
-| `src/editor/` | ImGui DockSpace、默认工具窗口布局、独立 Scene Viewport 和输入区域。 |
+| `src/editor/` | ImGui DockSpace、响应式 workspace preset、独立 Scene Viewport、主题、共享控件和纯 UI 状态。 |
 | `src/assets/` | ProjectContext、Scene/Environment Catalog、编辑事务、RuntimePackage、ArtifactIndex/依赖校验、cache prune、资产工具进程监督、manifest 和 KTX2 cache 读取。 |
 | `src/control/` | Windows Named Pipe 服务、运行时命令队列和 JSON 协议。 |
 | `src/core/` | Vulkan instance/device、SwapChain、FrameSync、Buffer/Image、Descriptor、Pipeline、VMA、同步与增量上传。 |
@@ -51,11 +51,12 @@ Cooked package 中 `projectRoot == runtimeRoot == package root`，cache 固定�
 ## UI 所有权
 
 `Application::drawGui()` 是 DockSpace 与编辑器窗口的组合入口。`EditorDockWorkspace`
-创建 Viewport、Scenes、Assets、Render、Materials 和 Diagnostics 顶层窗口，再把
-具体内容分派给 Application 的页面函数。`EditorUiState` 只保存材质筛选和选中
-index 等纯 UI 状态；`EditorViewportState` 只报告图像矩形、逻辑/物理尺寸以及
-visible、hovered、focused，不持有 Scene、Device 或图像所有权。窗口位置、尺寸
-和 docking 状态继续由 ImGui ini 管理。
+创建 Viewport、Scenes、Assets、Render、Materials 和 Diagnostics 顶层窗口，并
+提供 Viewport、Debugging 和 Compact 三种 preset。`EditorTheme` 统一字体、DPI、
+颜色和间距，`EditorWidgets` 提供属性表、语义状态、路径显示和模式选择。
+`EditorUiState` 只保存筛选、选中 index 和短期性能历史；`EditorViewportState`
+只报告图像矩形、逻辑/物理尺寸以及 visible、hovered、focused，不持有 Scene、
+Device 或图像所有权。窗口位置、尺寸和 docking 状态继续由 ImGui ini 管理。
 
 具体页面入口见 [编辑器 UI 工作区](../guides/editor_ui.md)。
 
