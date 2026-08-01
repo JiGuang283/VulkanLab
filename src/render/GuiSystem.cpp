@@ -3,6 +3,7 @@
 #include "core/Device.h"
 #include "core/GpuDebugUtils.h"
 #include "core/VulkanCheck.h"
+#include "editor/EditorTheme.h"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -44,7 +45,7 @@ GuiSystem::GuiSystem(VkInstance instance, Device &device,
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    ImGui::StyleColorsDark();
+    editor::applyEditorTheme(window);
 
     // --- GLFW backend (install_callbacks=true chains existing callbacks) ---
     ImGui_ImplGlfw_InitForVulkan(window, true);

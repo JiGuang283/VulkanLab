@@ -17,7 +17,7 @@ namespace {
 
 constexpr const char *kHostWindow =
     "VulkanLab DockSpace###VulkanLab.DockHost";
-constexpr const char *kDockspaceName = "VulkanLab.DockSpace.v2";
+constexpr const char *kDockspaceName = "VulkanLab.DockSpace.v3";
 constexpr const char *kViewportWindow = "Viewport###VulkanLab.Viewport";
 constexpr const char *kScenesWindow = "Scenes###VulkanLab.Scenes";
 constexpr const char *kAssetsWindow = "Assets###VulkanLab.Assets";
@@ -25,7 +25,19 @@ constexpr const char *kRenderWindow = "Render###VulkanLab.Render";
 constexpr const char *kMaterialsWindow = "Materials###VulkanLab.Materials";
 constexpr const char *kDiagnosticsWindow =
     "Diagnostics###VulkanLab.Diagnostics";
-constexpr float kCompactLayoutWidth = 1200.0f;
+constexpr float kCompactLayoutWidth = 1100.0f;
+
+const char *presetName(EditorWorkspacePreset preset) {
+    switch (preset) {
+    case EditorWorkspacePreset::Viewport:
+        return "Viewport";
+    case EditorWorkspacePreset::Debugging:
+        return "Debugging";
+    case EditorWorkspacePreset::Compact:
+        return "Compact";
+    }
+    return "Viewport";
+}
 
 } // namespace
 
@@ -55,11 +67,21 @@ void EditorDockWorkspace::draw(const EditorFrameStatus &status,
     const ImGuiID dockspaceId = ImGui::GetID(kDockspaceName);
     const ImVec2 dockspacePosition = ImGui::GetCursorScreenPos();
     const ImVec2 dockspaceSize = ImGui::GetContentRegionAvail();
-    if (resetLayoutRequested_ ||
-        ImGui::DockBuilderGetNode(dockspaceId) == nullptr) {
+    const bool missingLayout =
+        ImGui::DockBuilderGetNode(dockspaceId) == nullptr;
+    if (missingLayout && !requestedPreset_) {
+        requestedPreset_ = dockspaceSize.x < kCompactLayoutWidth
+                               ? EditorWorkspacePreset::Compact
+                               : EditorWorkspacePreset::Viewport;
+    }
+    if (resetLayoutRequested_ || requestedPreset_ || missingLayout) {
+        const EditorWorkspacePreset preset =
+            requestedPreset_.value_or(currentPreset_);
         buildDefaultLayout(dockspaceId, dockspacePosition.x,
                            dockspacePosition.y, dockspaceSize.x,
-                           dockspaceSize.y);
+                           dockspaceSize.y, preset);
+        currentPreset_ = preset;
+        requestedPreset_.reset();
         resetLayoutRequested_ = false;
     }
 
@@ -67,22 +89,42 @@ void EditorDockWorkspace::draw(const EditorFrameStatus &status,
     ImGui::End();
 
     drawViewport(viewportFrame);
-    drawPanel(kScenesWindow, scenesVisible_, panels.scenes);
-    drawPanel(kAssetsWindow, assetsVisible_, panels.assets);
-    drawPanel(kRenderWindow, renderVisible_, panels.render);
     drawPanel(kMaterialsWindow, materialsVisible_, panels.materials);
+    drawPanel(kRenderWindow, renderVisible_, panels.render);
+    drawPanel(kAssetsWindow, assetsVisible_, panels.assets);
+    drawPanel(kScenesWindow, scenesVisible_, panels.scenes);
     drawPanel(kDiagnosticsWindow, diagnosticsVisible_, panels.diagnostics);
+    if (activateDefaultTabsFrames_ == 1) {
+        auto selectDockedWindow = [](const char *name) {
+            ImGuiWindow *window = ImGui::FindWindowByName(name);
+            if (!window || !window->DockNode)
+                return;
+            window->DockNode->SelectedTabId = window->TabId;
+            if (window->DockNode->TabBar) {
+                window->DockNode->TabBar->SelectedTabId = window->TabId;
+                window->DockNode->TabBar->NextSelectedTabId = window->TabId;
+            }
+        };
+        selectDockedWindow(kScenesWindow);
+        if (currentPreset_ != EditorWorkspacePreset::Compact)
+            selectDockedWindow(kRenderWindow);
+        ImGui::SetWindowFocus(kViewportWindow);
+    }
+    if (activateDefaultTabsFrames_ > 0)
+        --activateDefaultTabsFrames_;
 }
 
 void EditorDockWorkspace::buildDefaultLayout(unsigned int dockspaceId,
                                              float x, float y, float width,
-                                             float height) {
+                                             float height,
+                                             EditorWorkspacePreset preset) {
     scenesVisible_ = true;
-    assetsVisible_ = true;
+    assetsVisible_ = preset != EditorWorkspacePreset::Compact;
     renderVisible_ = true;
-    materialsVisible_ = true;
-    diagnosticsVisible_ = true;
+    materialsVisible_ = preset != EditorWorkspacePreset::Compact;
+    diagnosticsVisible_ = preset == EditorWorkspacePreset::Debugging;
     viewportVisible_ = true;
+    activateDefaultTabsFrames_ = 2;
 
     ImGui::DockBuilderRemoveNode(dockspaceId);
     ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
@@ -93,36 +135,42 @@ void EditorDockWorkspace::buildDefaultLayout(unsigned int dockspaceId,
     ImGuiID centerId = dockspaceId;
     ImGuiID leftId = 0;
     ImGuiID rightId = 0;
-    const bool compact = width < kCompactLayoutWidth;
-    const float leftWidth =
-        compact ? std::clamp(width * 0.30f, 220.0f, 300.0f)
-                : std::clamp(width * 0.22f, 260.0f, 360.0f);
-    const float leftRatio =
-        std::clamp(leftWidth / std::max(width, 1.0f), 0.15f, 0.45f);
-    const float widthAfterLeft = std::max(width - leftWidth, 1.0f);
-    const float rightWidth =
-        compact ? std::clamp(width * 0.42f, 320.0f, 360.0f)
-                : std::clamp(width * 0.30f, 380.0f, 440.0f);
-    const float rightRatio =
-        std::clamp(rightWidth / widthAfterLeft, 0.20f, 0.60f);
+    const bool compact = preset == EditorWorkspacePreset::Compact;
+    const float leftWidth = compact
+                                ? std::clamp(width * 0.35f, 250.0f, 300.0f)
+                                : std::clamp(width * 0.22f, 260.0f, 300.0f);
+    const float leftRatio = std::clamp(
+        leftWidth / std::max(width, 1.0f), 0.16f, compact ? 0.48f : 0.30f);
 
     ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Left, leftRatio, &leftId,
                                 &centerId);
-    ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Right, rightRatio,
-                                &rightId, &centerId);
-
-    ImGui::DockBuilderDockWindow(kScenesWindow, leftId);
-    ImGui::DockBuilderDockWindow(kAssetsWindow, leftId);
-    ImGui::DockBuilderDockWindow(kRenderWindow, rightId);
-    ImGui::DockBuilderDockWindow(kMaterialsWindow, rightId);
-
     if (compact) {
+        ImGui::DockBuilderDockWindow(kScenesWindow, leftId);
+        ImGui::DockBuilderDockWindow(kAssetsWindow, leftId);
+        ImGui::DockBuilderDockWindow(kRenderWindow, leftId);
+        ImGui::DockBuilderDockWindow(kMaterialsWindow, leftId);
         ImGui::DockBuilderDockWindow(kDiagnosticsWindow, leftId);
     } else {
-        ImGuiID bottomId = 0;
-        ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Down, 0.24f,
-                                    &bottomId, &centerId);
-        ImGui::DockBuilderDockWindow(kDiagnosticsWindow, bottomId);
+        const float widthAfterLeft = std::max(width - leftWidth, 1.0f);
+        const float rightWidth =
+            std::clamp(width * 0.25f, 300.0f, 360.0f);
+        const float rightRatio = std::clamp(
+            rightWidth / widthAfterLeft, 0.20f, 0.46f);
+        ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Right, rightRatio,
+                                    &rightId, &centerId);
+        ImGui::DockBuilderDockWindow(kScenesWindow, leftId);
+        ImGui::DockBuilderDockWindow(kAssetsWindow, leftId);
+        ImGui::DockBuilderDockWindow(kRenderWindow, rightId);
+        ImGui::DockBuilderDockWindow(kMaterialsWindow, rightId);
+
+        if (preset == EditorWorkspacePreset::Debugging) {
+            ImGuiID bottomId = 0;
+            ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Down, 0.28f,
+                                        &bottomId, &centerId);
+            ImGui::DockBuilderDockWindow(kDiagnosticsWindow, bottomId);
+        } else {
+            ImGui::DockBuilderDockWindow(kDiagnosticsWindow, leftId);
+        }
     }
     ImGui::DockBuilderDockWindow(kViewportWindow, centerId);
 
@@ -143,7 +191,16 @@ void EditorDockWorkspace::drawMenuBar(const EditorFrameStatus &status) {
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Layout")) {
-        if (ImGui::MenuItem("Reset Layout"))
+        for (const EditorWorkspacePreset preset : {
+                 EditorWorkspacePreset::Viewport,
+                 EditorWorkspacePreset::Debugging,
+                 EditorWorkspacePreset::Compact}) {
+            const bool selected = preset == currentPreset_;
+            if (ImGui::MenuItem(presetName(preset), nullptr, selected))
+                requestedPreset_ = preset;
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Reset Current Layout"))
             resetLayoutRequested_ = true;
         ImGui::EndMenu();
     }
@@ -190,8 +247,23 @@ void EditorDockWorkspace::drawViewport(
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar |
                                    ImGuiWindowFlags_NoScrollWithMouse;
-    const bool open = ImGui::Begin(kViewportWindow, &viewportVisible_, flags);
+    const bool open = ImGui::Begin(kViewportWindow, nullptr, flags);
     if (open) {
+        const float statusHeight = ImGui::GetFrameHeight();
+        const float statusStartY = ImGui::GetCursorPosY();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.0f);
+        ImGui::SetCursorPosY(statusStartY + 2.0f);
+        if (viewport.resizePending) {
+            ImGui::TextDisabled("Render %u x %u  |  Resizing...",
+                                viewport.renderWidth,
+                                viewport.renderHeight);
+        } else {
+            ImGui::TextDisabled("Render %u x %u", viewport.renderWidth,
+                                viewport.renderHeight);
+        }
+        ImGui::SetCursorPosY(statusStartY + statusHeight + 2.0f);
+        ImGui::Separator();
+
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         const ImVec2 available = ImGui::GetContentRegionAvail();
         const float width = std::max(available.x, 0.0f);
@@ -237,7 +309,7 @@ void EditorDockWorkspace::drawPanel(
     if (!visible)
         return;
 
-    if (ImGui::Begin(name, &visible)) {
+    if (ImGui::Begin(name)) {
         ImGui::PushID(name);
         if (callback)
             callback();

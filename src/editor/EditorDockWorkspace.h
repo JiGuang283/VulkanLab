@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace vkr {
@@ -27,7 +28,10 @@ struct EditorViewportFrame {
     uint64_t textureId = 0;
     uint32_t renderWidth = 0;
     uint32_t renderHeight = 0;
+    bool resizePending = false;
 };
+
+enum class EditorWorkspacePreset { Viewport, Debugging, Compact };
 
 struct EditorViewportState {
     float minX = 0.0f;
@@ -56,7 +60,8 @@ class EditorDockWorkspace {
 
   private:
     void buildDefaultLayout(unsigned int dockspaceId, float x, float y,
-                            float width, float height);
+                            float width, float height,
+                            EditorWorkspacePreset preset);
     void drawMenuBar(const EditorFrameStatus &status);
     void drawViewport(const EditorViewportFrame &viewport);
     void drawPanel(const char *name, bool &visible,
@@ -68,8 +73,12 @@ class EditorDockWorkspace {
     bool assetsVisible_ = true;
     bool renderVisible_ = true;
     bool materialsVisible_ = true;
-    bool diagnosticsVisible_ = true;
+    bool diagnosticsVisible_ = false;
     bool resetLayoutRequested_ = false;
+    uint8_t activateDefaultTabsFrames_ = 0;
+    EditorWorkspacePreset currentPreset_ =
+        EditorWorkspacePreset::Viewport;
+    std::optional<EditorWorkspacePreset> requestedPreset_;
 };
 
 } // namespace vkr
