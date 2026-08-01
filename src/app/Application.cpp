@@ -31,7 +31,9 @@
 #include "diagnostics/TracyProfiler.h"
 #if VKL_ENABLE_EDITOR_UI
 #include "editor/EditorDockWorkspace.h"
+#include "editor/EditorWidgets.h"
 #endif
+#include "editor/EditorUiState.h"
 #include "render/GuiSystem.h"
 #include "render/DirectionalShadow.h"
 #include "render/EnvironmentGpuBuilder.h"
@@ -709,22 +711,6 @@ struct SceneAssetOperationState {
     std::array<char, 128> search{};
     std::string status;
     std::string error;
-};
-
-struct EditorUiState {
-    std::array<char, 128> materialSearch{};
-    size_t selectedMaterialIndex = 0;
-    uint64_t materialSceneGeneration =
-        std::numeric_limits<uint64_t>::max();
-    int selectedEnvironmentIndex = 0;
-    std::optional<std::filesystem::path> environmentImportSource;
-    std::array<char, 192> environmentDisplayName{};
-    std::array<char, 128> environmentId{};
-    std::vector<std::string> environmentProfileIds;
-    int environmentProfileIndex = 0;
-    bool requestEnvironmentImportModal = false;
-    std::string environmentStatus;
-    std::string environmentError;
 };
 
 namespace {
@@ -3134,70 +3120,152 @@ void Application::drawScenePanel() {
     }
 
     ImGui::Separator();
+    ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##SceneSearch", "Search scenes...",
                              sceneAssetOperations_->search.data(),
                              sceneAssetOperations_->search.size());
     const std::string search = sceneAssetOperations_->search.data();
-    for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
-        const SceneEntry &entry = sceneRegistry_[i];
-        if (!asciiContainsIgnoreCase(entry.name, search) &&
-            !asciiContainsIgnoreCase(entry.id, search))
-            continue;
-        const bool selected =
-            (i == sceneAssetOperations_->selectedSceneIndex);
-        const std::string profileId = profileIdForTextureLimit(entry);
-        const auto status = sceneAssetOperations_->statuses.find(
-            artifactStatusKey(entry.id, profileId));
-        const char *state = status == sceneAssetOperations_->statuses.end()
-                                ? "Unknown"
-                                : artifactStateName(status->second.state);
-        const std::string label = entry.name + "  [" + state + "]" +
-                                  (entry.available ? std::string{}
-                                                   : " (Unavailable)");
-        ImGui::BeginDisabled(!entry.available);
-        if (ImGui::Selectable(label.c_str(), selected)) {
-            sceneAssetOperations_->selectedSceneIndex = i;
-            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-                try {
-                    requestSceneOperation(i);
-                } catch (const std::exception &error) {
-                    sceneAssetOperations_->error = error.what();
+    const float sceneListHeight = std::clamp(
+        ImGui::GetContentRegionAvail().y * 0.46f, 150.0f, 310.0f);
+    ImGui::BeginChild("SceneBrowser", ImVec2(0.0f, sceneListHeight),
+                      ImGuiChildFlags_Borders);
+    const ImGuiTableFlags sceneTableFlags =
+        ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg |
+        ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_ScrollY;
+    if (ImGui::BeginTable("SceneTable", 2, sceneTableFlags)) {
+        ImGui::TableSetupColumn("Scene", ImGuiTableColumnFlags_WidthStretch,
+                                0.72f);
+        ImGui::TableSetupColumn("Status",
+                                ImGuiTableColumnFlags_WidthFixed, 76.0f);
+        ImGui::TableHeadersRow();
+        for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
+            const SceneEntry &entry = sceneRegistry_[i];
+            if (!asciiContainsIgnoreCase(entry.name, search) &&
+                !asciiContainsIgnoreCase(entry.id, search))
+                continue;
+
+            const std::string profileId = profileIdForTextureLimit(entry);
+            const auto status = sceneAssetOperations_->statuses.find(
+                artifactStatusKey(entry.id, profileId));
+            const ArtifactStatus *artifact =
+                status == sceneAssetOperations_->statuses.end()
+                    ? nullptr
+                    : &status->second;
+            const char *state = artifact
+                                    ? artifactStateName(artifact->state)
+                                    : "Unknown";
+            editor::StatusTone tone = editor::StatusTone::Neutral;
+            if (!entry.available) {
+                tone = editor::StatusTone::Error;
+                state = "Blocked";
+            } else if (artifact) {
+                switch (artifact->state) {
+                case ArtifactState::Ready:
+                    tone = editor::StatusTone::Success;
+                    break;
+                case ArtifactState::Importing:
+                    tone = editor::StatusTone::Info;
+                    break;
+                case ArtifactState::Stale:
+                case ArtifactState::Missing:
+                    tone = editor::StatusTone::Warning;
+                    break;
+                case ArtifactState::Invalid:
+                    tone = editor::StatusTone::Error;
+                    break;
                 }
             }
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            const bool selected =
+                i == sceneAssetOperations_->selectedSceneIndex;
+            const std::string label = entry.name + "###Scene" + entry.id;
+            ImGui::BeginDisabled(!entry.available);
+            if (ImGui::Selectable(label.c_str(), selected,
+                                  ImGuiSelectableFlags_SpanAllColumns)) {
+                sceneAssetOperations_->selectedSceneIndex = i;
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    try {
+                        requestSceneOperation(i);
+                    } catch (const std::exception &error) {
+                        sceneAssetOperations_->error = error.what();
+                    }
+                }
+            }
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(
+                    ImGuiHoveredFlags_AllowWhenDisabled)) {
+                if (entry.available)
+                    ImGui::SetTooltip("%s\nDouble-click to load",
+                                      entry.name.c_str());
+                else
+                    ImGui::SetTooltip("%s\n%s", entry.name.c_str(),
+                                      entry.unavailableReason.c_str());
+            }
+
+            ImGui::TableSetColumnIndex(1);
+            const char *reason = !entry.available
+                                     ? entry.unavailableReason.c_str()
+                                     : (artifact && !artifact->reason.empty()
+                                            ? artifact->reason.c_str()
+                                            : nullptr);
+            editor::statusIndicator(state, tone, reason);
         }
-        ImGui::EndDisabled();
-        if (!entry.available &&
-            ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("%s", entry.unavailableReason.c_str());
+        ImGui::EndTable();
     }
+    ImGui::EndChild();
 
     const int selectedIndex = sceneAssetOperations_->selectedSceneIndex;
     if (selectedIndex >= 0 &&
         selectedIndex < static_cast<int>(sceneRegistry_.size())) {
         const SceneEntry &entry = sceneRegistry_[selectedIndex];
         const std::string profileId = profileIdForTextureLimit(entry);
-        ImGui::Separator();
-        ImGui::Text("Selected: %s", entry.name.c_str());
-        ImGui::Text("ID: %s", entry.id.c_str());
-        ImGui::Text("Profile: %s", profileId.c_str());
+        ImGui::SeparatorText("Selected Scene");
         const auto selectedProfile = catalog_.importProfiles.find(profileId);
-        if (selectedProfile != catalog_.importProfiles.end())
-            ImGui::Text("Encoder: %s",
-                        selectedProfile->second.textureEncoder.c_str());
-        if (!entry.sourcePath.empty())
-            ImGui::TextWrapped("Source: %s", entry.sourcePath.c_str());
         const auto validation =
             sceneAssetOperations_->validationStatuses.find(entry.id);
-        if (validation !=
-            sceneAssetOperations_->validationStatuses.end()) {
-            ImGui::Text("Validation: %s",
-                        assetValidationStateName(validation->second.state));
-            if (!validation->second.reason.empty())
-                ImGui::TextWrapped("Validation detail: %s",
-                                   validation->second.reason.c_str());
+        if (editor::beginPropertyGrid("SelectedSceneProperties", 0.34f)) {
+            editor::propertyLabel("Name");
+            ImGui::TextUnformatted(entry.name.c_str());
+            editor::propertyLabel("ID");
+            ImGui::TextUnformatted(entry.id.c_str());
+            editor::propertyLabel("Profile");
+            ImGui::TextUnformatted(profileId.c_str());
+            if (selectedProfile != catalog_.importProfiles.end()) {
+                editor::propertyLabel("Encoder");
+                ImGui::TextUnformatted(
+                    selectedProfile->second.textureEncoder.c_str());
+            }
+            if (!entry.sourcePath.empty()) {
+                editor::propertyLabel("Source");
+                editor::pathValue(entry.sourcePath);
+            }
+            if (validation !=
+                sceneAssetOperations_->validationStatuses.end()) {
+                const AssetValidationState state = validation->second.state;
+                editor::StatusTone tone = editor::StatusTone::Neutral;
+                if (state == AssetValidationState::Valid)
+                    tone = editor::StatusTone::Success;
+                else if (state == AssetValidationState::Warnings ||
+                         state == AssetValidationState::Stale ||
+                         state == AssetValidationState::Unavailable)
+                    tone = editor::StatusTone::Warning;
+                else if (state == AssetValidationState::Invalid ||
+                         state == AssetValidationState::Failed)
+                    tone = editor::StatusTone::Error;
+                editor::propertyLabel("Validation");
+                editor::statusIndicator(
+                    assetValidationStateName(state), tone,
+                    validation->second.reason.empty()
+                        ? nullptr
+                        : validation->second.reason.c_str());
+            }
+            editor::endPropertyGrid();
         }
+
         ImGui::BeginDisabled(!entry.available);
-        if (ImGui::Button("Load")) {
+        if (ImGui::Button("Load", ImVec2(88.0f, 0.0f))) {
             try {
                 requestSceneOperation(selectedIndex);
             } catch (const std::exception &error) {
@@ -3205,11 +3273,19 @@ void Application::drawScenePanel() {
             }
         }
         ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("..."))
+            ImGui::OpenPopup("SceneActions");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Scene actions");
+
+        bool requestRemove = false;
+        if (ImGui::BeginPopup("SceneActions")) {
 #if VKL_ENABLE_ASSET_AUTHORING
-        if (!entry.builtin &&
-            config_.assetImportMode == AssetImportMode::OnDemand) {
-            ImGui::SameLine();
-            if (ImGui::Button("Reimport")) {
+            const bool canAuthor = !entry.builtin &&
+                                   config_.assetImportMode ==
+                                       AssetImportMode::OnDemand;
+            if (ImGui::MenuItem("Reimport", nullptr, false, canAuthor)) {
                 try {
                     requestSceneOperation(selectedIndex, false, false,
                                           ImportReason::ManualReimport, true);
@@ -3219,14 +3295,16 @@ void Application::drawScenePanel() {
             }
 
             const CatalogScene *catalogScene = catalog_.findScene(entry.id);
-            if (catalogScene && catalogScene->type == "gltf") {
-                if (ImGui::Button(
-                        validation != sceneAssetOperations_
-                                              ->validationStatuses.end() &&
-                                validation->second.state !=
-                                    AssetValidationState::NotChecked
-                            ? "Revalidate"
-                            : "Validate")) {
+            const bool canValidate = canAuthor && catalogScene &&
+                                     catalogScene->type == "gltf";
+            const char *validateLabel =
+                validation != sceneAssetOperations_->validationStatuses.end() &&
+                        validation->second.state !=
+                            AssetValidationState::NotChecked
+                    ? "Revalidate"
+                    : "Validate";
+            if (ImGui::MenuItem(validateLabel, nullptr, false,
+                                canValidate)) {
                     try {
                         AssetImportRequest request;
                         request.sceneId = entry.id;
@@ -3242,35 +3320,35 @@ void Application::drawScenePanel() {
                     } catch (const std::exception &error) {
                         sceneAssetOperations_->error = error.what();
                     }
-                }
-                if (validation != sceneAssetOperations_
-                                      ->validationStatuses.end() &&
-                    !validation->second.reportPath.empty() &&
-                    std::filesystem::is_regular_file(
-                        validation->second.reportPath)) {
-                    ImGui::SameLine();
-                    if (ImGui::Button("Open Validation Report")) {
-                        ShellExecuteW(nullptr, L"open",
-                                      validation->second.reportPath.c_str(),
-                                      nullptr, nullptr, SW_SHOWNORMAL);
-                    }
-                }
             }
-        }
-        if (!entry.builtin &&
-            config_.assetImportMode != AssetImportMode::CookedOnly) {
-            ImGui::SameLine();
-            if (ImGui::Button("Load Source Fallback")) {
+            const bool hasReport =
+                validation != sceneAssetOperations_->validationStatuses.end() &&
+                !validation->second.reportPath.empty() &&
+                std::filesystem::is_regular_file(
+                    validation->second.reportPath);
+            if (ImGui::MenuItem("Open Validation Report", nullptr, false,
+                                hasReport)) {
+                ShellExecuteW(nullptr, L"open",
+                              validation->second.reportPath.c_str(), nullptr,
+                              nullptr, SW_SHOWNORMAL);
+            }
+            ImGui::Separator();
+            const bool canLoadSource =
+                !entry.builtin &&
+                config_.assetImportMode != AssetImportMode::CookedOnly;
+            if (ImGui::MenuItem("Load Source Fallback", nullptr, false,
+                                canLoadSource)) {
                 try {
                     requestSceneOperation(selectedIndex, true);
                 } catch (const std::exception &error) {
                     sceneAssetOperations_->error = error.what();
                 }
             }
-        }
-        if (projectContext_.catalogWritable &&
-            config_.assetImportMode == AssetImportMode::OnDemand) {
-            if (ImGui::Button("Save Current Camera")) {
+            const bool canEditCatalog = projectContext_.catalogWritable &&
+                                        config_.assetImportMode ==
+                                            AssetImportMode::OnDemand;
+            if (ImGui::MenuItem("Save Current Camera", nullptr, false,
+                                canEditCatalog)) {
                 try {
                     SceneCatalogEditor::saveCamera(
                         projectContext_, entry.id,
@@ -3283,49 +3361,63 @@ void Application::drawScenePanel() {
                     sceneAssetOperations_->error = error.what();
                 }
             }
-            ImGui::SameLine();
-            ImGui::BeginDisabled(entry.builtin ||
-                                 selectedIndex == currentSceneIndex_);
-            if (ImGui::Button("Remove From Catalog"))
-                ImGui::OpenPopup("Remove Scene");
-            ImGui::EndDisabled();
-            if (ImGui::BeginPopupModal("Remove Scene", nullptr,
-                                       ImGuiWindowFlags_AlwaysAutoResize)) {
-                ImGui::TextWrapped(
-                    "Remove '%s' from the Catalog? Source files and derived "
-                    "artifacts will not be deleted.",
-                    entry.name.c_str());
-                if (ImGui::Button("Remove")) {
-                    try {
-                        SceneCatalogEditor::removeScene(projectContext_,
-                                                        entry.id);
-                        sceneAssetOperations_->status =
-                            "Removed " + entry.name + " from Catalog";
-                        refreshSceneRegistry();
-                    } catch (const std::exception &error) {
-                        sceneAssetOperations_->error = error.what();
-                    }
-                    ImGui::CloseCurrentPopup();
+            if (ImGui::MenuItem(
+                    "Remove From Catalog", nullptr, false,
+                    canEditCatalog && !entry.builtin &&
+                        selectedIndex != currentSceneIndex_))
+                requestRemove = true;
+#endif
+            ImGui::EndPopup();
+        }
+#if VKL_ENABLE_ASSET_AUTHORING
+        if (requestRemove)
+            ImGui::OpenPopup("Remove Scene");
+        if (ImGui::BeginPopupModal("Remove Scene", nullptr,
+                                   ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextWrapped(
+                "Remove '%s' from the Catalog? Source files and derived "
+                "artifacts will not be deleted.",
+                entry.name.c_str());
+            if (ImGui::Button("Remove")) {
+                try {
+                    SceneCatalogEditor::removeScene(projectContext_,
+                                                    entry.id);
+                    sceneAssetOperations_->status =
+                        "Removed " + entry.name + " from Catalog";
+                    refreshSceneRegistry();
+                } catch (const std::exception &error) {
+                    sceneAssetOperations_->error = error.what();
                 }
-                ImGui::SameLine();
-                if (ImGui::Button("Cancel"))
-                    ImGui::CloseCurrentPopup();
-                ImGui::EndPopup();
+                ImGui::CloseCurrentPopup();
             }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel"))
+                ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
         }
 #endif
     }
     if (!sceneAssetOperations_->status.empty())
-        ImGui::TextWrapped("%s", sceneAssetOperations_->status.c_str());
+        editor::statusIndicator(sceneAssetOperations_->status.c_str(),
+                                editor::StatusTone::Info);
     if (!sceneAssetOperations_->error.empty())
-        ImGui::TextWrapped("Error: %s",
-                           sceneAssetOperations_->error.c_str());
+        editor::statusIndicator(sceneAssetOperations_->error.c_str(),
+                                editor::StatusTone::Error);
 
 #if VKL_ENABLE_ASSET_AUTHORING
     if (ui.requestOpenModal) {
         ImGui::OpenPopup("Import Scene");
         ui.requestOpenModal = false;
     }
+    const ImGuiViewport *mainViewport = ImGui::GetMainViewport();
+    const float importAvailableWidth =
+        std::max(260.0f, mainViewport->WorkSize.x - 24.0f);
+    const float importMinimumWidth =
+        std::min(420.0f, importAvailableWidth);
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(importMinimumWidth, 0.0f),
+        ImVec2(importAvailableWidth,
+               std::max(320.0f, mainViewport->WorkSize.y - 24.0f)));
     if (ImGui::BeginPopupModal("Import Scene", nullptr,
                                ImGuiWindowFlags_AlwaysAutoResize)) {
         if (ui.preflight) {
@@ -3369,7 +3461,7 @@ void Application::drawScenePanel() {
                 }
                 if (!report.issues.empty() &&
                     ImGui::TreeNode("Validator Issues")) {
-                    ImGui::BeginChild("ValidationIssues", ImVec2(640.0f, 220.0f),
+                    ImGui::BeginChild("ValidationIssues", ImVec2(0.0f, 220.0f),
                                       ImGuiChildFlags_Borders);
                     const size_t issueCount =
                         std::min<size_t>(report.issues.size(), 50);
@@ -3500,25 +3592,35 @@ void Application::drawScenePanel() {
 }
 
 void Application::drawAssetsPanel() {
-    ImGui::Text("Project: %s", catalog_.projectId.c_str());
-    ImGui::TextWrapped("Catalog: %s",
-                       projectContext_.catalogPath.string().c_str());
-    ImGui::TextWrapped("Cache: %s",
-                       sceneLoadContext_.derivedTextureCachePath.c_str());
-    ImGui::Text("Mode: %s", assetImportModeName(config_.assetImportMode));
-    if (artifactUsage_) {
-        ImGui::Text("Index: %llu records (%llu ready)",
-                    static_cast<unsigned long long>(artifactUsage_->records),
-                    static_cast<unsigned long long>(
-                        artifactUsage_->readyRecords));
-        ImGui::Text("Cache Blobs: %llu (%.2f MiB)",
-                    static_cast<unsigned long long>(
-                        artifactUsage_->cacheBlobFiles),
-                    bytesToMiB(artifactUsage_->cacheBlobBytes));
-        ImGui::Text("Unreferenced: %llu (%.2f MiB)",
-                    static_cast<unsigned long long>(
-                        artifactUsage_->unreferencedBlobFiles),
-                    bytesToMiB(artifactUsage_->unreferencedBlobBytes));
+    ImGui::SeparatorText("Project Cache");
+    if (editor::beginPropertyGrid("AssetProjectSummary", 0.34f)) {
+        editor::propertyLabel("Project");
+        ImGui::TextUnformatted(catalog_.projectId.c_str());
+        editor::propertyLabel("Mode");
+        ImGui::TextUnformatted(assetImportModeName(config_.assetImportMode));
+        editor::propertyLabel("Catalog");
+        editor::pathValue(projectContext_.catalogPath.string());
+        editor::propertyLabel("Cache");
+        editor::pathValue(sceneLoadContext_.derivedTextureCachePath);
+        if (artifactUsage_) {
+            editor::propertyLabel("Index");
+            ImGui::Text("%llu records / %llu ready",
+                        static_cast<unsigned long long>(
+                            artifactUsage_->records),
+                        static_cast<unsigned long long>(
+                            artifactUsage_->readyRecords));
+            editor::propertyLabel("Cache Blobs");
+            ImGui::Text("%llu / %.2f MiB",
+                        static_cast<unsigned long long>(
+                            artifactUsage_->cacheBlobFiles),
+                        bytesToMiB(artifactUsage_->cacheBlobBytes));
+            editor::propertyLabel("Unreferenced");
+            ImGui::Text("%llu / %.2f MiB",
+                        static_cast<unsigned long long>(
+                            artifactUsage_->unreferencedBlobFiles),
+                        bytesToMiB(artifactUsage_->unreferencedBlobBytes));
+        }
+        editor::endPropertyGrid();
     }
 
     const int selected = sceneAssetOperations_->selectedSceneIndex;
@@ -3527,24 +3629,45 @@ void Application::drawAssetsPanel() {
         const std::string profileId = profileIdForTextureLimit(entry);
         const auto found = sceneAssetOperations_->statuses.find(
             artifactStatusKey(entry.id, profileId));
-        ImGui::Separator();
-        ImGui::Text("Scene: %s", entry.name.c_str());
-        ImGui::Text("Profile: %s", profileId.c_str());
+        ImGui::SeparatorText("Selected Scene Artifacts");
         const auto activeProfile = catalog_.importProfiles.find(profileId);
-        if (activeProfile != catalog_.importProfiles.end())
-            ImGui::Text("Encoder: %s",
-                        activeProfile->second.textureEncoder.c_str());
-        if (found != sceneAssetOperations_->statuses.end()) {
+        if (editor::beginPropertyGrid("SelectedArtifactSummary", 0.34f)) {
+            editor::propertyLabel("Scene");
+            ImGui::TextUnformatted(entry.name.c_str());
+            editor::propertyLabel("Profile");
+            ImGui::TextUnformatted(profileId.c_str());
+            if (activeProfile != catalog_.importProfiles.end()) {
+                editor::propertyLabel("Encoder");
+                ImGui::TextUnformatted(
+                    activeProfile->second.textureEncoder.c_str());
+            }
+            if (found != sceneAssetOperations_->statuses.end()) {
             const ArtifactStatus &status = found->second;
-            ImGui::Text("Artifacts: %s", artifactStateName(status.state));
-            ImGui::TextWrapped("%s", status.reason.c_str());
-            if (!status.payloadKind.empty())
-                ImGui::Text("Payload: %s", status.payloadKind.c_str());
-            if (status.entryCount > 0) {
-                ImGui::Text("Blobs: %llu (%.2f MiB)",
+                editor::StatusTone tone = editor::StatusTone::Neutral;
+                if (status.state == ArtifactState::Ready)
+                    tone = editor::StatusTone::Success;
+                else if (status.state == ArtifactState::Importing)
+                    tone = editor::StatusTone::Info;
+                else if (status.state == ArtifactState::Invalid)
+                    tone = editor::StatusTone::Error;
+                else
+                    tone = editor::StatusTone::Warning;
+                editor::propertyLabel("Artifacts");
+                editor::statusIndicator(
+                    artifactStateName(status.state), tone,
+                    status.reason.empty() ? nullptr : status.reason.c_str());
+                if (!status.payloadKind.empty()) {
+                    editor::propertyLabel("Payload");
+                    ImGui::TextUnformatted(status.payloadKind.c_str());
+                }
+                if (status.entryCount > 0) {
+                    editor::propertyLabel("Blobs");
+                    ImGui::Text("%llu / %.2f MiB",
                             static_cast<unsigned long long>(status.entryCount),
                             bytesToMiB(status.blobBytes));
+                }
             }
+            editor::endPropertyGrid();
         }
         if (artifactIndex_) {
             const auto record = artifactIndex_->records().find(
@@ -4007,11 +4130,16 @@ void Application::requestManualCapture(bool includeGui) {
 #if VKL_ENABLE_EDITOR_UI
 void Application::drawCapturePanel() {
     if (!captureService_) {
-        ImGui::TextDisabled("Capture is unavailable in this package.");
+        editor::emptyState("Capture is unavailable in this package.");
         return;
     }
 
-    ImGui::Checkbox("Include GUI", &captureIncludeGui_);
+    ImGui::TextUnformatted("Source");
+    constexpr const char *captureSources[] = {"Viewport", "Workspace"};
+    int source = captureIncludeGui_ ? 1 : 0;
+    if (editor::segmentedControl("CaptureSource", source, captureSources,
+                                 std::size(captureSources)))
+        captureIncludeGui_ = source == 1;
     const bool supported =
         !captureIncludeGui_ || swapChain_->captureSupported();
     ImGui::BeginDisabled(!supported);
@@ -4032,14 +4160,17 @@ void Application::drawCapturePanel() {
     ImGui::EndDisabled();
 
     if (!supported) {
-        ImGui::TextWrapped("Unavailable: %s",
-                           swapChain_->captureUnsupportedReason().c_str());
+        editor::statusIndicator(
+            "Capture source unavailable", editor::StatusTone::Warning,
+            swapChain_->captureUnsupportedReason().c_str());
     }
     if (!captureUiError_.empty())
-        ImGui::TextWrapped("Error: %s", captureUiError_.c_str());
+        editor::statusIndicator(captureUiError_.c_str(),
+                                editor::StatusTone::Error);
 
     ImGui::Separator();
-    ImGui::Text("Root: %s", captureService_->captureRoot().string().c_str());
+    ImGui::TextDisabled("Output root");
+    editor::pathValue(captureService_->captureRoot().string());
     const std::vector<CaptureTaskSnapshot> tasks = captureService_->tasks();
     ImGui::Text("Tasks: %llu",
                 static_cast<unsigned long long>(tasks.size()));
@@ -4139,6 +4270,8 @@ void Application::drawRenderPanel() {
             }
             ImGui::EndCombo();
         }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", current);
     }
     constexpr uint32_t textureLimits[] = {0, 2048, 1024, 512};
     ImGui::BeginDisabled(config_.assetImportMode ==
@@ -4156,6 +4289,8 @@ void Application::drawRenderPanel() {
         }
         ImGui::EndCombo();
     }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Changing texture quality reloads the current scene.");
     ImGui::EndDisabled();
     ImGui::Separator();
     float exposureEv = renderSettings_.exposureEv;
@@ -4175,7 +4310,7 @@ void Application::drawRenderPanel() {
         patch.toneMapper = static_cast<ToneMapper>(toneMapperIndex);
         applyRenderSettings(patch);
     }
-    ImGui::TextUnformatted("Legacy and debug views use PassThrough");
+    ImGui::TextDisabled("Legacy/debug use PassThrough");
 }
 
 void Application::drawPostProcessingPanel() {
@@ -4189,39 +4324,45 @@ void Application::drawPostProcessingPanel() {
         applyRenderSettings(patch);
     }
     ImGui::BeginDisabled(!renderSettings_.bloomEnabled);
-    float threshold = renderSettings_.bloomThreshold;
-    if (ImGui::DragFloat("Threshold", &threshold, 0.05f, 0.0f, 20.0f)) {
-        RenderSettingsPatch patch;
-        patch.bloomThreshold = threshold;
-        applyRenderSettings(patch);
-    }
-    float softKnee = renderSettings_.bloomSoftKnee;
-    if (ImGui::DragFloat("Soft Knee", &softKnee, 0.01f, 0.0f, 1.0f)) {
-        RenderSettingsPatch patch;
-        patch.bloomSoftKnee = softKnee;
-        applyRenderSettings(patch);
-    }
     float intensity = renderSettings_.bloomIntensity;
     if (ImGui::DragFloat("Intensity", &intensity, 0.01f, 0.0f, 5.0f)) {
         RenderSettingsPatch patch;
         patch.bloomIntensity = intensity;
         applyRenderSettings(patch);
     }
+    if (ImGui::TreeNodeEx("Bloom Tuning")) {
+        float threshold = renderSettings_.bloomThreshold;
+        if (ImGui::DragFloat("Threshold", &threshold, 0.05f, 0.0f,
+                             20.0f)) {
+            RenderSettingsPatch patch;
+            patch.bloomThreshold = threshold;
+            applyRenderSettings(patch);
+        }
+        float softKnee = renderSettings_.bloomSoftKnee;
+        if (ImGui::DragFloat("Soft Knee", &softKnee, 0.01f, 0.0f,
+                             1.0f)) {
+            RenderSettingsPatch patch;
+            patch.bloomSoftKnee = softKnee;
+            applyRenderSettings(patch);
+        }
+        ImGui::TextDisabled("Up to 6 half-resolution levels");
+        ImGui::TreePop();
+    }
     ImGui::EndDisabled();
     ImGui::EndDisabled();
 
-    ImGui::Text("Available: %s", available ? "Yes" : "No");
     const bool active =
         available && renderSettings_.bloomEnabled && compatible;
-    ImGui::Text("Active: %s", active ? "Yes" : "No");
+    editor::statusIndicator(
+        active ? "Bloom active" : "Bloom inactive",
+        active ? editor::StatusTone::Success : editor::StatusTone::Neutral);
     if (!available && renderer_) {
-        ImGui::TextWrapped("Unavailable: %s",
-                           renderer_->bloomUnsupportedReason().c_str());
+        editor::statusIndicator(
+            "Bloom unavailable", editor::StatusTone::Warning,
+            renderer_->bloomUnsupportedReason().c_str());
     } else if (renderSettings_.bloomEnabled && !compatible) {
-        ImGui::TextDisabled(
-            "Inactive for the selected Shader variant.");
+        ImGui::TextDisabled("Selected Shader does not support Bloom.");
     }
-    ImGui::TextDisabled("Pyramid: up to 6 half-resolution levels");
 }
 
 void Application::drawSceneLoadingPanel() {
@@ -4276,29 +4417,33 @@ void Application::drawLightingPanel() {
         applyRenderSettings(patch);
     }
     ImGui::BeginDisabled(!renderSettings_.shadowsEnabled);
-    float receiverBias = renderSettings_.shadowReceiverBias;
-    if (ImGui::DragFloat("Shadow Receiver Bias", &receiverBias, 0.00005f,
-                         0.0f, 0.05f, "%.5f")) {
-        RenderSettingsPatch patch;
-        patch.shadowReceiverBias = receiverBias;
-        applyRenderSettings(patch);
+    if (ImGui::TreeNodeEx("Shadow Tuning")) {
+        float receiverBias = renderSettings_.shadowReceiverBias;
+        if (ImGui::DragFloat("Receiver Bias", &receiverBias, 0.00005f,
+                             0.0f, 0.05f, "%.5f")) {
+            RenderSettingsPatch patch;
+            patch.shadowReceiverBias = receiverBias;
+            applyRenderSettings(patch);
+        }
+        float constantBias = renderSettings_.shadowConstantBias;
+        if (ImGui::DragFloat("Constant Bias", &constantBias, 0.05f, 0.0f,
+                             10.0f)) {
+            RenderSettingsPatch patch;
+            patch.shadowConstantBias = constantBias;
+            applyRenderSettings(patch);
+        }
+        float slopeBias = renderSettings_.shadowSlopeBias;
+        if (ImGui::DragFloat("Slope Bias", &slopeBias, 0.05f, 0.0f,
+                             10.0f)) {
+            RenderSettingsPatch patch;
+            patch.shadowSlopeBias = slopeBias;
+            applyRenderSettings(patch);
+        }
+        ImGui::TextDisabled("Shadow map %ux%u",
+                            kDirectionalShadowMapSize,
+                            kDirectionalShadowMapSize);
+        ImGui::TreePop();
     }
-    float constantBias = renderSettings_.shadowConstantBias;
-    if (ImGui::DragFloat("Shadow Constant Bias", &constantBias, 0.05f,
-                         0.0f, 10.0f)) {
-        RenderSettingsPatch patch;
-        patch.shadowConstantBias = constantBias;
-        applyRenderSettings(patch);
-    }
-    float slopeBias = renderSettings_.shadowSlopeBias;
-    if (ImGui::DragFloat("Shadow Slope Bias", &slopeBias, 0.05f, 0.0f,
-                         10.0f)) {
-        RenderSettingsPatch patch;
-        patch.shadowSlopeBias = slopeBias;
-        applyRenderSettings(patch);
-    }
-    ImGui::Text("Shadow Map: %ux%u", kDirectionalShadowMapSize,
-                kDirectionalShadowMapSize);
     ImGui::EndDisabled();
     ImGui::Separator();
 
@@ -4406,54 +4551,57 @@ void Application::drawLightingPanel() {
                   currentScene_->lights().begin(),
                   currentScene_->lights().end(), isEffectiveSceneLight))
             : 0;
-    ImGui::Text("Scene lights: %zu", sceneLightCount);
-    ImGui::Text("Active scene lights: %zu", effectiveSceneLightCount);
-    ImGui::Text("Uploaded: %u directional, %u punctual",
-                lastUploadedDirectionalLights_, lastUploadedPunctualLights_);
-    if (lastIgnoredLights_ > 0)
-        ImGui::Text("Ignored: %u", lastIgnoredLights_);
-    if (currentScene_ && !currentScene_->lights().empty() &&
-        ImGui::CollapsingHeader("Scene Light Details")) {
-        const auto &lights = currentScene_->lights();
-        for (size_t index = 0; index < lights.size(); ++index) {
-            const SceneLight &light = lights[index];
-            const std::string name =
-                light.debugName.empty() ? "Light" : light.debugName;
-            const std::string label =
-                std::to_string(index) + "  " + name;
-            if (!ImGui::TreeNode(label.c_str()))
-                continue;
-            ImGui::Text("Type: %s", lightTypeName(light.type));
-            ImGui::Text("Color: %.3f %.3f %.3f", light.color.r,
-                        light.color.g, light.color.b);
-            ImGui::Text("Intensity: %.3f %s", light.intensity,
-                        lightIntensityUnit(light.type));
-            if (light.type != LightType::Directional) {
-                ImGui::Text("Position: %.3f %.3f %.3f",
-                            light.positionWS.x, light.positionWS.y,
-                            light.positionWS.z);
-                if (light.range > 0.0f)
-                    ImGui::Text("Range: %.3f", light.range);
-                else
-                    ImGui::TextUnformatted("Range: Infinite");
+    if (ImGui::TreeNodeEx("Light Diagnostics")) {
+        ImGui::Text("Scene lights: %zu", sceneLightCount);
+        ImGui::Text("Active scene lights: %zu", effectiveSceneLightCount);
+        ImGui::Text("Uploaded: %u directional, %u punctual",
+                    lastUploadedDirectionalLights_,
+                    lastUploadedPunctualLights_);
+        if (lastIgnoredLights_ > 0)
+            ImGui::Text("Ignored: %u", lastIgnoredLights_);
+        if (currentScene_ && !currentScene_->lights().empty()) {
+            const auto &lights = currentScene_->lights();
+            for (size_t index = 0; index < lights.size(); ++index) {
+                const SceneLight &light = lights[index];
+                const std::string name =
+                    light.debugName.empty() ? "Light" : light.debugName;
+                const std::string label =
+                    std::to_string(index) + "  " + name;
+                if (!ImGui::TreeNode(label.c_str()))
+                    continue;
+                ImGui::Text("Type: %s", lightTypeName(light.type));
+                ImGui::Text("Color: %.3f %.3f %.3f", light.color.r,
+                            light.color.g, light.color.b);
+                ImGui::Text("Intensity: %.3f %s", light.intensity,
+                            lightIntensityUnit(light.type));
+                if (light.type != LightType::Directional) {
+                    ImGui::Text("Position: %.3f %.3f %.3f",
+                                light.positionWS.x, light.positionWS.y,
+                                light.positionWS.z);
+                    if (light.range > 0.0f)
+                        ImGui::Text("Range: %.3f", light.range);
+                    else
+                        ImGui::TextUnformatted("Range: Infinite");
+                }
+                if (light.type == LightType::Directional) {
+                    ImGui::Text("Surface-to-light: %.3f %.3f %.3f",
+                                light.directionWS.x, light.directionWS.y,
+                                light.directionWS.z);
+                } else if (light.type == LightType::Spot) {
+                    ImGui::Text("Emission direction: %.3f %.3f %.3f",
+                                light.directionWS.x, light.directionWS.y,
+                                light.directionWS.z);
+                    const float innerAngle = glm::degrees(std::acos(
+                        std::clamp(light.innerConeCos, -1.0f, 1.0f)));
+                    const float outerAngle = glm::degrees(std::acos(
+                        std::clamp(light.outerConeCos, -1.0f, 1.0f)));
+                    ImGui::Text("Cone: %.2f / %.2f deg", innerAngle,
+                                outerAngle);
+                }
+                ImGui::TreePop();
             }
-            if (light.type == LightType::Directional) {
-                ImGui::Text("Surface-to-light: %.3f %.3f %.3f",
-                            light.directionWS.x, light.directionWS.y,
-                            light.directionWS.z);
-            } else if (light.type == LightType::Spot) {
-                ImGui::Text("Emission direction: %.3f %.3f %.3f",
-                            light.directionWS.x, light.directionWS.y,
-                            light.directionWS.z);
-                const float innerAngle = glm::degrees(std::acos(
-                    std::clamp(light.innerConeCos, -1.0f, 1.0f)));
-                const float outerAngle = glm::degrees(std::acos(
-                    std::clamp(light.outerConeCos, -1.0f, 1.0f)));
-                ImGui::Text("Cone: %.2f / %.2f deg", innerAngle,
-                            outerAngle);
-            }
-            ImGui::TreePop();
         }
+        ImGui::TreePop();
     }
     if (sceneLightCount > 0 && effectiveSceneLightCount == 0) {
         ImGui::TextDisabled(
@@ -4503,7 +4651,7 @@ void Application::drawMaterialsPanel() {
     }
 
     if (!currentScene_) {
-        ImGui::TextDisabled("No scene is loaded.");
+        editor::emptyState("No scene is loaded.");
         return;
     }
 
@@ -4540,7 +4688,7 @@ void Application::drawMaterialsPanel() {
     ImGui::BeginChild("MaterialList", ImVec2(0.0f, listHeight),
                       ImGuiChildFlags_Borders);
     if (filteredIndices.empty())
-        ImGui::TextDisabled("No matching materials.");
+        editor::emptyState("No matching materials.");
     for (size_t materialIndex : filteredIndices) {
         const auto &material = materials[materialIndex];
         const std::string name =
@@ -4559,34 +4707,22 @@ void Application::drawMaterialsPanel() {
 
     if (materials.empty() ||
         ui.selectedMaterialIndex >= materials.size()) {
-        ImGui::TextDisabled("No material selected.");
+        editor::emptyState("No material selected.");
         return;
     }
 
     const auto &material = materials[ui.selectedMaterialIndex];
     if (!material) {
-        ImGui::TextDisabled("Selected material is null.");
+        editor::emptyState("Selected material is unavailable.");
         return;
     }
 
     const MaterialParams &params = material->params();
     auto beginPropertyTable = [](const char *id) {
-        const ImGuiTableFlags flags =
-            ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
-            ImGuiTableFlags_SizingStretchProp;
-        if (!ImGui::BeginTable(id, 2, flags))
-            return false;
-        ImGui::TableSetupColumn("Property",
-                                ImGuiTableColumnFlags_WidthStretch, 0.46f);
-        ImGui::TableSetupColumn("Value",
-                                ImGuiTableColumnFlags_WidthStretch, 0.54f);
-        return true;
+        return editor::beginPropertyGrid(id, 0.46f);
     };
     auto beginProperty = [](const char *name) {
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted(name);
-        ImGui::TableSetColumnIndex(1);
+        editor::propertyLabel(name);
     };
 
     if (ImGui::CollapsingHeader("Surface",
@@ -4604,7 +4740,7 @@ void Application::drawMaterialsPanel() {
         ImGui::Text("%.3f", params.alphaCutoff);
         beginProperty("Double Sided");
         ImGui::TextUnformatted(params.doubleSided ? "true" : "false");
-        ImGui::EndTable();
+        editor::endPropertyGrid();
     }
 
     if (ImGui::CollapsingHeader("PBR",
@@ -4631,7 +4767,7 @@ void Application::drawMaterialsPanel() {
         ImGui::Text("%.3f", params.emissiveStrength);
         beginProperty("Transmission");
         ImGui::Text("%.3f", params.transmissionFactor);
-        ImGui::EndTable();
+        editor::endPropertyGrid();
     }
 
     if (ImGui::CollapsingHeader("Textures",
@@ -4646,7 +4782,7 @@ void Application::drawMaterialsPanel() {
             ImGui::TextUnformatted(textures[slotIndex] ? "Bound"
                                                        : "Missing");
         }
-        ImGui::EndTable();
+        editor::endPropertyGrid();
     }
 
     if (ImGui::CollapsingHeader("Derived Render State",
@@ -4657,7 +4793,7 @@ void Application::drawMaterialsPanel() {
             isTransparentMaterial(params) ? "Transparent" : "Opaque");
         beginProperty("Cull");
         ImGui::TextUnformatted(params.doubleSided ? "None" : "Back");
-        ImGui::EndTable();
+        editor::endPropertyGrid();
     }
 }
 
@@ -4692,21 +4828,59 @@ void Application::drawCameraPanel() {
 }
 
 void Application::drawPerformancePanel() {
-    ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
-    ImGui::Text("Mode:   %s", mode_ == InputMode::UI ? "UI" : "CameraDrag");
-    if (currentScene_)
-        ImGui::Text("Objects: %zu", currentScene_->objects().size());
-    else
-        ImGui::Text("Objects: 0");
-    if (build::kTracy) {
-        ImGui::Text("Tracy: %s (GPU %s)",
-                    device_->tracyProfiler().connected() ? "Connected"
-                                                         : "Waiting",
-                    device_->tracyProfiler().gpuAvailable() ? "Available"
-                                                            : "Unavailable");
-    } else {
-        ImGui::TextUnformatted("Tracy: Not compiled");
+    if (editor::beginPropertyGrid("PerformanceSummary", 0.36f)) {
+        editor::propertyLabel("FPS");
+        ImGui::Text("%.1f", ImGui::GetIO().Framerate);
+        editor::propertyLabel("Input Mode");
+        ImGui::TextUnformatted(mode_ == InputMode::UI ? "UI"
+                                                     : "CameraDrag");
+        editor::propertyLabel("Objects");
+        ImGui::Text("%zu", currentScene_ ? currentScene_->objects().size()
+                                         : 0);
+        editor::propertyLabel("Tracy");
+        if (build::kTracy) {
+            const bool connected = device_->tracyProfiler().connected();
+            editor::statusIndicator(
+                connected ? "Connected" : "Waiting",
+                connected ? editor::StatusTone::Success
+                          : editor::StatusTone::Neutral,
+                device_->tracyProfiler().gpuAvailable()
+                    ? "Vulkan GPU profiling available"
+                    : "Vulkan GPU profiling unavailable");
+        } else {
+            ImGui::TextDisabled("Not compiled");
+        }
+        editor::endPropertyGrid();
     }
+
+    const EditorUiState &ui = *editorUi_;
+    if (ui.performanceCount > 1) {
+        std::array<float, EditorUiState::kPerformanceHistorySize> fps{};
+        std::array<float, EditorUiState::kPerformanceHistorySize> gpu{};
+        const size_t start =
+            (ui.performanceCursor + EditorUiState::kPerformanceHistorySize -
+             ui.performanceCount) %
+            EditorUiState::kPerformanceHistorySize;
+        for (size_t i = 0; i < ui.performanceCount; ++i) {
+            const size_t source =
+                (start + i) % EditorUiState::kPerformanceHistorySize;
+            fps[i] = ui.fpsHistory[source];
+            gpu[i] = ui.gpuHistory[source];
+        }
+        const float maxFps = std::max(
+            60.0f, *std::max_element(fps.begin(),
+                                     fps.begin() + ui.performanceCount));
+        const float maxGpu = std::max(
+            1.0f, *std::max_element(gpu.begin(),
+                                    gpu.begin() + ui.performanceCount));
+        ImGui::PlotLines("FPS History", fps.data(),
+                         static_cast<int>(ui.performanceCount), 0, nullptr,
+                         0.0f, maxFps * 1.1f, ImVec2(0.0f, 54.0f));
+        ImGui::PlotLines("GPU ms History", gpu.data(),
+                         static_cast<int>(ui.performanceCount), 0, nullptr,
+                         0.0f, maxGpu * 1.1f, ImVec2(0.0f, 54.0f));
+    }
+
     if (ImGui::CollapsingHeader("GPU Pass Timings",
                                 ImGuiTreeNodeFlags_DefaultOpen)) {
         const GpuPassTimings &timings = renderer_->gpuPassTimings();
@@ -4718,10 +4892,24 @@ void Application::drawPerformancePanel() {
             ImGui::Text("Frame Serial: %llu",
                         static_cast<unsigned long long>(
                             timings.frameSerial));
-            for (const GpuPassTiming &pass : timings.passes)
-                ImGui::Text("%s: %.3f ms", pass.name.c_str(),
-                            pass.milliseconds);
-            ImGui::Text("Total: %.3f ms", timings.totalMs);
+            if (editor::beginPropertyGrid("GpuPassBreakdown", 0.42f)) {
+                for (const GpuPassTiming &pass : timings.passes) {
+                    editor::propertyLabel(pass.name.c_str());
+                    const float fraction =
+                        timings.totalMs > 0.0
+                            ? static_cast<float>(pass.milliseconds /
+                                                 timings.totalMs)
+                            : 0.0f;
+                    char overlay[48]{};
+                    std::snprintf(overlay, sizeof(overlay), "%.3f ms",
+                                  pass.milliseconds);
+                    ImGui::ProgressBar(std::clamp(fraction, 0.0f, 1.0f),
+                                       ImVec2(-1.0f, 0.0f), overlay);
+                }
+                editor::propertyLabel("Total");
+                ImGui::Text("%.3f ms", timings.totalMs);
+                editor::endPropertyGrid();
+            }
         }
     }
 }
@@ -4891,6 +5079,17 @@ void Application::drawGui() {
     if (gpuTimings.available)
         status.gpuFrameMs = static_cast<float>(gpuTimings.totalMs);
 
+    EditorUiState &uiState = *editorUi_;
+    uiState.fpsHistory[uiState.performanceCursor] = status.fps;
+    uiState.gpuHistory[uiState.performanceCursor] =
+        std::max(status.gpuFrameMs, 0.0f);
+    uiState.performanceCursor =
+        (uiState.performanceCursor + 1) %
+        EditorUiState::kPerformanceHistorySize;
+    uiState.performanceCount = std::min(
+        uiState.performanceCount + 1,
+        EditorUiState::kPerformanceHistorySize);
+
     bool hasActiveLoad = false;
     if (latestSceneLoadTask_) {
         const SceneLoadState state = latestSceneLoadTask_->state.load();
@@ -4929,10 +5128,10 @@ void Application::drawGui() {
     };
     panels.assets = [this]() { drawAssetsPanel(); };
     panels.render = [this]() {
-        ImGui::PushItemWidth(-160.0f);
-        if (ImGui::CollapsingHeader("Pipeline",
+        ImGui::PushItemWidth(-145.0f);
+        if (ImGui::CollapsingHeader("Common",
                                     ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::PushID("Pipeline");
+            ImGui::PushID("Common");
             drawRenderPanel();
             ImGui::PopID();
         }
@@ -4948,8 +5147,7 @@ void Application::drawGui() {
             drawLightingPanel();
             ImGui::PopID();
         }
-        if (ImGui::CollapsingHeader("Camera",
-                                    ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::CollapsingHeader("Camera & Clip")) {
             ImGui::PushID("Camera");
             drawCameraPanel();
             ImGui::PopID();
@@ -4989,6 +5187,7 @@ void Application::drawGui() {
         gui_->viewportTextureId(frameSync_->nextFrameIndex());
     viewportFrame.renderWidth = renderExtent.width;
     viewportFrame.renderHeight = renderExtent.height;
+    viewportFrame.resizePending = viewportResize_.pending;
     editorDockWorkspace_->draw(status, viewportFrame, panels);
 
     const EditorViewportState &viewport =
