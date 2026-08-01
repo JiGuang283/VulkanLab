@@ -12,6 +12,8 @@ option(VKL_ENABLE_GPU_DEBUG_UTILS
     "Compile Vulkan object naming and command labels" ON)
 option(VKL_ENABLE_GPU_PROFILING
     "Compile per-pass Vulkan timestamp profiling" ON)
+option(VKL_ENABLE_TRACY
+    "Compile Tracy CPU and Vulkan GPU profiling" OFF)
 
 option(VKL_BUILD_ASSET_TOOL "Build VulkanLabAssetTool" ON)
 option(VKL_BUILD_CONTROL_TOOL "Build VulkanLabCtl" ON)
@@ -50,6 +52,7 @@ foreach(VKL_FEATURE IN ITEMS
         VKL_ENABLE_VALIDATION
         VKL_ENABLE_GPU_DEBUG_UTILS
         VKL_ENABLE_GPU_PROFILING
+        VKL_ENABLE_TRACY
         VKL_BUILD_ASSET_TOOL
         VKL_BUILD_CONTROL_TOOL
         VKL_BUILD_RENDER_TEST

@@ -1,5 +1,31 @@
 include_guard(GLOBAL)
 
+add_library(vkl_tracy INTERFACE)
+add_library(VulkanLab::Tracy ALIAS vkl_tracy)
+if(VKL_ENABLE_TRACY)
+    set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiling" FORCE)
+    set(TRACY_STATIC ON CACHE BOOL "Build Tracy as a static library" FORCE)
+    set(TRACY_ON_DEMAND ON CACHE BOOL
+        "Only collect Tracy data while a profiler is connected" FORCE)
+    set(TRACY_ONLY_LOCALHOST ON CACHE BOOL
+        "Restrict Tracy connections to this machine" FORCE)
+    set(TRACY_NO_BROADCAST ON CACHE BOOL
+        "Disable Tracy network discovery broadcasts" FORCE)
+    set(TRACY_ONLY_IPV4 ON CACHE BOOL
+        "Use IPv4 for the localhost Tracy connection" FORCE)
+    set(TRACY_NO_CALLSTACK ON CACHE BOOL
+        "Disable Tracy callstack collection" FORCE)
+    set(TRACY_NO_SAMPLING ON CACHE BOOL
+        "Disable Tracy callstack sampling" FORCE)
+    set(TRACY_NO_FRAME_IMAGE ON CACHE BOOL
+        "Disable Tracy frame image support" FORCE)
+    set(TRACY_NO_CRASH_HANDLER ON CACHE BOOL
+        "Do not replace VulkanLab crash handling" FORCE)
+    add_subdirectory("${PROJECT_SOURCE_DIR}/external/tracy" external/tracy
+                     EXCLUDE_FROM_ALL)
+    target_link_libraries(vkl_tracy INTERFACE Tracy::TracyClient)
+endif()
+
 # KTX 4.4.2 requires KTX1 to configure its bundled `ktx` CLI, although the
 # renderer only consumes KTX2 through ktx_read.
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static dependencies" FORCE)

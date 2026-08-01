@@ -91,6 +91,7 @@ target_link_libraries(vkl_asset_runtime
         Vulkan::Vulkan
     PRIVATE
         vkl_foundation
+        vkl_tracy
         ktx_read
 )
 
@@ -136,6 +137,8 @@ set(VKL_ENGINE_SOURCES
     core/VulkanContext.cpp
     core/VulkanException.cpp
     diagnostics/CaptureTypes.cpp
+    diagnostics/Profiling.h
+    diagnostics/TracyProfiler.h
     render/FallbackTextures.cpp
     render/EnvironmentGpuBuilder.cpp
     render/DirectionalShadow.cpp
@@ -180,6 +183,12 @@ else()
     list(APPEND VKL_ENGINE_SOURCES render/GpuPassProfilerDisabled.cpp)
 endif()
 
+if(VKL_ENABLE_TRACY)
+    list(APPEND VKL_ENGINE_SOURCES diagnostics/TracyProfiler.cpp)
+else()
+    list(APPEND VKL_ENGINE_SOURCES diagnostics/TracyProfilerDisabled.cpp)
+endif()
+
 if(VKL_ENABLE_EDITOR_UI)
     list(APPEND VKL_ENGINE_SOURCES render/GuiSystem.cpp)
 else()
@@ -213,6 +222,7 @@ target_link_libraries(vkl_engine
         vkl_shader_catalog
         vkl_glm
         vkl_vma_headers
+        vkl_tracy
         Vulkan::Vulkan
     PRIVATE
         vkl_image_codecs
@@ -240,6 +250,7 @@ target_link_libraries(VulkanLab PRIVATE
     vkl_asset_runtime
     vkl_foundation
     vkl_shader_catalog
+    vkl_tracy
     vkl_glfw
     vkl_json
     Vulkan::Vulkan

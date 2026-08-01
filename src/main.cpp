@@ -82,7 +82,8 @@ void printUsage(std::ostream &out) {
         << ", gpu-debug-utils="
         << (vkr::build::kGpuDebugUtils ? "on" : "off")
         << ", gpu-profiling="
-        << (vkr::build::kGpuProfiling ? "on" : "off") << "\n";
+        << (vkr::build::kGpuProfiling ? "on" : "off")
+        << ", tracy=" << (vkr::build::kTracy ? "on" : "off") << "\n";
 }
 
 bool parseArguments(int argc, wchar_t **argv, vkr::Config &config) {
@@ -240,10 +241,10 @@ int wmain(int argc, wchar_t **argv) {
             "Build",
             "Compiled features: editor-ui={}, runtime-control={}, "
             "capture={}, asset-authoring={}, validation={}, "
-            "gpu-debug-utils={}, gpu-profiling={}",
+            "gpu-debug-utils={}, gpu-profiling={}, tracy={}",
             features.editorUi, features.runtimeControl, features.capture,
             features.assetAuthoring, features.validation,
-            features.gpuDebugUtils, features.gpuProfiling);
+            features.gpuDebugUtils, features.gpuProfiling, features.tracy);
         // 按需覆写默认配置，例如：
         // config.windowWidth  = 1280;
         // config.windowHeight = 720;

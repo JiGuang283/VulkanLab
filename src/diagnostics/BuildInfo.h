@@ -12,6 +12,7 @@ struct BuildFeatureInfo {
     bool validation = false;
     bool gpuDebugUtils = false;
     bool gpuProfiling = false;
+    bool tracy = false;
     bool assetTool = false;
     bool controlTool = false;
     bool renderTest = false;

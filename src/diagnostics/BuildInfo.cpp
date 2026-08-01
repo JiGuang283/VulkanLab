@@ -19,6 +19,7 @@ const BuildInfo &currentBuildInfo() {
                                  build::kValidation,
                                  build::kGpuDebugUtils,
                                  build::kGpuProfiling,
+                                 build::kTracy,
                                  build::kAssetTool,
                                  build::kControlTool,
                                  build::kRenderTest}};
