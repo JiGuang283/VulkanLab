@@ -156,10 +156,10 @@ RenderResourceRegistry::registerSampler(RenderSamplerDesc desc) {
     return handle;
 }
 
-void RenderResourceRegistry::realize(VkExtent2D swapchainExtent) {
+void RenderResourceRegistry::realize(VkExtent2D viewportExtent) {
     if (realized_)
         throw std::logic_error("render resources were already realized");
-    swapchainExtent_ = swapchainExtent;
+    viewportExtent_ = viewportExtent;
     for (uint32_t i = 0; i < imageDescriptions_.size(); ++i)
         createImageEntry(i);
     for (uint32_t i = 0; i < samplerDescriptions_.size(); ++i)
@@ -167,22 +167,22 @@ void RenderResourceRegistry::realize(VkExtent2D swapchainExtent) {
     realized_ = true;
 }
 
-void RenderResourceRegistry::releaseExtentDependent() {
+void RenderResourceRegistry::releaseViewportDependent() {
     for (uint32_t i = 0; i < imageDescriptions_.size(); ++i) {
         if (imageDescriptions_[i].extentPolicy ==
-            RenderExtentPolicy::Swapchain) {
+            RenderExtentPolicy::Viewport) {
             images_[i].clear();
         }
     }
 }
 
-void RenderResourceRegistry::recreateExtentDependent(
-    VkExtent2D swapchainExtent) {
-    releaseExtentDependent();
-    swapchainExtent_ = swapchainExtent;
+void RenderResourceRegistry::recreateViewportDependent(
+    VkExtent2D viewportExtent) {
+    releaseViewportDependent();
+    viewportExtent_ = viewportExtent;
     for (uint32_t i = 0; i < imageDescriptions_.size(); ++i) {
         if (imageDescriptions_[i].extentPolicy ==
-            RenderExtentPolicy::Swapchain) {
+            RenderExtentPolicy::Viewport) {
             createImageEntry(i);
         }
     }
@@ -231,8 +231,8 @@ VkExtent2D RenderResourceRegistry::extent(RenderImageHandle handle) const {
         return desc.fixedExtent;
     const uint32_t divisor = desc.extentDivisor;
     return {
-        std::max(1u, (swapchainExtent_.width + divisor - 1u) / divisor),
-        std::max(1u, (swapchainExtent_.height + divisor - 1u) / divisor)};
+        std::max(1u, (viewportExtent_.width + divisor - 1u) / divisor),
+        std::max(1u, (viewportExtent_.height + divisor - 1u) / divisor)};
 }
 
 void RenderResourceRegistry::createImageEntry(uint32_t index) {
@@ -242,10 +242,10 @@ void RenderResourceRegistry::createImageEntry(uint32_t index) {
             ? desc.fixedExtent
             : VkExtent2D{
                   std::max(1u,
-                           (swapchainExtent_.width + desc.extentDivisor - 1u) /
+                           (viewportExtent_.width + desc.extentDivisor - 1u) /
                                desc.extentDivisor),
                   std::max(1u,
-                           (swapchainExtent_.height + desc.extentDivisor -
+                           (viewportExtent_.height + desc.extentDivisor -
                             1u) /
                                desc.extentDivisor)};
     if (imageExtent.width == 0 || imageExtent.height == 0)
@@ -298,7 +298,8 @@ void RenderResourceRegistry::createSamplerEntry(uint32_t index) {
 
 RendererResourceHandles
 registerDefaultRendererResources(RenderResourceRegistry &registry,
-                                 Device &device) {
+                                 Device &device,
+                                 VkFormat viewportColorFormat) {
     const VkFormat hdrFormat = chooseHdrFormat(device);
     const VkFormat depthFormat = chooseDepthFormat(device, false);
     const VkFormat shadowDepthFormat = chooseDepthFormat(device, true);
@@ -307,14 +308,14 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
 
     RendererResourceHandles handles{};
     handles.hdrColor = registry.registerImage(
-        {"HDR Color", RenderExtentPolicy::Swapchain, {},
+        {"HDR Color", RenderExtentPolicy::Viewport, {},
          RenderResourceMultiplicity::PerFrame, hdrFormat,
          VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL,
          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, VK_IMAGE_ASPECT_COLOR_BIT});
     if (samples != VK_SAMPLE_COUNT_1_BIT) {
         handles.hdrMsaaColor = registry.registerImage(
-            {"HDR MSAA Color", RenderExtentPolicy::Swapchain, {},
+            {"HDR MSAA Color", RenderExtentPolicy::Viewport, {},
              RenderResourceMultiplicity::PerFrame, hdrFormat, samples,
              VK_IMAGE_TILING_OPTIMAL,
              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
@@ -322,11 +323,18 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
              VK_IMAGE_ASPECT_COLOR_BIT});
     }
     handles.mainDepth = registry.registerImage(
-        {"Main Depth", RenderExtentPolicy::Swapchain, {},
+        {"Main Depth", RenderExtentPolicy::Viewport, {},
          RenderResourceMultiplicity::PerFrame, depthFormat, samples,
          VK_IMAGE_TILING_OPTIMAL,
          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, VK_IMAGE_ASPECT_DEPTH_BIT});
+    handles.viewportColor = registry.registerImage(
+        {"Viewport Color", RenderExtentPolicy::Viewport, {},
+         RenderResourceMultiplicity::PerFrame, viewportColorFormat,
+         VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+             VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, VK_IMAGE_ASPECT_COLOR_BIT});
     handles.directionalShadowDepth = registry.registerImage(
         {"Directional Shadow Depth", RenderExtentPolicy::Fixed,
          {kDirectionalShadowMapSize, kDirectionalShadowMapSize},
@@ -342,7 +350,7 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
              ++level) {
             RenderImageDesc bloom{};
             bloom.name = "Bloom/Level" + std::to_string(level);
-            bloom.extentPolicy = RenderExtentPolicy::Swapchain;
+            bloom.extentPolicy = RenderExtentPolicy::Viewport;
             bloom.multiplicity = RenderResourceMultiplicity::PerFrame;
             bloom.format = device.computeBloomSupport().format;
             bloom.usage =
@@ -357,6 +365,13 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
     RenderSamplerDesc hdrSampler{};
     hdrSampler.name = "HDR Sampler";
     handles.hdrSampler = registry.registerSampler(std::move(hdrSampler));
+
+    RenderSamplerDesc viewportSampler{};
+    viewportSampler.name = "Viewport Sampler";
+    viewportSampler.magFilter = VK_FILTER_LINEAR;
+    viewportSampler.minFilter = VK_FILTER_LINEAR;
+    handles.viewportSampler =
+        registry.registerSampler(std::move(viewportSampler));
 
     RenderSamplerDesc shadowSampler{};
     shadowSampler.name = "Directional Shadow Sampler";

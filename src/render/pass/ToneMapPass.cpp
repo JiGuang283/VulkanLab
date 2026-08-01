@@ -6,10 +6,8 @@
 #include "core/Image.h"
 #include "core/Pipeline.h"
 #include "core/PipelineConfigBuilder.h"
-#include "core/SwapChain.h"
 #include "core/VulkanCheck.h"
 #include "render/FrameGpuData.h"
-#include "render/GuiSystem.h"
 #include "render/PipelineCache.h"
 #include "render/PipelineKey.h"
 #include "render/RenderFrame.h"
@@ -45,24 +43,25 @@ bool isSrgbFormat(VkFormat format) {
 
 } // namespace
 
-ToneMapPass::ToneMapPass(Device &device, SwapChain &swapChain,
+ToneMapPass::ToneMapPass(Device &device,
                          const RenderResourceRegistry &resources,
                          RenderImageHandle hdrColor,
                          RenderSamplerHandle hdrSampler,
                          RenderImageHandle bloomColor,
                          RenderSamplerHandle bloomSampler,
+                         RenderImageHandle viewportColor,
                          DescriptorAllocator &descriptorAllocator,
                          std::string fullscreenVertPath,
                          std::string toneMapFragPath)
-    : device_(&device), swapChain_(&swapChain), hdrColor_(hdrColor),
-      hdrSampler_(hdrSampler), bloomColor_(bloomColor),
-      bloomSampler_(bloomSampler),
+    : device_(&device), hdrColor_(hdrColor), hdrSampler_(hdrSampler),
+      bloomColor_(bloomColor), bloomSampler_(bloomSampler),
+      viewportColor_(viewportColor),
       descriptorAllocator_(&descriptorAllocator),
       fullscreenVertPath_(std::move(fullscreenVertPath)),
       toneMapFragPath_(std::move(toneMapFragPath)) {
-    createRenderPass();
+    createRenderPass(resources);
     createDescriptors(resources);
-    createFramebuffers();
+    createFramebuffers(resources);
 }
 
 ToneMapPass::~ToneMapPass() {
@@ -77,7 +76,7 @@ ToneMapPass::~ToneMapPass() {
         vkDestroyRenderPass(device_->logicalDevice(), renderPass_, nullptr);
 }
 
-void ToneMapPass::releaseSwapChainResources() {
+void ToneMapPass::releaseViewportResources() {
     destroyFramebuffers();
 }
 
@@ -91,21 +90,24 @@ std::vector<RenderImageUsage> ToneMapPass::resourceUsages() const {
             {bloomColor_, RenderImageAccess::SampledRead,
              VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
     }
+    usages.push_back(
+        {viewportColor_, RenderImageAccess::ColorAttachmentWrite,
+         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
     return usages;
 }
 
-void ToneMapPass::onResize(const SwapChain &,
-                           const RenderResourceRegistry &resources) {
+void ToneMapPass::onViewportResize(
+    const RenderResourceRegistry &resources) {
     updateDescriptors(resources);
-    createFramebuffers();
+    createFramebuffers(resources);
 }
 
 void ToneMapPass::execute(const RenderFrameContext &frame,
-                          const RenderResourceRegistry &,
+                          const RenderResourceRegistry &resources,
                           const RenderQueue &) {
-    VKL_PROFILE_ZONE("Record ToneMap And UI");
-    VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd,
-                         "ToneMap + UI");
+    VKL_PROFILE_ZONE("Record ToneMap");
+    VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "ToneMap");
     if (!frame.pipelineCache || !frame.view || !frame.shaderVariant)
         return;
 
@@ -114,18 +116,18 @@ void ToneMapPass::execute(const RenderFrameContext &frame,
     VkRenderPassBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     beginInfo.renderPass = renderPass_;
-    beginInfo.framebuffer = framebuffers_.at(frame.imageIndex);
-    beginInfo.renderArea = {{0, 0}, frame.extent};
+    beginInfo.framebuffer = framebuffers_.at(frame.frameIndex);
+    beginInfo.renderArea = {{0, 0}, frame.viewportExtent};
     beginInfo.clearValueCount = 1;
     beginInfo.pClearValues = &clear;
     vkCmdBeginRenderPass(frame.cmd, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
     VkViewport viewport{};
-    viewport.width = static_cast<float>(frame.extent.width);
-    viewport.height = static_cast<float>(frame.extent.height);
+    viewport.width = static_cast<float>(frame.viewportExtent.width);
+    viewport.height = static_cast<float>(frame.viewportExtent.height);
     viewport.maxDepth = 1.0f;
     vkCmdSetViewport(frame.cmd, 0, 1, &viewport);
-    const VkRect2D scissor{{0, 0}, frame.extent};
+    const VkRect2D scissor{{0, 0}, frame.viewportExtent};
     vkCmdSetScissor(frame.cmd, 0, 1, &scissor);
 
     {
@@ -171,31 +173,29 @@ void ToneMapPass::execute(const RenderFrameContext &frame,
             push.applyBloom = 1;
         }
         push.encodeGamma =
-            isSrgbFormat(swapChain_->imageFormat()) ? 0u : 1u;
+            isSrgbFormat(resources.description(viewportColor_).format)
+                ? 0u
+                : 1u;
         vkCmdPushConstants(frame.cmd, pipeline.layout(),
                            VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push),
                            &push);
         vkCmdDraw(frame.cmd, 3, 1, 0, 0);
     }
 
-    if (frame.gui) {
-        VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "ImGui");
-        ScopedGpuLabel label(device_->debugUtils(), frame.cmd, "ImGui");
-        frame.gui->render(frame.cmd);
-    }
     vkCmdEndRenderPass(frame.cmd);
 }
 
-void ToneMapPass::createRenderPass() {
+void ToneMapPass::createRenderPass(
+    const RenderResourceRegistry &resources) {
     VkAttachmentDescription color{};
-    color.format = swapChain_->imageFormat();
+    color.format = resources.description(viewportColor_).format;
     color.samples = VK_SAMPLE_COUNT_1_BIT;
     color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    color.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    color.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkAttachmentReference colorRef{0,
                                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
@@ -204,15 +204,23 @@ void ToneMapPass::createRenderPass() {
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorRef;
 
-    VkSubpassDependency dependency{};
-    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependency.dstSubpass = 0;
-    dependency.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    dependency.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+    std::array<VkSubpassDependency, 2> dependencies{};
+    dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[0].dstSubpass = 0;
+    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependencies[0].dstStageMask =
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+    dependencies[1].srcSubpass = 0;
+    dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[1].srcStageMask =
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
     VkRenderPassCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -220,8 +228,8 @@ void ToneMapPass::createRenderPass() {
     info.pAttachments = &color;
     info.subpassCount = 1;
     info.pSubpasses = &subpass;
-    info.dependencyCount = 1;
-    info.pDependencies = &dependency;
+    info.dependencyCount = static_cast<uint32_t>(dependencies.size());
+    info.pDependencies = dependencies.data();
     VK_CHECK(vkCreateRenderPass(device_->logicalDevice(), &info, nullptr,
                                 &renderPass_));
     device_->debugUtils().setObjectName(VK_OBJECT_TYPE_RENDER_PASS,
@@ -229,23 +237,27 @@ void ToneMapPass::createRenderPass() {
                                         "Pass/ToneMap/RenderPass");
 }
 
-void ToneMapPass::createFramebuffers() {
-    framebuffers_.resize(swapChain_->imageViews().size());
+void ToneMapPass::createFramebuffers(
+    const RenderResourceRegistry &resources) {
+    const VkExtent2D extent = resources.extent(viewportColor_);
+    framebuffers_.resize(MAX_FRAMES_IN_FLIGHT);
     for (size_t index = 0; index < framebuffers_.size(); ++index) {
-        const VkImageView attachment = swapChain_->imageViews()[index];
+        const VkImageView attachment =
+            resources.image(viewportColor_, static_cast<uint32_t>(index))
+                .imageView();
         VkFramebufferCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         info.renderPass = renderPass_;
         info.attachmentCount = 1;
         info.pAttachments = &attachment;
-        info.width = swapChain_->extent().width;
-        info.height = swapChain_->extent().height;
+        info.width = extent.width;
+        info.height = extent.height;
         info.layers = 1;
         VK_CHECK(vkCreateFramebuffer(device_->logicalDevice(), &info, nullptr,
                                      &framebuffers_[index]));
         device_->debugUtils().setObjectName(
             VK_OBJECT_TYPE_FRAMEBUFFER, framebuffers_[index],
-            "Pass/ToneMap/Framebuffer/Image" + std::to_string(index));
+            "Pass/ToneMap/Framebuffer/Frame" + std::to_string(index));
     }
 }
 

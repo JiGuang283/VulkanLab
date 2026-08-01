@@ -59,7 +59,7 @@ MainForwardPass::~MainForwardPass() {
         vkDestroyRenderPass(device_->logicalDevice(), renderPass_, nullptr);
 }
 
-void MainForwardPass::releaseSwapChainResources() {
+void MainForwardPass::releaseViewportResources() {
     destroyFramebuffers();
 }
 
@@ -91,8 +91,8 @@ std::vector<RenderImageUsage> MainForwardPass::resourceUsages() const {
     return usages;
 }
 
-void MainForwardPass::onResize(
-    const SwapChain &, const RenderResourceRegistry &resources) {
+void MainForwardPass::onViewportResize(
+    const RenderResourceRegistry &resources) {
     createFramebuffers(resources);
 }
 

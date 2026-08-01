@@ -16,7 +16,7 @@ class SwapChain;
 
 struct CaptureFrameSelection {
     uint64_t taskId = 0;
-    bool includeGui = false;
+    CaptureSourceKind source = CaptureSourceKind::Viewport;
 };
 
 class CaptureService {
@@ -35,8 +35,9 @@ class CaptureService {
     std::vector<CaptureTaskSnapshot> tasks() const;
 
     std::optional<CaptureFrameSelection>
-    prepareFrame(const SwapChain &swapChain);
-    void recordCopy(VkCommandBuffer commandBuffer, VkImage swapchainImage);
+    prepareFrame(const CaptureImageSource &viewport,
+                 const CaptureImageSource &workspace);
+    void recordCopy(VkCommandBuffer commandBuffer);
     void frameSubmitted(uint64_t submissionSerial);
     void update(uint64_t completedSubmissionSerial);
 

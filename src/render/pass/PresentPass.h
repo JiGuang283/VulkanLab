@@ -17,48 +17,47 @@ class RenderResourceRegistry;
 class SwapChain;
 struct RenderFrameContext;
 
-class ToneMapPass final : public IRenderPass {
+class PresentPass final : public IRenderPass {
   public:
-    ToneMapPass(Device &device, const RenderResourceRegistry &resources,
-                RenderImageHandle hdrColor,
-                RenderSamplerHandle hdrSampler,
-                RenderImageHandle bloomColor,
-                RenderSamplerHandle bloomSampler,
+    PresentPass(Device &device, SwapChain &swapChain,
+                const RenderResourceRegistry &resources,
                 RenderImageHandle viewportColor,
+                RenderSamplerHandle viewportSampler,
                 DescriptorAllocator &descriptorAllocator,
                 std::string fullscreenVertPath,
-                std::string toneMapFragPath);
-    ~ToneMapPass() override;
+                std::string presentFragPath);
+    ~PresentPass() override;
 
-    ToneMapPass(const ToneMapPass &) = delete;
-    ToneMapPass &operator=(const ToneMapPass &) = delete;
+    PresentPass(const PresentPass &) = delete;
+    PresentPass &operator=(const PresentPass &) = delete;
 
-    std::string_view name() const override { return "ToneMap"; }
+    std::string_view name() const override { return "Present + UI"; }
     std::vector<RenderImageUsage> resourceUsages() const override;
-    void releaseViewportResources() override;
+    void releaseViewportResources() override {}
     void onViewportResize(
         const RenderResourceRegistry &resources) override;
+    void releaseSwapChainResources() override;
+    void onSwapChainResize(const SwapChain &swapChain) override;
     void execute(const RenderFrameContext &frame,
                  const RenderResourceRegistry &resources,
                  const RenderQueue &queue) override;
 
+    VkRenderPass renderPass() const { return renderPass_; }
+
   private:
-    void createRenderPass(const RenderResourceRegistry &resources);
-    void createFramebuffers(const RenderResourceRegistry &resources);
+    void createRenderPass();
+    void createFramebuffers();
     void destroyFramebuffers();
     void createDescriptors(const RenderResourceRegistry &resources);
     void updateDescriptors(const RenderResourceRegistry &resources);
 
     Device *device_ = nullptr;
-    RenderImageHandle hdrColor_{};
-    RenderSamplerHandle hdrSampler_{};
-    RenderImageHandle bloomColor_{};
-    RenderSamplerHandle bloomSampler_{};
+    SwapChain *swapChain_ = nullptr;
     RenderImageHandle viewportColor_{};
+    RenderSamplerHandle viewportSampler_{};
     DescriptorAllocator *descriptorAllocator_ = nullptr;
     std::string fullscreenVertPath_;
-    std::string toneMapFragPath_;
-
+    std::string presentFragPath_;
     VkRenderPass renderPass_ = VK_NULL_HANDLE;
     std::vector<VkFramebuffer> framebuffers_;
     VkDescriptorSetLayout sourceDescriptorSetLayout_ = VK_NULL_HANDLE;

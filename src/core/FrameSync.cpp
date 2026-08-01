@@ -133,6 +133,16 @@ uint64_t FrameSync::endFrame(const FrameContext &ctx) {
     return submissionSerial;
 }
 
+void FrameSync::waitForAllFrames() {
+    std::array<VkFence, MAX_FRAMES_IN_FLIGHT> fences{};
+    for (uint32_t frame = 0; frame < frames_.size(); ++frame)
+        fences[frame] = frames_[frame].inFlight;
+    VK_CHECK(vkWaitForFences(device_->logicalDevice(),
+                             static_cast<uint32_t>(fences.size()),
+                             fences.data(), VK_TRUE, UINT64_MAX));
+    submissionSerials_.completeAll();
+}
+
 void FrameSync::onSwapChainRecreated() {
     VkDevice d = device_->logicalDevice();
     for (auto sem : renderFinished_)

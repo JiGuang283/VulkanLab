@@ -9,6 +9,8 @@
 #include <imgui_impl_vulkan.h>
 
 #include <stdexcept>
+#include <cstring>
+#include <string>
 
 namespace vkr {
 
@@ -74,6 +76,7 @@ GuiSystem::GuiSystem(VkInstance instance, Device &device,
 GuiSystem::~GuiSystem() {
     if (device_)
         vkDeviceWaitIdle(device_->logicalDevice());
+    clearViewportTextures();
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
@@ -107,6 +110,39 @@ bool GuiSystem::wantCaptureMouse() const {
 
 bool GuiSystem::wantCaptureKeyboard() const {
     return ImGui::GetIO().WantCaptureKeyboard;
+}
+
+void GuiSystem::setViewportTextures(
+    VkSampler sampler,
+    const std::array<VkImageView, MAX_FRAMES_IN_FLIGHT> &imageViews) {
+    clearViewportTextures();
+    for (uint32_t frame = 0; frame < viewportTextureSets_.size(); ++frame) {
+        viewportTextureSets_[frame] = ImGui_ImplVulkan_AddTexture(
+            sampler, imageViews[frame],
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        device_->debugUtils().setObjectName(
+            VK_OBJECT_TYPE_DESCRIPTOR_SET, viewportTextureSets_[frame],
+            "ImGui/ViewportTexture/Frame" + std::to_string(frame));
+    }
+}
+
+void GuiSystem::clearViewportTextures() {
+    for (VkDescriptorSet &set : viewportTextureSets_) {
+        if (set != VK_NULL_HANDLE) {
+            ImGui_ImplVulkan_RemoveTexture(set);
+            set = VK_NULL_HANDLE;
+        }
+    }
+}
+
+uint64_t GuiSystem::viewportTextureId(uint32_t frameIndex) const {
+    if (frameIndex >= viewportTextureSets_.size())
+        return 0;
+    uint64_t id = 0;
+    const VkDescriptorSet set = viewportTextureSets_[frameIndex];
+    static_assert(sizeof(set) <= sizeof(id));
+    std::memcpy(&id, &set, sizeof(set));
+    return id;
 }
 
 } // namespace vkr

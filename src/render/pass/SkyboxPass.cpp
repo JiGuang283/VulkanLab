@@ -62,12 +62,12 @@ std::vector<RenderImageUsage> SkyboxPass::resourceUsages() const {
              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}};
 }
 
-void SkyboxPass::releaseSwapChainResources() {
+void SkyboxPass::releaseViewportResources() {
     destroyFramebuffers();
 }
 
-void SkyboxPass::onResize(
-    const SwapChain &, const RenderResourceRegistry &resources) {
+void SkyboxPass::onViewportResize(
+    const RenderResourceRegistry &resources) {
     createFramebuffers(resources);
 }
 

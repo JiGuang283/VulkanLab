@@ -234,6 +234,11 @@ void checkDescriptors(const ReflectedModule &reflected,
         module.shader_stage == SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT &&
         reflected.path().find("postprocess/tonemap.frag") !=
             std::string::npos;
+    const bool present =
+        contract == vkr::ShaderProgramContract::Fullscreen &&
+        module.shader_stage == SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT &&
+        reflected.path().find("postprocess/present.frag") !=
+            std::string::npos;
     const VkShaderStageFlags stage =
         static_cast<VkShaderStageFlags>(module.shader_stage);
 
@@ -248,6 +253,16 @@ void checkDescriptors(const ReflectedModule &reflected,
                         SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
                     stage == VK_SHADER_STAGE_FRAGMENT_BIT,
                 "ToneMap descriptor contract mismatch in " + reflected.path());
+            continue;
+        }
+        if (present) {
+            requireShader(
+                binding->set == 0 && binding->binding == 0 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
+                    stage == VK_SHADER_STAGE_FRAGMENT_BIT,
+                "Present descriptor contract mismatch in " +
+                    reflected.path());
             continue;
         }
 

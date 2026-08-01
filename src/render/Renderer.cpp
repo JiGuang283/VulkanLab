@@ -4,6 +4,7 @@
 #include "core/Device.h"
 #include "core/FrameSync.h"
 #include "core/GpuDebugUtils.h"
+#include "core/Image.h"
 #include "core/SwapChain.h"
 #include "core/UploadContext.h"
 #include "core/VulkanCheck.h"
@@ -21,12 +22,15 @@
 #include "render/pass/MainForwardPass.h"
 #include "render/pass/SkyboxPass.h"
 #include "render/pass/ToneMapPass.h"
+#include "render/pass/PresentPass.h"
 #include "render/pass/BloomPass.h"
 #include "diagnostics/TracyProfiler.h"
 #include "diagnostics/Profiling.h"
 
 #include <cstring>
+#include <algorithm>
 #include <memory>
+#include <stdexcept>
 #include <utility>
 
 namespace vkr {
@@ -42,8 +46,20 @@ Renderer::Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
     createGlobalDescriptorSetLayout();
     createGlobalDescriptorSets();
     renderResources_ = std::make_unique<RenderResourceRegistry>(device);
-    resourceHandles_ =
-        registerDefaultRendererResources(*renderResources_, device);
+    VkFormatProperties viewportFormatProperties{};
+    vkGetPhysicalDeviceFormatProperties(device.physicalDevice(),
+                                        swapChain.imageFormat(),
+                                        &viewportFormatProperties);
+    constexpr VkFormatFeatureFlags kViewportFeatures =
+        VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+    if ((viewportFormatProperties.optimalTilingFeatures &
+         kViewportFeatures) != kViewportFeatures) {
+        throw std::runtime_error(
+            "swapchain format cannot be used as a sampled viewport target");
+    }
+    resourceHandles_ = registerDefaultRendererResources(
+        *renderResources_, device, swapChain.imageFormat());
     renderResources_->realize(swapChain.extent());
     createLightingDescriptorSetLayout();
     createFallbackEnvironment();
@@ -86,7 +102,8 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.cmd = frame.cmd;
     renderFrame.frameIndex = frame.frameIndex;
     renderFrame.imageIndex = frame.imageIndex;
-    renderFrame.extent = swapChain_->extent();
+    renderFrame.viewportExtent = renderResources_->viewportExtent();
+    renderFrame.swapchainExtent = swapChain_->extent();
     renderFrame.globalDescriptorSet = globalDescriptorSet(frame.frameIndex);
     renderFrame.globalDescriptorSetLayout = globalDescriptorSetLayout_;
     renderFrame.lightingDescriptorSet =
@@ -113,13 +130,48 @@ void Renderer::recreateSwapChain() {
 
     pipeline_.releaseSwapChainResources();
     swapChain_->recreate();
-    renderResources_->recreateExtentDependent(swapChain_->extent());
+    pipeline_.onSwapChainResize(*swapChain_);
+}
+
+void Renderer::resizeViewport(VkExtent2D extent) {
+    if (extent.width == 0 || extent.height == 0 ||
+        (extent.width == renderResources_->viewportExtent().width &&
+         extent.height == renderResources_->viewportExtent().height)) {
+        return;
+    }
+    const uint32_t maxImageDimension =
+        device_->physicalDeviceProperties().limits.maxImageDimension2D;
+    extent.width = std::min(extent.width, maxImageDimension);
+    extent.height = std::min(extent.height, maxImageDimension);
+
+    pipeline_.releaseViewportResources();
+    renderResources_->recreateViewportDependent(extent);
     pipeline_.validateResources(*renderResources_);
-    pipeline_.onResize(*swapChain_, *renderResources_);
+    pipeline_.onViewportResize(*renderResources_);
 }
 
 VkRenderPass Renderer::renderPass() const {
-    return toneMapPass_ ? toneMapPass_->renderPass() : VK_NULL_HANDLE;
+    return presentPass_ ? presentPass_->renderPass() : VK_NULL_HANDLE;
+}
+
+VkExtent2D Renderer::viewportExtent() const {
+    return renderResources_->viewportExtent();
+}
+
+RendererViewportOutput Renderer::viewportOutput() const {
+    RendererViewportOutput output{};
+    output.extent = renderResources_->viewportExtent();
+    output.format =
+        renderResources_->description(resourceHandles_.viewportColor).format;
+    output.sampler =
+        renderResources_->sampler(resourceHandles_.viewportSampler);
+    for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+        const Image &image =
+            renderResources_->image(resourceHandles_.viewportColor, frame);
+        output.images[frame] = image.handle();
+        output.imageViews[frame] = image.imageView();
+    }
+    return output;
 }
 
 void Renderer::createUniformBuffers() {
@@ -417,12 +469,21 @@ void Renderer::createRenderPipeline() {
     }
 
     auto toneMapPass = std::make_unique<ToneMapPass>(
-        *device_, *swapChain_, *renderResources_, resourceHandles_.hdrColor,
+        *device_, *renderResources_, resourceHandles_.hdrColor,
         resourceHandles_.hdrSampler, resourceHandles_.bloomLevels.front(),
-        resourceHandles_.bloomSampler, *descriptorAllocator_,
+        resourceHandles_.bloomSampler, resourceHandles_.viewportColor,
+        *descriptorAllocator_,
         shaderPaths_.fullscreenVert, shaderPaths_.toneMapFrag);
     toneMapPass_ = toneMapPass.get();
     pipeline_.addPass(std::move(toneMapPass));
+
+    auto presentPass = std::make_unique<PresentPass>(
+        *device_, *swapChain_, *renderResources_,
+        resourceHandles_.viewportColor, resourceHandles_.viewportSampler,
+        *descriptorAllocator_, shaderPaths_.fullscreenVert,
+        shaderPaths_.presentFrag);
+    presentPass_ = presentPass.get();
+    pipeline_.addPass(std::move(presentPass));
     pipeline_.validateResources(*renderResources_);
 }
 

@@ -32,8 +32,6 @@ class DirectionalShadowPass final : public IRenderPass {
         return "DirectionalShadow";
     }
     std::vector<RenderImageUsage> resourceUsages() const override;
-    void onResize(const SwapChain &,
-                  const RenderResourceRegistry &) override {}
     void execute(const RenderFrameContext &frame,
                  const RenderResourceRegistry &resources,
                  const RenderQueue &queue) override;

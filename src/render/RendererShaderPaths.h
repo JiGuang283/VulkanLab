@@ -9,6 +9,7 @@ struct RendererShaderPaths {
     std::string shadowMaskFrag;
     std::string fullscreenVert;
     std::string toneMapFrag;
+    std::string presentFrag;
     std::string skyboxFrag;
     std::string bloomDownsampleComp;
     std::string bloomUpsampleComp;

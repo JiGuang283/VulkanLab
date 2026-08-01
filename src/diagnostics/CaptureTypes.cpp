@@ -32,6 +32,16 @@ const char *captureTaskStateName(CaptureTaskState state) {
     return "Unknown";
 }
 
+const char *captureSourceKindName(CaptureSourceKind source) {
+    switch (source) {
+    case CaptureSourceKind::Viewport:
+        return "Viewport";
+    case CaptureSourceKind::Workspace:
+        return "Workspace";
+    }
+    return "Unknown";
+}
+
 bool isTerminalCaptureTaskState(CaptureTaskState state) {
     return state == CaptureTaskState::Completed ||
            state == CaptureTaskState::Failed ||

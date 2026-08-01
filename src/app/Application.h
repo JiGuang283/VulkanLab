@@ -19,6 +19,7 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -83,6 +84,10 @@ class Application final
     void processCameraInput(float dt);
     void drawGui();
     void handleSwapChainRecreate();
+#if VKL_ENABLE_EDITOR_UI
+    void bindViewportTextures();
+    void applyPendingViewportResize();
+#endif
     const ShaderVariant &currentShaderVariant() const;
     void applySceneCameraDefaults();
 #if VKL_ENABLE_RUNTIME_CONTROL
@@ -199,6 +204,18 @@ class Application final
     std::unique_ptr<GuiSystem>           gui_;
 #if VKL_ENABLE_EDITOR_UI
     std::unique_ptr<EditorDockWorkspace> editorDockWorkspace_;
+    struct ViewportResizeState {
+        uint32_t desiredWidth = 0;
+        uint32_t desiredHeight = 0;
+        std::chrono::steady_clock::time_point changedAt{};
+        bool pending = false;
+        bool immediate = false;
+        bool measured = false;
+    } viewportResize_;
+    uint32_t viewportDisplayWidth_ = 0;
+    uint32_t viewportDisplayHeight_ = 0;
+    bool viewportVisible_ = false;
+    bool viewportHovered_ = false;
 #endif
     std::unique_ptr<CaptureService>      captureService_;
     RenderQueue                          renderQueue_;

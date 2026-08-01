@@ -24,6 +24,25 @@ enum class CaptureTaskState {
     Cancelled,
 };
 
+enum class CaptureSourceKind {
+    Viewport,
+    Workspace,
+};
+
+struct CaptureImageSource {
+    CaptureSourceKind kind = CaptureSourceKind::Viewport;
+    VkImage image = VK_NULL_HANDLE;
+    VkExtent2D extent{};
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkPipelineStageFlags sourceStage = 0;
+    VkAccessFlags sourceAccess = 0;
+    VkPipelineStageFlags restoreStage = 0;
+    VkAccessFlags restoreAccess = 0;
+    bool supported = false;
+    std::string unsupportedReason;
+};
+
 struct CaptureTimings {
     double recordingMs = 0.0;
     double gpuWaitMs = 0.0;
@@ -42,6 +61,7 @@ struct CaptureResult {
     uint32_t width = 0;
     uint32_t height = 0;
     VkFormat format = VK_FORMAT_UNDEFINED;
+    CaptureSourceKind source = CaptureSourceKind::Viewport;
     uint64_t frameSerial = 0;
     std::filesystem::path outputPath;
     std::string sha256;
@@ -64,6 +84,7 @@ struct CaptureFormatDescription {
 };
 
 const char *captureTaskStateName(CaptureTaskState state);
+const char *captureSourceKindName(CaptureSourceKind source);
 bool isTerminalCaptureTaskState(CaptureTaskState state);
 bool isValidCaptureTaskTransition(CaptureTaskState from,
                                   CaptureTaskState to);

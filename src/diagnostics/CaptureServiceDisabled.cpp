@@ -23,11 +23,12 @@ std::optional<CaptureTaskSnapshot> CaptureService::task(uint64_t) const {
 std::vector<CaptureTaskSnapshot> CaptureService::tasks() const { return {}; }
 
 std::optional<CaptureFrameSelection>
-CaptureService::prepareFrame(const SwapChain &) {
+CaptureService::prepareFrame(const CaptureImageSource &,
+                             const CaptureImageSource &) {
     return std::nullopt;
 }
 
-void CaptureService::recordCopy(VkCommandBuffer, VkImage) {}
+void CaptureService::recordCopy(VkCommandBuffer) {}
 
 void CaptureService::frameSubmitted(uint64_t) {}
 

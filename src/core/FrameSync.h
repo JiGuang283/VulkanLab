@@ -37,6 +37,9 @@ class FrameSync {
     std::optional<FrameContext> beginFrame();
     uint64_t                    endFrame(const FrameContext &ctx);
 
+    uint32_t nextFrameIndex() const { return currentFrame_; }
+    void waitForAllFrames();
+
     void notifyResize() { framebufferResized_ = true; }
 
     /// 如果为 true，调用方应执行交换链重建后调 onSwapChainRecreated()

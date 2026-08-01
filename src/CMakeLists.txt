@@ -160,6 +160,7 @@ set(VKL_ENGINE_SOURCES
     render/pass/BloomPass.cpp
     render/pass/SkyboxPass.cpp
     render/pass/ToneMapPass.cpp
+    render/pass/PresentPass.cpp
     scene/BuiltinScenes.cpp
     scene/Camera.cpp
     scene/Scene.cpp

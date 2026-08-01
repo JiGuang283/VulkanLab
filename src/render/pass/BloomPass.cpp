@@ -114,13 +114,13 @@ std::vector<RenderImageUsage> BloomPass::resourceUsages() const {
     return usages;
 }
 
-void BloomPass::releaseSwapChainResources() {
+void BloomPass::releaseViewportResources() {
     freeDescriptors();
     initialized_.fill(false);
 }
 
-void BloomPass::onResize(const SwapChain &,
-                         const RenderResourceRegistry &resources) {
+void BloomPass::onViewportResize(
+    const RenderResourceRegistry &resources) {
     createDescriptors(resources);
     initialized_.fill(false);
 }

@@ -16,7 +16,8 @@ struct RenderFrameContext {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     uint32_t        frameIndex = 0;
     uint32_t        imageIndex = 0;
-    VkExtent2D      extent{};
+    VkExtent2D      viewportExtent{};
+    VkExtent2D      swapchainExtent{};
     VkDescriptorSet globalDescriptorSet = VK_NULL_HANDLE;
     VkDescriptorSetLayout globalDescriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorSet lightingDescriptorSet = VK_NULL_HANDLE;

@@ -22,9 +22,10 @@ class RenderPipeline {
     RenderPipeline &operator=(const RenderPipeline &) = delete;
 
     void addPass(std::unique_ptr<IRenderPass> pass);
+    void releaseViewportResources();
+    void onViewportResize(const RenderResourceRegistry &resources);
     void releaseSwapChainResources();
-    void onResize(const SwapChain &swapChain,
-                  const RenderResourceRegistry &resources);
+    void onSwapChainResize(const SwapChain &swapChain);
     void validateResources(const RenderResourceRegistry &resources) const;
     std::vector<std::string> passNames() const;
     void execute(const RenderFrameContext &frame,

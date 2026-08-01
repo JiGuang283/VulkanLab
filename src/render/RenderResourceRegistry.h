@@ -34,7 +34,7 @@ struct RenderSamplerHandle {
 };
 
 enum class RenderExtentPolicy {
-    Swapchain,
+    Viewport,
     Fixed,
 };
 
@@ -45,7 +45,7 @@ enum class RenderResourceMultiplicity {
 
 struct RenderImageDesc {
     std::string name;
-    RenderExtentPolicy extentPolicy = RenderExtentPolicy::Swapchain;
+    RenderExtentPolicy extentPolicy = RenderExtentPolicy::Viewport;
     VkExtent2D fixedExtent{};
     RenderResourceMultiplicity multiplicity =
         RenderResourceMultiplicity::PerFrame;
@@ -107,9 +107,11 @@ struct RendererResourceHandles {
     RenderImageHandle hdrColor{};
     RenderImageHandle hdrMsaaColor{};
     RenderImageHandle mainDepth{};
+    RenderImageHandle viewportColor{};
     RenderImageHandle directionalShadowDepth{};
     std::array<RenderImageHandle, kBloomPyramidLevelCount> bloomLevels{};
     RenderSamplerHandle hdrSampler{};
+    RenderSamplerHandle viewportSampler{};
     RenderSamplerHandle shadowSampler{};
     RenderSamplerHandle bloomSampler{};
 };
@@ -126,9 +128,9 @@ class RenderResourceRegistry {
 
     RenderImageHandle registerImage(RenderImageDesc desc);
     RenderSamplerHandle registerSampler(RenderSamplerDesc desc);
-    void realize(VkExtent2D swapchainExtent);
-    void releaseExtentDependent();
-    void recreateExtentDependent(VkExtent2D swapchainExtent);
+    void realize(VkExtent2D viewportExtent);
+    void releaseViewportDependent();
+    void recreateViewportDependent(VkExtent2D viewportExtent);
 
     bool valid(RenderImageHandle handle) const;
     bool valid(RenderSamplerHandle handle) const;
@@ -139,7 +141,7 @@ class RenderResourceRegistry {
     const Image &image(RenderImageHandle handle, uint32_t frameIndex) const;
     VkSampler sampler(RenderSamplerHandle handle) const;
     VkExtent2D extent(RenderImageHandle handle) const;
-    VkExtent2D swapchainExtent() const { return swapchainExtent_; }
+    VkExtent2D viewportExtent() const { return viewportExtent_; }
     uint32_t frameCount() const { return frameCount_; }
 
   private:
@@ -148,7 +150,7 @@ class RenderResourceRegistry {
 
     Device *device_ = nullptr;
     uint32_t frameCount_ = 0;
-    VkExtent2D swapchainExtent_{};
+    VkExtent2D viewportExtent_{};
     bool realized_ = false;
     std::vector<RenderImageDesc> imageDescriptions_;
     std::vector<std::vector<std::unique_ptr<Image>>> images_;
@@ -158,7 +160,8 @@ class RenderResourceRegistry {
 
 RendererResourceHandles
 registerDefaultRendererResources(RenderResourceRegistry &registry,
-                                 Device &device);
+                                 Device &device,
+                                 VkFormat viewportColorFormat);
 
 void validateRenderResourceContracts(
     const std::vector<RenderImageDesc> &descriptions,

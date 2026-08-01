@@ -27,9 +27,9 @@ class MainForwardPass final : public IRenderPass {
 
     std::string_view name() const override { return "MainForward"; }
     std::vector<RenderImageUsage> resourceUsages() const override;
-    void releaseSwapChainResources() override;
-    void onResize(const SwapChain &swapChain,
-                  const RenderResourceRegistry &resources) override;
+    void releaseViewportResources() override;
+    void onViewportResize(
+        const RenderResourceRegistry &resources) override;
     void execute(const RenderFrameContext &frame,
                  const RenderResourceRegistry &resources,
                  const RenderQueue &queue) override;

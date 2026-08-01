@@ -23,10 +23,19 @@ struct EnvironmentGpuResources;
 class GuiSystem;
 class MainForwardPass;
 class ToneMapPass;
+class PresentPass;
 class PipelineCache;
 class RenderQueue;
 struct ShaderVariant;
 struct RenderView;
+
+struct RendererViewportOutput {
+    VkExtent2D extent{};
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    VkSampler sampler = VK_NULL_HANDLE;
+    std::array<VkImage, MAX_FRAMES_IN_FLIGHT> images{};
+    std::array<VkImageView, MAX_FRAMES_IN_FLIGHT> imageViews{};
+};
 
 class Renderer {
   public:
@@ -45,9 +54,12 @@ class Renderer {
 
     // ---- 交换链重建 ----
     void recreateSwapChain();
+    void resizeViewport(VkExtent2D extent);
 
     // ---- 访问器 ----
     VkRenderPass renderPass() const;
+    VkExtent2D viewportExtent() const;
+    RendererViewportOutput viewportOutput() const;
     const GpuPassTimings &gpuPassTimings() const;
     VkDescriptorSetLayout globalDescriptorSetLayout() const {
         return globalDescriptorSetLayout_;
@@ -106,6 +118,7 @@ class Renderer {
     std::unique_ptr<GpuPassProfiler> gpuPassProfiler_;
     MainForwardPass *mainForwardPass_ = nullptr;
     ToneMapPass *toneMapPass_ = nullptr;
+    PresentPass *presentPass_ = nullptr;
 };
 
 } // namespace vkr

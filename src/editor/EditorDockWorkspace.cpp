@@ -4,6 +4,7 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <string>
 
@@ -16,7 +17,8 @@ namespace {
 
 constexpr const char *kHostWindow =
     "VulkanLab DockSpace###VulkanLab.DockHost";
-constexpr const char *kDockspaceName = "VulkanLab.DockSpace.v1";
+constexpr const char *kDockspaceName = "VulkanLab.DockSpace.v2";
+constexpr const char *kViewportWindow = "Viewport###VulkanLab.Viewport";
 constexpr const char *kScenesWindow = "Scenes###VulkanLab.Scenes";
 constexpr const char *kAssetsWindow = "Assets###VulkanLab.Assets";
 constexpr const char *kRenderWindow = "Render###VulkanLab.Render";
@@ -28,6 +30,7 @@ constexpr float kCompactLayoutWidth = 1200.0f;
 } // namespace
 
 void EditorDockWorkspace::draw(const EditorFrameStatus &status,
+                               const EditorViewportFrame &viewportFrame,
                                const EditorPanelCallbacks &panels) {
     const ImGuiViewport *viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
@@ -60,34 +63,15 @@ void EditorDockWorkspace::draw(const EditorFrameStatus &status,
         resetLayoutRequested_ = false;
     }
 
-    ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f),
-                     ImGuiDockNodeFlags_PassthruCentralNode);
-
-    if (const ImGuiDockNode *central =
-            ImGui::DockBuilderGetCentralNode(dockspaceId)) {
-        sceneArea_ = {central->Pos.x,
-                      central->Pos.y,
-                      central->Pos.x + central->Size.x,
-                      central->Pos.y + central->Size.y,
-                      central->Size.x > 0.0f && central->Size.y > 0.0f};
-    } else {
-        sceneArea_.valid = false;
-    }
+    ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f));
     ImGui::End();
 
+    drawViewport(viewportFrame);
     drawPanel(kScenesWindow, scenesVisible_, panels.scenes);
     drawPanel(kAssetsWindow, assetsVisible_, panels.assets);
     drawPanel(kRenderWindow, renderVisible_, panels.render);
     drawPanel(kMaterialsWindow, materialsVisible_, panels.materials);
     drawPanel(kDiagnosticsWindow, diagnosticsVisible_, panels.diagnostics);
-}
-
-bool EditorDockWorkspace::sceneAreaHovered() const {
-    if (!sceneArea_.valid)
-        return false;
-    const ImVec2 mouse = ImGui::GetIO().MousePos;
-    return mouse.x >= sceneArea_.minX && mouse.x < sceneArea_.maxX &&
-           mouse.y >= sceneArea_.minY && mouse.y < sceneArea_.maxY;
 }
 
 void EditorDockWorkspace::buildDefaultLayout(unsigned int dockspaceId,
@@ -98,6 +82,7 @@ void EditorDockWorkspace::buildDefaultLayout(unsigned int dockspaceId,
     renderVisible_ = true;
     materialsVisible_ = true;
     diagnosticsVisible_ = true;
+    viewportVisible_ = true;
 
     ImGui::DockBuilderRemoveNode(dockspaceId);
     ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
@@ -139,6 +124,7 @@ void EditorDockWorkspace::buildDefaultLayout(unsigned int dockspaceId,
                                     &bottomId, &centerId);
         ImGui::DockBuilderDockWindow(kDiagnosticsWindow, bottomId);
     }
+    ImGui::DockBuilderDockWindow(kViewportWindow, centerId);
 
     ImGui::DockBuilderFinish(dockspaceId);
 }
@@ -148,6 +134,7 @@ void EditorDockWorkspace::drawMenuBar(const EditorFrameStatus &status) {
         return;
 
     if (ImGui::BeginMenu("View")) {
+        ImGui::MenuItem("Viewport", nullptr, &viewportVisible_);
         ImGui::MenuItem("Scenes", nullptr, &scenesVisible_);
         ImGui::MenuItem("Assets", nullptr, &assetsVisible_);
         ImGui::MenuItem("Render", nullptr, &renderVisible_);
@@ -192,6 +179,56 @@ void EditorDockWorkspace::drawMenuBar(const EditorFrameStatus &status) {
     }
 
     ImGui::EndMenuBar();
+}
+
+void EditorDockWorkspace::drawViewport(
+    const EditorViewportFrame &viewport) {
+    viewportState_ = {};
+    if (!viewportVisible_)
+        return;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar |
+                                   ImGuiWindowFlags_NoScrollWithMouse;
+    const bool open = ImGui::Begin(kViewportWindow, &viewportVisible_, flags);
+    if (open) {
+        const ImVec2 origin = ImGui::GetCursorScreenPos();
+        const ImVec2 available = ImGui::GetContentRegionAvail();
+        const float width = std::max(available.x, 0.0f);
+        const float height = std::max(available.y, 0.0f);
+        const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
+
+        viewportState_.minX = origin.x;
+        viewportState_.minY = origin.y;
+        viewportState_.maxX = origin.x + width;
+        viewportState_.maxY = origin.y + height;
+        viewportState_.logicalWidth = width;
+        viewportState_.logicalHeight = height;
+        viewportState_.pixelWidth = static_cast<uint32_t>(std::lround(
+            width * std::max(scale.x, 0.0f)));
+        viewportState_.pixelHeight = static_cast<uint32_t>(std::lround(
+            height * std::max(scale.y, 0.0f)));
+        viewportState_.visible = true;
+        viewportState_.valid = width > 0.0f && height > 0.0f &&
+                               viewportState_.pixelWidth > 0 &&
+                               viewportState_.pixelHeight > 0;
+        viewportState_.focused = ImGui::IsWindowFocused(
+            ImGuiFocusedFlags_RootAndChildWindows);
+
+        if (viewportState_.valid) {
+            if (viewport.textureId != 0) {
+                ImGui::Image(
+                    ImTextureRef(
+                        static_cast<ImTextureID>(viewport.textureId)),
+                    ImVec2(width, height));
+            } else {
+                ImGui::Dummy(ImVec2(width, height));
+            }
+            viewportState_.hovered = ImGui::IsItemHovered();
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleVar();
 }
 
 void EditorDockWorkspace::drawPanel(

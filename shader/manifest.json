@@ -103,6 +103,12 @@
       "fragment": "postprocess/tonemap.frag"
     },
     {
+      "id": "postprocess.present",
+      "contract": "fullscreen",
+      "vertex": "postprocess/fullscreen.vert",
+      "fragment": "postprocess/present.frag"
+    },
+    {
       "id": "postprocess.bloom-downsample",
       "contract": "compute",
       "compute": "postprocess/bloom_downsample.comp"

@@ -19,4 +19,12 @@ bool GuiSystem::wantCaptureMouse() const { return false; }
 
 bool GuiSystem::wantCaptureKeyboard() const { return false; }
 
+void GuiSystem::setViewportTextures(
+    VkSampler,
+    const std::array<VkImageView, MAX_FRAMES_IN_FLIGHT> &) {}
+
+void GuiSystem::clearViewportTextures() {}
+
+uint64_t GuiSystem::viewportTextureId(uint32_t) const { return 0; }
+
 } // namespace vkr

@@ -18,9 +18,10 @@ class IRenderPass {
 
     virtual std::string_view name() const = 0;
     virtual std::vector<RenderImageUsage> resourceUsages() const = 0;
+    virtual void releaseViewportResources() {}
+    virtual void onViewportResize(const RenderResourceRegistry &) {}
     virtual void releaseSwapChainResources() {}
-    virtual void onResize(const SwapChain &swapChain,
-                          const RenderResourceRegistry &resources) = 0;
+    virtual void onSwapChainResize(const SwapChain &) {}
     virtual void execute(const RenderFrameContext &frame,
                          const RenderResourceRegistry &resources,
                          const RenderQueue &queue) = 0;

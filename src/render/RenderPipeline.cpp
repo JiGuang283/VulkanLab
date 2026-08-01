@@ -24,10 +24,20 @@ void RenderPipeline::releaseSwapChainResources() {
         (*pass)->releaseSwapChainResources();
 }
 
-void RenderPipeline::onResize(const SwapChain &swapChain,
-                              const RenderResourceRegistry &resources) {
+void RenderPipeline::releaseViewportResources() {
+    for (auto pass = passes_.rbegin(); pass != passes_.rend(); ++pass)
+        (*pass)->releaseViewportResources();
+}
+
+void RenderPipeline::onViewportResize(
+    const RenderResourceRegistry &resources) {
     for (auto &pass : passes_)
-        pass->onResize(swapChain, resources);
+        pass->onViewportResize(resources);
+}
+
+void RenderPipeline::onSwapChainResize(const SwapChain &swapChain) {
+    for (auto &pass : passes_)
+        pass->onSwapChainResize(swapChain);
 }
 
 void RenderPipeline::validateResources(

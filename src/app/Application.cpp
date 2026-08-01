@@ -525,6 +525,7 @@ ControlJson captureTaskToJson(const CaptureTaskSnapshot &task) {
             {"width", task.result.width},
             {"height", task.result.height},
             {"format", describeCaptureFormat(task.result.format).name},
+            {"source", captureSourceKindName(task.result.source)},
             {"frameSerial", task.result.frameSerial},
             {"outputPath", task.result.outputPath.u8string()},
             {"sha256", task.result.sha256},
@@ -911,6 +912,8 @@ void Application::init() {
     const ShaderProgram &shadowMask = shaderRegistry_.program("shadow.mask");
     const ShaderProgram &toneMap =
         shaderRegistry_.program("postprocess.tonemap");
+    const ShaderProgram &present =
+        shaderRegistry_.program("postprocess.present");
     const ShaderProgram &bloomDownsample =
         shaderRegistry_.program("postprocess.bloom-downsample");
     const ShaderProgram &bloomUpsample =
@@ -921,7 +924,8 @@ void Application::init() {
         RendererShaderPaths{
             shadowOpaque.vertSpvPath, shadowMask.fragSpvPath,
             toneMap.vertSpvPath, toneMap.fragSpvPath,
-            skybox.fragSpvPath, bloomDownsample.computeSpvPath,
+            present.fragSpvPath, skybox.fragSpvPath,
+            bloomDownsample.computeSpvPath,
             bloomUpsample.computeSpvPath});
 #if VKL_ENABLE_CAPTURE
     if (!projectContext_.cookedPackage) {
@@ -1000,6 +1004,7 @@ void Application::init() {
             context_->instance(), *device_, renderer_->renderPass(),
             window_->handle(), swapChain_->imageCount(),
             swapChain_->imageCount());
+        bindViewportTextures();
     }
 #endif
 }
@@ -2498,8 +2503,11 @@ ControlJson Application::runtimeRenderStatus() {
     }
 
     const bool captureEnabled = captureService_ != nullptr;
-    const bool captureSupported =
+    const bool workspaceCaptureSupported =
         captureEnabled && swapChain_->captureSupported();
+    const bool viewportCaptureSupported =
+        captureEnabled &&
+        describeCaptureFormat(renderer_->viewportOutput().format).supported;
     const GpuPassTimings &gpuTimings = renderer_->gpuPassTimings();
     ControlJson gpuPasses = ControlJson::object();
     for (const GpuPassTiming &pass : gpuTimings.passes)
@@ -2525,6 +2533,21 @@ ControlJson Application::runtimeRenderStatus() {
             }
         }
     }
+    const VkExtent2D viewportRenderExtent = renderer_->viewportExtent();
+    uint32_t viewportDisplayWidth = swapChain_->extent().width;
+    uint32_t viewportDisplayHeight = swapChain_->extent().height;
+    bool viewportVisible = true;
+    bool viewportHovered = false;
+    bool viewportResizePending = false;
+#if VKL_ENABLE_EDITOR_UI
+    if (gui_) {
+        viewportDisplayWidth = viewportDisplayWidth_;
+        viewportDisplayHeight = viewportDisplayHeight_;
+        viewportVisible = viewportVisible_;
+        viewportHovered = viewportHovered_;
+        viewportResizePending = viewportResize_.pending;
+    }
+#endif
     return {
         {"scene", std::move(scene)},
         {"sceneGeneration", sceneGeneration_},
@@ -2570,12 +2593,26 @@ ControlJson Application::runtimeRenderStatus() {
         {"captureQueue", std::move(captureQueue)},
         {"capture",
          {{"enabled", captureEnabled},
-          {"supported", captureSupported},
+          {"supported",
+           viewportCaptureSupported || workspaceCaptureSupported},
+          {"viewportSupported", viewportCaptureSupported},
+          {"workspaceSupported", workspaceCaptureSupported},
           {"accepting",
            captureEnabled && captureService_->acceptingRequests()},
-          {"reason", captureEnabled && !captureSupported
+          {"reason", captureEnabled && !workspaceCaptureSupported
                          ? swapChain_->captureUnsupportedReason()
                          : std::string{}}}},
+        {"viewport",
+         {{"mode", gui_ ? "editor" : "fullscreen"},
+          {"visible", viewportVisible},
+          {"hovered", viewportHovered},
+          {"displayExtent",
+           {{"width", viewportDisplayWidth},
+            {"height", viewportDisplayHeight}}},
+          {"renderExtent",
+           {{"width", viewportRenderExtent.width},
+            {"height", viewportRenderExtent.height}}},
+          {"resizePending", viewportResizePending}}},
         {"guiVisible", config_.diagnostics.guiVisible},
         {"minimized", minimized},
         {"swapchainRecreatePending", recreatePending},
@@ -2830,10 +2867,11 @@ void Application::updateInputMode() {
         const bool pressed = input_->isMousePressed(MouseButton::Right);
         bool overUI = gui_ && gui_->wantCaptureMouse();
 #if VKL_ENABLE_EDITOR_UI
+        const bool overSceneArea = !gui_ || !editorDockWorkspace_ ||
+                                   editorDockWorkspace_->viewportState().hovered;
+        if (overSceneArea)
+            overUI = false;
         overUI = overUI || (io && ImGui::IsAnyItemActive());
-        const bool overSceneArea =
-            !gui_ || !editorDockWorkspace_ ||
-            editorDockWorkspace_->sceneAreaHovered();
 #else
         constexpr bool overSceneArea = true;
 #endif
@@ -3974,7 +4012,8 @@ void Application::drawCapturePanel() {
     }
 
     ImGui::Checkbox("Include GUI", &captureIncludeGui_);
-    const bool supported = swapChain_->captureSupported();
+    const bool supported =
+        !captureIncludeGui_ || swapChain_->captureSupported();
     ImGui::BeginDisabled(!supported);
     if (ImGui::Button("Capture"))
         requestManualCapture(captureIncludeGui_);
@@ -4012,8 +4051,8 @@ void Application::drawCapturePanel() {
             static_cast<unsigned long long>(task.request.taskId),
             captureTaskStateName(task.state));
         if (open) {
-            ImGui::Text("GUI: %s", task.request.includeGui ? "Included"
-                                                           : "Excluded");
+            ImGui::Text("Source: %s",
+                        task.request.includeGui ? "Workspace" : "Viewport");
             if (task.result.width != 0) {
                 ImGui::Text("Image: %ux%u %s", task.result.width,
                             task.result.height,
@@ -4944,10 +4983,80 @@ void Application::drawGui() {
         }
     };
 
-    editorDockWorkspace_->draw(status, panels);
+    const VkExtent2D renderExtent = renderer_->viewportExtent();
+    EditorViewportFrame viewportFrame{};
+    viewportFrame.textureId =
+        gui_->viewportTextureId(frameSync_->nextFrameIndex());
+    viewportFrame.renderWidth = renderExtent.width;
+    viewportFrame.renderHeight = renderExtent.height;
+    editorDockWorkspace_->draw(status, viewportFrame, panels);
+
+    const EditorViewportState &viewport =
+        editorDockWorkspace_->viewportState();
+    viewportVisible_ = viewport.visible;
+    viewportHovered_ = viewport.hovered;
+    if (viewport.valid) {
+        viewportDisplayWidth_ = viewport.pixelWidth;
+        viewportDisplayHeight_ = viewport.pixelHeight;
+        camera_.setAspect(viewport.logicalWidth / viewport.logicalHeight);
+
+        const bool desiredChanged =
+            viewportResize_.desiredWidth != viewport.pixelWidth ||
+            viewportResize_.desiredHeight != viewport.pixelHeight;
+        if (desiredChanged) {
+            viewportResize_.desiredWidth = viewport.pixelWidth;
+            viewportResize_.desiredHeight = viewport.pixelHeight;
+            viewportResize_.changedAt = std::chrono::steady_clock::now();
+            viewportResize_.pending = true;
+            viewportResize_.immediate = !viewportResize_.measured;
+            viewportResize_.measured = true;
+        }
+    }
 }
 #else
 void Application::drawGui() {}
+#endif
+
+#if VKL_ENABLE_EDITOR_UI
+void Application::bindViewportTextures() {
+    if (!gui_ || !renderer_)
+        return;
+    const RendererViewportOutput output = renderer_->viewportOutput();
+    gui_->setViewportTextures(output.sampler, output.imageViews);
+}
+
+void Application::applyPendingViewportResize() {
+    if (!viewportResize_.pending || !renderer_ || !gui_)
+        return;
+    const VkExtent2D current = renderer_->viewportExtent();
+    if (current.width == viewportResize_.desiredWidth &&
+        current.height == viewportResize_.desiredHeight) {
+        viewportResize_.pending = false;
+        viewportResize_.immediate = false;
+        return;
+    }
+
+    constexpr auto kResizeDebounce = std::chrono::milliseconds(120);
+    if (!viewportResize_.immediate &&
+        std::chrono::steady_clock::now() - viewportResize_.changedAt <
+            kResizeDebounce) {
+        return;
+    }
+
+    frameSync_->waitForAllFrames();
+    if (captureService_) {
+        captureService_->update(frameSync_->completedSubmissionSerial());
+    }
+    gui_->clearViewportTextures();
+    renderer_->resizeViewport(
+        {viewportResize_.desiredWidth, viewportResize_.desiredHeight});
+    bindViewportTextures();
+    viewportResize_.pending = false;
+    viewportResize_.immediate = false;
+    VKR_LOG_DEBUG("Viewport", "Resized render target to {}x{}",
+                  renderer_->viewportExtent().width,
+                  renderer_->viewportExtent().height);
+}
 #endif
 
 void Application::handleSwapChainRecreate() {
@@ -4967,8 +5076,11 @@ void Application::handleSwapChainRecreate() {
     frameSync_->onSwapChainRecreated();
     if (gui_)
         gui_->onSwapChainRecreated(swapChain_->imageCount());
-    camera_.setAspect(static_cast<float>(swapChain_->extent().width) /
-                      static_cast<float>(swapChain_->extent().height));
+    if (!gui_) {
+        renderer_->resizeViewport(swapChain_->extent());
+        camera_.setAspect(static_cast<float>(swapChain_->extent().width) /
+                          static_cast<float>(swapChain_->extent().height));
+    }
 }
 
 const ShaderVariant &Application::currentShaderVariant() const {
@@ -5026,6 +5138,10 @@ void Application::mainLoop() {
                                    .count();
         lastTime = now;
 
+#if VKL_ENABLE_EDITOR_UI
+        applyPendingViewportResize();
+#endif
+
         // 3. ImGui 新帧
         if (gui_)
             gui_->beginFrame();
@@ -5081,7 +5197,49 @@ void Application::mainLoop() {
         if (captureService_) {
             captureService_->update(
                 frameSync_->completedSubmissionSerial());
-            captureSelection = captureService_->prepareFrame(*swapChain_);
+            const RendererViewportOutput viewportOutput =
+                renderer_->viewportOutput();
+            CaptureImageSource viewportSource{};
+            viewportSource.kind = CaptureSourceKind::Viewport;
+            viewportSource.image = viewportOutput.images[ctx->frameIndex];
+            viewportSource.extent = viewportOutput.extent;
+            viewportSource.format = viewportOutput.format;
+            viewportSource.layout =
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            viewportSource.sourceStage =
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            viewportSource.sourceAccess =
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                VK_ACCESS_SHADER_READ_BIT;
+            viewportSource.restoreStage =
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            viewportSource.restoreAccess = VK_ACCESS_SHADER_READ_BIT;
+            viewportSource.supported =
+                describeCaptureFormat(viewportSource.format).supported;
+            if (!viewportSource.supported) {
+                viewportSource.unsupportedReason =
+                    "viewport format is not supported for PNG capture";
+            }
+
+            CaptureImageSource workspaceSource{};
+            workspaceSource.kind = CaptureSourceKind::Workspace;
+            workspaceSource.image = swapChain_->image(ctx->imageIndex);
+            workspaceSource.extent = swapChain_->extent();
+            workspaceSource.format = swapChain_->imageFormat();
+            workspaceSource.layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            workspaceSource.sourceStage =
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            workspaceSource.sourceAccess =
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            workspaceSource.restoreStage =
+                VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+            workspaceSource.restoreAccess = 0;
+            workspaceSource.supported = swapChain_->captureSupported();
+            workspaceSource.unsupportedReason =
+                swapChain_->captureUnsupportedReason();
+            captureSelection = captureService_->prepareFrame(
+                viewportSource, workspaceSource);
         }
 
         RenderViewInput viewInput{};
@@ -5169,10 +5327,6 @@ void Application::mainLoop() {
         }
 
         GuiSystem *frameGui = gui_.get();
-        if (captureSelection && !captureSelection->includeGui && gui_) {
-            gui_->discardFrame();
-            frameGui = nullptr;
-        }
         {
             ScopedGpuLabel frameLabel(
                 device_->debugUtils(), ctx->cmd,
@@ -5183,8 +5337,7 @@ void Application::mainLoop() {
             if (captureSelection) {
                 VKL_PROFILE_GPU_ZONE(device_->tracyProfiler(), ctx->cmd,
                                      "ScreenshotCopy");
-                captureService_->recordCopy(
-                    ctx->cmd, swapChain_->image(ctx->imageIndex));
+                captureService_->recordCopy(ctx->cmd);
             }
         }
         device_->tracyProfiler().collect(ctx->cmd);

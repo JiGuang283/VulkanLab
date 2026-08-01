@@ -8,7 +8,6 @@
 #include "core/Device.h"
 #include "core/GpuDebugUtils.h"
 #include "core/Log.h"
-#include "core/SwapChain.h"
 
 #include <stb_image_write.h>
 
@@ -239,7 +238,8 @@ class CaptureService::Impl {
     }
 
     std::optional<CaptureFrameSelection>
-    prepareFrame(const SwapChain &swapChain) {
+    prepareFrame(const CaptureImageSource &viewport,
+                 const CaptureImageSource &workspace) {
         if (active_)
             return std::nullopt;
 
@@ -252,16 +252,26 @@ class CaptureService::Impl {
         runtime.recordingAt = Clock::now();
 
         try {
-            if (!swapChain.captureSupported())
-                throw std::runtime_error(swapChain.captureUnsupportedReason());
-            const VkExtent2D extent = swapChain.extent();
+            const CaptureImageSource &source =
+                task->request.includeGui ? workspace : viewport;
+            if (!source.supported)
+                throw std::runtime_error(source.unsupportedReason.empty()
+                                             ? "capture source is unsupported"
+                                             : source.unsupportedReason);
+            if (source.image == VK_NULL_HANDLE || source.extent.width == 0 ||
+                source.extent.height == 0)
+                throw std::runtime_error("capture source is invalid");
+            if (!describeCaptureFormat(source.format).supported)
+                throw std::runtime_error("capture source format is unsupported");
+            const VkExtent2D extent = source.extent;
             const uint64_t bytes =
                 checkedCaptureByteSize(extent.width, extent.height);
 
             ActiveCapture active;
             active.taskId = taskId;
             active.extent = extent;
-            active.format = swapChain.imageFormat();
+            active.format = source.format;
+            active.source = source;
             active.byteSize = bytes;
             active.buffer = std::make_unique<Buffer>(
                 *device_, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -272,15 +282,16 @@ class CaptureService::Impl {
             task->result.width = extent.width;
             task->result.height = extent.height;
             task->result.format = active.format;
+            task->result.source = source.kind;
             active_ = std::move(active);
-            return CaptureFrameSelection{taskId, task->request.includeGui};
+            return CaptureFrameSelection{taskId, source.kind};
         } catch (const std::exception &error) {
             failTask(taskId, error.what());
             return std::nullopt;
         }
     }
 
-    void recordCopy(VkCommandBuffer commandBuffer, VkImage swapchainImage) {
+    void recordCopy(VkCommandBuffer commandBuffer) {
         if (!active_)
             return;
         const CaptureTaskSnapshot *task = tasks_.find(active_->taskId);
@@ -294,20 +305,20 @@ class CaptureService::Impl {
 
         VkImageMemoryBarrier toTransfer{};
         toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        toTransfer.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        toTransfer.srcAccessMask = active_->source.sourceAccess;
         toTransfer.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        toTransfer.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        toTransfer.oldLayout = active_->source.layout;
         toTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         toTransfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toTransfer.image = swapchainImage;
+        toTransfer.image = active_->source.image;
         toTransfer.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         toTransfer.subresourceRange.baseMipLevel = 0;
         toTransfer.subresourceRange.levelCount = 1;
         toTransfer.subresourceRange.baseArrayLayer = 0;
         toTransfer.subresourceRange.layerCount = 1;
         vkCmdPipelineBarrier(commandBuffer,
-                             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                             active_->source.sourceStage,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
                              nullptr, 1, &toTransfer);
 
@@ -321,18 +332,18 @@ class CaptureService::Impl {
         copy.imageSubresource.layerCount = 1;
         copy.imageOffset = {0, 0, 0};
         copy.imageExtent = {active_->extent.width, active_->extent.height, 1};
-        vkCmdCopyImageToBuffer(commandBuffer, swapchainImage,
+        vkCmdCopyImageToBuffer(commandBuffer, active_->source.image,
                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                active_->buffer->handle(), 1, &copy);
 
-        VkImageMemoryBarrier toPresent = toTransfer;
-        toPresent.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        toPresent.dstAccessMask = 0;
-        toPresent.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        VkImageMemoryBarrier restore = toTransfer;
+        restore.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        restore.dstAccessMask = active_->source.restoreAccess;
+        restore.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        restore.newLayout = active_->source.layout;
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0,
-                             nullptr, 0, nullptr, 1, &toPresent);
+                             active_->source.restoreStage, 0, 0,
+                             nullptr, 0, nullptr, 1, &restore);
         active_->copyRecorded = true;
     }
 
@@ -588,6 +599,7 @@ class CaptureService::Impl {
         uint64_t taskId = 0;
         VkExtent2D extent{};
         VkFormat format = VK_FORMAT_UNDEFINED;
+        CaptureImageSource source{};
         uint64_t byteSize = 0;
         uint64_t submissionSerial = 0;
         bool copyRecorded = false;
@@ -635,13 +647,13 @@ std::vector<CaptureTaskSnapshot> CaptureService::tasks() const {
 }
 
 std::optional<CaptureFrameSelection>
-CaptureService::prepareFrame(const SwapChain &swapChain) {
-    return impl_->prepareFrame(swapChain);
+CaptureService::prepareFrame(const CaptureImageSource &viewport,
+                             const CaptureImageSource &workspace) {
+    return impl_->prepareFrame(viewport, workspace);
 }
 
-void CaptureService::recordCopy(VkCommandBuffer commandBuffer,
-                                VkImage swapchainImage) {
-    impl_->recordCopy(commandBuffer, swapchainImage);
+void CaptureService::recordCopy(VkCommandBuffer commandBuffer) {
+    impl_->recordCopy(commandBuffer);
 }
 
 void CaptureService::frameSubmitted(uint64_t submissionSerial) {

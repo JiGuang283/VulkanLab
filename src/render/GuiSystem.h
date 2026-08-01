@@ -1,5 +1,9 @@
 #pragma once
 
+#include "core/FrameSync.h"
+
+#include <array>
+#include <cstdint>
 #include <vulkan/vulkan.h>
 
 struct GLFWwindow;
@@ -37,9 +41,17 @@ class GuiSystem {
     bool wantCaptureMouse() const;
     bool wantCaptureKeyboard() const;
 
+    void setViewportTextures(
+        VkSampler sampler,
+        const std::array<VkImageView, MAX_FRAMES_IN_FLIGHT> &imageViews);
+    void clearViewportTextures();
+    uint64_t viewportTextureId(uint32_t frameIndex) const;
+
   private:
     Device          *device_ = nullptr;
     VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT>
+        viewportTextureSets_{};
 };
 
 } // namespace vkr
