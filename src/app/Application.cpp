@@ -2507,8 +2507,11 @@ ControlJson Application::runtimeRenderStatus() {
     uint64_t directionalSceneLights = 0;
     uint64_t pointSceneLights = 0;
     uint64_t spotSceneLights = 0;
+    uint64_t activeSceneLights = 0;
     if (currentScene_) {
         for (const SceneLight &light : currentScene_->lights()) {
+            if (isEffectiveSceneLight(light))
+                ++activeSceneLights;
             switch (light.type) {
             case LightType::Directional:
                 ++directionalSceneLights;
@@ -2544,6 +2547,8 @@ ControlJson Application::runtimeRenderStatus() {
           {"sceneDirectional", directionalSceneLights},
           {"scenePoint", pointSceneLights},
           {"sceneSpot", spotSceneLights},
+          {"activeSceneLights", activeSceneLights},
+          {"fallbackSunActive", activeSceneLights == 0},
           {"uploadedDirectional", lastUploadedDirectionalLights_},
           {"uploadedPunctual", lastUploadedPunctualLights_},
           {"ignored", lastIgnoredLights_}}},
@@ -4356,7 +4361,14 @@ void Application::drawLightingPanel() {
                      10.0f);
     const size_t sceneLightCount = currentScene_ ? currentScene_->lights().size()
                                                  : 0;
+    const size_t effectiveSceneLightCount =
+        currentScene_
+            ? static_cast<size_t>(std::count_if(
+                  currentScene_->lights().begin(),
+                  currentScene_->lights().end(), isEffectiveSceneLight))
+            : 0;
     ImGui::Text("Scene lights: %zu", sceneLightCount);
+    ImGui::Text("Active scene lights: %zu", effectiveSceneLightCount);
     ImGui::Text("Uploaded: %u directional, %u punctual",
                 lastUploadedDirectionalLights_, lastUploadedPunctualLights_);
     if (lastIgnoredLights_ > 0)
@@ -4404,7 +4416,11 @@ void Application::drawLightingPanel() {
             ImGui::TreePop();
         }
     }
-    if (sceneLightCount == 0) {
+    if (sceneLightCount > 0 && effectiveSceneLightCount == 0) {
+        ImGui::TextDisabled(
+            "All scene lights are disabled; using fallback Sun.");
+    }
+    if (effectiveSceneLightCount == 0) {
         ImGui::Separator();
         float sunAzimuth = 0.0f;
         float sunElevation = 0.0f;

@@ -45,7 +45,7 @@ SkyboxPass 负责清空 HDR color，并在启用时绘制环境背景。MainForw
 
 ## 方向光阴影
 
-`buildRenderView()` 从实际上传的第一盏 Directional light 生成 `DirectionalShadowFrameData`。场景没有显式灯光时使用默认 Sun；场景有灯光但没有 Directional light 时不生成阴影。无有效 bounds、无有效光方向或关闭 Shadows 时，ShadowPass 仍清除目标，但 Forward shader 不采样阴影贡献。
+`buildRenderView()` 从实际上传的第一盏 Directional light 生成 `DirectionalShadowFrameData`。零强度、零颜色或非有限参数的 Scene light 保留在场景诊断数据中，但不上传到 GPU；场景没有实际贡献光照的灯时使用默认 Sun。场景有有效灯光但没有 Directional light 时不生成阴影。无有效 bounds、无有效光方向或关闭 Shadows 时，ShadowPass 仍清除目标，但 Forward shader 不采样阴影贡献。
 
 阴影相机使用场景 AABB 的 8 个角点拟合：light view 看向 bounds center，XY 增加 5% padding、Z 增加 10% padding，并将 XY center 对齐到 shadow texel。投影使用 Vulkan `[0,1]` 深度的正交 ZO 矩阵。
 
@@ -146,7 +146,7 @@ Application 在创建 Window/Vulkan 前加载 `ShaderRegistry`。当前选择使
 
 SceneLight 支持 Directional、Point 和 Spot。glTF loader 解析 `KHR_lights_punctual` 根定义和当前 scene 的 node 引用，应用完整 node world transform后生成静态世界空间灯光。同一 light definition 可以由多个 node 实例化。glTF Directional 的局部 `-Z` 发射方向会翻转为引擎使用的 surface-to-light 方向；Spot 保留 light-to-scene 发射方向。
 
-GlobalUBO 最多上传 1 个 directional light 和 8 个 punctual lights；Point 与 Spot 共用 punctual 配额，超出部分保留在 Scene 并计入 ignored。存在任意显式场景灯光时不注入 fallback Sun；第一盏实际上传的 Directional 继续驱动唯一的方向光 shadow map，Point/Spot 当前不投射阴影。颜色和 intensity 保持 glTF 物理单位，不做自动缩放；高强度场景通过 Exposure EV 和 Tone Mapping 调整。没有可用 IBL 时，环境项由 ambient color/intensity 提供；AO 只影响间接项。
+GlobalUBO 最多上传 1 个 directional light 和 8 个 punctual lights；Point 与 Spot 共用 punctual 配额，超出部分保留在 Scene 并计入 ignored。存在任意有效场景灯光时不注入 fallback Sun；如果场景声明的灯全部为零强度、零颜色或非法值，则跳过这些灯并使用 fallback Sun。第一盏实际上传的 Directional 继续驱动唯一的方向光 shadow map，Point/Spot 当前不投射阴影。颜色和 intensity 保持 glTF 物理单位，不做自动缩放；高强度场景通过 Exposure EV 和 Tone Mapping 调整。没有可用 IBL 时，环境项由 ambient color/intensity 提供；AO 只影响间接项。
 
 当前只支持一张全局环境和一张方向光 shadow map；没有 CSM、Point/Spot shadow、local reflection probe、parallax correction、deferred rendering 或 auto exposure。Bloom 是同步 compute 后处理，不使用异步 compute、lens dirt、anamorphic filter 或 temporal stabilization。
 

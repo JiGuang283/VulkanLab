@@ -2,6 +2,7 @@
 #include "diagnostics/Profiling.h"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace vkr {
@@ -53,6 +54,19 @@ GpuLight makeGpuLight(const SceneLight &light) {
 
 } // namespace
 
+bool isEffectiveSceneLight(const SceneLight &light) {
+    constexpr float kMinimumContribution = 1.0e-5f;
+    if (!std::isfinite(light.intensity) ||
+        light.intensity <= kMinimumContribution) {
+        return false;
+    }
+    return std::isfinite(light.color.r) && std::isfinite(light.color.g) &&
+           std::isfinite(light.color.b) &&
+           (light.color.r > kMinimumContribution ||
+            light.color.g > kMinimumContribution ||
+            light.color.b > kMinimumContribution);
+}
+
 RenderView buildRenderView(const RenderViewInput &input) {
     VKL_PROFILE_ZONE("Build RenderView");
     RenderView result{};
@@ -68,8 +82,7 @@ RenderView buildRenderView(const RenderViewInput &input) {
 
     SceneLight fallbackSun{};
     const SceneLight *shadowLight = nullptr;
-    const bool hasSceneLights =
-        input.sceneLights != nullptr && !input.sceneLights->empty();
+    bool hasEffectiveSceneLights = false;
 
     const auto uploadLight = [&](const SceneLight &light) {
         switch (light.type) {
@@ -98,10 +111,15 @@ RenderView buildRenderView(const RenderViewInput &input) {
         }
     };
 
-    if (hasSceneLights) {
-        for (const SceneLight &light : *input.sceneLights)
+    if (input.sceneLights) {
+        for (const SceneLight &light : *input.sceneLights) {
+            if (!isEffectiveSceneLight(light))
+                continue;
+            hasEffectiveSceneLights = true;
             uploadLight(light);
-    } else {
+        }
+    }
+    if (!hasEffectiveSceneLights) {
         fallbackSun = makeDefaultSun(input.defaultSun);
         uploadLight(fallbackSun);
     }

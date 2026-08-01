@@ -46,6 +46,7 @@ struct RenderView {
     RenderViewLightStats lightStats{};
 };
 
+bool isEffectiveSceneLight(const SceneLight &light);
 RenderView buildRenderView(const RenderViewInput &input);
 
 } // namespace vkr
