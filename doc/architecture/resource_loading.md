@@ -1,8 +1,8 @@
 # 资源加载
 
 > Status: Current
-> Last verified: 2026-08-01
-> Verified against: Scene Authoring Stage 0-1 working tree
+> Last verified: 2026-08-02
+> Verified against: Scene Authoring Stage 2 working tree
 
 ## 项目、Catalog 与导入
 
@@ -32,19 +32,21 @@ HDR 环境导入只接受本地 2:1 equirectangular `.hdr`。UI 或 `VulkanLabAs
 `SceneWorkflowController` 从 Catalog 的 `models[]` 构建 SceneRegistry；原生 `scenes[]` 当前被有意忽略，直到 RuntimeWorld 阶段。SceneRegistry 的 `SceneEntry` 可以提供两种入口：
 
 - `SceneFactory`：同步创建完整 GPU Scene，当前用于 Viking Room 和初始化兼容路径。
-- `ScenePrepareFactory`：只产生 `PreparedSceneData`，当前用于全部 glTF 场景。
+- `ModelPrepareFactory`：只产生 `PreparedModelData`，当前用于全部 glTF 模型；`ScenePrepareFactory` 暂时保留为兼容别名。
 
-`PreparedSceneData` 保存纹理 payload、sampler/format 描述、材质参数、vertex/index、对象引用、静态世界空间灯光和相机建议，不包含 Vulkan handle、VMA allocation 或 descriptor set。纹理 payload 可以是运行时解码的 RGBA8 base level，也可以是 KTX2 转码后带完整 mip chain 的数据。主线程随后由 `SceneGpuBuilder` 把它转换为运行时 Scene。
+`PreparedModelData` 保存纹理 payload、sampler/format 描述、材质参数、vertex/index、`localToAsset` primitive、asset-space 灯光和预览相机，不包含 Vulkan handle、VMA allocation 或 descriptor set。纹理 payload 可以是运行时解码的 RGBA8 base level，也可以是 KTX2 读取后带完整 mip chain 的数据。主线程随后由 `ModelGpuBuilder` 把它转换为不可变、可共享的 `ModelAsset`。
 
 Catalog v3 与 `.vkscene.json` 的数据契约见[场景数据与 Catalog](scene_documents.md)。
 
-## 异步 glTF Prepare
+## 共享 ModelAsset 加载
 
-`SceneLoadManager` 持有一个 C++17 worker thread。新的 glTF 请求获得递增的 taskId 和 generation，并取消旧的 pending/active 请求。worker 调用 `GltfPreparer` 完成：
+`AssetRepository` 按 `(modelId, profileId)` 管理 ModelAsset generation，并持有一个 FIFO CPU worker 和最多一个活动 `ModelGpuBuilder`。相同 key 的加载请求共享 CPU prepare 和 GPU build；Ready 请求直接复用同一资源。`Reload` 创建新 generation，旧 generation 在已有 Scene lease 释放前保持有效。`SceneLoadManager` 现在只保留预览操作 ID、进度、取消和历史兼容语义，不再拥有 worker 或 GPU builder。
+
+Repository worker 调用 `GltfPreparer` 完成：
 
 - 解析 `.gltf`/`.glb`、node hierarchy 和 world transform。
 - 读取 position、normal、UV0、UV1、tangent、COLOR_0 和 index；缺少 tangent 时生成稳定 fallback。
-- 读取 `KHR_lights_punctual` 定义，并按当前 scene 中的 node 引用实例化 Directional、Point 和 Spot。
+- 读取 `KHR_lights_punctual` 定义，并按模型 node 引用生成 asset-space Directional、Point 和 Spot prototype。
 - 转换 metallic-roughness、alpha、double-sided、normal scale、AO、emissive strength、transmission 和 volume 基础参数。
 - 读取 embedded image 或 `.gltf` 相对路径下的本地图片，使用 stb 解码为 RGBA8。
 - 按 `SceneLoadContext::maxTextureSize` 在 CPU 侧执行等比 bilinear 缩放。
@@ -52,7 +54,9 @@ Catalog v3 与 `.vkscene.json` 的数据契约见[场景数据与 Catalog](scene
 
 worker 在文件、图片、材质、primitive 和 hierarchy 等自然边界检查 cancellation token。异常写入任务的 Failed 状态，不跨线程调用 Vulkan，也不向 Application 抛异常。
 
-glTF 灯光与 mesh 使用同一套 node hierarchy 和 Y-up 到 Z-up 根变换。Point/Spot 的位置来自 node world translation；Directional/Spot 的发射方向来自 node 局部 `-Z`。同一个 glTF light definition 被多个 node 引用时会生成多个 `SceneLight` 实例。颜色保持线性，Directional intensity 保持 lux，Point/Spot intensity 保持 candela；loader 不执行强度归一化或自动曝光。灯光是 prepared CPU 数据，发布时直接移动进 Scene，不产生额外 GPU 上传批次。
+glTF 灯光与 mesh 使用同一套 node hierarchy 和 Y-up 到 Z-up 根变换。Point/Spot 的位置来自 node asset-space translation；Directional/Spot 的发射方向来自 node 局部 `-Z`。同一个 glTF light definition 被多个 node 引用时会生成多个 prototype。`Scene` 实例化模型时再通过 `rootToWorld` 转换位置和方向；range、intensity 与 cone 不随实例 scale 改变。颜色保持线性，Directional intensity 保持 lux，Point/Spot intensity 保持 candela。
+
+`ModelGpuBuilder` 在主线程按帧预算创建 Texture、Mesh、Material 和 descriptor，完成后发布 `shared_ptr<const ModelAsset>`。Repository 只使用 graphics queue 的增量上传 fence，不在 glTF 切换中调用 `vkDeviceWaitIdle()` 或清空 Pipeline Cache。预览仍暴露旧 `Scene` facade，但内部只放置一个 identity `ModelInstance`；RenderCommand 的矩阵为 `rootToWorld * localToAsset`。被替换的 Scene 和无消费者 ModelAsset 都按 FrameSync submission serial 延迟释放。
 
 图片格式仍按语义选择：BaseColor/Emissive 使用 sRGB，Normal/MetallicRoughness/Occlusion 使用 linear。同一 glTF image 在不同语义下可以对应不同派生纹理，不能只按 image index 复用；sampler 映射 repeat、clamp、mirrored repeat、min/mag filter 和 mipmap mode。
 
@@ -78,9 +82,9 @@ DerivedAssets/<projectId>/
 
 manifest schema v3 记录 project/scene/profile 稳定身份、scene、texture limit、编码器名称/版本/质量设置，以及每个 image 的 payload kind、Vulkan format、mip 数量、GPU payload/blob 字节、supercompression、语义、mipmap wrap、输出尺寸、cache key 和源 stamp。schema v1/v2 UASTC manifest 仍可读取；当当前 profile 要求 BC7 时，它们被标记为 `Stale`，不能作为 Native BC7 Ready artifact。`TextureSemantic` 固定为 `SrgbColor`、`LinearData` 和 `Normal`；BaseColor/Emissive 生成 `VK_FORMAT_BC7_SRGB_BLOCK`，MetallicRoughness/Occlusion/Normal 生成 `VK_FORMAT_BC7_UNORM_BLOCK`。同一图片以不同语义或 wrap 参与材质时必须生成独立条目。
 
-运行时按 scene ID 和实际 texture limit 对应的 profile ID 查找精确 manifest，并用 size + write time 快速检查依赖。Native BC7 命中后，worker 只用 libktx 读取和校验 mip payload，不调用 `ktxTexture2_TranscodeBasis()`；`SceneGpuBuilder` 直接上传 BC7 mip chain。旧 schema v1/v2 UASTC 缓存仍保留 BC7/RGBA32 转码兼容路径。开发设备不支持 BC7 时，Native BC7 条目记录 `native_bc7_unsupported` 并回退源图片；Cooked package 在加载场景前返回 `bc7_required`，不会引入 DirectXTex 或静默回退。
+运行时按 model ID 和实际 texture limit 对应的 profile ID 查找精确 manifest，并用 size + write time 快速检查依赖。序列化兼容字段仍命名为 `sceneId`，其值继续传 model ID，避免现有缓存失效。Native BC7 命中后，worker 只用 libktx 读取和校验 mip payload，不调用 `ktxTexture2_TranscodeBasis()`；`ModelGpuBuilder` 直接上传 BC7 mip chain。旧 schema v1/v2 UASTC 缓存仍保留 BC7/RGBA32 转码兼容路径。开发设备不支持 BC7 时，Native BC7 条目记录 `native_bc7_unsupported` 并回退源图片；Cooked package 在加载模型前返回 `bc7_required`，不会引入 DirectXTex 或静默回退。
 
-`PreparedImage` 的 prebuilt mip payload 包含总字节数组、最终 `VkFormat` 和每级 mip 的 offset、size、width、height。`SceneGpuBuilder` 将所有 mip 写入 staging，并通过多个 `VkBufferImageCopy` region 上传到只需要 `TRANSFER_DST | SAMPLED` 的 image。原始 RGBA8 fallback 继续上传 base level，并由 GPU blit 生成 mip。
+`PreparedImage` 的 prebuilt mip payload 包含总字节数组、最终 `VkFormat` 和每级 mip 的 offset、size、width、height。`ModelGpuBuilder` 将所有 mip 写入 staging，并通过多个 `VkBufferImageCopy` region 上传到只需要 `TRANSFER_DST | SAMPLED` 的 image。原始 RGBA8 fallback 继续上传 base level，并由 GPU blit 生成 mip。
 
 开发模式下，glTF prepare 遇到单个派生条目缺失、KTX2 读取/校验失败或 Native BC7 不受支持时可记录 miss 并走 RGBA fallback；普通 scene load 之前仍会先执行 scene/profile 级 artifact admission。CookedOnly 设置 `SceneLoadContext::requireDerivedTextures`，并要求 scene texture manifest 全部为 Native BC7；manifest 身份、scene stamp、entry/source stamp、format、payload size、mip offset 任一不匹配都会终止加载，不会调用 stb 解码。
 
@@ -132,13 +136,7 @@ Stage A 的文件导入事务完成 Catalog 注册后会立即提交派生资产
 
 ## 增量 GPU Build
 
-CPU prepare 完成后，Application 在开始 GPU build 前执行一次明确的 teardown 边界：
-
-1. `vkDeviceWaitIdle()`，确保旧 Scene 不再被帧命令引用。
-2. 清空 PipelineCache，释放旧 Scene，避免两个 Main Sponza 级场景重叠占用显存。
-3. 记录 VMA before 快照，创建 SceneGpuBuilder。
-
-SceneGpuBuilder 每帧以默认 `32 MiB` 和 `2 ms` 软预算推进：fallback、Texture、Mesh、等待 GPU、Material、SceneObject 和 publish。单个不可拆分 Texture/Mesh 可以超过软预算，但不会因大于预算而饥饿。
+CPU prepare 完成后，Repository 将记录放入唯一的 GPU build FIFO。`ModelGpuBuilder` 每帧以默认 `32 MiB` 和 `2 ms` 软预算推进：fallback、Texture、Mesh、等待 GPU、Material、ModelAsset finalize。单个不可拆分 Texture/Mesh 可以超过软预算，但不会因大于预算而饥饿。整个过程继续渲染当前 Scene，不执行 scene teardown。
 
 `IncrementalUploadQueue` 使用 graphics queue 和两个延迟创建的 slot。每个 slot 拥有独立的 128 MiB staging、command pool/buffer 和 fence：
 
@@ -146,36 +144,37 @@ SceneGpuBuilder 每帧以默认 `32 MiB` 和 `2 ms` 软预算推进：fallback�
 - 当前 slot 放不下时提交，并继续使用另一个空闲 slot。
 - 普通帧只用 `vkGetFenceStatus()` 轮询，不调用无限期 `vkWaitForFences()` 或 `vkQueueWaitIdle()`。
 - fence 完成前不覆盖 staging，也不销毁关联的半成品 Texture/Mesh。
-- 全部上传完成后才创建材质 descriptor 并把 Scene 发布到 RenderQueue。
+- 全部上传完成后才创建材质 descriptor 并发布不可变 ModelAsset。
 
 取消或 GPU build 失败会停止记录新资源，提交已经记录的命令，并逐帧轮询在途 fence。相关 fence 完成后才销毁半成品；正常取消路径不使用 device idle。程序退出和显式 teardown 可以 drain。
 
 DescriptorAllocator 创建支持单独释放 set 的 pool。MaterialInstance 析构会归还 descriptor set，因此失败、取消和反复重载不会持续耗尽 pool 容量。
 
-`RenderResourceRegistry` 不管理这里的 Scene Texture/Mesh 或 Environment Texture，也不参与上传或 residency。它只拥有 Renderer 内部的 HDR、depth、shadow render target 和 sampler；Scene/Environment 资源分别由 SceneGpuBuilder、EnvironmentGpuBuilder、Texture/Mesh 与上传队列按上述生命周期管理。
+`RenderResourceRegistry` 不管理这里的 ModelAsset Texture/Mesh 或 Environment Texture，也不参与上传或 residency。它只拥有 Renderer 内部的 HDR、depth、shadow render target 和 sampler；模型与环境资源分别由 AssetRepository/ModelGpuBuilder、EnvironmentGpuBuilder、Texture/Mesh 与上传队列按上述生命周期管理。
 
 ## 发布与失败语义
 
 - CPU prepare 期间继续渲染当前 Scene。
-- 开始 GPU build 后旧 Scene 已释放，期间渲染空场景；统一窗口顶部和 `Scene -> Scenes` 显示加载进度。
-- 只有最新 generation 且所有 upload fence 完成的任务可以发布。
+- GPU build 期间仍保留并渲染当前 Scene；统一窗口顶部和 `Scene -> Scenes` 显示加载进度。
+- 只有最新 preview operation 且对应 ModelAsset 的全部 upload fence 完成后才构造单实例 preview Scene 并原子发布。
+- 被替换的 Scene 进入 submission-serial retirement queue；其最后一个 ModelAsset lease 释放后，Repository 再按同一 serial 边界销毁共享 GPU 资源。
 - Environment prepare/upload 始终保留当前 Scene 和旧 Environment；只有完整新 generation 可以原子替换。
-- CPU prepare 失败时保留当前 Scene；旧 Scene 已释放后的 GPU build 失败会保留可操作的空场景。
+- CPU prepare、GPU build 失败或取消都保留当前 Scene。
 - 同步 Viking Room 切换会先取消后台任务，旧 generation 不能在稍后覆盖同步场景。
-- Application 关闭前先停止控制服务和 source import future，再取消并 join AssetImportManager/完整工具进程树，然后取消 builder、join SceneLoadManager，最后销毁 Vulkan 对象。
+- Application 关闭前先停止控制服务和 source import future，再取消并 join AssetImportManager/完整工具进程树和 AssetRepository worker，等待设备空闲后按所有权顺序销毁 Scene、ModelAsset 与 Vulkan 对象。
 
 ## LoadStats
 
 日志、`VulkanLab -> Diagnostics -> Load Stats` 和 Runtime Control JSON 会记录：
 
-- taskId、generation、最终状态、worker queue、CPU prepare、GPU build 和总 wall time。
+- taskId、operation generation、model generation、repository hit/coalesced、最终状态、worker queue、CPU prepare、GPU build 和总 wall time。
 - glTF parse、图片读取/解码/缩放、材质、mesh CPU、hierarchy 和 command recording 耗时。
 - prepared CPU bytes、纹理/mesh/vertex/index/material/object 数量及上传字节。
 - 每帧 upload pump 的最大耗时/字节、batch submit/completion、fence poll/wait 和 peak in-flight。
 - KTX2 cache lookup/hit/miss/invalid、Native BC7/UASTC 命中数、Native payload 读取字节与耗时、Basis transcode 次数/耗时、BC7/RGBA32 fallback 数量和 prebuilt mip 数量。
 - 场景资源创建前后的 VMA allocation count、allocation bytes 与 block bytes。
 
-VMA 快照在 SceneGpuBuilder 和 staging 销毁后采集，不把临时 staging 计入场景常驻差值。VMA 数值不等同于 Windows 任务管理器显示的专用显存。
+VMA 快照在 ModelGpuBuilder 完成并发布后采集；Repository 面板另外显示 Ready/Loading/Failed/Retiring record、consumer 和资源计数。VMA 数值不等同于 Windows 任务管理器显示的专用显存。
 
 ## Cook 与 packaged runtime
 
@@ -211,11 +210,11 @@ Native BC7 是当前 Windows desktop platform artifact。采用它的直接原�
 
 2026-07-31 在当前机器上的 Main Sponza 2048 结果为：Release AssetTool 首次用 4 workers 构建 72 张纹理约 `776.84 s`，复用扫描约 `3.15 s`；Debug runtime 两次加载分别约 `1.06 s` 和 `1.02 s`，Native KTX2 read 约 `146 ms`，`basisTranscodeCount=0`、transcode/decode/resize 都为 0。72 张纹理的 BC7 mip payload 与 blob 总量约 `384 MiB`，与原运行时转码后的 GPU payload 一致。
 
-这一步不同时引入 streaming 或 residency 系统。现有场景替换会在新 GPU build 前释放旧 Scene，没有多场景 residency 累积。重新评估 memory admission/streaming/LRU 的条件仍是：目标设备 allocation failure 或单 Scene 超过 device-local budget 的 50%；需要同时驻留多个大场景或 resident set 超过 budget 的 70%；或发布体积成为明确产品约束。memory gate 需要先接入 `VK_EXT_memory_budget`，不能把 VMA block bytes 当作可用预算。
+这一步不同时引入 streaming、常驻缓存或 LRU。为保证切换事务性，新 ModelAsset 准备期间会与当前 Scene 的旧资源短暂同时驻留；旧 Scene 只在新 preview 发布后按 submission serial 释放。重新评估 memory admission/streaming/LRU 的条件仍是：目标设备 allocation failure 或单 ModelAsset 超过 device-local budget 的 50%；切换峰值或 resident set 超过 budget 的 70%；或发布体积成为明确产品约束。memory gate 需要先接入 `VK_EXT_memory_budget`，不能把 VMA block bytes 当作可用预算。
 
 ## 当前限制
 
-- CPU prepare 只有一个 worker；不同场景不会并行解码。
+- AssetRepository 只有一个 CPU worker 和一个活动 ModelGpuBuilder；不同模型不会并行 prepare/upload。
 - AssetImportManager 当前一次只监督一个资产工具；单个工具内部可以并行编码。没有跨工具并发、持久任务数据库或断点任务队列。
 - ArtifactIndex 当前使用 JSON 和命名 mutex；没有 directory watcher 或跨机器共享数据库。索引可从 manifest 重建。
 - 单个大 Texture/Mesh 仍是原子 pump，可能造成短帧尖峰。
@@ -223,5 +222,5 @@ Native BC7 是当前 Windows desktop platform artifact。采用它的直接原�
 - 开发模式中未生成或未命中 KTX2 profile 的图片仍可能运行时 decode/resize，并以 RGBA8 上传；CookedOnly 禁止该路径。
 - Windows desktop profiles 统一使用 BC7，不使用 BC5 normal 或 BC4 AO，也不对 Native BC7 blob 使用 Zstd；开发设备无 BC7 时回退源 RGBA8，Cooked package 要求 BC7。
 - 环境只支持本地 RGBE `.hdr` 和单个全局环境；没有 EXR、runtime convolution、reflection probe、parallax correction、diffuse SH、BC6H 或 environment streaming。
-- 没有渲染进程内编码、mip streaming、LRU residency、virtual texturing 或加载时保留旧大场景的显存预算策略；OnDemand 重建由独立 AssetTool 进程完成。
+- 没有渲染进程内编码、mip streaming、LRU residency、virtual texturing 或新旧大模型重叠时的显存 admission 策略；OnDemand 重建由独立 AssetTool 进程完成。
 - Viking Room 仍使用同步 OBJ/PNG factory；开发模式从 `projectRoot` 读取，正式包使用 Cook 闭包。

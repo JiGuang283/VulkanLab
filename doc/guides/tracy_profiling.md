@@ -98,7 +98,7 @@ CPU 线程使用稳定名称：
 - `AssetImport`
 - `CaptureEncode`
 
-主要 CPU zone 包括 frame、Runtime command、UI、RenderView、RenderQueue、frame fence、acquire/submit/present、swapchain resize、glTF parse/material/mesh/hierarchy、SceneGpuBuilder、staging/upload、环境加载、截图编码和 pipeline cache miss。
+主要 CPU zone 包括 frame、Runtime command、UI、RenderView、RenderQueue、frame fence、acquire/submit/present、swapchain resize、glTF parse/material/mesh/hierarchy、AssetRepository/ModelGpuBuilder、staging/upload、环境加载、截图编码和 pipeline cache miss。
 
 Vulkan GPU 时间线包含：
 
@@ -116,7 +116,7 @@ ToneMap + UI
   FullscreenToneMap
   ImGui
 ScreenshotCopy
-SceneUpload task=<id> batch=<n>
+ModelUpload model=<id> profile=<profile> batch=<n>
 ```
 
 不会为单个 draw、纹理或 mip 创建 zone，避免大场景 trace 膨胀。每次成功 submit/present 后发送 `FrameMark`。draw count、pipeline count、加载进度、staging bytes 和 VMA allocation/block bytes 作为 plot；VMA 只在 Profiler 已连接时每秒采样一次。
@@ -148,6 +148,6 @@ Tracy preset 应报告 `compiled=true`、`version=0.13.1`、`connectionMode=on-d
 实现验收时在 RTX 4060 Laptop GPU 上完成了两类 capture：
 
 - Viking Room：CPU frame/renderer zone 与 DirectionalShadow、MainForward、ToneMap GPU zone 可导出。
-- Main Sponza 2048：worker prepare 约 783 ms，`SceneGpuBuilder::pump` 分布在 77 次主线程调用，5 个 `SceneUpload` batch 出现在同一 GPU timeline；本次完整场景加载约 1.1 秒。
+- Main Sponza 2048 的旧 Stage 2A 基线为：worker prepare 约 783 ms，旧 `SceneGpuBuilder::pump` 分布在 77 次主线程调用，5 个 `SceneUpload` batch 出现在同一 GPU timeline；本次完整场景加载约 1.1 秒。Stage 2 之后应以 `ModelGpuBuilder::pump` 和 `ModelUpload` label 重新采集，不直接横向比较旧 zone 名称。
 
 这些数字只证明链路可用，不是跨机器性能目标。后续性能结论必须记录 GPU、驱动、分辨率、场景/profile、Shader、commit 和 capture 版本。

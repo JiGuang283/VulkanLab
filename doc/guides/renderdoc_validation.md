@@ -92,10 +92,11 @@ Frame N
   ScreenshotCopy
 ```
 
-只有实际执行截图复制时才会出现 `ScreenshotCopy`。同步加载与增量加载分别使用：
+只有实际执行截图复制时才会出现 `ScreenshotCopy`。legacy 同步加载、共享模型增量加载和其他增量上传分别使用：
 
 ```text
 SceneUpload scene=<name> batch=<n>
+ModelUpload model=<model-id> profile=<profile-id> batch=<n>
 SceneUpload task=<id> batch=<n>
 ```
 
@@ -160,4 +161,3 @@ Runtime Control 的 `window.resize` 仅在 `--automation` 模式可用，尺寸�
 - Debug Utils 不可用时对象命名和标签自动变为空操作，渲染仍可继续。
 - Validation profile 只在启动时生效，不能通过 ImGui 或 Runtime Control 动态切换。
 - Stage 2A 不提交 RenderDoc SDK、二进制文件或抓帧文件。
-

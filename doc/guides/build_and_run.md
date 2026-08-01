@@ -1,8 +1,8 @@
 # 构建与运行
 
 > Status: Current
-> Last verified: 2026-08-01
-> Verified against: Scene Authoring Stage 0-1 working tree
+> Last verified: 2026-08-02
+> Verified against: Scene Authoring Stage 2 working tree
 
 ## 环境要求
 
@@ -460,9 +460,9 @@ Native BC7 的引入基线是 Main Sponza 2048 Debug 总加载约 `26.11 s`，�
 ## 运行注意事项
 
 - 开发模式的 glTF 纹理尺寸默认限制为 `2048`，可在 `VulkanLab -> Render -> Pipeline` 切换为 `Full`、`2048`、`1024` 或 `512`。切换会创建新的场景加载任务；CookedOnly 控件禁用。
-- 开发模式下，KTX2 编码由 `AssetImportManager` 监督的独立 `VulkanLabAssetTool` 进程执行；glTF prepare 在 SceneLoadManager worker 执行；GPU 创建和上传由主线程按帧推进。CookedOnly 不创建 AssetImportManager。资产导入显示在 `Scene -> Assets`，场景加载显示在窗口顶部及 `Scene -> Scenes`。
+- 开发模式下，KTX2 编码由 `AssetImportManager` 监督的独立 `VulkanLabAssetTool` 进程执行；glTF prepare 由 `AssetRepository` 的单个 FIFO worker 执行，`ModelGpuBuilder` 在主线程按帧创建和上传共享 `ModelAsset`。CookedOnly 不创建 AssetImportManager。资产导入显示在 `Scene -> Assets`，模型预览加载显示在窗口顶部及 `Scene -> Scenes`。
 - Native BC7 的首次 Build/Rebuild 可能持续数分钟；这是离线导入成本。正常重复加载不应出现 UASTC transcode，日志应显示 `cache=native-bc7 upload=direct`。
 - HDR 环境的首次 CPU bake 可能持续较长时间，应在资产导入阶段完成，而不是在场景切换时触发。运行时只读取已经发布的环境 KTX2；IBL 与 Skybox 默认关闭。
-- GPU build 前会释放旧 Scene 以控制大场景切换时的显存峰值，因此该阶段可能只显示统一工具窗口和空场景。活跃任务的紧凑进度位于窗口顶部，详细进度位于 `Scene -> Scenes`。
+- glTF 模型加载期间继续渲染当前 Scene；新的 `ModelAsset` 完全 Ready 后才原子发布预览 Scene。旧 Scene 和不再使用的共享资源按 frame submission serial 延迟释放，因此两个大型模型切换时可能短暂同时占用显存。活跃任务的紧凑进度位于窗口顶部，详细进度位于 `Scene -> Scenes`。
 - `Full` 对 Main Sponza 仍是高风险选项。开发模式的 KTX2 缓存只覆盖已经显式生成且精确匹配的 profile；未命中时仍可能回退 RGBA8。
 - 日志写入运行目录下的 `logs/VulkanLab.log`。加载统计也显示在 `VulkanLab -> Diagnostics -> Load Stats`。

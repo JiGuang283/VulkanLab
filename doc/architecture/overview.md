@@ -1,8 +1,8 @@
 # 系统架构概览
 
 > Status: Current
-> Last verified: 2026-08-01
-> Verified against: Viewport v2 working tree
+> Last verified: 2026-08-02
+> Verified against: Scene Authoring Stage 2 working tree
 
 VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Application` 为组合根，场景、渲染提交、GPU 资源和调试控制之间保持显式所有权，不使用全局引擎服务定位器。
 
@@ -19,7 +19,7 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 | `src/core/` | Vulkan instance/device、SwapChain、FrameSync、Buffer/Image、Descriptor、Pipeline、VMA、同步与增量上传。 |
 | `src/render/` | Mesh、Texture、材质、纯 CPU glTF prepare、Environment GPU build、RenderView、RenderQueue、RenderResourceRegistry、PipelineCache、Renderer、GPU profiler 和 Shader variant。 |
 | `src/render/pass/` | RenderPipeline 中的具体 pass；当前为 DirectionalShadow、Skybox、MainForward、Bloom、ToneMap 和 Present。 |
-| `src/scene/` | Scene、SceneObject、SceneLight、Camera、prepared data、加载任务、GPU builder、SceneFactory 和内建场景。 |
+| `src/scene/` | 兼容 Scene facade、ModelAsset/ModelInstance、AssetRepository、ModelGpuBuilder、加载任务、Camera、SceneFactory 和内建场景。 |
 | `src/window/` | GLFW 窗口和输入状态。 |
 | `src/platform/` | Win32 原生文件选择等平台适配。 |
 | `src/diagnostics/` | 场景加载耗时、资源上传量、VMA 快照、截图与自动化诊断。 |
@@ -44,7 +44,7 @@ Cooked package 中 `projectRoot == runtimeRoot == package root`，cache 固定�
 3. VulkanContext、Device 和 DescriptorAllocator。
 4. SwapChain 和 FrameSync。
 5. Renderer、全局 UBO、Lighting descriptor generation、类型化 render resource registry、Forward + Compute RenderPipeline、GPU timestamp profiler 和开发模式 CaptureService。
-6. PipelineCache、SceneLoadManager/EnvironmentLoadManager worker、ArtifactIndex 和初始 Scene/environment admission；只有 OnDemand 创建 AssetImportManager supervisor。
+6. PipelineCache、AssetRepository/EnvironmentLoadManager worker、SceneLoadManager 操作 facade、ArtifactIndex 和初始 Scene/environment admission；只有 OnDemand 创建 AssetImportManager supervisor。
 7. GuiSystem。
 8. 可选的 Runtime Control 命令队列和 Named Pipe 线程。
 
@@ -68,7 +68,7 @@ Device 或图像所有权。窗口位置、尺寸和 docking 状态继续由 ImG
 
 主线程拥有 GLFW、ImGui、DescriptorAllocator 和全部 Vulkan/VMA 对象。它每帧轮询 upload fence、按预算记录上传命令，并在资源全部可用后发布 Scene 或新的 Environment descriptor generation。
 
-SceneLoadManager 持有一个长期 worker。worker 只执行 glTF 文件读取、解析、图片解码/缩放、顶点转换、tangent、bounds 和 hierarchy，输出不包含 Vulkan handle 的 `PreparedSceneData`。它通过 atomic 进度/取消标记和受 mutex 保护的结果与主线程通信。
+AssetRepository 持有一个长期 FIFO worker。worker 只执行 glTF 文件读取、解析、图片解码/缩放、顶点转换、tangent、bounds 和 hierarchy，输出不包含 Vulkan handle 的 `PreparedModelData`。主线程按预算推进唯一活动 `ModelGpuBuilder`，并把完成结果发布为共享 `ModelAsset`。相同 `(modelId, profileId)` 请求会 Ready hit 或合并到同一 generation；SceneLoadManager 只保留预览 operation/history 兼容接口。
 
 EnvironmentLoadManager 持有独立 worker，只读取和校验已经离线 bake 的四个浮点 KTX2，输出 `PreparedEnvironment`。主线程使用 EnvironmentGpuBuilder 和增量上传队列创建 cubemap/LUT；完整新 generation 发布前保留旧环境，旧 descriptor/resources 按 submission serial 延迟销毁。
 
@@ -87,12 +87,12 @@ CaptureService 的主线程部分按请求从最终 Swapchain Workspace 或 per-
 ## 每帧数据流
 
 1. 轮询窗口和输入，收割 asset import 结果，执行一条待处理控制命令。
-2. 轮询 worker 结果与 upload fence，在软预算内推进 SceneGpuBuilder 和 EnvironmentGpuBuilder。
+2. 轮询 worker 结果与 upload fence，在软预算内推进 AssetRepository/ModelGpuBuilder 和 EnvironmentGpuBuilder；收割达到 submission serial 的旧 Scene/ModelAsset。
 3. 应用待切换场景，更新计时、输入模式、相机和 Scene tick。
 4. 轮询场景导入 future，构建全屏 DockSpace 及 Viewport、Scenes、Assets、Render、Materials 和 Diagnostics 窗口；Viewport 报告内容区尺寸和交互状态，并显示对应 frame slot 的 Viewport Color。
 5. `FrameSync::beginFrame()` 获取 frame index、swapchain image 和 command buffer。
 6. Application 组装 `RenderViewInput`；纯函数 `buildRenderView()` 完成默认 Sun、灯光截断/GPU 打包和阴影拟合，生成不可变 `RenderView`。
-7. Scene 生成 RenderCommand，RenderQueue 分别排序 opaque 与 transparent 命令。
+7. Scene facade 从 legacy SceneObject 和共享 ModelInstance 生成 RenderCommand；实例矩阵使用 `rootToWorld * localToAsset`，RenderQueue 分别排序 opaque 与 transparent 命令。
 8. Renderer 上传 `RenderView::globalUbo`、读取已完成 frame slot 的 timestamp，并组装 RenderFrameContext；RenderPipeline 依次执行 DirectionalShadowPass、SkyboxPass、MainForwardPass、可选 Compute Bloom、写入 Viewport Color 的 ToneMapPass，以及写入 Swapchain 的 PresentPass + ImGui。每个 Pass 由 timestamp query 包围。
 9. 若有截图任务，在同一个 frame command buffer 中复制最终 Swapchain Workspace 或 Viewport Color，再恢复其 present/shader-read layout。
 10. `FrameSync::endFrame()` 提交和 present；操作系统窗口变化只重建 Swapchain/Present 资源，稳定后的 Viewport 内容区变化只重建 viewport-dependent Registry 资源。后续帧推进 completed submission serial，并把已完成截图交给 CPU worker。

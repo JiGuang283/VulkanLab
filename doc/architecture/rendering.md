@@ -162,7 +162,7 @@ Renderer 持有一个 `GpuPassProfiler` 和 timestamp query pool。每个 frame 
 
 `VKL_ENABLE_TRACY` 只在 `windows-msvc-tracy` 专用配置中开启。Device 持有一个可选 `TracyProfiler`，其生命周期在 `VkDevice` 销毁前结束；关闭开关时链接 no-op 实现，不配置 Tracy submodule，也不创建网络线程或 Vulkan query 资源。
 
-Tracy Vulkan context 使用 graphics queue 和独立 transient command pool完成初始化。各 Pass 在现有 frame command buffer 中写入嵌套 GPU zone；`IncrementalUploadQueue` 和同步 `UploadContext` 在各自 batch command buffer 中写入 `SceneUpload` zone。所有 zone 结束后，每帧调用一次 `TracyVkCollect()`，没有增加 `WAIT_BIT`、queue idle、device idle 或额外 fence。
+Tracy Vulkan context 使用 graphics queue 和独立 transient command pool完成初始化。各 Pass 在现有 frame command buffer 中写入嵌套 GPU zone；`ModelGpuBuilder` 的 `IncrementalUploadQueue` 写入 `ModelUpload model=<id> profile=<profile>` zone，环境和 legacy 同步 `UploadContext` 保留各自的上传 zone。所有 zone 结束后，每帧调用一次 `TracyVkCollect()`，没有增加 `WAIT_BIT`、queue idle、device idle 或额外 fence。
 
 GPU 层级覆盖 DirectionalShadow/ShadowCasters、Skybox、MainForward/Opaque/Transparent、可选 Bloom Downsample/Upsample、ToneMap、Present/ImGui、ScreenshotCopy 和上传 batch。CPU 侧覆盖 Application frame、FrameSync、RenderView/RenderQueue、场景与环境 worker、glTF 各准备阶段、逐帧 GPU builder、资产工具监督、Capture encode 和 pipeline cache miss。单 draw、单纹理和单 mip 不创建 zone。
 

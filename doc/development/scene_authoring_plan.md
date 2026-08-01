@@ -1,8 +1,8 @@
 # VulkanLab 可编辑场景与多模型世界实施计划
 
 > Status: Active
-> Last verified: 2026-08-01
-> Verified against: Scene Authoring Stage 0-1 working tree
+> Last verified: 2026-08-02
+> Verified against: Scene Authoring Stage 2 working tree
 
 ## Summary
 
@@ -32,7 +32,8 @@ VulkanLab 当前可以导入、准备、上传并渲染一个完整 glTF/GLB，�
 
 - Stage 0 已完成：`SceneWorkflowController` 持有 Catalog/模型预览 registry 和任务状态；Scenes/Assets 已迁入独立 panel，并通过 snapshot/action 与 Application 交互。
 - Stage 1 已完成：新增 `vkl_scene_data`、持久 UUID、Catalog schema v3、`SceneCatalogStore`、规范化 Model Import API 和严格的 SceneDocument schema/原子存储。
-- 原生 `.vkscene.json` 仍按计划不进入主列表或运行时；下一未完成阶段是 Stage 2 Shared ModelAsset 与 AssetRepository。
+- Stage 2 已完成：glTF 准备与 GPU 构建已拆为 `PreparedModelData`、`ModelGpuBuilder`、共享 `ModelAsset` 和按 generation 管理的 `AssetRepository`；模型预览通过临时 `ModelInstance` 继续兼容旧 `Scene`。
+- 原生 `.vkscene.json` 仍按计划不进入主列表或运行时；下一未完成阶段是 Stage 3 RuntimeWorld 与 Native Scene Loading。
 
 当前事实说明见[场景数据与 Catalog](../architecture/scene_documents.md)。
 

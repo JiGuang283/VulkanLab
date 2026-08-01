@@ -1,10 +1,10 @@
 # 场景数据与 Catalog
 
 > Status: Current
-> Last verified: 2026-08-01
-> Verified against: Scene Authoring Stage 0-1 working tree
+> Last verified: 2026-08-02
+> Verified against: Scene Authoring Stage 2 working tree
 
-VulkanLab 已将“导入的模型”和“可编辑场景文档”拆成两个领域对象。当前阶段只建立数据与工作流边界：模型仍通过现有单模型预览运行，原生场景文档尚未转换为运行时 World，也不会出现在 Scenes 列表或 `scene.list` 中。
+VulkanLab 已将“导入的模型”和“可编辑场景文档”拆成两个领域对象。模型预览现在由共享 `ModelAsset` 驱动；原生场景文档仍只具备数据与存储基础，尚未转换为运行时 World，也不会出现在 Scenes 列表或 `scene.list` 中。
 
 ## 数据分层
 

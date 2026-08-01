@@ -1,8 +1,8 @@
 # VulkanLab Runtime Control 使用说明
 
 > Status: Current
-> Last verified: 2026-08-01
-> Verified against: Scene Authoring Stage 0-1 working tree
+> Last verified: 2026-08-02
+> Verified against: Scene Authoring Stage 2 working tree
 
 Runtime Control 通过 Windows Named Pipe 控制已经运行的 VulkanLab。它面向本机开发、诊断和自动化，可以查询状态、加载模型预览和环境、设置相机、Shader 与渲染参数、等待渲染稳定、异步截图并安全退出程序。Stage 1 继续保留 `scene.*` 协议名称；`scene.list.entries[]` 是 Catalog model previews，同时返回 `kind: "modelPreview"`、稳定 `modelId`、兼容 `sceneId`、Catalog profile ID 和该 profile 的纹理限制。原生 SceneDocument 尚不出现在此接口。
 
@@ -79,7 +79,7 @@ cd build\windows-msvc-debug\Debug
 
 场景名称使用 Catalog 的完整 display name，不区分 ASCII 大小写。`scene list --json` 同时返回兼容的 `scenes` 名称数组和带稳定 `id`、`profileId`、`available`、`source` 的 `entries`。
 
-`scene.load` 和 `scene.reload` 立即返回 task ID。`VulkanLabCtl` 默认每 100 ms 轮询 `load.status`，直到整个 import/prepare/upload operation 完成；`--no-wait` 可关闭客户端等待。任务状态包括 `Queued`、`PreparingCpu`、`ReadyForUpload`、`Uploading`、`WaitingForGpu`、`Completed`、`Cancelling`、`Cancelled` 和 `Failed`。
+`scene.load` 和 `scene.reload` 立即返回 task ID。`VulkanLabCtl` 默认每 100 ms 轮询 `load.status`，直到整个 import/prepare/upload operation 完成；`--no-wait` 可关闭客户端等待。普通 `scene.load` 使用 Repository Ready cache 或合并相同 model/profile 的活动请求，`scene.reload` 强制创建新的 ModelAsset generation。任务响应包含 `modelId`、`profileId`、`modelGeneration`、`repositoryHit` 和 `coalescedRequest`。任务状态包括 `Queued`、`PreparingCpu`、`ReadyForUpload`、`Uploading`、`WaitingForGpu`、`ReadyToPublish`、`Completed`、`Cancelling`、`Cancelled` 和 `Failed`。
 
 `quit` 的成功响应会先写回并 flush，随后 Application 才退出主循环、停止管道和截图 worker。
 
@@ -117,6 +117,7 @@ cd build\windows-msvc-debug\Debug
 - submitted/completed frame serial 与累计 presented frame 数；
 - 最近一个已完成 frame 的 `gpuTimings`，包含 available、frameSerial、DirectionalShadow/Skybox/MainForward、可选 Bloom、ToneMap、Present + UI 分项与 totalMs；
 - 待上传 texture/mesh、in-flight upload batch；
+- `modelAssetRepository` 的 Ready/Loading/Failed/Retiring 数量、prepare/build/hit/coalesced 计数和各 generation 的 consumer/资源摘要；
 - 当前选择和已发布的 environment，以及环境加载任务；
 - 当前 Scene 的 Directional/Point/Spot 数量、实际上传数量和超限忽略数量；
 - capture queue 计数，以及 Workspace/Viewport 各自的 capture capability；
