@@ -1,9 +1,13 @@
 #include "Scene.h"
+#include "ModelAsset.h"
+#include "ModelLight.h"
 #include "render/MaterialInstance.h"
 #include "render/Mesh.h"
 #include "render/RenderQueue.h"
 
 #include <algorithm>
+#include <stdexcept>
+#include <unordered_set>
 #include <utility>
 
 namespace vkr {
@@ -49,10 +53,59 @@ void includeTransformedBounds(Bounds &sceneBounds, const Bounds &localBounds,
 } // namespace
 
 void Scene::addObject(SceneObject obj) {
-    if (obj.mesh)
-        includeTransformedBounds(bounds_, obj.mesh->localBounds(),
-                                 obj.transform);
     objects_.push_back(std::move(obj));
+    rebuildDerivedState();
+}
+
+size_t Scene::addModelInstance(ModelInstance instance) {
+    if (!instance.asset || !instance.asset.asset())
+        throw std::invalid_argument(
+            "Scene model instances require a ready ModelAsset");
+    modelInstances_.push_back(std::move(instance));
+    rebuildDerivedState();
+    return modelInstances_.size() - 1;
+}
+
+bool Scene::removeModelInstance(size_t index) {
+    if (index >= modelInstances_.size())
+        return false;
+    modelInstances_.erase(modelInstances_.begin() +
+                          static_cast<std::ptrdiff_t>(index));
+    rebuildDerivedState();
+    return true;
+}
+
+void Scene::rebuildDerivedState() {
+    bounds_ = {};
+    materials_ = legacyMaterials_;
+    lights_ = legacyLights_;
+
+    std::unordered_set<const MaterialInstance *> seenMaterials;
+    for (const auto &material : materials_)
+        seenMaterials.insert(material.get());
+
+    for (const SceneObject &object : objects_) {
+        if (object.mesh)
+            includeTransformedBounds(bounds_, object.mesh->localBounds(),
+                                     object.transform);
+    }
+
+    for (const ModelInstance &instance : modelInstances_) {
+        if (!instance.visible)
+            continue;
+        const auto asset = instance.asset.asset();
+        if (!asset)
+            continue;
+        includeTransformedBounds(bounds_, asset->localBounds,
+                                 instance.rootToWorld);
+        for (const auto &material : asset->materials) {
+            if (material && seenMaterials.insert(material.get()).second)
+                materials_.push_back(material);
+        }
+        for (const ModelLightPrototype &light : asset->lights)
+            lights_.push_back(
+                instantiateModelLight(light, instance.rootToWorld));
+    }
 }
 
 void Scene::collectRenderCommands(RenderQueue &queue) const {
@@ -72,6 +125,39 @@ void Scene::collectRenderCommands(RenderQueue &queue) const {
             queueType,
         });
     }
+
+    for (const ModelInstance &instance : modelInstances_) {
+        if (!instance.visible)
+            continue;
+        const auto asset = instance.asset.asset();
+        if (!asset)
+            continue;
+        for (const ModelPrimitive &primitive : asset->primitives) {
+            const auto *material = primitive.material.get();
+            const auto *params = material ? &material->params() : nullptr;
+            const bool transparent =
+                params && (params->alphaMode == AlphaMode::Blend ||
+                           params->transmissionFactor > 0.0f);
+            queue.add(RenderCommand{
+                primitive.mesh.get(),
+                material,
+                instance.rootToWorld * primitive.localToAsset,
+                transparent ? RenderQueueType::Transparent
+                            : RenderQueueType::Opaque,
+            });
+        }
+    }
+}
+
+size_t Scene::renderableCount() const {
+    size_t count = objects_.size();
+    for (const ModelInstance &instance : modelInstances_) {
+        if (instance.visible) {
+            if (const auto asset = instance.asset.asset())
+                count += asset->primitives.size();
+        }
+    }
+    return count;
 }
 
 } // namespace vkr

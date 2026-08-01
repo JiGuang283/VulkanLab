@@ -1,6 +1,7 @@
 #pragma once
 
 #include "diagnostics/SceneLoadStats.h"
+#include "ModelAssetHandle.h"
 
 #include <atomic>
 #include <chrono>
@@ -11,8 +12,6 @@
 #include <string>
 
 namespace vkr {
-
-struct PreparedSceneData;
 
 enum class SceneLoadState : uint32_t {
     Queued,
@@ -62,7 +61,12 @@ struct SceneLoadTask {
     uint64_t generation = 0;
     int      sceneIndex = -1;
     std::string sceneName;
+    std::string modelId;
+    std::string profileId;
     uint32_t textureLimit = 0;
+    uint64_t modelGeneration = 0;
+    bool repositoryHit = false;
+    bool coalescedRequest = false;
     std::atomic<SceneLoadState> state{SceneLoadState::Queued};
     std::atomic_bool finalized{false};
     SceneLoadProgress progress;
@@ -73,7 +77,7 @@ struct SceneLoadTask {
         std::make_shared<std::atomic_bool>(false);
 
     mutable std::mutex mutex;
-    std::unique_ptr<PreparedSceneData> prepared;
+    ModelAssetHandle modelAsset;
     std::string error;
 };
 

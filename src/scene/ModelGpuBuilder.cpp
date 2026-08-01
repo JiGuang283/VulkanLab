@@ -1,18 +1,18 @@
-#include "SceneGpuBuilder.h"
+#include "ModelGpuBuilder.h"
 
-#include "PreparedSceneData.h"
-#include "Scene.h"
+#include "PreparedModelData.h"
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
 #include "core/IncrementalUploadQueue.h"
 #include "core/Log.h"
-#include "core/PipelineConfigBuilder.h"
+#include "diagnostics/Profiling.h"
+#include "diagnostics/SceneLoadStats.h"
 #include "render/FallbackTextures.h"
 #include "render/MaterialInstance.h"
 #include "render/MaterialTemplate.h"
 #include "render/Mesh.h"
 #include "render/Texture.h"
-#include "diagnostics/Profiling.h"
+#include "SceneLoadTask.h"
 
 #include <algorithm>
 #include <array>
@@ -21,7 +21,6 @@
 #include <utility>
 
 namespace vkr {
-
 namespace {
 
 class UploadPumpStatsScope {
@@ -45,58 +44,89 @@ class UploadPumpStatsScope {
     Clock::time_point start_;
 };
 
-PipelineConfig standardPipelineConfig(Device &device) {
-    return PipelineConfigBuilder{}
-        .defaultVertexLayout()
-        .msaa(device.msaaSamples())
-        .pushConstant(
-            {VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-             128})
-        .build();
+void includePoint(Bounds &bounds, const glm::vec3 &point) {
+    if (!bounds.valid) {
+        bounds.min = point;
+        bounds.max = point;
+        bounds.center = point;
+        bounds.radius = 0.0f;
+        bounds.valid = true;
+        return;
+    }
+    bounds.min = glm::min(bounds.min, point);
+    bounds.max = glm::max(bounds.max, point);
+    bounds.center = (bounds.min + bounds.max) * 0.5f;
+    bounds.radius = glm::length(bounds.max - bounds.center);
+}
+
+void includeTransformedBounds(Bounds &result, const Bounds &local,
+                              const glm::mat4 &transform) {
+    if (!local.valid)
+        return;
+    for (int x = 0; x < 2; ++x) {
+        for (int y = 0; y < 2; ++y) {
+            for (int z = 0; z < 2; ++z) {
+                const glm::vec3 corner{
+                    x ? local.max.x : local.min.x,
+                    y ? local.max.y : local.min.y,
+                    z ? local.max.z : local.min.z};
+                includePoint(result,
+                             glm::vec3(transform * glm::vec4(corner, 1.0f)));
+            }
+        }
+    }
 }
 
 } // namespace
 
-SceneGpuBuilder::SceneGpuBuilder(
+ModelGpuBuilder::ModelGpuBuilder(
     Device &device, DescriptorAllocator &descriptorAllocator,
-    std::shared_ptr<SceneLoadTask> task,
-    std::unique_ptr<PreparedSceneData> prepared)
+    Context context, std::unique_ptr<PreparedModelData> prepared)
     : device_(&device), descriptorAllocator_(&descriptorAllocator),
-      task_(std::move(task)), prepared_(std::move(prepared)) {
-    if (!task_ || !prepared_)
-        throw std::invalid_argument("SceneGpuBuilder requires task and data");
+      context_(std::move(context)), prepared_(std::move(prepared)) {
+    if (!prepared_ || !context_.progress || !context_.stats ||
+        !context_.cancellation || !context_.materialTemplate ||
+        context_.modelId.empty() || context_.profileId.empty()) {
+        throw std::invalid_argument("ModelGpuBuilder context is incomplete");
+    }
     uploadQueue_ = std::make_unique<IncrementalUploadQueue>(
-        device, &task_->stats.resources, 2,
-        IncrementalUploadQueue::kDefaultSlotCapacity, task_->id,
-        task_->sceneName);
-    scene_ = std::make_unique<Scene>();
+        device, &context_.stats->resources, 2,
+        IncrementalUploadQueue::kDefaultSlotCapacity, context_.taskId,
+        context_.modelId + "/" + context_.profileId,
+        "ModelUpload model=" + context_.modelId + " profile=" +
+            context_.profileId,
+        "Model/" + context_.modelId + "/" + context_.profileId +
+            "/Upload");
+    asset_ = std::make_shared<ModelAsset>();
+    asset_->id = ModelAssetId(context_.modelId);
+    asset_->profileId = context_.profileId;
+    asset_->generation = context_.generation;
+    asset_->materialTemplate = context_.materialTemplate;
     textures_.reserve(prepared_->textures.size());
     meshes_.reserve(prepared_->meshes.size());
     materials_.reserve(prepared_->materials.size());
-    task_->progress.uploadTextureTotal = prepared_->textures.size();
-    task_->progress.uploadMeshTotal = prepared_->meshes.size();
-    task_->state = SceneLoadState::Uploading;
+    context_.progress->uploadTextureTotal = prepared_->textures.size();
+    context_.progress->uploadMeshTotal = prepared_->meshes.size();
     buildStart_ = std::chrono::steady_clock::now();
-    task_->stats.timeToFirstUploadMs =
+    context_.stats->timeToFirstUploadMs =
         std::chrono::duration<double, std::milli>(buildStart_ -
-                                                  task_->requestedAt)
+                                                  context_.requestedAt)
             .count();
 }
 
-SceneGpuBuilder::~SceneGpuBuilder() = default;
+ModelGpuBuilder::~ModelGpuBuilder() = default;
 
-void SceneGpuBuilder::pump(const Budget &budget) {
-    VKL_PROFILE_ZONE("SceneGpuBuilder::pump");
-    VKL_PROFILE_TEXT(task_->sceneName);
+void ModelGpuBuilder::pump(const Budget &budget) {
+    VKL_PROFILE_ZONE("ModelGpuBuilder::pump");
+    VKL_PROFILE_TEXT(context_.displayName);
     if (finished())
         return;
     uint64_t recordedBytes = 0;
-    UploadPumpStatsScope pumpStats(task_->stats.resources, recordedBytes);
+    UploadPumpStatsScope statsScope(context_.stats->resources, recordedBytes);
     try {
         uploadQueue_->poll();
-        if (task_->cancellation->load() && phase_ != Phase::Cancelling) {
+        if (context_.cancellation->load() && phase_ != Phase::Cancelling) {
             phase_ = Phase::Cancelling;
-            task_->state = SceneLoadState::Cancelling;
         }
 
         if (phase_ == Phase::Cancelling) {
@@ -104,9 +134,7 @@ void SceneGpuBuilder::pump(const Budget &budget) {
             uploadQueue_->poll();
             if (uploadQueue_->idle()) {
                 phase_ = failurePending_ ? Phase::Failed : Phase::Cancelled;
-                task_->state = failurePending_ ? SceneLoadState::Failed
-                                               : SceneLoadState::Cancelled;
-                task_->stats.gpuBuildMs =
+                context_.stats->gpuBuildMs =
                     std::chrono::duration<double, std::milli>(
                         std::chrono::steady_clock::now() - buildStart_)
                         .count();
@@ -115,12 +143,10 @@ void SceneGpuBuilder::pump(const Budget &budget) {
         }
 
         const auto start = std::chrono::steady_clock::now();
+        const std::string debugRoot = "Model/" + context_.modelId + "/" +
+                                      context_.profileId;
 
         if (phase_ == Phase::Fallbacks) {
-            if (!materialTemplate_) {
-                materialTemplate_ = std::make_shared<MaterialTemplate>(
-                    *device_, standardPipelineConfig(*device_));
-            }
             static constexpr std::array<std::array<uint8_t, 4>, 3>
                 fallbackPixels{{{255, 255, 255, 255},
                                 {0, 0, 0, 255},
@@ -138,9 +164,8 @@ void SceneGpuBuilder::pump(const Budget &budget) {
                 info.format = index == 2 ? VK_FORMAT_R8G8B8A8_UNORM
                                          : VK_FORMAT_R8G8B8A8_SRGB;
                 info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-                info.debugName =
-                    "Scene/" + task_->sceneName + "/FallbackTexture/" +
-                    std::to_string(index);
+                info.debugName = debugRoot + "/FallbackTexture/" +
+                                 std::to_string(index);
                 fallbackBuildTextures_.push_back(
                     std::make_shared<Texture>(*device_, *recorder, info));
                 recordedBytes += 4;
@@ -165,7 +190,6 @@ void SceneGpuBuilder::pump(const Budget &budget) {
             info.pixels = source.image->pixels.data();
             info.width = source.image->width;
             info.height = source.image->height;
-            info.maxExtent = 0;
             info.generateMipmaps = true;
             info.format = source.format;
             info.minFilter = source.minFilter;
@@ -173,11 +197,11 @@ void SceneGpuBuilder::pump(const Budget &budget) {
             info.mipmapMode = source.mipmapMode;
             info.wrapU = source.wrapU;
             info.wrapV = source.wrapV;
-            info.debugName =
-                "Scene/" + task_->sceneName + "/Texture/" +
-                std::to_string(textureIndex_) +
-                (source.debugName.empty() ? std::string{}
-                                          : "/" + source.debugName);
+            info.debugName = debugRoot + "/Texture/" +
+                             std::to_string(textureIndex_) +
+                             (source.debugName.empty()
+                                  ? std::string{}
+                                  : "/" + source.debugName);
             std::vector<TextureMipLevelInfo> mipLevels;
             if (source.image->kind ==
                 PreparedTextureDataKind::PrebuiltMipChain) {
@@ -186,20 +210,19 @@ void SceneGpuBuilder::pump(const Budget &budget) {
                         "Prepared texture has an empty mip chain");
                 mipLevels.reserve(source.image->mipLevels.size());
                 for (const PreparedMipLevel &mip : source.image->mipLevels) {
-                    mipLevels.push_back({mip.offset, mip.size, mip.width,
-                                         mip.height});
+                    mipLevels.push_back(
+                        {mip.offset, mip.size, mip.width, mip.height});
                 }
                 info.dataSize = source.image->pixels.size();
                 info.generateMipmaps = false;
                 info.mipLevels = mipLevels.data();
-                info.mipLevelCount =
-                    static_cast<uint32_t>(mipLevels.size());
+                info.mipLevelCount = static_cast<uint32_t>(mipLevels.size());
             }
             textures_.push_back(
                 std::make_shared<Texture>(*device_, *recorder, info));
             source.image.reset();
             ++textureIndex_;
-            task_->progress.uploadedTextures = textureIndex_;
+            context_.progress->uploadedTextures = textureIndex_;
             recordedBytes += bytes;
             if (budgetExpired(start, recordedBytes, budget))
                 break;
@@ -213,13 +236,11 @@ void SceneGpuBuilder::pump(const Budget &budget) {
                meshIndex_ < prepared_->meshes.size() &&
                !budgetExpired(start, recordedBytes, budget)) {
             PreparedMesh &source = prepared_->meshes[meshIndex_];
-            const uint64_t vertexBytes =
-                source.vertices.size() * sizeof(Vertex);
+            const uint64_t vertexBytes = source.vertices.size() * sizeof(Vertex);
             const uint64_t indexBytes =
                 source.indices.size() * sizeof(uint32_t);
             const uint64_t reservation =
-                vertexBytes + indexBytes +
-                (uploadQueue_->copyAlignment() - 1);
+                vertexBytes + indexBytes + (uploadQueue_->copyAlignment() - 1);
             UploadRecorder *recorder = uploadQueue_->acquire(reservation);
             if (!recorder)
                 break;
@@ -227,8 +248,7 @@ void SceneGpuBuilder::pump(const Budget &budget) {
                 *device_, *recorder, source.vertices.data(), vertexBytes,
                 source.indices.data(),
                 static_cast<uint32_t>(source.indices.size()),
-                "Scene/" + task_->sceneName + "/Mesh/" +
-                    std::to_string(meshIndex_) +
+                debugRoot + "/Mesh/" + std::to_string(meshIndex_) +
                     (source.debugName.empty() ? std::string{}
                                               : "/" + source.debugName)));
             source.vertices.clear();
@@ -236,13 +256,12 @@ void SceneGpuBuilder::pump(const Budget &budget) {
             source.indices.clear();
             source.indices.shrink_to_fit();
             ++meshIndex_;
-            task_->progress.uploadedMeshes = meshIndex_;
+            context_.progress->uploadedMeshes = meshIndex_;
             recordedBytes += vertexBytes + indexBytes;
         }
         if (phase_ == Phase::Meshes &&
             meshIndex_ == prepared_->meshes.size()) {
             phase_ = Phase::WaitingForGpu;
-            task_->state = SceneLoadState::WaitingForGpu;
         }
 
         if (phase_ == Phase::WaitingForGpu) {
@@ -251,14 +270,13 @@ void SceneGpuBuilder::pump(const Budget &budget) {
             if (!uploadQueue_->idle())
                 return;
             phase_ = Phase::Materials;
-            task_->state = SceneLoadState::Uploading;
         }
 
         if (phase_ == Phase::Materials && !fallbackMaterial_) {
             MaterialParams params{};
             params.debugName = "Fallback Material";
             fallbackMaterial_ = std::make_shared<MaterialInstance>(
-                *device_, *descriptorAllocator_, materialTemplate_,
+                *device_, *descriptorAllocator_, context_.materialTemplate,
                 MaterialInstance::makeTextureSet(fallbackTextures_->white(),
                                                  *fallbackTextures_),
                 params);
@@ -271,8 +289,7 @@ void SceneGpuBuilder::pump(const Budget &budget) {
             MaterialTextureSet textureSet{};
             for (size_t slotIndex = 0;
                  slotIndex < kMaterialTextureSlotCount; ++slotIndex) {
-                const int32_t textureIndex =
-                    source.textureIndices[slotIndex];
+                const int32_t textureIndex = source.textureIndices[slotIndex];
                 const MaterialTextureSlot slot =
                     static_cast<MaterialTextureSlot>(slotIndex);
                 textureSet[slotIndex] =
@@ -282,133 +299,133 @@ void SceneGpuBuilder::pump(const Budget &budget) {
                         : fallbackTextures_->textureFor(slot);
             }
             materials_.push_back(std::make_shared<MaterialInstance>(
-                *device_, *descriptorAllocator_, materialTemplate_,
+                *device_, *descriptorAllocator_, context_.materialTemplate,
                 std::move(textureSet), std::move(source.params)));
             ++materialIndex_;
         }
         if (phase_ == Phase::Materials &&
             materialIndex_ == prepared_->materials.size()) {
-            phase_ = Phase::Objects;
+            phase_ = Phase::Finalize;
         }
 
-        while (phase_ == Phase::Objects &&
-               objectIndex_ < prepared_->objects.size() &&
-               !budgetExpired(start, recordedBytes, budget)) {
-            const PreparedObject &source = prepared_->objects[objectIndex_];
-            if (source.meshIndex >= meshes_.size())
-                throw std::runtime_error("Prepared object mesh is invalid");
-            std::shared_ptr<MaterialInstance> material =
-                source.materialIndex >= 0 &&
-                        source.materialIndex <
-                            static_cast<int32_t>(materials_.size())
-                    ? materials_[static_cast<size_t>(source.materialIndex)]
-                    : fallbackMaterial_;
-            scene_->addObject(
-                {meshes_[source.meshIndex], std::move(material),
-                 source.transform});
-            ++objectIndex_;
-        }
-        if (phase_ == Phase::Objects &&
-            objectIndex_ == prepared_->objects.size()) {
-            scene_->addMaterialTemplate(materialTemplate_);
-            for (auto &texture : textures_)
-                scene_->addTexture(texture);
-            for (auto &material : materials_)
-                scene_->addMaterial(material);
-            scene_->addMaterial(fallbackMaterial_);
-            for (auto &mesh : meshes_)
-                scene_->addMesh(mesh);
-            for (SceneLight &light : prepared_->lights)
-                scene_->addLight(std::move(light));
-            prepared_->lights.clear();
-            scene_->initialCamera = prepared_->initialCamera;
-            task_->stats.materialCount = materials_.size() + 1;
-            task_->stats.objectCount = scene_->objects().size();
-            task_->stats.lightInstanceCount = scene_->lights().size();
-            task_->stats.directionalLightCount = 0;
-            task_->stats.pointLightCount = 0;
-            task_->stats.spotLightCount = 0;
-            for (const SceneLight &light : scene_->lights()) {
-                switch (light.type) {
-                case LightType::Directional:
-                    ++task_->stats.directionalLightCount;
-                    break;
-                case LightType::Point:
-                    ++task_->stats.pointLightCount;
-                    break;
-                case LightType::Spot:
-                    ++task_->stats.spotLightCount;
-                    break;
-                }
-            }
-            task_->state = SceneLoadState::ReadyToPublish;
-            phase_ = Phase::Ready;
-            task_->stats.gpuBuildMs =
-                std::chrono::duration<double, std::milli>(
-                    std::chrono::steady_clock::now() - buildStart_)
-                    .count();
-        }
+        if (phase_ == Phase::Finalize)
+            finalizeAsset();
     } catch (const std::exception &error) {
         fail(error);
     }
 }
 
-uint64_t SceneGpuBuilder::stagingBytesInUse() const {
-    return uploadQueue_
-               ? static_cast<uint64_t>(uploadQueue_->stagingBytesInUse())
-               : 0;
-}
-
-void SceneGpuBuilder::cancel() {
-    task_->cancellation->store(true);
-    if (!finished()) {
-        phase_ = Phase::Cancelling;
-        task_->state = SceneLoadState::Cancelling;
+void ModelGpuBuilder::finalizeAsset() {
+    asset_->textures.reserve(fallbackBuildTextures_.size() + textures_.size());
+    asset_->textures.insert(asset_->textures.end(),
+                            fallbackBuildTextures_.begin(),
+                            fallbackBuildTextures_.end());
+    asset_->textures.insert(asset_->textures.end(), textures_.begin(),
+                            textures_.end());
+    asset_->meshes = meshes_;
+    asset_->materials = materials_;
+    asset_->materials.push_back(fallbackMaterial_);
+    asset_->primitives.reserve(prepared_->primitives.size());
+    for (const PreparedModelPrimitive &source : prepared_->primitives) {
+        if (source.meshIndex >= meshes_.size())
+            throw std::runtime_error("Prepared primitive mesh is invalid");
+        std::shared_ptr<MaterialInstance> material =
+            source.materialIndex >= 0 &&
+                    source.materialIndex <
+                        static_cast<int32_t>(materials_.size())
+                ? materials_[static_cast<size_t>(source.materialIndex)]
+                : fallbackMaterial_;
+        asset_->primitives.push_back(
+            {meshes_[source.meshIndex], std::move(material),
+             source.localToAsset});
+        includeTransformedBounds(asset_->localBounds,
+                                 meshes_[source.meshIndex]->localBounds(),
+                                 source.localToAsset);
     }
+    asset_->lights = std::move(prepared_->lights);
+    asset_->previewCamera = prepared_->previewCamera;
+
+    context_.stats->materialCount = asset_->materials.size();
+    context_.stats->objectCount = asset_->primitives.size();
+    context_.stats->primitiveCount = asset_->primitives.size();
+    context_.stats->lightInstanceCount = asset_->lights.size();
+    context_.stats->directionalLightCount = 0;
+    context_.stats->pointLightCount = 0;
+    context_.stats->spotLightCount = 0;
+    for (const ModelLightPrototype &light : asset_->lights) {
+        switch (light.type) {
+        case LightType::Directional:
+            ++context_.stats->directionalLightCount;
+            break;
+        case LightType::Point:
+            ++context_.stats->pointLightCount;
+            break;
+        case LightType::Spot:
+            ++context_.stats->spotLightCount;
+            break;
+        }
+    }
+    context_.stats->gpuBuildMs =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - buildStart_)
+            .count();
+    phase_ = Phase::Ready;
 }
 
-bool SceneGpuBuilder::ready() const { return phase_ == Phase::Ready; }
+void ModelGpuBuilder::cancel() {
+    context_.cancellation->store(true);
+    if (!finished())
+        phase_ = Phase::Cancelling;
+}
 
-bool SceneGpuBuilder::finished() const {
+bool ModelGpuBuilder::ready() const { return phase_ == Phase::Ready; }
+
+bool ModelGpuBuilder::finished() const {
     return phase_ == Phase::Ready || phase_ == Phase::Cancelled ||
            phase_ == Phase::Failed;
 }
 
-bool SceneGpuBuilder::cancelled() const {
+bool ModelGpuBuilder::cancelled() const {
     return phase_ == Phase::Cancelled;
 }
 
-std::unique_ptr<Scene> SceneGpuBuilder::takeScene() {
+std::shared_ptr<const ModelAsset> ModelGpuBuilder::takeAsset() {
     if (!ready())
         return {};
-    return std::move(scene_);
+    return std::move(asset_);
 }
 
-uint64_t SceneGpuBuilder::pendingTextureCount() const {
+uint64_t ModelGpuBuilder::pendingTextureCount() const {
     return prepared_ && textureIndex_ < prepared_->textures.size()
                ? static_cast<uint64_t>(prepared_->textures.size() -
                                        textureIndex_)
                : 0;
 }
 
-uint64_t SceneGpuBuilder::pendingMeshCount() const {
+uint64_t ModelGpuBuilder::pendingMeshCount() const {
     return prepared_ && meshIndex_ < prepared_->meshes.size()
                ? static_cast<uint64_t>(prepared_->meshes.size() - meshIndex_)
                : 0;
 }
 
-uint64_t SceneGpuBuilder::pendingUploadCount() const {
+uint64_t ModelGpuBuilder::pendingUploadCount() const {
     uint64_t pending = pendingTextureCount() + pendingMeshCount();
     if (pending == 0 && uploadQueue_ && !uploadQueue_->idle())
         pending = 1;
     return pending;
 }
 
-uint32_t SceneGpuBuilder::inFlightUploadBatches() const {
+uint32_t ModelGpuBuilder::inFlightUploadBatches() const {
     return uploadQueue_ ? uploadQueue_->inFlightCount() : 0;
 }
 
-bool SceneGpuBuilder::budgetExpired(
+uint64_t ModelGpuBuilder::stagingBytesInUse() const {
+    return uploadQueue_
+               ? static_cast<uint64_t>(uploadQueue_->stagingBytesInUse())
+               : 0;
+}
+
+bool ModelGpuBuilder::budgetExpired(
     const std::chrono::steady_clock::time_point &start, uint64_t bytes,
     const Budget &budget) const {
     if (bytes >= budget.maxUploadBytes)
@@ -418,18 +435,14 @@ bool SceneGpuBuilder::budgetExpired(
                .count() >= budget.maxRecordMs;
 }
 
-void SceneGpuBuilder::submitRecorded() { uploadQueue_->submitActive(); }
+void ModelGpuBuilder::submitRecorded() { uploadQueue_->submitActive(); }
 
-void SceneGpuBuilder::fail(const std::exception &error) {
-    {
-        std::lock_guard<std::mutex> lock(task_->mutex);
-        task_->error = error.what();
-    }
+void ModelGpuBuilder::fail(const std::exception &error) {
+    error_ = error.what();
     failurePending_ = true;
-    task_->state = SceneLoadState::Cancelling;
     phase_ = Phase::Cancelling;
-    VKR_LOG_ERROR("Scene", "GPU build for '{}' failed: {}",
-                  task_->sceneName, error.what());
+    VKR_LOG_ERROR("ModelAsset", "GPU build for '{}:{}' failed: {}",
+                  context_.modelId, context_.profileId, error.what());
 }
 
 } // namespace vkr

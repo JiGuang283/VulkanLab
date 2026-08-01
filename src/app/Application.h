@@ -20,6 +20,7 @@
 
 #include <cstdint>
 #include <chrono>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -46,8 +47,9 @@ struct RuntimeCommand;
 class RuntimeCommandQueue;
 class NamedPipeServerWin32;
 class SceneLoadManager;
-class SceneGpuBuilder;
+class AssetRepository;
 struct SceneLoadTask;
+struct ModelAsset;
 class EnvironmentLoadManager;
 class EnvironmentGpuBuilder;
 struct EnvironmentLoadTask;
@@ -119,11 +121,13 @@ class Application final
     void loadScene(int index, bool replaceCurrent = false);
     uint64_t reloadCurrentScene();
     void switchScene(int index);
-    uint64_t requestSceneLoad(int index, bool sourceFallback = false);
+    uint64_t requestSceneLoad(int index, bool sourceFallback = false,
+                              bool reloadAsset = false);
     uint64_t requestSceneOperation(int index, bool sourceFallback = false,
                                    bool loadAfter = true,
                                    ImportReason reason = ImportReason::SceneLoad,
-                                   bool forceReimport = false);
+                                   bool forceReimport = false,
+                                   bool reloadAsset = false);
     bool cancelSceneLoad(uint64_t taskId);
     bool cancelLoadOperation(uint64_t taskId);
     bool cancelEnvironmentLoad(uint64_t taskId);
@@ -142,6 +146,11 @@ class Application final
     void refreshAllArtifactStatuses();
     void refreshValidationStatus(int sceneIndex);
     void refreshAllValidationStatuses();
+    void retireCurrentScene();
+    void collectRetiredScenes();
+    void runModelAssetSharingSmoke(
+        const std::shared_ptr<SceneLoadTask> &task,
+        const std::shared_ptr<const ModelAsset> &asset);
 
 #if VKL_ENABLE_RUNTIME_CONTROL
     ControlJson runtimeSystemInfo() override;
@@ -231,12 +240,17 @@ class Application final
 
     // 场景切换
     SceneLoadContext        sceneLoadContext_;
+    std::unique_ptr<AssetRepository> assetRepository_;
     std::unique_ptr<Scene>  currentScene_;
+    struct RetiredScene {
+        uint64_t retireAfterSerial = 0;
+        std::unique_ptr<Scene> scene;
+    };
+    std::deque<RetiredScene> retiredScenes_;
     int                     currentSceneIndex_ = -1;
     int                     pendingSceneIndex_ = -1;
     std::optional<SceneLoadStats> lastSceneLoadStats_;
     std::unique_ptr<SceneLoadManager> sceneLoadManager_;
-    std::unique_ptr<SceneGpuBuilder> sceneGpuBuilder_;
     std::shared_ptr<SceneLoadTask> latestSceneLoadTask_;
     std::unique_ptr<EnvironmentLoadManager> environmentLoadManager_;
     std::unique_ptr<EnvironmentGpuBuilder> environmentGpuBuilder_;
@@ -262,6 +276,7 @@ class Application final
     std::string captureUiError_;
     uint64_t sceneGeneration_ = 0;
     uint64_t presentedFrameCount_ = 0;
+    bool modelAssetSharingSmokeComplete_ = false;
 
     // 输入模式
     InputMode  mode_ = InputMode::UI;

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "scene/PreparedSceneData.h"
+#include "scene/PreparedModelData.h"
 #include "scene/SceneLoadTask.h"
 #include "TextureTranscodeTarget.h"
 
@@ -28,7 +28,7 @@ class GltfPreparer {
         SceneLoadStats *loadStats = nullptr;
     };
 
-    static PreparedSceneData prepare(
+    static PreparedModelData prepare(
         const std::string &path, const Options &options,
         const CancellationToken &cancellation = {},
         SceneLoadProgress *progress = nullptr);

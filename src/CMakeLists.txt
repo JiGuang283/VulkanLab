@@ -181,7 +181,9 @@ set(VKL_ENGINE_SOURCES
     scene/BuiltinScenes.cpp
     scene/Camera.cpp
     scene/Scene.cpp
-    scene/SceneGpuBuilder.cpp
+    scene/AssetRepository.cpp
+    scene/ModelGpuBuilder.cpp
+    scene/ModelLight.cpp
     scene/SceneLoadManager.cpp
     scene/SceneLoadTask.cpp
     scene/SceneRegistryBuilder.cpp

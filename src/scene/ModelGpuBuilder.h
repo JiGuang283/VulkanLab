@@ -1,10 +1,14 @@
 #pragma once
 
-#include "SceneLoadTask.h"
+#include "ModelAsset.h"
 
+#include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace vkr {
@@ -16,33 +20,48 @@ class IncrementalUploadQueue;
 class MaterialInstance;
 class MaterialTemplate;
 class Mesh;
-class Scene;
 class Texture;
-struct PreparedSceneData;
+struct PreparedModelData;
+struct SceneLoadProgress;
+struct SceneLoadStats;
 
-class SceneGpuBuilder {
+class ModelGpuBuilder {
   public:
     struct Budget {
         uint64_t maxUploadBytes = 32ull * 1024ull * 1024ull;
         double maxRecordMs = 2.0;
     };
 
-    SceneGpuBuilder(Device &device,
-                    DescriptorAllocator &descriptorAllocator,
-                    std::shared_ptr<SceneLoadTask> task,
-                    std::unique_ptr<PreparedSceneData> prepared);
-    ~SceneGpuBuilder();
+    struct Context {
+        std::string modelId;
+        std::string profileId;
+        std::string displayName;
+        uint64_t taskId = 0;
+        uint64_t generation = 0;
+        std::chrono::steady_clock::time_point requestedAt =
+            std::chrono::steady_clock::now();
+        SceneLoadProgress *progress = nullptr;
+        SceneLoadStats *stats = nullptr;
+        std::shared_ptr<std::atomic_bool> cancellation;
+        std::shared_ptr<MaterialTemplate> materialTemplate;
+    };
 
-    SceneGpuBuilder(const SceneGpuBuilder &) = delete;
-    SceneGpuBuilder &operator=(const SceneGpuBuilder &) = delete;
+    ModelGpuBuilder(Device &device,
+                    DescriptorAllocator &descriptorAllocator,
+                    Context context,
+                    std::unique_ptr<PreparedModelData> prepared);
+    ~ModelGpuBuilder();
+
+    ModelGpuBuilder(const ModelGpuBuilder &) = delete;
+    ModelGpuBuilder &operator=(const ModelGpuBuilder &) = delete;
 
     void pump(const Budget &budget = {});
     void cancel();
     bool ready() const;
     bool finished() const;
     bool cancelled() const;
-    std::unique_ptr<Scene> takeScene();
-    std::shared_ptr<SceneLoadTask> task() const { return task_; }
+    std::shared_ptr<const ModelAsset> takeAsset();
+    const std::string &error() const { return error_; }
     uint64_t pendingUploadCount() const;
     uint64_t pendingTextureCount() const;
     uint64_t pendingMeshCount() const;
@@ -56,7 +75,7 @@ class SceneGpuBuilder {
         Meshes,
         WaitingForGpu,
         Materials,
-        Objects,
+        Finalize,
         Ready,
         Cancelling,
         Cancelled,
@@ -67,14 +86,14 @@ class SceneGpuBuilder {
                        uint64_t bytes, const Budget &budget) const;
     void submitRecorded();
     void fail(const std::exception &error);
+    void finalizeAsset();
 
     Device *device_ = nullptr;
     DescriptorAllocator *descriptorAllocator_ = nullptr;
-    std::shared_ptr<SceneLoadTask> task_;
-    std::unique_ptr<PreparedSceneData> prepared_;
+    Context context_;
+    std::unique_ptr<PreparedModelData> prepared_;
     std::unique_ptr<IncrementalUploadQueue> uploadQueue_;
-    std::unique_ptr<Scene> scene_;
-    std::shared_ptr<MaterialTemplate> materialTemplate_;
+    std::shared_ptr<ModelAsset> asset_;
     std::shared_ptr<FallbackTextures> fallbackTextures_;
     std::vector<std::shared_ptr<Texture>> fallbackBuildTextures_;
     std::vector<std::shared_ptr<Texture>> textures_;
@@ -84,9 +103,9 @@ class SceneGpuBuilder {
     size_t textureIndex_ = 0;
     size_t meshIndex_ = 0;
     size_t materialIndex_ = 0;
-    size_t objectIndex_ = 0;
     Phase phase_ = Phase::Fallbacks;
     bool failurePending_ = false;
+    std::string error_;
     std::chrono::steady_clock::time_point buildStart_ =
         std::chrono::steady_clock::now();
 };

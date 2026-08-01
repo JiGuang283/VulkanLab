@@ -21,7 +21,8 @@ class IncrementalUploadQueue {
         Device &device, ResourceLoadStats *stats = nullptr,
         uint32_t slotCount = 2,
         VkDeviceSize slotCapacity = kDefaultSlotCapacity,
-        uint64_t taskId = 0, std::string sceneName = {});
+        uint64_t taskId = 0, std::string sceneName = {},
+        std::string uploadLabel = {}, std::string debugRoot = {});
     ~IncrementalUploadQueue();
 
     IncrementalUploadQueue(const IncrementalUploadQueue &) = delete;
@@ -48,6 +49,7 @@ class IncrementalUploadQueue {
     uint64_t taskId_ = 0;
     uint64_t nextBatchIndex_ = 0;
     std::string sceneName_;
+    std::string uploadLabel_;
 };
 
 } // namespace vkr

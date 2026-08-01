@@ -180,11 +180,11 @@ float sanitizeNonNegativeFloat(double value, float fallback,
     return static_cast<float>(value);
 }
 
-std::optional<SceneLight>
-makeSceneLight(const tg3_light &source, uint32_t lightIndex,
+std::optional<ModelLightPrototype>
+makeModelLight(const tg3_light &source, uint32_t lightIndex,
                const tg3_node &node, int nodeIndex, const glm::mat4 &world,
                const std::string &path) {
-    SceneLight result{};
+    ModelLightPrototype result{};
     if (tg3_str_equals_cstr(source.type, "directional")) {
         result.type = LightType::Directional;
     } else if (tg3_str_equals_cstr(source.type, "point")) {
@@ -226,7 +226,7 @@ makeSceneLight(const tg3_light &source, uint32_t lightIndex,
                          path, lightIndex, nodeIndex);
             return std::nullopt;
         }
-        result.positionWS = position;
+        result.positionAS = position;
         result.range = sanitizeNonNegativeFloat(
             source.range, 0.0f, correctedProperties);
     } else {
@@ -250,7 +250,7 @@ makeSceneLight(const tg3_light &source, uint32_t lightIndex,
         }
         const glm::vec3 normalizedDirection =
             emittedDirection / std::sqrt(directionLengthSquared);
-        result.directionWS =
+        result.directionAS =
             result.type == LightType::Directional
                 ? -normalizedDirection
                 : normalizedDirection;
@@ -443,7 +443,7 @@ uint64_t textureKey(int textureIndex, TextureSemantic semantic) {
 
 } // namespace
 
-PreparedSceneData GltfPreparer::prepare(
+PreparedModelData GltfPreparer::prepare(
     const std::string &path, const Options &options,
     const CancellationToken &cancellation, SceneLoadProgress *progress) {
     VKL_PROFILE_ZONE("GltfPreparer::prepare");
@@ -479,9 +479,9 @@ PreparedSceneData GltfPreparer::prepare(
 
     throwIfCancelled(cancellation);
     const tg3_model *gltf = model.get();
-    PreparedSceneData prepared;
+    PreparedModelData prepared;
     prepared.sourcePath = path;
-    prepared.initialCamera = options.cameraOverride;
+    prepared.previewCamera = options.cameraOverride;
     if (options.loadStats)
         options.loadStats->gltfLightDefinitionCount = gltf->lights_count;
 
@@ -929,7 +929,7 @@ PreparedSceneData GltfPreparer::prepare(
                 node.mesh < static_cast<int>(primitivesByMesh.size())) {
                 for (const PrimitiveReference &primitive :
                      primitivesByMesh[node.mesh]) {
-                    prepared.objects.push_back(
+                    prepared.primitives.push_back(
                         {primitive.meshIndex, primitive.materialIndex, world});
                 }
             }
@@ -941,7 +941,7 @@ PreparedSceneData GltfPreparer::prepare(
                         "skipping",
                         path, nodeIndex, node.light);
                 } else {
-                    auto light = makeSceneLight(
+                    auto light = makeModelLight(
                         gltf->lights[node.light],
                         static_cast<uint32_t>(node.light), node, nodeIndex,
                         world, path);
@@ -973,7 +973,7 @@ PreparedSceneData GltfPreparer::prepare(
     } else {
         for (const auto &meshPrimitives : primitivesByMesh) {
             for (const PrimitiveReference &primitive : meshPrimitives) {
-                prepared.objects.push_back(
+                prepared.primitives.push_back(
                     {primitive.meshIndex, -1, glm::mat4(1.0f)});
             }
         }
@@ -982,7 +982,7 @@ PreparedSceneData GltfPreparer::prepare(
     uint64_t directionalLightCount = 0;
     uint64_t pointLightCount = 0;
     uint64_t spotLightCount = 0;
-    for (const SceneLight &light : prepared.lights) {
+    for (const ModelLightPrototype &light : prepared.lights) {
         switch (light.type) {
         case LightType::Directional:
             ++directionalLightCount;
@@ -1025,8 +1025,9 @@ PreparedSceneData GltfPreparer::prepare(
             preparedBytes += mesh.vertices.size() * sizeof(Vertex);
             preparedBytes += mesh.indices.size() * sizeof(uint32_t);
         }
-        for (const SceneLight &light : prepared.lights)
-            preparedBytes += sizeof(SceneLight) + light.debugName.size();
+        for (const ModelLightPrototype &light : prepared.lights)
+            preparedBytes += sizeof(ModelLightPrototype) +
+                             light.debugName.size();
         options.loadStats->preparedCpuBytes = preparedBytes;
     }
     throwIfCancelled(cancellation);

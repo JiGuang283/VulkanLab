@@ -63,10 +63,13 @@ struct ResourceLoadStats {
 struct SceneLoadStats {
     uint64_t    taskId = 0;
     uint64_t    generation = 0;
+    uint64_t    modelGeneration = 0;
     std::string sceneName;
     std::string finalState;
     uint32_t    maxTextureSize = 0;
     bool        success = false;
+    bool        repositoryHit = false;
+    bool        coalescedRequest = false;
 
     double totalMs = 0.0;
     double deviceIdleMs = 0.0;
@@ -86,6 +89,7 @@ struct SceneLoadStats {
     uint64_t deviceWaitIdleCalls = 0;
     uint64_t materialCount = 0;
     uint64_t objectCount = 0;
+    uint64_t primitiveCount = 0;
     uint64_t gltfLightDefinitionCount = 0;
     uint64_t lightInstanceCount = 0;
     uint64_t directionalLightCount = 0;

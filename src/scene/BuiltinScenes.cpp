@@ -84,13 +84,15 @@ ScenePrepareFactory gltfSceneFactory(std::string modelPath,
     return [modelPath = std::move(modelPath), cameraOverride](
                const SceneLoadContext &loadContext,
                const CancellationToken &cancellation,
-               SceneLoadProgress &progress) -> PreparedSceneData {
+               SceneLoadProgress &progress) -> PreparedModelData {
         GltfPreparer::Options options{};
         options.maxTextureSize = loadContext.maxTextureSize;
         options.derivedTextureCachePath =
             loadContext.derivedTextureCachePath;
         options.projectId = loadContext.projectId;
-        options.sceneId = loadContext.sceneId;
+        options.sceneId = loadContext.modelId.empty()
+                              ? loadContext.sceneId
+                              : loadContext.modelId;
         options.profileId = loadContext.profileId;
         options.textureTranscodeTarget =
             loadContext.textureTranscodeTarget;

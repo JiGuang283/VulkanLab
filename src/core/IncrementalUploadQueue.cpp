@@ -270,10 +270,14 @@ class IncrementalUploadQueue::Slot final : public UploadRecorder {
 
 IncrementalUploadQueue::IncrementalUploadQueue(
     Device &device, ResourceLoadStats *stats, uint32_t slotCount,
-    VkDeviceSize slotCapacity, uint64_t taskId, std::string sceneName)
+    VkDeviceSize slotCapacity, uint64_t taskId, std::string sceneName,
+    std::string uploadLabel, std::string debugRoot)
     : device_(&device), stats_(stats), defaultCapacity_(slotCapacity),
       taskId_(taskId),
-      sceneName_(sceneName.empty() ? "Unknown" : std::move(sceneName)) {
+      sceneName_(sceneName.empty() ? "Unknown" : std::move(sceneName)),
+      uploadLabel_(uploadLabel.empty()
+                       ? "SceneUpload task=" + std::to_string(taskId)
+                       : std::move(uploadLabel)) {
     if (slotCount < 2 || slotCapacity == 0)
         throw std::invalid_argument("Incremental upload queue requires slots");
     VkPhysicalDeviceProperties properties{};
@@ -281,11 +285,12 @@ IncrementalUploadQueue::IncrementalUploadQueue(
     copyAlignment_ = std::max<VkDeviceSize>(
         16, properties.limits.optimalBufferCopyOffsetAlignment);
     slots_.reserve(slotCount);
+    if (debugRoot.empty())
+        debugRoot = "SceneUpload/" + sceneName_ + "/Task" +
+                    std::to_string(taskId_);
     for (uint32_t i = 0; i < slotCount; ++i) {
         slots_.push_back(std::make_unique<Slot>(
-            device, stats, slotCapacity, i,
-            "SceneUpload/" + sceneName_ + "/Task" +
-                std::to_string(taskId_)));
+            device, stats, slotCapacity, i, debugRoot));
     }
 }
 
@@ -306,8 +311,8 @@ UploadRecorder *IncrementalUploadQueue::acquire(
         if (!slot->inFlight() && !slot->hasCommands()) {
             slot->prepare(requiredBytes);
             slot->setBatchLabel(
-                "SceneUpload task=" + std::to_string(taskId_) +
-                " batch=" + std::to_string(nextBatchIndex_++));
+                uploadLabel_ + " batch=" +
+                std::to_string(nextBatchIndex_++));
             active_ = slot.get();
             return active_;
         }
