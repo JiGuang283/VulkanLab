@@ -1,5 +1,6 @@
 #include "ScenesPanel.h"
 
+#include "editor/EditorDragDrop.h"
 #include "editor/EditorWidgets.h"
 
 #include <imgui.h>
@@ -159,13 +160,27 @@ void ScenesPanel::draw(const SceneWorkflowSnapshot &snapshot,
                     actions.loadPreview(item.index);
             }
             ImGui::EndDisabled();
+            if (item.canInstantiate && ImGui::BeginDragDropSource()) {
+                ImGui::SetDragDropPayload(
+                    editor::kModelAssetPayload, item.id.c_str(),
+                    item.id.size() + 1);
+                ImGui::TextUnformatted(item.displayName.c_str());
+                ImGui::TextDisabled("Drop into the Viewport");
+                ImGui::EndDragDropSource();
+            }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                ImGui::SetTooltip("%s%s%s", item.displayName.c_str(),
-                                  item.available ? "\nDouble-click to load"
-                                                 : "\n",
-                                  item.available
-                                      ? ""
-                                      : item.unavailableReason.c_str());
+                if (item.canInstantiate) {
+                    ImGui::SetTooltip(
+                        "%s\nDouble-click to load preview\nDrag into the "
+                        "Viewport to instantiate",
+                        item.displayName.c_str());
+                } else {
+                    ImGui::SetTooltip(
+                        "%s%s%s", item.displayName.c_str(),
+                        item.available ? "\nDouble-click to load" : "\n",
+                        item.available ? ""
+                                       : item.unavailableReason.c_str());
+                }
             }
             ImGui::TableSetColumnIndex(1);
             const char *state = item.available ? item.artifactState.c_str()

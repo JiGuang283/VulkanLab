@@ -1,5 +1,7 @@
 #include "OutlinerPanel.h"
 
+#include "editor/EditorDragDrop.h"
+
 #include <imgui.h>
 
 #include <algorithm>
@@ -32,6 +34,18 @@ const OutlinerEntitySnapshot *findEntity(
     return found == snapshot.entities.end() ? nullptr : &*found;
 }
 
+std::optional<PersistentEntityId>
+entityPayload(const ImGuiPayload *payload) {
+    if (!payload || !payload->Data || payload->DataSize <= 0)
+        return std::nullopt;
+    const char *data = static_cast<const char *>(payload->Data);
+    size_t length = 0;
+    const size_t capacity = static_cast<size_t>(payload->DataSize);
+    while (length < capacity && data[length] != '\0')
+        ++length;
+    return PersistentEntityId::parse(std::string_view(data, length));
+}
+
 } // namespace
 
 void OutlinerPanel::beginRename(const PersistentEntityId &id,
@@ -60,6 +74,22 @@ void OutlinerPanel::draw(const OutlinerPanelSnapshot &snapshot,
 
     ImGui::BeginChild("OutlinerTree", ImVec2(0.0f, 0.0f),
                       ImGuiChildFlags_Borders);
+    const bool rootSelected = false;
+    if (ImGui::Selectable("Scene Root", rootSelected) && actions.select)
+        actions.select(std::nullopt);
+    if (snapshot.editable && ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload(
+                editor::kEntityPayload)) {
+            if (payload->IsDelivery()) {
+                if (const auto entity = entityPayload(payload);
+                    entity && actions.reparent) {
+                    actions.reparent(*entity, std::nullopt);
+                }
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
+    ImGui::Separator();
     const std::string query = search_.data();
     if (!query.empty()) {
         for (const OutlinerEntitySnapshot &entity : snapshot.entities) {
@@ -141,6 +171,24 @@ void OutlinerPanel::drawEntity(const OutlinerEntitySnapshot &entity,
     }
     if (ImGui::IsItemClicked() && actions.select)
         actions.select(entity.id);
+    if (snapshot.editable && ImGui::BeginDragDropSource()) {
+        ImGui::SetDragDropPayload(editor::kEntityPayload, id.c_str(),
+                                  id.size() + 1);
+        ImGui::TextUnformatted(entity.name.c_str());
+        ImGui::EndDragDropSource();
+    }
+    if (snapshot.editable && ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload(
+                editor::kEntityPayload)) {
+            if (payload->IsDelivery()) {
+                if (const auto child = entityPayload(payload);
+                    child && *child != entity.id && actions.reparent) {
+                    actions.reparent(*child, entity.id);
+                }
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
     if (ImGui::IsItemHovered() &&
         ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
         beginRename(entity.id, entity.name);
