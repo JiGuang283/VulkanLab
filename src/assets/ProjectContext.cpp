@@ -123,7 +123,13 @@ ProjectContext makePackageContext(const std::filesystem::path &root) {
         context.runtimeRoot / "artifacts" / "captures";
     context.catalogWritable = false;
     context.cookedPackage = true;
-    context.packageProfileId = manifest.profileId;
+    context.packageSchemaVersion = manifest.schemaVersion;
+    context.nativeScenePackage =
+        manifest.schemaVersion >= RuntimePackageManifest::kSchemaVersion;
+    context.packageProfileId = manifest.defaultImportProfile.empty()
+                                   ? manifest.profileId
+                                   : manifest.defaultImportProfile;
+    context.startupSceneId = manifest.startupSceneId;
     context.requiredTextureEncoder = manifest.requiredTextureEncoder;
     context.diagnostic = "verified cooked package (" +
                          std::to_string(verified.fileCount) + " files)";

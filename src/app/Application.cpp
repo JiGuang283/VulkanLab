@@ -948,8 +948,22 @@ void Application::init() {
         throw std::runtime_error("No scenes registered; call "
                                  "Application::registerScene before run().");
 
-    const int start = std::clamp(config_.defaultSceneIndex, 0,
-                                 static_cast<int>(sceneRegistry_.size()) - 1);
+    int start = std::clamp(config_.defaultSceneIndex, 0,
+                           static_cast<int>(sceneRegistry_.size()) - 1);
+    if (projectContext_.nativeScenePackage) {
+        const auto found = std::find_if(
+            sceneRegistry_.begin(), sceneRegistry_.end(),
+            [this](const SceneEntry &entry) {
+                return entry.isNativeScene() &&
+                       entry.id == projectContext_.startupSceneId;
+            });
+        if (found == sceneRegistry_.end()) {
+            throw std::runtime_error(
+                "Cooked package startup scene is not registered: " +
+                projectContext_.startupSceneId);
+        }
+        start = static_cast<int>(found - sceneRegistry_.begin());
+    }
     pipelineCache_ = std::make_unique<PipelineCache>(*device_);
     assetRepository_ = std::make_unique<AssetRepository>(
         *device_, *descriptorAllocator_);
@@ -2597,6 +2611,13 @@ ControlJson Application::runtimeSystemInfo() {
         {"runtimeRoot", projectContext_.runtimeRoot.u8string()},
         {"assetMode", assetImportModeName(config_.assetImportMode)},
         {"cookedPackage", projectContext_.cookedPackage},
+        {"package",
+         {{"schemaVersion", projectContext_.packageSchemaVersion},
+          {"nativeScenePackage", projectContext_.nativeScenePackage},
+          {"startupSceneId",
+           projectContext_.startupSceneId.empty()
+               ? ControlJson(nullptr)
+               : ControlJson(projectContext_.startupSceneId)}}},
         {"cacheRoot", sceneLoadContext_.derivedTextureCachePath},
         {"captureRoot", projectContext_.captureRoot.u8string()},
         {"textureLimit", sceneLoadContext_.maxTextureSize},
@@ -3273,6 +3294,14 @@ ControlJson Application::runtimeRenderStatus() {
     return {
         {"scene", std::move(scene)},
         {"runtimeWorld", std::move(runtimeWorld)},
+        {"package",
+         {{"cooked", projectContext_.cookedPackage},
+          {"schemaVersion", projectContext_.packageSchemaVersion},
+          {"nativeScenePackage", projectContext_.nativeScenePackage},
+          {"startupSceneId",
+           projectContext_.startupSceneId.empty()
+               ? ControlJson(nullptr)
+               : ControlJson(projectContext_.startupSceneId)}}},
         {"sceneGeneration", sceneGeneration_},
         {"loadTask", std::move(loadTask)},
         {"environment",

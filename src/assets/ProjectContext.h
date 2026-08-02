@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -14,7 +15,10 @@ struct ProjectContext {
     std::filesystem::path captureRoot;
     bool catalogWritable = false;
     bool cookedPackage = false;
+    bool nativeScenePackage = false;
+    uint32_t packageSchemaVersion = 0;
     std::string packageProfileId;
+    std::string startupSceneId;
     std::string requiredTextureEncoder;
     std::string diagnostic;
 
