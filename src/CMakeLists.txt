@@ -185,6 +185,7 @@ set(VKL_ENGINE_SOURCES
     scene/ModelGpuBuilder.cpp
     scene/ModelLight.cpp
     scene/RuntimeWorld.cpp
+    scene/TransformMath.cpp
     scene/SceneLoadManager.cpp
     scene/SceneLoadTask.cpp
     scene/SceneRegistryBuilder.cpp

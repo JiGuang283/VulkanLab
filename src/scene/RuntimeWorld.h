@@ -37,6 +37,11 @@ enum class ModelBindingState {
     Failed,
 };
 
+enum class ReparentMode {
+    KeepLocal,
+    KeepWorld,
+};
+
 struct RuntimeModelInstanceComponent {
     ModelAssetId modelId;
     std::string profileId;
@@ -97,7 +102,9 @@ class RuntimeWorld final : public IRenderWorld {
     EntityHandle createEntity(SceneEntityDocument entity,
                               std::optional<size_t> insertIndex = std::nullopt);
     bool destroyEntity(EntityHandle handle, bool includeDescendants = true);
-    bool setParent(EntityHandle handle, std::optional<EntityHandle> parent);
+    bool setParent(EntityHandle handle, std::optional<EntityHandle> parent,
+                   ReparentMode mode = ReparentMode::KeepLocal,
+                   std::string *error = nullptr);
     bool setName(EntityHandle handle, std::string name);
     bool setEnabled(EntityHandle handle, bool enabled);
     bool setTransform(EntityHandle handle,

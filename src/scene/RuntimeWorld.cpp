@@ -2,10 +2,9 @@
 
 #include "ModelAsset.h"
 #include "ModelLight.h"
+#include "TransformMath.h"
 #include "render/MaterialInstance.h"
 #include "render/RenderQueue.h"
-
-#include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -14,12 +13,6 @@
 
 namespace vkr {
 namespace {
-
-glm::mat4 localMatrix(const SceneTransformDocument &transform) {
-    return glm::translate(glm::mat4(1.0f), transform.translation) *
-           glm::mat4_cast(glm::normalize(transform.rotation)) *
-           glm::scale(glm::mat4(1.0f), transform.scale);
-}
 
 void includePoint(Bounds &bounds, const glm::vec3 &point) {
     if (!bounds.valid) {
@@ -307,16 +300,52 @@ bool RuntimeWorld::wouldCreateCycle(EntityHandle handle,
 }
 
 bool RuntimeWorld::setParent(EntityHandle handle,
-                             std::optional<EntityHandle> parent) {
+                             std::optional<EntityHandle> parent,
+                             ReparentMode mode, std::string *error) {
+    if (error)
+        error->clear();
     Slot *entry = slot(handle);
-    if (!entry || (parent && (!valid(*parent) ||
-                              wouldCreateCycle(handle, *parent))))
+    if (!entry || (parent && !valid(*parent))) {
+        if (error)
+            *error = "invalid_parent";
         return false;
+    }
+    if (parent && wouldCreateCycle(handle, *parent)) {
+        if (error)
+            *error = "parent_cycle";
+        return false;
+    }
+    if (entry->parent == parent)
+        return true;
+
+    SceneTransformDocument localAfterReparent = entry->transform.local;
+    if (mode == ReparentMode::KeepWorld) {
+        rebuildDerivedState();
+        const glm::mat4 oldWorld = entry->transform.world;
+        glm::mat4 newLocal = oldWorld;
+        if (parent) {
+            const Slot *newParent = slot(*parent);
+            const float determinant = glm::determinant(newParent->transform.world);
+            if (!std::isfinite(determinant) || std::abs(determinant) < 1.0e-8f) {
+                if (error)
+                    *error = "transform_not_decomposable";
+                return false;
+            }
+            newLocal = glm::inverse(newParent->transform.world) * oldWorld;
+        }
+        if (!decomposeSceneTransform(newLocal, localAfterReparent)) {
+            if (error)
+                *error = "transform_not_decomposable";
+            return false;
+        }
+    }
+
     if (entry->parent) {
         if (Slot *oldParent = slot(*entry->parent))
             eraseHandle(oldParent->children, handle);
     }
     entry->parent = parent;
+    entry->transform.local = localAfterReparent;
     if (parent)
         slot(*parent)->children.push_back(handle);
     markDirty(handle);
@@ -460,7 +489,8 @@ void RuntimeWorld::updateHierarchy(EntityHandle handle,
     Slot *entry = slot(handle);
     if (!entry)
         return;
-    entry->transform.world = parentWorld * localMatrix(entry->transform.local);
+    entry->transform.world =
+        parentWorld * composeSceneTransform(entry->transform.local);
     entry->transform.worldRotation = glm::normalize(
         parentRotation * entry->transform.local.rotation);
     entry->transform.dirty = false;
