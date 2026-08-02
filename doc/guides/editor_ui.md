@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 4 working tree
+> Verified against: Scene Authoring Stage 5 implementation
 
 VulkanLab 的开发 UI 使用 Dear ImGui `v1.92.7-docking`，在主 GLFW
 窗口内创建一个全屏 DockSpace。Viewport、Outliner、Inspector、Scenes、Assets、
@@ -80,12 +80,21 @@ Assets 包含 `Models`、`Environments` 与 `Jobs / Cache` 三个 Tab。Models �
 Validator、预览、重导入和模型派生资源；Environments 管理 HDR 导入及 IBL artifact；
 Jobs / Cache 显示项目 cache、当前任务、取消、日志和历史。
 
+打开 Native Scene 后，可实例化的 glTF 模型行可以直接拖入 Viewport。拖动 payload
+只保存稳定 `modelId`；释放后创建 root Model Entity，并复用 AssetRepository 的异步
+绑定与共享 GPU 资源。builtin、缺失模型或没有 Native Scene 会话时不会提供拖放。
+
 ### Outliner 与 Inspector
 
 Outliner 显示 Native Scene 的实体层级，支持搜索、单选、创建 Empty/Model/三类 Light/
 Camera、重命名、enabled、复制和删除 subtree。Inspector 的 Entity 页编辑 parent、局部
 Translation/Euler Rotation/Scale，以及 Model、Light、Camera component；Scene 页编辑
 ambient、environment 和 active camera。Parent picker 使用 Keep Local。
+
+Outliner 的 Entity 可以拖到另一个 Entity，或拖到显式 `Scene Root` 行解除父子关系。
+这条拖放路径使用 Keep World：系统先保存旧 world matrix，再计算并分解新 local TRS。
+如果父级非均匀缩放与旋转形成无法用 TRS 表示的 shear，操作以
+`transform_not_decomposable` 原子失败，原层级与 Transform 保持不变。
 
 删除 active Camera 或移除其 Camera component 会被拒绝，必须先指定另一台 Camera。
 超过 `1 directional + 8 punctual` 的显式灯仍保存在文档中，但会标记为 Not uploaded。
@@ -138,9 +147,23 @@ Viewport 图像上方保留一行只读状态，显示当前 render extent；资
 Native Scene 的 Viewport toolbar 可在 `Editor Camera` 与 `Active Camera` 间切换。
 Active Camera 直接使用场景 Camera component，且不会响应 FPS 相机输入。
 
+Toolbar 的 `Q/W/E/R` 分别切换 Select、Translate、Rotate 和 Scale；Translate/Rotate
+支持 Local/World，Scale 固定使用 Local。左键点击使用 CPU ray 与 Ready ModelInstance
+的 asset-space bounds 求交，选择最近命中的实体；点击空白清除选择。选中模型绘制 bounds
+线框，Light、Camera 和 Empty Entity 显示 pivot 标记并继续通过 Outliner 选择。
+
+Gizmo 拖动开始时捕获一次 SceneDocument before 状态，拖动期间直接更新 RuntimeWorld，
+释放时只生成一条 Undo 命令。`Escape` 取消并恢复 before 状态；隐藏 Viewport、切换选择
+或重载场景也会取消未完成操作。Active Camera 模式下不能直接操纵当前 active Camera，
+需要先切回 Editor Camera。
+
 右键相机模式只能从实际 Viewport 图像区域启动。在标题栏、Tab、工具窗口、菜单、
 modal 或 docking 拖动目标上按右键不会进入相机模式。进入 CameraDrag 后仍使用
 现有 GLFW 鼠标捕获和 `W/S/A/D/Q/E` 移动逻辑。
+
+模型拖入 Viewport 时优先与 `Z=0` 平面求交；相机射线没有有效正向地面交点时，使用穿过
+当前选择、Scene bounds center 或原点的相机朝向平面。拖动期间只显示落点与模型名称，
+释放后创建实体，不绘制临时模型副本。
 
 ## 截图与无 UI 构建
 
@@ -152,8 +175,9 @@ modal 或 docking 拖动目标上按右键不会进入相机模式。进入 Came
 - `VKL_ENABLE_EDITOR_UI=OFF` 不编译 EditorDockWorkspace，也不链接 ImGui，仍保留
   同一条离屏 Viewport 渲染和 fullscreen present 路径。
 
-当前只支持一个 Scene Viewport。对象拾取、Gizmo、可调 render scale 和 ImGui
-Multi-viewports 尚未实现。
+当前只支持一个 Scene Viewport 和单选。Picking 使用 ModelAsset bounds，不提供 primitive
+选择、重叠对象循环选择或 GPU Object-ID Pass；Gizmo 暂无 snapping。可调 render scale、
+outline postprocess 和 ImGui Multi-viewports 尚未实现。
 
 ## 文件与快捷键
 
@@ -163,6 +187,7 @@ Multi-viewports 尚未实现。
 - `Ctrl+D`：复制选中 subtree。
 - `Delete`：删除选中 subtree。
 - `F2`：重命名选中实体。
+- `Q/W/E/R`：Viewport Select/Translate/Rotate/Scale。
 
 切换场景、关闭或退出时，Dirty 会话提供 Save/Discard/Cancel。保存使用加载时的 file
 stamp；外部修改冲突只允许 Reload、Save As 或 Cancel，不提供强制覆盖。文本输入活跃

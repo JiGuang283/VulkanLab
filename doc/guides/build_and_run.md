@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 2 working tree
+> Verified against: Scene Authoring Stage 5 implementation
 
 ## 环境要求
 
@@ -11,7 +11,7 @@
 - CMake 3.22 或更高版本。
 - Vulkan SDK。CMake 需要能找到 Vulkan、`glslc`、`spirv-val` 和 SDK 中的 GLM 头文件。
 - 仓库内 `external/` 依赖完整，尤其是 `glfw/lib-vc2022`、ImGui、stb、VMA 和 glTF 头文件。
-- 运行时使用 KTX-Software v4.4.2，AssetTool 使用 DirectXTex `may2026` 离线压缩 BC7，shader contract tests 使用固定提交的 SPIRV-Reflect，Tracy 专用构建使用 v0.13.1；它们都是 submodule。首次克隆或更新后必须递归初始化：
+- 运行时使用 KTX-Software v4.4.2，AssetTool 使用 DirectXTex `may2026` 离线压缩 BC7，shader contract tests 使用固定提交的 SPIRV-Reflect，Tracy 专用构建使用 v0.13.1；Editor 使用固定提交 `5ab7676` 的 ImGuizmo。它们都是 submodule。首次克隆或更新后必须递归初始化：
 
 ```powershell
 git submodule update --init --recursive

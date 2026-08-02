@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 4 working tree
+> Verified against: Scene Authoring Stage 5 implementation
 
 VulkanLab 已将“导入模型”“可保存场景”和“运行时世界”拆成三个领域对象。模型预览与 Native Scene 都通过 `AssetRepository` 共享 `ModelAsset`；`.vkscene.json` 由 `RuntimeWorld` 实例化，并可在编辑器中修改、撤销和原子保存。
 
@@ -95,12 +95,17 @@ schema v1/v2 中的 `scenes[]` 仍按旧语义读取为 `CatalogModel`，旧 `ca
 
 `SceneEditorSession` 持有当前 `RuntimeWorld`、文档路径/file stamp、UUID selection、Editor/Active Camera 模式和最多 256 项的命令栈。`RuntimeWorld` 是编辑期间唯一内存真源；保存时调用 `toDocument()`。命令只保存 before/after `SceneDocument`，不保存 `EntityHandle`、裸指针或 GPU 资源。连续拖动在激活时捕获一次 before，并在释放时提交一个命令。
 
+`SceneViewportController` 是 Editor-only 的空间交互入口。它根据当前实际 Viewport image rect 和 Editor/Active Camera 生成射线，使用 `ModelAsset::localBounds` 完成实体级 CPU picking，并通过 ImGuizmo 修改选中实体的 world matrix。修改结果统一转换回 local TRS，再进入 `SceneEditorSession` 的连续事务，因此不会在 SceneDocument 中引入矩阵或 editor-only 字段。
+
+`RuntimeWorld::setParent()` 支持 Keep Local 与 Keep World。Inspector parent picker 使用 Keep Local；Outliner drag/drop 使用 Keep World。Keep World 在修改层级前完成 inverse-parent 与 TRS 分解校验，拒绝 perspective、近零 scale、非有限矩阵和无法表示的 shear，失败时不修改 world。
+
 Native Scene 加载事务先在 worker 解析文档，再按 Catalog profile 向 `AssetRepository` 请求唯一模型集合，并等待模型与 environment 全部 Ready。新 World 完整构造后才原子发布；失败或取消时旧 World 与旧 environment 保持可用。旧 World 和共享资源按 submission serial 延迟释放，不调用 `vkDeviceWaitIdle()`。
 
 ## 当前限制
 
 - 一次只打开一个 Native Scene 编辑会话；模型预览仍作为独立兼容入口。
-- Stage 4 仅支持数值式编辑、Outliner 选择和 Inspector 属性，不支持 Viewport picking、drag/drop reparent 或 Gizmo。
+- Viewport picking 只使用 ModelAsset bounds，暂不支持 primitive picking、重叠对象循环选择或 GPU Object-ID Pass。
+- Gizmo 暂不支持 snapping；编辑器仍只支持单选和一个 Scene Viewport。
 - builtin/OBJ 模型不能放入 Native Scene；Viking Room 继续使用 legacy preview。
 - GPU ABI 仍限制为一盏 Directional 和八盏 Point/Spot。超限 Light Entity 会保存，但在 Outliner/Inspector 标记为未上传。
 - Native Scene 使用各 Catalog model 的 import profile；全局 Texture Limit 仅影响模型预览。
