@@ -18,8 +18,9 @@ class MainForwardPass final : public IRenderPass {
   public:
     MainForwardPass(Device &device,
                     const RenderResourceRegistry &resources,
-                    RendererResourceHandles resourceHandles,
-                    VkDescriptorSetLayout lightingDescriptorSetLayout);
+                     RendererResourceHandles resourceHandles,
+                     VkDescriptorSetLayout lightingDescriptorSetLayout,
+                     VkDescriptorSetLayout atmosphereDescriptorSetLayout);
     ~MainForwardPass() override;
 
     MainForwardPass(const MainForwardPass &) = delete;
@@ -49,6 +50,7 @@ class MainForwardPass final : public IRenderPass {
     Device *device_ = nullptr;
     RendererResourceHandles resourceHandles_{};
     VkDescriptorSetLayout lightingDescriptorSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout atmosphereDescriptorSetLayout_ = VK_NULL_HANDLE;
 
     VkRenderPass renderPass_ = VK_NULL_HANDLE;
     std::array<VkFramebuffer, MAX_FRAMES_IN_FLIGHT> framebuffers_{};

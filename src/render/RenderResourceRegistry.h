@@ -60,6 +60,8 @@ struct RenderImageDesc {
     bool externallyInitialized = false;
     VkImageLayout initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     uint32_t extentDivisor = 1;
+    uint32_t arrayLayers = 1;
+    VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
 };
 
 struct RenderSamplerDesc {
@@ -114,6 +116,11 @@ struct RendererResourceHandles {
     RenderSamplerHandle viewportSampler{};
     RenderSamplerHandle shadowSampler{};
     RenderSamplerHandle bloomSampler{};
+    RenderImageHandle atmosphereTransmittance{};
+    RenderImageHandle atmosphereMultipleScattering{};
+    RenderImageHandle atmosphereSkyView{};
+    RenderImageHandle atmosphereAerialPerspective{};
+    RenderSamplerHandle atmosphereSampler{};
 };
 
 class RenderResourceRegistry {

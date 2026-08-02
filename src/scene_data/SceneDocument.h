@@ -29,11 +29,31 @@ struct ModelInstanceDocument {
 struct LightComponentDocument {
     SceneDocumentLightType type = SceneDocumentLightType::Directional;
     bool castsShadow = true;
+    std::optional<uint32_t> atmosphereSunIndex;
+    float sourceAngularRadiusRadians = 0.004675f;
     glm::vec3 color{1.0f};
     float intensity = 1.0f;
     std::optional<float> range;
     float innerConeRadians = 0.0f;
     float outerConeRadians = 0.785398163f;
+};
+
+struct AtmosphereComponentDocument {
+    float bottomRadiusKm = 6360.0f;
+    float atmosphereHeightKm = 100.0f;
+    glm::vec3 rayleighScatteringPerKm{0.005802f, 0.013558f, 0.033100f};
+    float rayleighScaleHeightKm = 8.0f;
+    float mieScatteringPerKm = 0.003996f;
+    float mieExtinctionPerKm = 0.004440f;
+    float mieScaleHeightKm = 1.2f;
+    float mieAnisotropy = 0.8f;
+    glm::vec3 ozoneAbsorptionPerKm{0.000650f, 0.001881f, 0.000085f};
+    float ozoneCenterHeightKm = 25.0f;
+    float ozoneHalfWidthKm = 15.0f;
+    glm::vec3 groundAlbedo{0.0f};
+    float multipleScatteringFactor = 1.0f;
+    float aerialPerspectiveStartMeters = 100.0f;
+    float aerialPerspectiveDistanceScale = 1.0f;
 };
 
 struct CameraComponentDocument {
@@ -51,6 +71,7 @@ struct SceneEntityDocument {
     std::optional<ModelInstanceDocument> modelInstance;
     std::optional<LightComponentDocument> light;
     std::optional<CameraComponentDocument> camera;
+    std::optional<AtmosphereComponentDocument> atmosphere;
 };
 
 struct SceneAmbientDocument {
@@ -65,7 +86,7 @@ struct SceneEnvironmentDocument {
 };
 
 struct SceneDocument {
-    static constexpr uint32_t kSchemaVersion = 2;
+    static constexpr uint32_t kSchemaVersion = 3;
 
     uint32_t schemaVersion = kSchemaVersion;
     SceneDocumentId id;

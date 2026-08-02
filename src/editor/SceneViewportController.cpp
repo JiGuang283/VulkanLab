@@ -323,6 +323,10 @@ void SceneViewportController::drawOverlay(
             session.cameraMode() == EditorCameraMode::ActiveScene &&
             world->activeCameraId() &&
             *world->activeCameraId() == selected->id;
+        const bool atmosphereTransformLocked =
+            selected->atmosphere &&
+            (operation_ == GizmoOperation::Rotate ||
+             operation_ == GizmoOperation::Scale);
         if (activeCameraSelected) {
             if (manipulationActive_)
                 cancelManipulation();
@@ -330,6 +334,13 @@ void SceneViewportController::drawOverlay(
                 ImVec2(viewport.minX + 10.0f, viewport.minY + 10.0f),
                 IM_COL32(255, 196, 84, 255),
                 "Switch to Editor Camera to edit the active camera");
+        } else if (atmosphereTransformLocked) {
+            if (manipulationActive_)
+                cancelManipulation();
+            ImGui::GetWindowDrawList()->AddText(
+                ImVec2(viewport.minX + 10.0f, viewport.minY + 10.0f),
+                IM_COL32(255, 196, 84, 255),
+                "Sky Atmosphere only supports translation");
         } else if (operation_ != GizmoOperation::Select &&
                    !camera.cameraDragging) {
             glm::mat4 gizmoProjection = camera.projection;

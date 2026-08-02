@@ -67,7 +67,8 @@ void OutlinerPanel::draw(const OutlinerPanelSnapshot &snapshot,
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Create entity");
     if (ImGui::BeginPopup("CreateEntity")) {
-        drawCreateMenu(actions, std::nullopt);
+        drawCreateMenu(actions, std::nullopt,
+                       snapshot.canCreateAtmosphere);
         ImGui::EndPopup();
     }
     ImGui::EndDisabled();
@@ -171,7 +172,8 @@ void OutlinerPanel::drawEntity(const OutlinerEntitySnapshot &entity,
     }
     if (ImGui::IsItemClicked() && actions.select)
         actions.select(entity.id);
-    if (snapshot.editable && ImGui::BeginDragDropSource()) {
+    if (snapshot.editable && !entity.hasAtmosphere &&
+        ImGui::BeginDragDropSource()) {
         ImGui::SetDragDropPayload(editor::kEntityPayload, id.c_str(),
                                   id.size() + 1);
         ImGui::TextUnformatted(entity.name.c_str());
@@ -195,15 +197,18 @@ void OutlinerPanel::drawEntity(const OutlinerEntitySnapshot &entity,
     }
     if (ImGui::BeginPopupContextItem("EntityActions")) {
         if (ImGui::BeginMenu("Create Child")) {
-            drawCreateMenu(actions, entity.id);
+            drawCreateMenu(actions, entity.id,
+                           snapshot.canCreateAtmosphere);
             ImGui::EndMenu();
         }
         ImGui::BeginDisabled(!snapshot.editable);
         if (ImGui::MenuItem("Rename", "F2")) {
             beginRename(entity.id, entity.name);
         }
+        ImGui::BeginDisabled(entity.hasAtmosphere);
         if (ImGui::MenuItem("Duplicate", "Ctrl+D") && actions.duplicate)
             actions.duplicate(entity.id);
+        ImGui::EndDisabled();
         if (ImGui::MenuItem("Delete", "Delete") && actions.remove)
             actions.remove(entity.id);
         ImGui::EndDisabled();
@@ -221,7 +226,8 @@ void OutlinerPanel::drawEntity(const OutlinerEntitySnapshot &entity,
 
 void OutlinerPanel::drawCreateMenu(
     const OutlinerPanelActions &actions,
-    std::optional<PersistentEntityId> parent) {
+    std::optional<PersistentEntityId> parent,
+    bool canCreateAtmosphere) {
     const auto create = [&](const char *label, OutlinerCreateKind kind) {
         if (ImGui::MenuItem(label) && actions.create)
             actions.create(kind, parent);
@@ -233,6 +239,9 @@ void OutlinerPanel::drawCreateMenu(
     create("Point Light", OutlinerCreateKind::PointLight);
     create("Spot Light", OutlinerCreateKind::SpotLight);
     create("Camera", OutlinerCreateKind::Camera);
+    ImGui::BeginDisabled(!canCreateAtmosphere || parent.has_value());
+    create("Sky Atmosphere", OutlinerCreateKind::SkyAtmosphere);
+    ImGui::EndDisabled();
 }
 
 } // namespace vkr

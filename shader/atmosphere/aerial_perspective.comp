@@ -1,0 +1,28 @@
+#version 450
+
+#extension GL_GOOGLE_include_directive : require
+#define ATMOSPHERE_SET 0
+#define ATMOSPHERE_NO_GLOBAL_FRAME
+#include "include/atmosphere_scattering.glsl"
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+layout(rgba16f, set = 1, binding = 0) uniform writeonly image2DArray destinationImage;
+
+void main()
+{
+    ivec3 voxel = ivec3(gl_GlobalInvocationID.xyz);
+    ivec3 size = imageSize(destinationImage);
+    if (any(greaterThanEqual(voxel, size)))
+        return;
+    vec2 uv = (vec2(voxel.xy) + 0.5) / vec2(size.xy);
+    float depth = (float(voxel.z) + 0.5) / float(size.z);
+    float startKm = atmosphere.ozoneAbsorptionAerialStart.w;
+    float maxDistanceKm = max(atmosphere.cameraDistanceParams.w, startKm);
+    float distanceKm = mix(startKm, maxDistanceKm, depth * depth);
+    vec3 transmittance;
+    vec3 radiance = integrateAtmosphere(vec3(0.0), atmosphereUvDirection(uv),
+                                        distanceKm, 16, transmittance);
+    imageStore(destinationImage, voxel,
+               vec4(radiance,
+                    clamp(dot(transmittance, vec3(1.0 / 3.0)), 0.0, 1.0)));
+}

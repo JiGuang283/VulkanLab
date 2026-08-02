@@ -27,6 +27,7 @@ struct ShaderProgram {
     std::string fragSpvPath;
     std::string computeSpvPath;
     bool usesSceneLights = false;
+    bool usesAtmosphere = false;
 };
 
 struct ShaderVariant {
@@ -37,6 +38,7 @@ struct ShaderVariant {
     int32_t order = 0;
     bool isDefault = false;
     bool supportsBloom = false;
+    bool supportsAtmosphere = false;
     ShaderToneMappingPolicy toneMapping =
         ShaderToneMappingPolicy::PassThrough;
     std::string vertSpvPath;

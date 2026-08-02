@@ -31,6 +31,22 @@ struct alignas(16) GlobalFrameUbo {
     glm::vec4 environmentParams{0.0f};
 };
 
+// Shared by atmosphere compute, sky, and PBR fragment programs (std140).
+struct alignas(16) AtmosphereGpuParams {
+    glm::vec4 planetCenterBottomRadius;
+    glm::vec4 topRadiusDensityHeights;
+    glm::vec4 rayleighScatteringOzoneHalfWidth;
+    glm::vec4 mieScatteringExtinction;
+    glm::vec4 ozoneAbsorptionAerialStart;
+    glm::vec4 groundAlbedoDistanceScale;
+    glm::vec4 sunDirectionAngularRadius;
+    glm::vec4 sunColorIntensity;
+    glm::vec4 cameraDistanceParams;
+    glm::vec4 viewportParams;
+    glm::uvec4 runtimeParams;
+    glm::vec4 reserved;
+};
+
 struct alignas(16) ToneMapPushConstants {
     float exposureEv = 0.0f;
     float bloomIntensity = 0.0f;
@@ -57,6 +73,20 @@ static_assert(offsetof(GpuLight, directionInnerCos) == 16);
 static_assert(offsetof(GpuLight, colorIntensity) == 32);
 static_assert(offsetof(GpuLight, params) == 48);
 static_assert(sizeof(GlobalFrameUbo) == 336);
+static_assert(sizeof(AtmosphereGpuParams) == 192);
+static_assert(offsetof(AtmosphereGpuParams, planetCenterBottomRadius) == 0);
+static_assert(offsetof(AtmosphereGpuParams, topRadiusDensityHeights) == 16);
+static_assert(offsetof(AtmosphereGpuParams,
+                       rayleighScatteringOzoneHalfWidth) == 32);
+static_assert(offsetof(AtmosphereGpuParams, mieScatteringExtinction) == 48);
+static_assert(offsetof(AtmosphereGpuParams, ozoneAbsorptionAerialStart) == 64);
+static_assert(offsetof(AtmosphereGpuParams, groundAlbedoDistanceScale) == 80);
+static_assert(offsetof(AtmosphereGpuParams, sunDirectionAngularRadius) == 96);
+static_assert(offsetof(AtmosphereGpuParams, sunColorIntensity) == 112);
+static_assert(offsetof(AtmosphereGpuParams, cameraDistanceParams) == 128);
+static_assert(offsetof(AtmosphereGpuParams, viewportParams) == 144);
+static_assert(offsetof(AtmosphereGpuParams, runtimeParams) == 160);
+static_assert(offsetof(AtmosphereGpuParams, reserved) == 176);
 static_assert(offsetof(GlobalFrameUbo, view) == 0);
 static_assert(offsetof(GlobalFrameUbo, proj) == 64);
 static_assert(offsetof(GlobalFrameUbo, inverseViewProjection) == 128);

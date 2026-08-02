@@ -191,7 +191,7 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
             rejectUnknownFields(
                 item, field,
                 {"id", "contract", "vertex", "fragment", "compute",
-                 "sceneLights"});
+                 "sceneLights", "atmosphere"});
 
             ShaderProgram program;
             program.id = requiredString(item, "id", field);
@@ -204,6 +204,7 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
             program.contract = parseContract(
                 requiredString(item, "contract", field), field + ".contract");
             program.usesSceneLights = item.value("sceneLights", false);
+            program.usesAtmosphere = item.value("atmosphere", false);
 
             const std::string vertex = optionalString(item, "vertex", field);
             const std::string fragment =
@@ -227,6 +228,12 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
                 throw fieldError(field + ".sceneLights",
                                  "only main-forward programs may consume "
                                  "scene lights");
+            }
+            if (program.usesAtmosphere &&
+                program.contract == ShaderProgramContract::ShadowDepth) {
+                throw fieldError(field + ".atmosphere",
+                                 "shadow-depth programs cannot consume "
+                                 "atmosphere resources");
             }
             program.vertSpvPath = resolveSpirvPath(
                 shaderRoot, program.vertexSourcePath, field + ".vertex");
@@ -280,6 +287,7 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
                 requiredString(item, "toneMapping", field),
                 field + ".toneMapping");
             variant.supportsBloom = item.value("bloom", false);
+            variant.supportsAtmosphere = program.usesAtmosphere;
             variant.isDefault = item.at("default").get<bool>();
             variant.order = item.at("order").get<int32_t>();
             variant.vertSpvPath = program.vertSpvPath;

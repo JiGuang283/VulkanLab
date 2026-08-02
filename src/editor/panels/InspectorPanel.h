@@ -48,6 +48,7 @@ struct InspectorPanelSnapshot {
         InspectorLightUploadStatus::Ineffective;
     InspectorLightShadowStatus selectedLightShadowStatus =
         InspectorLightShadowStatus::Disabled;
+    bool atmospherePresent = false;
     bool editable = false;
 };
 
@@ -68,6 +69,10 @@ struct InspectorPanelActions {
     std::function<void(PersistentEntityId,
                        std::optional<CameraComponentDocument>)>
         setCamera;
+    std::function<void(PersistentEntityId,
+                       std::optional<AtmosphereComponentDocument>)>
+        setAtmosphere;
+    std::function<void(PersistentEntityId, bool)> setAtmosphereSun;
     std::function<void(PersistentEntityId)> setActiveCamera;
     std::function<void(SceneAmbientDocument)> setAmbient;
     std::function<void(std::optional<SceneEnvironmentDocument>)>
@@ -86,6 +91,7 @@ class InspectorPanel {
     bool lightEditing_ = false;
     bool cameraEditing_ = false;
     bool sceneEditing_ = false;
+    bool atmosphereEditing_ = false;
 };
 
 } // namespace vkr

@@ -923,6 +923,16 @@ void Application::init() {
     const ShaderProgram &bloomUpsample =
         shaderRegistry_.program("postprocess.bloom-upsample");
     const ShaderProgram &skybox = shaderRegistry_.program("skybox");
+    const ShaderProgram &atmosphereTransmittance =
+        shaderRegistry_.program("atmosphere.transmittance");
+    const ShaderProgram &atmosphereMultipleScattering =
+        shaderRegistry_.program("atmosphere.multiple-scattering");
+    const ShaderProgram &atmosphereSkyView =
+        shaderRegistry_.program("atmosphere.sky-view");
+    const ShaderProgram &atmosphereAerialPerspective =
+        shaderRegistry_.program("atmosphere.aerial-perspective");
+    const ShaderProgram &atmosphereSky =
+        shaderRegistry_.program("atmosphere.sky");
     renderer_ = std::make_unique<Renderer>(
         *device_, *swapChain_, *frameSync_, *descriptorAllocator_,
         RendererShaderPaths{
@@ -930,7 +940,12 @@ void Application::init() {
             toneMap.vertSpvPath, toneMap.fragSpvPath,
             present.fragSpvPath, skybox.fragSpvPath,
             bloomDownsample.computeSpvPath,
-            bloomUpsample.computeSpvPath});
+            bloomUpsample.computeSpvPath,
+            atmosphereTransmittance.computeSpvPath,
+            atmosphereMultipleScattering.computeSpvPath,
+            atmosphereSkyView.computeSpvPath,
+            atmosphereAerialPerspective.computeSpvPath,
+            atmosphereSky.fragSpvPath});
 #if VKL_ENABLE_CAPTURE
     if (!projectContext_.cookedPackage) {
         captureService_ = std::make_unique<CaptureService>(
@@ -3241,6 +3256,15 @@ ControlJson Application::runtimeRenderStatus() {
             {"bufferIndex", lastLightStats_.shadowCasterBufferIndex},
             {"active", lastLightStats_.shadowCasterActive}};
     }
+    const AtmosphereRuntimeStatus atmosphereStatus =
+        renderer_->atmosphereStatus();
+    ControlJson atmosphereComponent = nullptr;
+    if (atmosphereStatus.componentPresent) {
+        atmosphereComponent = atmosphereStatus.componentEntity.toString();
+    }
+    ControlJson atmosphereSun = nullptr;
+    if (atmosphereStatus.sunEntity)
+        atmosphereSun = atmosphereStatus.sunEntity->toString();
     const VkExtent2D viewportRenderExtent = renderer_->viewportExtent();
     uint32_t viewportDisplayWidth = swapChain_->extent().width;
     uint32_t viewportDisplayHeight = swapChain_->extent().height;
@@ -3316,6 +3340,19 @@ ControlJson Application::runtimeRenderStatus() {
           {"ready", renderer_->environmentReady()},
           {"loadTask",
            environmentLoadTaskToJson(latestEnvironmentLoadTask_)}}},
+        {"atmosphere",
+         {{"supported", atmosphereStatus.supported},
+          {"componentPresent", atmosphereStatus.componentPresent},
+          {"active", atmosphereStatus.active},
+          {"componentEntity", std::move(atmosphereComponent)},
+          {"sunEntity", std::move(atmosphereSun)},
+          {"sunBufferIndex", atmosphereStatus.sunBufferIndex},
+          {"cameraAltitudeKm", atmosphereStatus.cameraAltitudeKm},
+          {"staticLutReady", atmosphereStatus.staticLutReady},
+          {"staticLutDirty", atmosphereStatus.staticLutDirty},
+          {"lutGeneration", atmosphereStatus.lutGeneration},
+          {"lastUpdateMs", atmosphereStatus.lastUpdateMs},
+          {"unavailableReason", atmosphereStatus.unavailableReason}}},
         {"lighting",
          {{"sceneLights",
            currentScene_ ? currentScene_->lights().size() : 0},
@@ -4802,6 +4839,45 @@ void Application::drawLightingPanel() {
         applyRenderSettings(patch);
     }
     ImGui::EndDisabled();
+    const AtmosphereRuntimeStatus atmosphereStatus =
+        renderer_->atmosphereStatus();
+    if (ImGui::TreeNodeEx("Sky Atmosphere")) {
+        ImGui::Text("Support: %s",
+                    atmosphereStatus.supported ? "Available" : "Unavailable");
+        ImGui::Text("Component: %s",
+                    atmosphereStatus.componentPresent ? "Present" : "None");
+        ImGui::Text("Active: %s",
+                    atmosphereStatus.active ? "Yes" : "No");
+        if (atmosphereStatus.componentPresent) {
+            const std::string componentId =
+                atmosphereStatus.componentEntity.toString();
+            ImGui::TextWrapped("Component Entity: %s", componentId.c_str());
+            if (atmosphereStatus.sunEntity) {
+                const std::string sunId =
+                    atmosphereStatus.sunEntity->toString();
+                ImGui::TextWrapped("Sun Entity: %s", sunId.c_str());
+                ImGui::Text("Sun Buffer Index: %d",
+                            atmosphereStatus.sunBufferIndex);
+            } else {
+                ImGui::TextDisabled("Atmosphere Sun: None");
+            }
+            ImGui::Text("Camera Altitude: %.3f km",
+                        atmosphereStatus.cameraAltitudeKm);
+            ImGui::Text("Static LUT: %s%s",
+                        atmosphereStatus.staticLutReady ? "Ready" : "Pending",
+                        atmosphereStatus.staticLutDirty ? " (dirty)" : "");
+            ImGui::Text("LUT Generation: %llu",
+                        static_cast<unsigned long long>(
+                            atmosphereStatus.lutGeneration));
+            ImGui::Text("Last Static Update: %.3f ms",
+                        atmosphereStatus.lastUpdateMs);
+        }
+        if (!atmosphereStatus.unavailableReason.empty()) {
+            ImGui::TextWrapped("Unavailable: %s",
+                               atmosphereStatus.unavailableReason.c_str());
+        }
+        ImGui::TreePop();
+    }
     if (!device_->environmentIblSupported()) {
         ImGui::TextDisabled(
             "IBL unsupported: RGBA16F cube/RG16F linear filtering required.");
@@ -5819,9 +5895,22 @@ void Application::deleteSelectedEditorEntity() {
     const PersistentEntityId id = *sceneEditorSession_->selection();
     try {
         if (sceneEditorSession_->execute(
-                "Delete Entity", [id](RuntimeWorld &world) {
-                    return world.destroyEntity(world.find(id), true);
-                })) {
+                 "Delete Entity", [id](RuntimeWorld &world) {
+                    const auto selected = world.entity(world.find(id));
+                    if (selected && selected->atmosphere) {
+                        for (const RuntimeEntitySnapshot &entity :
+                             world.entities()) {
+                            if (!entity.light ||
+                                !entity.light->atmosphereSunIndex)
+                                continue;
+                            LightComponentDocument light = *entity.light;
+                            light.atmosphereSunIndex.reset();
+                            if (!world.setLight(world.find(entity.id), light))
+                                return false;
+                        }
+                    }
+                     return world.destroyEntity(world.find(id), true);
+                 })) {
             sceneEditorSession_->select(std::nullopt);
         }
     } catch (const std::exception &error) {
@@ -5835,6 +5924,13 @@ void Application::duplicateSelectedEditorEntity() {
         return;
     const PersistentEntityId rootId = *sceneEditorSession_->selection();
     try {
+        if (const auto selected = sceneEditorSession_->world()->entity(
+                sceneEditorSession_->world()->find(rootId));
+            selected && selected->atmosphere) {
+            editorUi_->sceneError =
+                "Sky Atmosphere is a singleton and cannot be duplicated.";
+            return;
+        }
         PersistentEntityId duplicateRoot;
         sceneEditorSession_->execute(
             "Duplicate Entity", [&](RuntimeWorld &world) {
@@ -5869,6 +5965,8 @@ void Application::duplicateSelectedEditorEntity() {
                     copy.transform = source.transform;
                     copy.modelInstance = source.modelInstance;
                     copy.light = source.light;
+                    if (copy.light)
+                        copy.light->atmosphereSunIndex.reset();
                     copy.camera = source.camera;
                     remap[source.id] = copy.id;
                     if (source.id == rootId)
@@ -5909,6 +6007,11 @@ void Application::drawOutlinerPanel() {
     OutlinerPanelSnapshot snapshot;
     snapshot.editable = projectContext_.catalogWritable;
     const std::vector<RuntimeEntitySnapshot> entities = world->entities();
+    snapshot.canCreateAtmosphere = std::none_of(
+        entities.begin(), entities.end(),
+        [](const RuntimeEntitySnapshot &entity) {
+            return entity.atmosphere.has_value();
+        });
     std::unordered_set<PersistentEntityId, PersistentEntityIdHash>
         lightLimitExceeded;
     lightLimitExceeded.insert(lastLightStats_.ignoredEntityIds.begin(),
@@ -5919,7 +6022,8 @@ void Application::drawOutlinerPanel() {
              sceneEditorSession_->selection() &&
                  *sceneEditorSession_->selection() == entity.id,
              entity.modelBindingState, entity.modelInstance.has_value(),
-             lightLimitExceeded.count(entity.id) != 0});
+             lightLimitExceeded.count(entity.id) != 0,
+             entity.atmosphere.has_value()});
     }
 
     OutlinerPanelActions actions;
@@ -5961,6 +6065,11 @@ void Application::drawOutlinerPanel() {
             case OutlinerCreateKind::Camera:
                 entity.name = "Camera";
                 entity.camera = CameraComponentDocument{};
+                break;
+            case OutlinerCreateKind::SkyAtmosphere:
+                entity.name = "Sky Atmosphere";
+                entity.atmosphere = AtmosphereComponentDocument{};
+                parentId.reset();
                 break;
             }
             const PersistentEntityId createdId = entity.id;
@@ -6059,6 +6168,11 @@ void Application::drawInspectorPanel() {
     snapshot.editable = projectContext_.catalogWritable;
     const std::vector<RuntimeEntitySnapshot> entities = world->entities();
     snapshot.entities = entities;
+    snapshot.atmospherePresent = std::any_of(
+        entities.begin(), entities.end(),
+        [](const RuntimeEntitySnapshot &entity) {
+            return entity.atmosphere.has_value();
+        });
     if (sceneEditorSession_->selection()) {
         snapshot.entity =
             world->entity(world->find(*sceneEditorSession_->selection()));
@@ -6179,6 +6293,43 @@ void Application::drawInspectorPanel() {
                 return world.setCamera(world.find(id), std::move(value));
             });
     };
+    actions.setAtmosphere =
+        [this](PersistentEntityId id,
+               std::optional<AtmosphereComponentDocument> value) {
+            if (sceneEditorSession_->continuousEditActive()) {
+                if (auto world = sceneEditorSession_->world())
+                    world->setAtmosphere(world->find(id), std::move(value));
+                return;
+            }
+            sceneEditorSession_->execute(
+                "Set Sky Atmosphere",
+                [id, value = std::move(value)](RuntimeWorld &world) mutable {
+                    return world.setAtmosphere(world.find(id),
+                                               std::move(value));
+                });
+        };
+    actions.setAtmosphereSun =
+        [this](PersistentEntityId id, bool enabled) {
+            sceneEditorSession_->execute(
+                "Set Atmosphere Sun", [id, enabled](RuntimeWorld &world) {
+                    for (const RuntimeEntitySnapshot &entity :
+                         world.entities()) {
+                        if (!entity.light)
+                            continue;
+                        LightComponentDocument light = *entity.light;
+                        const bool selected = entity.id == id;
+                        const bool shouldUse = enabled && selected;
+                        if ((light.atmosphereSunIndex == 0u) == shouldUse)
+                            continue;
+                        light.atmosphereSunIndex =
+                            shouldUse ? std::optional<uint32_t>(0u)
+                                      : std::nullopt;
+                        if (!world.setLight(world.find(entity.id), light))
+                            return false;
+                    }
+                    return true;
+                });
+        };
     actions.setActiveCamera = [this](PersistentEntityId id) {
         sceneEditorSession_->execute(
             "Set Active Camera", [id](RuntimeWorld &world) {
@@ -6899,6 +7050,11 @@ void Application::mainLoop() {
         viewInput.view = camera_.viewMatrix();
         viewInput.projection = camera_.projectionMatrix();
         viewInput.cameraPosition = camera_.position();
+        viewInput.cameraNearPlane = camera_.nearPlane();
+        viewInput.cameraFarPlane = camera_.farPlane();
+        viewInput.viewportExtent = renderer_->viewportExtent();
+        viewInput.atmosphereSupported =
+            device_->atmosphereSupport().available;
         viewInput.ambientColor = ambientColor_;
         viewInput.ambientIntensity = ambientIntensity_;
         viewInput.defaultSun = {defaultSunDirection_, defaultSunColor_,
@@ -6913,6 +7069,7 @@ void Application::mainLoop() {
             viewInput.sceneLights = &currentScene_->lights();
             viewInput.fallbackSunEnabled =
                 currentScene_->allowsFallbackSun();
+            viewInput.atmosphere = currentScene_->worldAtmosphere();
             if (const auto ambient = currentScene_->worldAmbient()) {
                 viewInput.ambientColor = ambient->color;
                 viewInput.ambientIntensity = ambient->intensity;
@@ -6944,6 +7101,8 @@ void Application::mainLoop() {
                     viewInput.view = activeCamera->view;
                     viewInput.projection = activeCamera->projection;
                     viewInput.cameraPosition = activeCamera->position;
+                    viewInput.cameraNearPlane = activeCamera->nearPlane;
+                    viewInput.cameraFarPlane = activeCamera->farPlane;
                     renderCameraPosition = activeCamera->position;
                 }
             }

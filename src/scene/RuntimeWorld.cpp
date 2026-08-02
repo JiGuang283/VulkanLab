@@ -46,6 +46,17 @@ void includeTransformedBounds(Bounds &result, const Bounds &local,
     }
 }
 
+bool validAtmosphereTransform(const SceneTransformDocument &transform) {
+    const glm::quat rotation = glm::normalize(transform.rotation);
+    return std::abs(rotation.w - 1.0f) <= 1.0e-4f &&
+           std::abs(rotation.x) <= 1.0e-4f &&
+           std::abs(rotation.y) <= 1.0e-4f &&
+           std::abs(rotation.z) <= 1.0e-4f &&
+           glm::all(glm::lessThanEqual(
+               glm::abs(transform.scale - glm::vec3(1.0f)),
+               glm::vec3(1.0e-4f)));
+}
+
 LightType runtimeLightType(SceneDocumentLightType type) {
     switch (type) {
     case SceneDocumentLightType::Directional:
@@ -147,6 +158,7 @@ SceneDocument RuntimeWorld::toDocument() const {
             entity.modelInstance = ModelInstanceDocument{entry->model->modelId};
         entity.light = entry->light;
         entity.camera = entry->camera;
+        entity.atmosphere = entry->atmosphere;
         document.entities.push_back(std::move(entity));
     }
     return document;
@@ -183,6 +195,7 @@ void RuntimeWorld::replaceDocument(const SceneDocument &document) {
     byId_ = std::move(replacement->byId_);
     bounds_ = replacement->bounds_;
     lights_ = std::move(replacement->lights_);
+    atmosphere_ = std::move(replacement->atmosphere_);
     materials_ = std::move(replacement->materials_);
     derivedDirty_ = true;
 }
@@ -213,6 +226,19 @@ EntityHandle RuntimeWorld::createEntity(SceneEntityDocument entity,
                                         std::optional<size_t> insertIndex) {
     if (entity.id.empty() || byId_.find(entity.id) != byId_.end())
         throw std::invalid_argument("Runtime entity UUID is invalid or duplicate");
+    if (entity.atmosphere) {
+        for (EntityHandle handle : order_) {
+            const Slot *existing = slot(handle);
+            if (existing && existing->atmosphere) {
+                throw std::invalid_argument(
+                    "RuntimeWorld supports only one atmosphere component");
+            }
+        }
+        if (entity.parent || !validAtmosphereTransform(entity.transform)) {
+            throw std::invalid_argument(
+                "Atmosphere entity must be a root with identity rotation and unit scale");
+        }
+    }
     uint32_t index = 0;
     if (!freeList_.empty()) {
         index = freeList_.back();
@@ -233,6 +259,7 @@ EntityHandle RuntimeWorld::createEntity(SceneEntityDocument entity,
                        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), true};
     entry.light = std::move(entity.light);
     entry.camera = std::move(entity.camera);
+    entry.atmosphere = std::move(entity.atmosphere);
     if (entity.modelInstance) {
         RuntimeModelInstanceComponent component;
         component.modelId = entity.modelInstance->model;
@@ -310,6 +337,11 @@ bool RuntimeWorld::setParent(EntityHandle handle,
             *error = "invalid_parent";
         return false;
     }
+    if (entry->atmosphere && parent) {
+        if (error)
+            *error = "atmosphere_must_be_root";
+        return false;
+    }
     if (parent && wouldCreateCycle(handle, *parent)) {
         if (error)
             *error = "parent_cycle";
@@ -374,6 +406,8 @@ bool RuntimeWorld::setTransform(EntityHandle handle,
     Slot *entry = slot(handle);
     if (!entry)
         return false;
+    if (entry->atmosphere && !validAtmosphereTransform(transform))
+        return false;
     entry->transform.local = transform;
     entry->transform.local.rotation =
         glm::normalize(entry->transform.local.rotation);
@@ -417,6 +451,26 @@ bool RuntimeWorld::setCamera(
     if (!component && activeCamera_ && *activeCamera_ == entry->id)
         return false;
     entry->camera = std::move(component);
+    return true;
+}
+
+bool RuntimeWorld::setAtmosphere(
+    EntityHandle handle,
+    std::optional<AtmosphereComponentDocument> component) {
+    Slot *entry = slot(handle);
+    if (!entry)
+        return false;
+    if (component) {
+        if (entry->parent || !validAtmosphereTransform(entry->transform.local))
+            return false;
+        for (EntityHandle candidate : order_) {
+            const Slot *other = slot(candidate);
+            if (other && other != entry && other->atmosphere)
+                return false;
+        }
+    }
+    entry->atmosphere = std::move(component);
+    derivedDirty_ = true;
     return true;
 }
 
@@ -513,6 +567,7 @@ void RuntimeWorld::rebuildDerivedState() {
 
     bounds_ = {};
     lights_.clear();
+    atmosphere_.reset();
     materials_.clear();
     std::unordered_set<const MaterialInstance *> seenMaterials;
 
@@ -528,6 +583,9 @@ void RuntimeWorld::rebuildDerivedState() {
         light.source = SceneLightSource::ExplicitEntity;
         light.ownerEntity = entry->id;
         light.castsShadow = source.castsShadow;
+        light.atmosphereSunIndex = source.atmosphereSunIndex;
+        light.sourceAngularRadiusRadians =
+            source.sourceAngularRadiusRadians;
         light.type = runtimeLightType(source.type);
         light.positionWS = glm::vec3(entry->transform.world[3]);
         light.color = source.color;
@@ -545,6 +603,16 @@ void RuntimeWorld::rebuildDerivedState() {
                 glm::vec3(0.0f, 0.0f, -1.0f));
         }
         lights_.push_back(std::move(light));
+    }
+
+    for (EntityHandle handle : order_) {
+        const Slot *entry = slot(handle);
+        if (!entry || !entry->effectiveEnabled || !entry->atmosphere)
+            continue;
+        atmosphere_ = RenderWorldAtmosphere{
+            entry->id, glm::vec3(entry->transform.world[3]),
+            *entry->atmosphere};
+        break;
     }
 
     for (EntityHandle handle : order_) {
@@ -658,6 +726,8 @@ RuntimeWorld::activeCamera(float aspect) const {
         entry->transform.worldRotation * glm::vec3(0.0f, 1.0f, 0.0f));
     RuntimeCameraView result;
     result.position = position;
+    result.nearPlane = entry->camera->nearPlane;
+    result.farPlane = entry->camera->farPlane;
     result.view = glm::lookAt(position, position + forward, up);
     result.projection = glm::perspective(
         entry->camera->verticalFovRadians, std::max(aspect, 0.001f),
@@ -676,6 +746,11 @@ std::optional<RenderWorldEnvironment> RuntimeWorld::worldEnvironment() const {
     return RenderWorldEnvironment{environment_->environmentId,
                                   environment_->intensity,
                                   environment_->rotationRadians};
+}
+
+std::optional<RenderWorldAtmosphere> RuntimeWorld::worldAtmosphere() const {
+    const_cast<RuntimeWorld *>(this)->rebuildDerivedState();
+    return atmosphere_;
 }
 
 std::vector<RuntimeEntitySnapshot> RuntimeWorld::entities() const {
@@ -716,6 +791,7 @@ RuntimeWorld::entity(EntityHandle handle) const {
     }
     result.light = entry->light;
     result.camera = entry->camera;
+    result.atmosphere = entry->atmosphere;
     return result;
 }
 

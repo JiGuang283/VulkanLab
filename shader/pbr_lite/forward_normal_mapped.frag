@@ -5,6 +5,7 @@
 #include "include/scene_lights.glsl"
 #include "include/material_push.glsl"
 #include "include/ibl.glsl"
+#include "include/atmosphere.glsl"
 
 const float PI = 3.14159265359;
 
@@ -186,6 +187,11 @@ vec3 evaluateDirectLighting(vec3 n, vec3 v, vec3 positionWS, vec3 albedo,
         GpuLight light = sceneLightBuffer.lights[i];
         vec3 l = normalize(light.directionInnerCos.xyz);
         vec3 radiance = light.colorIntensity.rgb * light.colorIntensity.a;
+        if (atmosphereIsActive() &&
+            i == atmosphere.runtimeParams.y) {
+            radiance *= sampleAtmosphereTransmittance(
+                atmosphereWorldPositionKm(positionWS), l);
+        }
         float visibility = int(i) == shadowLightIndex
                                ? directionalShadowVisibility(positionWS)
                                : 1.0;
@@ -274,5 +280,13 @@ void main()
         n, v, albedo, roughness, metallic, occlusion);
     vec3 color = applyTransmissionApprox(indirect + direct + emissive, n, v,
                                          roughness);
+    if (atmosphereIsActive()) {
+        vec3 viewRay = fragPositionWS - ubo.cameraPosWS.xyz;
+        vec4 aerial = sampleAerialPerspective(
+            normalize(viewRay), length(viewRay));
+        color = color * aerial.a + aerial.rgb *
+                atmosphere.sunColorIntensity.rgb *
+                atmosphere.sunColorIntensity.a;
+    }
     outColor = vec4(color, materialAlpha(baseColor.a));
 }

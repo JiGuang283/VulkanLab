@@ -9,6 +9,7 @@
 #include "render/GpuPassProfiler.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/RendererShaderPaths.h"
+#include "render/Atmosphere.h"
 
 #include <memory>
 #include <array>
@@ -23,6 +24,7 @@ class DescriptorAllocator;
 struct EnvironmentGpuResources;
 class GuiSystem;
 class MainForwardPass;
+class AtmosphereLutPass;
 class ToneMapPass;
 class PresentPass;
 class PipelineCache;
@@ -84,6 +86,9 @@ class Renderer {
     bool bloomSupported() const;
     const std::string &bloomUnsupportedReason() const;
     SceneLightBufferStatus sceneLightBufferStatus() const;
+    bool atmosphereSupported() const;
+    const std::string &atmosphereUnsupportedReason() const;
+    AtmosphereRuntimeStatus atmosphereStatus() const;
 
     // ---- per-frame UBO 访问器 ----
   private:
@@ -106,6 +111,10 @@ class Renderer {
     void createGlobalDescriptorSetLayout();
     void createGlobalDescriptorSets();
     void createLightingDescriptorSetLayout();
+    void createAtmosphereUniformBuffers();
+    void createAtmosphereDescriptorSetLayout();
+    void createAtmosphereDescriptorSets();
+    void initializeAtmosphereImages();
     void createFallbackEnvironment();
     void createLightingGeneration(
         std::shared_ptr<EnvironmentGpuResources> environment);
@@ -128,6 +137,10 @@ class Renderer {
     VkDescriptorSetLayout globalDescriptorSetLayout_ = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> globalDescriptorSets_;
     VkDescriptorSetLayout lightingDescriptorSetLayout_ = VK_NULL_HANDLE;
+    std::vector<std::unique_ptr<Buffer>> atmosphereUniformBuffers_;
+    VkDescriptorSetLayout atmosphereDescriptorSetLayout_ = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT>
+        atmosphereDescriptorSets_{};
     std::shared_ptr<EnvironmentGpuResources> fallbackEnvironment_;
     std::unique_ptr<LightingDescriptorGeneration>
         currentLightingGeneration_;
@@ -138,6 +151,8 @@ class Renderer {
     RenderPipeline pipeline_;
     std::unique_ptr<GpuPassProfiler> gpuPassProfiler_;
     MainForwardPass *mainForwardPass_ = nullptr;
+    AtmosphereLutPass *atmosphereLutPass_ = nullptr;
+    AtmosphereRuntimeStatus atmosphereStatus_{};
     ToneMapPass *toneMapPass_ = nullptr;
     PresentPass *presentPass_ = nullptr;
 };

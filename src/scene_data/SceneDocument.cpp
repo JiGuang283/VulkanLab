@@ -207,7 +207,12 @@ ModelInstanceDocument parseModelInstance(const Json &value,
 
 LightComponentDocument parseLight(const Json &value, const std::string &field,
                                   uint32_t sourceSchemaVersion) {
-    if (sourceSchemaVersion >= 2) {
+    if (sourceSchemaVersion >= 3) {
+        requireOnlyKeys(value, field,
+                        {"type", "castsShadow", "atmosphereSunIndex",
+                         "sourceAngularRadiusRadians", "color", "intensity",
+                         "range", "innerConeRadians", "outerConeRadians"});
+    } else if (sourceSchemaVersion >= 2) {
         requireOnlyKeys(value, field,
                         {"type", "castsShadow", "color", "intensity",
                          "range", "innerConeRadians", "outerConeRadians"});
@@ -223,6 +228,18 @@ LightComponentDocument parseLight(const Json &value, const std::string &field,
                             ? value.at("castsShadow").get<bool>()
                             : light.type ==
                                   SceneDocumentLightType::Directional;
+    if (sourceSchemaVersion >= 3 &&
+        value.contains("atmosphereSunIndex") &&
+        !value.at("atmosphereSunIndex").is_null()) {
+        light.atmosphereSunIndex =
+            value.at("atmosphereSunIndex").get<uint32_t>();
+    }
+    if (sourceSchemaVersion >= 3 &&
+        value.contains("sourceAngularRadiusRadians")) {
+        light.sourceAngularRadiusRadians = finiteFloat(
+            value.at("sourceAngularRadiusRadians"),
+            field + ".sourceAngularRadiusRadians");
+    }
     light.color = readVec3(value.at("color"), field + ".color");
     light.intensity = finiteFloat(value.at("intensity"),
                                   field + ".intensity");
@@ -253,6 +270,57 @@ CameraComponentDocument parseCamera(const Json &value,
     return camera;
 }
 
+AtmosphereComponentDocument parseAtmosphere(const Json &value,
+                                            const std::string &field) {
+    requireOnlyKeys(
+        value, field,
+        {"bottomRadiusKm", "atmosphereHeightKm",
+         "rayleighScatteringPerKm", "rayleighScaleHeightKm",
+         "mieScatteringPerKm", "mieExtinctionPerKm", "mieScaleHeightKm",
+         "mieAnisotropy", "ozoneAbsorptionPerKm", "ozoneCenterHeightKm",
+         "ozoneHalfWidthKm", "groundAlbedo", "multipleScatteringFactor",
+         "aerialPerspectiveStartMeters",
+         "aerialPerspectiveDistanceScale"});
+    AtmosphereComponentDocument atmosphere;
+    atmosphere.bottomRadiusKm = finiteFloat(
+        value.at("bottomRadiusKm"), field + ".bottomRadiusKm");
+    atmosphere.atmosphereHeightKm = finiteFloat(
+        value.at("atmosphereHeightKm"), field + ".atmosphereHeightKm");
+    atmosphere.rayleighScatteringPerKm = readVec3(
+        value.at("rayleighScatteringPerKm"),
+        field + ".rayleighScatteringPerKm");
+    atmosphere.rayleighScaleHeightKm = finiteFloat(
+        value.at("rayleighScaleHeightKm"),
+        field + ".rayleighScaleHeightKm");
+    atmosphere.mieScatteringPerKm = finiteFloat(
+        value.at("mieScatteringPerKm"), field + ".mieScatteringPerKm");
+    atmosphere.mieExtinctionPerKm = finiteFloat(
+        value.at("mieExtinctionPerKm"), field + ".mieExtinctionPerKm");
+    atmosphere.mieScaleHeightKm = finiteFloat(
+        value.at("mieScaleHeightKm"), field + ".mieScaleHeightKm");
+    atmosphere.mieAnisotropy = finiteFloat(
+        value.at("mieAnisotropy"), field + ".mieAnisotropy");
+    atmosphere.ozoneAbsorptionPerKm = readVec3(
+        value.at("ozoneAbsorptionPerKm"),
+        field + ".ozoneAbsorptionPerKm");
+    atmosphere.ozoneCenterHeightKm = finiteFloat(
+        value.at("ozoneCenterHeightKm"), field + ".ozoneCenterHeightKm");
+    atmosphere.ozoneHalfWidthKm = finiteFloat(
+        value.at("ozoneHalfWidthKm"), field + ".ozoneHalfWidthKm");
+    atmosphere.groundAlbedo =
+        readVec3(value.at("groundAlbedo"), field + ".groundAlbedo");
+    atmosphere.multipleScatteringFactor = finiteFloat(
+        value.at("multipleScatteringFactor"),
+        field + ".multipleScatteringFactor");
+    atmosphere.aerialPerspectiveStartMeters = finiteFloat(
+        value.at("aerialPerspectiveStartMeters"),
+        field + ".aerialPerspectiveStartMeters");
+    atmosphere.aerialPerspectiveDistanceScale = finiteFloat(
+        value.at("aerialPerspectiveDistanceScale"),
+        field + ".aerialPerspectiveDistanceScale");
+    return atmosphere;
+}
+
 SceneEntityDocument parseEntity(const Json &value, size_t index,
                                 uint32_t sourceSchemaVersion) {
     const std::string field = "entities[" + std::to_string(index) + "]";
@@ -270,7 +338,12 @@ SceneEntityDocument parseEntity(const Json &value, size_t index,
 
     const Json &components = value.at("components");
     requireOnlyKeys(components, field + ".components",
-                    {"modelInstance", "light", "camera"});
+                    sourceSchemaVersion >= 3
+                        ? std::initializer_list<const char *>{
+                              "modelInstance", "light", "camera",
+                              "atmosphere"}
+                        : std::initializer_list<const char *>{
+                              "modelInstance", "light", "camera"});
     if (components.contains("modelInstance")) {
         entity.modelInstance = parseModelInstance(
             components.at("modelInstance"), field + ".components.modelInstance");
@@ -283,6 +356,10 @@ SceneEntityDocument parseEntity(const Json &value, size_t index,
         entity.camera = parseCamera(components.at("camera"),
                                     field + ".components.camera");
     }
+    if (sourceSchemaVersion >= 3 && components.contains("atmosphere")) {
+        entity.atmosphere = parseAtmosphere(
+            components.at("atmosphere"), field + ".components.atmosphere");
+    }
     return entity;
 }
 
@@ -293,8 +370,8 @@ SceneDocument parseDocument(const Json &root) {
     SceneDocument document;
     const uint32_t sourceSchemaVersion =
         root.at("schemaVersion").get<uint32_t>();
-    if (sourceSchemaVersion != 1 &&
-        sourceSchemaVersion != SceneDocument::kSchemaVersion) {
+    if (sourceSchemaVersion < 1 ||
+        sourceSchemaVersion > SceneDocument::kSchemaVersion) {
         throw documentError("schemaVersion", "unsupported schema");
     }
     document.schemaVersion = SceneDocument::kSchemaVersion;
@@ -375,6 +452,12 @@ Json serializeDocument(const SceneDocument &document) {
         if (entity.light) {
             Json light = {{"type", lightTypeName(entity.light->type)},
                           {"castsShadow", entity.light->castsShadow},
+                          {"atmosphereSunIndex",
+                           entity.light->atmosphereSunIndex
+                               ? Json(*entity.light->atmosphereSunIndex)
+                               : Json(nullptr)},
+                          {"sourceAngularRadiusRadians",
+                           entity.light->sourceAngularRadiusRadians},
                           {"color", writeVec3(entity.light->color)},
                           {"intensity", entity.light->intensity}};
             light["range"] = entity.light->range
@@ -389,6 +472,29 @@ Json serializeDocument(const SceneDocument &document) {
                 {"verticalFovRadians", entity.camera->verticalFovRadians},
                 {"nearPlane", entity.camera->nearPlane},
                 {"farPlane", entity.camera->farPlane}};
+        }
+        if (entity.atmosphere) {
+            const AtmosphereComponentDocument &a = *entity.atmosphere;
+            components["atmosphere"] = {
+                {"bottomRadiusKm", a.bottomRadiusKm},
+                {"atmosphereHeightKm", a.atmosphereHeightKm},
+                {"rayleighScatteringPerKm",
+                 writeVec3(a.rayleighScatteringPerKm)},
+                {"rayleighScaleHeightKm", a.rayleighScaleHeightKm},
+                {"mieScatteringPerKm", a.mieScatteringPerKm},
+                {"mieExtinctionPerKm", a.mieExtinctionPerKm},
+                {"mieScaleHeightKm", a.mieScaleHeightKm},
+                {"mieAnisotropy", a.mieAnisotropy},
+                {"ozoneAbsorptionPerKm",
+                 writeVec3(a.ozoneAbsorptionPerKm)},
+                {"ozoneCenterHeightKm", a.ozoneCenterHeightKm},
+                {"ozoneHalfWidthKm", a.ozoneHalfWidthKm},
+                {"groundAlbedo", writeVec3(a.groundAlbedo)},
+                {"multipleScatteringFactor", a.multipleScatteringFactor},
+                {"aerialPerspectiveStartMeters",
+                 a.aerialPerspectiveStartMeters},
+                {"aerialPerspectiveDistanceScale",
+                 a.aerialPerspectiveDistanceScale}};
         }
 
         Json item = Json::object();
@@ -489,11 +595,18 @@ SceneDocument SceneDocumentService::createDefault(
     sun.light = LightComponentDocument{};
     sun.light->type = SceneDocumentLightType::Directional;
     sun.light->intensity = 3.0f;
+    sun.light->atmosphereSunIndex = 0;
     const glm::vec3 surfaceToSun =
         glm::normalize(glm::vec3(0.3f, 0.8f, 0.5f));
     sun.transform.rotation = rotationLookingAlong(
         -surfaceToSun, glm::vec3(0.0f, 0.0f, 1.0f));
     document.entities.push_back(sun);
+
+    SceneEntityDocument atmosphere;
+    atmosphere.id = PersistentEntityId::generate();
+    atmosphere.name = "Sky Atmosphere";
+    atmosphere.atmosphere = AtmosphereComponentDocument{};
+    document.entities.push_back(atmosphere);
 
     validate(document);
     return document;
@@ -531,6 +644,8 @@ void SceneDocumentService::validate(
 
     std::unordered_map<PersistentEntityId, size_t, PersistentEntityIdHash>
         indices;
+    size_t atmosphereCount = 0;
+    size_t atmosphereSunCount = 0;
     for (size_t index = 0; index < document.entities.size(); ++index) {
         const SceneEntityDocument &entity = document.entities[index];
         const std::string field = "entities[" + std::to_string(index) + "]";
@@ -581,6 +696,31 @@ void SceneDocumentService::validate(
                 entity.light->type != SceneDocumentLightType::Directional)
                 throw documentError(field + ".components.light.castsShadow",
                                     "only directional lights can cast shadows");
+            if (!std::isfinite(entity.light->sourceAngularRadiusRadians) ||
+                entity.light->sourceAngularRadiusRadians <= 0.0f ||
+                entity.light->sourceAngularRadiusRadians > 0.1f) {
+                throw documentError(
+                    field + ".components.light.sourceAngularRadiusRadians",
+                    "must be finite and in the range (0, 0.1]");
+            }
+            if (entity.light->atmosphereSunIndex) {
+                if (*entity.light->atmosphereSunIndex != 0) {
+                    throw documentError(
+                        field + ".components.light.atmosphereSunIndex",
+                        "v1 only supports atmosphere Sun index 0");
+                }
+                if (entity.light->type !=
+                    SceneDocumentLightType::Directional) {
+                    throw documentError(
+                        field + ".components.light.atmosphereSunIndex",
+                        "only directional lights can be an atmosphere Sun");
+                }
+                if (++atmosphereSunCount > 1) {
+                    throw documentError(
+                        field + ".components.light.atmosphereSunIndex",
+                        "only one atmosphere Sun is supported");
+                }
+            }
             if (entity.light->type == SceneDocumentLightType::Spot &&
                 (entity.light->innerConeRadians < 0.0f ||
                  entity.light->outerConeRadians <
@@ -602,6 +742,79 @@ void SceneDocumentService::validate(
                 throw documentError(field + ".components.camera",
                                     "expected 0 < nearPlane < farPlane");
         }
+        if (entity.atmosphere) {
+            if (++atmosphereCount > 1) {
+                throw documentError(field + ".components.atmosphere",
+                                    "only one atmosphere is supported");
+            }
+            if (entity.parent) {
+                throw documentError(field + ".parent",
+                                    "an atmosphere entity must be at the scene root");
+            }
+            const glm::quat rotation =
+                glm::normalize(entity.transform.rotation);
+            if (std::abs(rotation.w - 1.0f) > 1.0e-4f ||
+                std::abs(rotation.x) > 1.0e-4f ||
+                std::abs(rotation.y) > 1.0e-4f ||
+                std::abs(rotation.z) > 1.0e-4f) {
+                throw documentError(field + ".transform.rotation",
+                                    "an atmosphere entity must use identity rotation");
+            }
+            if (glm::any(glm::greaterThan(
+                    glm::abs(entity.transform.scale - glm::vec3(1.0f)),
+                    glm::vec3(1.0e-4f)))) {
+                throw documentError(field + ".transform.scale",
+                                    "an atmosphere entity must use unit scale");
+            }
+            const AtmosphereComponentDocument &a = *entity.atmosphere;
+            validateFiniteVec3(a.rayleighScatteringPerKm,
+                               field + ".components.atmosphere.rayleighScatteringPerKm");
+            validateFiniteVec3(a.ozoneAbsorptionPerKm,
+                               field + ".components.atmosphere.ozoneAbsorptionPerKm");
+            validateFiniteVec3(a.groundAlbedo,
+                               field + ".components.atmosphere.groundAlbedo");
+            if (!std::isfinite(a.bottomRadiusKm) || a.bottomRadiusKm <= 0.0f ||
+                !std::isfinite(a.atmosphereHeightKm) ||
+                a.atmosphereHeightKm <= 0.0f ||
+                !std::isfinite(a.rayleighScaleHeightKm) ||
+                a.rayleighScaleHeightKm <= 0.0f ||
+                !std::isfinite(a.mieScatteringPerKm) ||
+                a.mieScatteringPerKm < 0.0f ||
+                !std::isfinite(a.mieExtinctionPerKm) ||
+                a.mieExtinctionPerKm < a.mieScatteringPerKm ||
+                !std::isfinite(a.mieScaleHeightKm) ||
+                a.mieScaleHeightKm <= 0.0f ||
+                !std::isfinite(a.mieAnisotropy) || a.mieAnisotropy < -0.99f ||
+                a.mieAnisotropy > 0.99f ||
+                !std::isfinite(a.ozoneCenterHeightKm) ||
+                a.ozoneCenterHeightKm < 0.0f ||
+                !std::isfinite(a.ozoneHalfWidthKm) ||
+                a.ozoneHalfWidthKm <= 0.0f ||
+                !std::isfinite(a.multipleScatteringFactor) ||
+                a.multipleScatteringFactor < 0.0f ||
+                !std::isfinite(a.aerialPerspectiveStartMeters) ||
+                a.aerialPerspectiveStartMeters < 0.0f ||
+                !std::isfinite(a.aerialPerspectiveDistanceScale) ||
+                a.aerialPerspectiveDistanceScale <= 0.0f) {
+                throw documentError(field + ".components.atmosphere",
+                                    "contains an invalid physical parameter");
+            }
+            if (glm::any(glm::lessThan(a.rayleighScatteringPerKm,
+                                       glm::vec3(0.0f))) ||
+                glm::any(glm::lessThan(a.ozoneAbsorptionPerKm,
+                                       glm::vec3(0.0f))) ||
+                glm::any(glm::lessThan(a.groundAlbedo, glm::vec3(0.0f))) ||
+                glm::any(glm::greaterThan(a.groundAlbedo,
+                                          glm::vec3(1.0f)))) {
+                throw documentError(field + ".components.atmosphere",
+                                    "scattering must be non-negative and albedo must be in [0, 1]");
+            }
+        }
+    }
+
+    if (atmosphereSunCount > 0 && atmosphereCount == 0) {
+        throw documentError("entities",
+                            "an atmosphere Sun requires an atmosphere component");
     }
 
     std::vector<uint8_t> visit(document.entities.size(), 0);

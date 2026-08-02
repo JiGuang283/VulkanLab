@@ -46,9 +46,12 @@ MainForwardPass::MainForwardPass(Device &device,
                                  const RenderResourceRegistry &resources,
                                  RendererResourceHandles resourceHandles,
                                  VkDescriptorSetLayout
-                                     lightingDescriptorSetLayout)
+                                     lightingDescriptorSetLayout,
+                                 VkDescriptorSetLayout
+                                     atmosphereDescriptorSetLayout)
     : device_(&device), resourceHandles_(resourceHandles),
-      lightingDescriptorSetLayout_(lightingDescriptorSetLayout) {
+      lightingDescriptorSetLayout_(lightingDescriptorSetLayout),
+      atmosphereDescriptorSetLayout_(atmosphereDescriptorSetLayout) {
     createRenderPass(resources);
     createFramebuffers(resources);
 }
@@ -69,6 +72,14 @@ std::vector<RenderImageUsage> MainForwardPass::resourceUsages() const {
          RenderImageAccess::SampledRead,
          VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
          VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}};
+    usages.push_back({resourceHandles_.atmosphereTransmittance,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    usages.push_back({resourceHandles_.atmosphereAerialPerspective,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
     if (resourceHandles_.hdrMsaaColor.valid()) {
         usages.push_back({resourceHandles_.hdrMsaaColor,
                           RenderImageAccess::ColorAttachmentReadWrite,
@@ -176,6 +187,10 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                 frame.globalDescriptorSetLayout);
             pipelineConfig.descriptorLayouts.push_back(
                 lightingDescriptorSetLayout_);
+            if (frame.shaderVariant->supportsAtmosphere) {
+                pipelineConfig.descriptorLayouts.push_back(
+                    atmosphereDescriptorSetLayout_);
+            }
 
             Pipeline &pipeline = frame.pipelineCache->getOrCreate(
                 renderPass_, std::move(pipelineConfig));
@@ -190,6 +205,12 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                     frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                     pipeline.layout(), 2, 1,
                     &frame.lightingDescriptorSet, 0, nullptr);
+                if (frame.shaderVariant->supportsAtmosphere) {
+                    vkCmdBindDescriptorSets(
+                        frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        pipeline.layout(), 3, 1,
+                        &frame.atmosphereDescriptorSet, 0, nullptr);
+                }
                 boundPipeline = &pipeline;
             }
 

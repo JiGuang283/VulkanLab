@@ -152,10 +152,15 @@ void testProjectManifestPreservesPublicVariants() {
                             "postprocess.bloom-downsample") != nullptr &&
                         registry.findProgram(
                             "postprocess.bloom-upsample") != nullptr &&
-                        registry.findProgram("skybox") != nullptr,
+                        registry.findProgram("skybox") != nullptr &&
+                        registry.findProgram(
+                            "atmosphere.transmittance") != nullptr &&
+                        registry.findProgram("atmosphere.sky") != nullptr,
                     "required internal shader program is missing");
     requireRegistry(registry.defaultVariant().supportsBloom,
                     "project default shader must support Bloom");
+    requireRegistry(registry.defaultVariant().supportsAtmosphere,
+                    "project default shader must support Atmosphere");
 }
 
 void testRegistryRejectsDuplicateDisplayName() {

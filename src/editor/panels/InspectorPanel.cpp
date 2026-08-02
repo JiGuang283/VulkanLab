@@ -109,6 +109,7 @@ void InspectorPanel::draw(const InspectorPanelSnapshot &snapshot,
                     }
                 }
             }
+            ImGui::BeginDisabled(entity.atmosphere.has_value());
             if (ImGui::BeginCombo("Parent", parentName)) {
                 const bool rootSelected = !entity.parent;
                 if (ImGui::Selectable("None", rootSelected) &&
@@ -130,6 +131,7 @@ void InspectorPanel::draw(const InspectorPanelSnapshot &snapshot,
                 }
                 ImGui::EndCombo();
             }
+            ImGui::EndDisabled();
 
             if (ImGui::CollapsingHeader("Transform",
                                         ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -142,6 +144,7 @@ void InspectorPanel::draw(const InspectorPanelSnapshot &snapshot,
                     actions.setTransform(entity.id, transform);
                 endContinuousIfNeeded(transformEditing_, actions);
 
+                ImGui::BeginDisabled(entity.atmosphere.has_value());
                 glm::vec3 euler =
                     quaternionToEulerDegrees(entity.transform.rotation);
                 changed = ImGui::DragFloat3("Rotation", &euler.x, 0.5f);
@@ -153,7 +156,6 @@ void InspectorPanel::draw(const InspectorPanelSnapshot &snapshot,
                     actions.setTransform(entity.id, transform);
                 }
                 endContinuousIfNeeded(transformEditing_, actions);
-
                 transform = entity.transform;
                 changed = ImGui::DragFloat3("Scale", &transform.scale.x,
                                             0.01f, -1000.0f, 1000.0f);
@@ -170,6 +172,7 @@ void InspectorPanel::draw(const InspectorPanelSnapshot &snapshot,
                     actions.setTransform(entity.id, transform);
                 }
                 endContinuousIfNeeded(transformEditing_, actions);
+                ImGui::EndDisabled();
             }
 
             if (ImGui::CollapsingHeader("Model",
@@ -266,6 +269,10 @@ void InspectorPanel::draw(const InspectorPanelSnapshot &snapshot,
                         light.castsShadow =
                             light.type ==
                             SceneDocumentLightType::Directional;
+                        if (light.type !=
+                            SceneDocumentLightType::Directional) {
+                            light.atmosphereSunIndex.reset();
+                        }
                         actions.setLight(entity.id, light);
                     }
                     if (light.type == SceneDocumentLightType::Directional) {
@@ -274,6 +281,32 @@ void InspectorPanel::draw(const InspectorPanelSnapshot &snapshot,
                             actions.setLight) {
                             light.castsShadow = castsShadow;
                             actions.setLight(entity.id, light);
+                        }
+                        bool atmosphereSun =
+                            light.atmosphereSunIndex == 0u;
+                        ImGui::BeginDisabled(!snapshot.atmospherePresent);
+                        if (ImGui::Checkbox("Use as Atmosphere Sun",
+                                            &atmosphereSun) &&
+                            actions.setAtmosphereSun) {
+                            actions.setAtmosphereSun(entity.id,
+                                                     atmosphereSun);
+                        }
+                        ImGui::EndDisabled();
+                        if (atmosphereSun) {
+                            float angularRadiusDegrees = glm::degrees(
+                                light.sourceAngularRadiusRadians);
+                            bool changed = ImGui::DragFloat(
+                                "Sun Angular Radius", &angularRadiusDegrees,
+                                0.005f, 0.01f, 5.0f, "%.3f deg");
+                            beginContinuousIfNeeded(
+                                changed, lightEditing_, "Edit Light",
+                                actions);
+                            if (changed && actions.setLight) {
+                                light.sourceAngularRadiusRadians =
+                                    glm::radians(angularRadiusDegrees);
+                                actions.setLight(entity.id, light);
+                            }
+                            endContinuousIfNeeded(lightEditing_, actions);
                         }
                     }
                     bool changed = ImGui::ColorEdit3("Color", &light.color.x);
@@ -319,6 +352,102 @@ void InspectorPanel::draw(const InspectorPanelSnapshot &snapshot,
                         }
                         endContinuousIfNeeded(lightEditing_, actions);
                     }
+                }
+            }
+
+            if (entity.atmosphere &&
+                ImGui::CollapsingHeader("Sky Atmosphere",
+                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+                AtmosphereComponentDocument atmosphere = *entity.atmosphere;
+                if (ImGui::Button("Earth Preset") &&
+                    actions.setAtmosphere) {
+                    actions.setAtmosphere(entity.id,
+                                          AtmosphereComponentDocument{});
+                }
+                const auto applyAtmosphereEdit = [&](bool changed) {
+                    beginContinuousIfNeeded(changed, atmosphereEditing_,
+                                            "Edit Sky Atmosphere", actions);
+                    if (changed && actions.setAtmosphere) {
+                        atmosphere.mieExtinctionPerKm = std::max(
+                            atmosphere.mieExtinctionPerKm,
+                            atmosphere.mieScatteringPerKm);
+                        actions.setAtmosphere(entity.id, atmosphere);
+                    }
+                    endContinuousIfNeeded(atmosphereEditing_, actions);
+                };
+                bool changed = ImGui::DragFloat(
+                    "Ground Radius (km)", &atmosphere.bottomRadiusKm, 1.0f,
+                    100.0f, 100000.0f);
+                applyAtmosphereEdit(changed);
+                changed = ImGui::DragFloat(
+                    "Atmosphere Height (km)",
+                    &atmosphere.atmosphereHeightKm, 0.1f, 1.0f, 1000.0f);
+                applyAtmosphereEdit(changed);
+                changed = ImGui::ColorEdit3("Ground Albedo",
+                                             &atmosphere.groundAlbedo.x);
+                applyAtmosphereEdit(changed);
+                changed = ImGui::DragFloat(
+                    "Multiple Scattering",
+                    &atmosphere.multipleScatteringFactor, 0.01f, 0.0f,
+                    4.0f);
+                applyAtmosphereEdit(changed);
+                changed = ImGui::DragFloat(
+                    "Aerial Start (m)",
+                    &atmosphere.aerialPerspectiveStartMeters, 1.0f, 0.0f,
+                    100000.0f);
+                applyAtmosphereEdit(changed);
+                changed = ImGui::DragFloat(
+                    "Aerial Distance Scale",
+                    &atmosphere.aerialPerspectiveDistanceScale, 0.01f,
+                    0.01f, 10.0f);
+                applyAtmosphereEdit(changed);
+
+                if (ImGui::TreeNodeEx("Advanced Scattering",
+                                      ImGuiTreeNodeFlags_DefaultOpen)) {
+                    changed = ImGui::DragFloat3(
+                        "Rayleigh / km",
+                        &atmosphere.rayleighScatteringPerKm.x, 0.00001f,
+                        0.0f, 1.0f, "%.6f");
+                    applyAtmosphereEdit(changed);
+                    changed = ImGui::DragFloat(
+                        "Rayleigh Height (km)",
+                        &atmosphere.rayleighScaleHeightKm, 0.01f, 0.01f,
+                        100.0f);
+                    applyAtmosphereEdit(changed);
+                    changed = ImGui::DragFloat(
+                        "Mie Scattering / km",
+                        &atmosphere.mieScatteringPerKm, 0.00001f, 0.0f,
+                        1.0f, "%.6f");
+                    applyAtmosphereEdit(changed);
+                    changed = ImGui::DragFloat(
+                        "Mie Extinction / km",
+                        &atmosphere.mieExtinctionPerKm, 0.00001f, 0.0f,
+                        1.0f, "%.6f");
+                    applyAtmosphereEdit(changed);
+                    changed = ImGui::DragFloat(
+                        "Mie Height (km)", &atmosphere.mieScaleHeightKm,
+                        0.01f, 0.01f, 100.0f);
+                    applyAtmosphereEdit(changed);
+                    changed = ImGui::SliderFloat(
+                        "Mie Anisotropy", &atmosphere.mieAnisotropy,
+                        -0.99f, 0.99f);
+                    applyAtmosphereEdit(changed);
+                    changed = ImGui::DragFloat3(
+                        "Ozone Absorption / km",
+                        &atmosphere.ozoneAbsorptionPerKm.x, 0.00001f, 0.0f,
+                        1.0f, "%.6f");
+                    applyAtmosphereEdit(changed);
+                    changed = ImGui::DragFloat(
+                        "Ozone Center (km)",
+                        &atmosphere.ozoneCenterHeightKm, 0.1f, 0.0f,
+                        atmosphere.atmosphereHeightKm);
+                    applyAtmosphereEdit(changed);
+                    changed = ImGui::DragFloat(
+                        "Ozone Half Width (km)",
+                        &atmosphere.ozoneHalfWidthKm, 0.1f, 0.01f,
+                        atmosphere.atmosphereHeightKm);
+                    applyAtmosphereEdit(changed);
+                    ImGui::TreePop();
                 }
             }
 

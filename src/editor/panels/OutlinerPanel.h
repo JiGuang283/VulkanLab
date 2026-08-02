@@ -17,6 +17,7 @@ enum class OutlinerCreateKind {
     PointLight,
     SpotLight,
     Camera,
+    SkyAtmosphere,
 };
 
 struct OutlinerEntitySnapshot {
@@ -28,11 +29,13 @@ struct OutlinerEntitySnapshot {
     ModelBindingState modelState = ModelBindingState::Unresolved;
     bool hasModel = false;
     bool lightLimitExceeded = false;
+    bool hasAtmosphere = false;
 };
 
 struct OutlinerPanelSnapshot {
     std::vector<OutlinerEntitySnapshot> entities;
     bool editable = false;
+    bool canCreateAtmosphere = true;
 };
 
 struct OutlinerPanelActions {
@@ -61,7 +64,8 @@ class OutlinerPanel {
                     const OutlinerPanelSnapshot &snapshot,
                     const OutlinerPanelActions &actions);
     void drawCreateMenu(const OutlinerPanelActions &actions,
-                        std::optional<PersistentEntityId> parent);
+                        std::optional<PersistentEntityId> parent,
+                        bool canCreateAtmosphere);
 
     std::array<char, 128> search_{};
     std::array<char, 192> renameBuffer_{};

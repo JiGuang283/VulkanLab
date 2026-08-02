@@ -14,18 +14,20 @@ class RenderResourceRegistry;
 class SwapChain;
 struct RenderFrameContext;
 
-class SkyboxPass final : public IRenderPass {
+class SkyBackgroundPass final : public IRenderPass {
   public:
-    SkyboxPass(Device &device,
+    SkyBackgroundPass(Device &device,
                const RenderResourceRegistry &resources,
                RendererResourceHandles resourceHandles,
                VkDescriptorSetLayout globalDescriptorSetLayout,
                VkDescriptorSetLayout lightingDescriptorSetLayout,
+               VkDescriptorSetLayout atmosphereDescriptorSetLayout,
                std::string vertexShaderPath,
-               std::string fragmentShaderPath);
-    ~SkyboxPass() override;
+               std::string skyboxFragmentShaderPath,
+               std::string atmosphereFragmentShaderPath);
+    ~SkyBackgroundPass() override;
 
-    std::string_view name() const override { return "Skybox"; }
+    std::string_view name() const override { return "SkyBackground"; }
     std::vector<RenderImageUsage> resourceUsages() const override;
     void releaseViewportResources() override;
     void onViewportResize(
@@ -43,9 +45,11 @@ class SkyboxPass final : public IRenderPass {
     RendererResourceHandles resourceHandles_{};
     VkDescriptorSetLayout globalDescriptorSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout lightingDescriptorSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout atmosphereDescriptorSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout emptyDescriptorSetLayout_ = VK_NULL_HANDLE;
     std::string vertexShaderPath_;
-    std::string fragmentShaderPath_;
+    std::string skyboxFragmentShaderPath_;
+    std::string atmosphereFragmentShaderPath_;
     VkRenderPass renderPass_ = VK_NULL_HANDLE;
     std::array<VkFramebuffer, MAX_FRAMES_IN_FLIGHT> framebuffers_{};
 };

@@ -136,6 +136,8 @@ RenderResourceRegistry::registerImage(RenderImageDesc desc) {
     }
     if (desc.extentDivisor == 0)
         throw std::invalid_argument("render image extent divisor is zero");
+    if (desc.arrayLayers == 0)
+        throw std::invalid_argument("render image array layer count is zero");
     const RenderImageHandle handle{
         static_cast<uint32_t>(imageDescriptions_.size())};
     imageDescriptions_.push_back(std::move(desc));
@@ -263,11 +265,20 @@ void RenderResourceRegistry::createImageEntry(uint32_t index) {
             (desc.multiplicity == RenderResourceMultiplicity::PerFrame
                  ? "/Frame" + std::to_string(frameIndex)
                  : std::string{});
-        image = std::make_unique<Image>(
-            *device_, imageExtent.width, imageExtent.height, desc.mipLevels,
-            desc.samples, desc.format, desc.tiling, desc.usage,
-            desc.memoryProperties, debugName);
-        image->createView(desc.format, desc.aspect, desc.mipLevels);
+        ImageCreateInfo imageInfo{};
+        imageInfo.width = imageExtent.width;
+        imageInfo.height = imageExtent.height;
+        imageInfo.mipLevels = desc.mipLevels;
+        imageInfo.arrayLayers = desc.arrayLayers;
+        imageInfo.samples = desc.samples;
+        imageInfo.format = desc.format;
+        imageInfo.tiling = desc.tiling;
+        imageInfo.usage = desc.usage;
+        imageInfo.memoryProperties = desc.memoryProperties;
+        imageInfo.debugName = debugName;
+        image = std::make_unique<Image>(*device_, imageInfo);
+        image->createView(desc.format, desc.aspect, desc.mipLevels,
+                          desc.viewType, desc.arrayLayers);
     }
 }
 
@@ -362,6 +373,47 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
         }
     }
 
+    const bool atmosphereSupported = device.atmosphereSupport().available;
+    const VkFormat atmosphereFormat = atmosphereSupported
+                                          ? device.atmosphereSupport().format
+                                          : VK_FORMAT_R8G8B8A8_UNORM;
+    const VkImageUsageFlags atmosphereUsage =
+        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+        (atmosphereSupported ? VK_IMAGE_USAGE_STORAGE_BIT : 0u);
+    const auto registerAtmosphereImage =
+        [&](std::string name, VkExtent2D supportedExtent,
+            RenderResourceMultiplicity multiplicity,
+            uint32_t arrayLayers = 1,
+            VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D) {
+            RenderImageDesc desc{};
+            desc.name = std::move(name);
+            desc.extentPolicy = RenderExtentPolicy::Fixed;
+            desc.fixedExtent = atmosphereSupported ? supportedExtent
+                                                   : VkExtent2D{1, 1};
+            desc.multiplicity = multiplicity;
+            desc.format = atmosphereFormat;
+            desc.usage = atmosphereUsage;
+            desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+            desc.externallyInitialized = true;
+            desc.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            desc.arrayLayers = atmosphereSupported ? arrayLayers : 1u;
+            desc.viewType = viewType;
+            return registry.registerImage(std::move(desc));
+        };
+    handles.atmosphereTransmittance = registerAtmosphereImage(
+        "Atmosphere/Transmittance", {256, 64},
+        RenderResourceMultiplicity::Single);
+    handles.atmosphereMultipleScattering = registerAtmosphereImage(
+        "Atmosphere/MultipleScattering", {32, 32},
+        RenderResourceMultiplicity::Single);
+    handles.atmosphereSkyView = registerAtmosphereImage(
+        "Atmosphere/SkyView", {192, 108},
+        RenderResourceMultiplicity::PerFrame);
+    handles.atmosphereAerialPerspective = registerAtmosphereImage(
+        "Atmosphere/AerialPerspective", {32, 32},
+        RenderResourceMultiplicity::PerFrame, 32,
+        VK_IMAGE_VIEW_TYPE_2D_ARRAY);
+
     RenderSamplerDesc hdrSampler{};
     hdrSampler.name = "HDR Sampler";
     handles.hdrSampler = registry.registerSampler(std::move(hdrSampler));
@@ -393,6 +445,17 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
         handles.bloomSampler =
             registry.registerSampler(std::move(bloomSampler));
     }
+    RenderSamplerDesc atmosphereSampler{};
+    atmosphereSampler.name = "Atmosphere Sampler";
+    atmosphereSampler.magFilter = atmosphereSupported ? VK_FILTER_LINEAR
+                                                      : VK_FILTER_NEAREST;
+    atmosphereSampler.minFilter = atmosphereSupported ? VK_FILTER_LINEAR
+                                                      : VK_FILTER_NEAREST;
+    atmosphereSampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    atmosphereSampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    atmosphereSampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    handles.atmosphereSampler =
+        registry.registerSampler(std::move(atmosphereSampler));
     return handles;
 }
 

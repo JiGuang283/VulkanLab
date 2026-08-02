@@ -13,10 +13,11 @@ namespace vkr {
 namespace {
 constexpr uint32_t kMaxSetsPerPool = 512;
 
-constexpr std::array<VkDescriptorPoolSize, 4> kPoolSizes = {{
+constexpr std::array<VkDescriptorPoolSize, 5> kPoolSizes = {{
     {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 512},
     {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4096},
     {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 128},
+    {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 512},
     {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 128},
 }};
 } // namespace

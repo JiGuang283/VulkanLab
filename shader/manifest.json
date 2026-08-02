@@ -12,14 +12,16 @@
       "contract": "main-forward",
       "vertex": "pbr_lite/forward.vert",
       "fragment": "pbr_lite/forward.frag",
-      "sceneLights": true
+      "sceneLights": true,
+      "atmosphere": true
     },
     {
       "id": "forward.pbr-lite-normal-mapped",
       "contract": "main-forward",
       "vertex": "pbr_lite/forward_normal_mapped.vert",
       "fragment": "pbr_lite/forward_normal_mapped.frag",
-      "sceneLights": true
+      "sceneLights": true,
+      "atmosphere": true
     },
     {
       "id": "debug.base-color",
@@ -125,6 +127,37 @@
       "contract": "fullscreen",
       "vertex": "postprocess/fullscreen.vert",
       "fragment": "skybox/skybox.frag"
+    },
+    {
+      "id": "atmosphere.transmittance",
+      "contract": "compute",
+      "compute": "atmosphere/transmittance.comp",
+      "atmosphere": true
+    },
+    {
+      "id": "atmosphere.multiple-scattering",
+      "contract": "compute",
+      "compute": "atmosphere/multiple_scattering.comp",
+      "atmosphere": true
+    },
+    {
+      "id": "atmosphere.sky-view",
+      "contract": "compute",
+      "compute": "atmosphere/sky_view.comp",
+      "atmosphere": true
+    },
+    {
+      "id": "atmosphere.aerial-perspective",
+      "contract": "compute",
+      "compute": "atmosphere/aerial_perspective.comp",
+      "atmosphere": true
+    },
+    {
+      "id": "atmosphere.sky",
+      "contract": "fullscreen",
+      "vertex": "postprocess/fullscreen.vert",
+      "fragment": "atmosphere/sky.frag",
+      "atmosphere": true
     }
   ],
   "variants": [

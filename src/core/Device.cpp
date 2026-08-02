@@ -232,6 +232,14 @@ void Device::pickPhysicalDevice() {
             VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL,
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT, 0,
             &bloomImageProperties) == VK_SUCCESS;
+    VkImageFormatProperties atmosphereImageProperties{};
+    const bool atmosphereImageSupported =
+        vkGetPhysicalDeviceImageFormatProperties(
+            physicalDevice_, VK_FORMAT_R16G16B16A16_SFLOAT,
+            VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            0, &atmosphereImageProperties) == VK_SUCCESS;
 
     if (!graphicsQueueSupportsCompute) {
         computeBloomSupport_.reason =
@@ -255,6 +263,24 @@ void Device::pickPhysicalDevice() {
     } else {
         VKR_LOG_WARN("Device", "Compute Bloom unavailable: {}",
                      computeBloomSupport_.reason);
+    }
+    if (!computeBloomSupport_.available) {
+        atmosphereSupport_.reason = computeBloomSupport_.reason;
+    } else if (!atmosphereImageSupported) {
+        atmosphereSupport_.reason =
+            "RGBA16F atmosphere image usage is unavailable";
+    } else if (atmosphereImageProperties.maxArrayLayers < 32) {
+        atmosphereSupport_.reason =
+            "RGBA16F storage images do not support 32 array layers";
+    } else {
+        atmosphereSupport_.available = true;
+        atmosphereSupport_.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    }
+    if (atmosphereSupport_.available) {
+        VKR_LOG_INFO("Device", "Compute Sky Atmosphere is supported");
+    } else {
+        VKR_LOG_WARN("Device", "Sky Atmosphere unavailable: {}",
+                     atmosphereSupport_.reason);
     }
 }
 void Device::createLogicalDevice() {
@@ -280,7 +306,9 @@ void Device::createLogicalDevice() {
     deviceFeatures.textureCompressionBC =
         textureTranscodeTarget_ == TextureTranscodeTarget::Bc7;
     deviceFeatures.shaderStorageImageExtendedFormats =
-        computeBloomSupport_.available ? VK_TRUE : VK_FALSE;
+        (computeBloomSupport_.available || atmosphereSupport_.available)
+            ? VK_TRUE
+            : VK_FALSE;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

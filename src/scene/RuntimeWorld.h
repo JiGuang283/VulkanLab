@@ -70,6 +70,7 @@ struct RuntimeEntitySnapshot {
     std::optional<ModelInstanceDocument> modelInstance;
     std::optional<LightComponentDocument> light;
     std::optional<CameraComponentDocument> camera;
+    std::optional<AtmosphereComponentDocument> atmosphere;
     ModelBindingState modelBindingState = ModelBindingState::Unresolved;
     std::string modelBindingError;
     std::string modelProfileId;
@@ -115,6 +116,9 @@ class RuntimeWorld final : public IRenderWorld {
                   std::optional<LightComponentDocument> component);
     bool setCamera(EntityHandle handle,
                    std::optional<CameraComponentDocument> component);
+    bool setAtmosphere(
+        EntityHandle handle,
+        std::optional<AtmosphereComponentDocument> component);
     bool setActiveCamera(const PersistentEntityId &id);
     bool bindModel(EntityHandle handle, uint64_t expectedRevision,
                    std::string profileId, ModelAssetHandle asset,
@@ -151,6 +155,7 @@ class RuntimeWorld final : public IRenderWorld {
     activeCamera(float aspect) const override;
     std::optional<RenderWorldAmbient> worldAmbient() const override;
     std::optional<RenderWorldEnvironment> worldEnvironment() const override;
+    std::optional<RenderWorldAtmosphere> worldAtmosphere() const override;
 
     size_t entityCount() const { return order_.size(); }
     size_t modelInstanceCount() const;
@@ -170,6 +175,7 @@ class RuntimeWorld final : public IRenderWorld {
         std::optional<RuntimeModelInstanceComponent> model;
         std::optional<LightComponentDocument> light;
         std::optional<CameraComponentDocument> camera;
+        std::optional<AtmosphereComponentDocument> atmosphere;
     };
 
     Slot *slot(EntityHandle handle);
@@ -196,6 +202,7 @@ class RuntimeWorld final : public IRenderWorld {
         byId_;
     Bounds bounds_;
     std::vector<SceneLight> lights_;
+    std::optional<RenderWorldAtmosphere> atmosphere_;
     std::vector<std::shared_ptr<MaterialInstance>> materials_;
     bool derivedDirty_ = true;
 };

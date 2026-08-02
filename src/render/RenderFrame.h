@@ -22,6 +22,8 @@ struct RenderFrameContext {
     VkDescriptorSetLayout globalDescriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorSet lightingDescriptorSet = VK_NULL_HANDLE;
     VkDescriptorSetLayout lightingDescriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSet atmosphereDescriptorSet = VK_NULL_HANDLE;
+    VkDescriptorSetLayout atmosphereDescriptorSetLayout = VK_NULL_HANDLE;
     PipelineCache  *pipelineCache = nullptr;
     const GpuDebugUtils *debugUtils = nullptr;
     const TracyProfiler *tracyProfiler = nullptr;
@@ -29,6 +31,7 @@ struct RenderFrameContext {
     const ShaderVariant *shaderVariant = nullptr;
     const RenderView *view = nullptr;
     bool environmentReady = false;
+    bool atmosphereReady = false;
 };
 
 } // namespace vkr

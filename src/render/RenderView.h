@@ -4,6 +4,7 @@
 #include "render/FrameGpuData.h"
 #include "render/RenderSettings.h"
 #include "scene/SceneLight.h"
+#include "scene/IRenderWorld.h"
 #include "scene/SceneTypes.h"
 
 #include <glm/glm.hpp>
@@ -12,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <vulkan/vulkan.h>
 
 namespace vkr {
 
@@ -34,6 +36,22 @@ struct RenderViewInput {
     RenderSettings settings{};
     bool environmentReady = false;
     float maxSpecularLod = 0.0f;
+    float cameraNearPlane = 0.05f;
+    float cameraFarPlane = 1000.0f;
+    VkExtent2D viewportExtent{};
+    std::optional<RenderWorldAtmosphere> atmosphere;
+    bool atmosphereSupported = false;
+};
+
+struct AtmosphereFrameData {
+    bool componentPresent = false;
+    bool active = false;
+    PersistentEntityId componentEntity;
+    std::optional<PersistentEntityId> sunEntity;
+    std::string sunStableKey;
+    int32_t sunBufferIndex = -1;
+    float cameraAltitudeKm = 0.0f;
+    uint64_t staticLutKey = 0;
 };
 
 struct RenderViewLightStats {
@@ -59,6 +77,8 @@ struct RenderView {
     DirectionalShadowFrameData directionalShadow{};
     RenderSettings settings{};
     RenderViewLightStats lightStats{};
+    AtmosphereFrameData atmosphere{};
+    AtmosphereGpuParams atmosphereGpuParams{};
 };
 
 bool isEffectiveSceneLight(const SceneLight &light);

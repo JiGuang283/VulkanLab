@@ -80,6 +80,9 @@ class Scene final : public IRenderWorld {
     std::optional<RenderWorldEnvironment> worldEnvironment() const override {
         return std::nullopt;
     }
+    std::optional<RenderWorldAtmosphere> worldAtmosphere() const override {
+        return std::nullopt;
+    }
     std::optional<CameraPose> initialCamera;
 
   private:

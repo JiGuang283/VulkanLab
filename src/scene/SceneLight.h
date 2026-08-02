@@ -29,6 +29,8 @@ struct SceneLight {
     SceneLightSource source = SceneLightSource::Legacy;
     std::optional<PersistentEntityId> ownerEntity;
     bool castsShadow = false;
+    std::optional<uint32_t> atmosphereSunIndex;
+    float sourceAngularRadiusRadians = 0.004675f;
     LightType type = LightType::Directional;
 
     glm::vec3 positionWS{0.0f};

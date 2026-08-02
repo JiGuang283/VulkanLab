@@ -1,0 +1,43 @@
+#version 450
+
+#extension GL_GOOGLE_include_directive : require
+#define ATMOSPHERE_SET 0
+#define ATMOSPHERE_NO_GLOBAL_FRAME
+#include "include/atmosphere_scattering.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(rgba16f, set = 1, binding = 0) uniform writeonly image2D destinationImage;
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(destinationImage);
+    if (any(greaterThanEqual(pixel, size)))
+        return;
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+    float radius = mix(atmosphereBottomRadius(), atmosphereTopRadius(), uv.y);
+    float mu = uv.x * 2.0 - 1.0;
+    vec3 origin = atmospherePlanetCenter() + vec3(0.0, 0.0, radius);
+    vec3 direction = normalize(vec3(sqrt(max(1.0 - mu * mu, 0.0)), 0.0, mu));
+    float topDistance = raySphereNearest(origin - atmospherePlanetCenter(),
+                                         direction, atmosphereTopRadius());
+    float groundDistance = raySphereNearest(origin - atmospherePlanetCenter(),
+                                            direction, atmosphereBottomRadius());
+    if (groundDistance > 1e-4 &&
+        (topDistance < 0.0 || groundDistance < topDistance)) {
+        imageStore(destinationImage, pixel, vec4(0.0, 0.0, 0.0, 1.0));
+        return;
+    }
+    float distanceKm = max(topDistance, 0.0);
+    if (groundDistance >= 0.0)
+        distanceKm = min(distanceKm, groundDistance);
+    vec3 opticalDepth = vec3(0.0);
+    const int sampleCount = 40;
+    float stepLength = distanceKm / float(sampleCount);
+    for (int i = 0; i < sampleCount; ++i) {
+        vec3 position = origin + direction * ((float(i) + 0.5) * stepLength);
+        opticalDepth += atmosphereExtinction(atmosphereDensity(position)) *
+                        stepLength;
+    }
+    imageStore(destinationImage, pixel, vec4(exp(-opticalDepth), 1.0));
+}

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SceneTypes.h"
+#include "scene_data/SceneDocument.h"
 
 #include <cstddef>
 #include <memory>
@@ -18,6 +19,8 @@ struct RuntimeCameraView {
     glm::mat4 view{1.0f};
     glm::mat4 projection{1.0f};
     glm::vec3 position{0.0f};
+    float nearPlane = 0.05f;
+    float farPlane = 1000.0f;
 };
 
 struct RenderWorldAmbient {
@@ -29,6 +32,12 @@ struct RenderWorldEnvironment {
     std::string id;
     float intensity = 1.0f;
     float rotationRadians = 0.0f;
+};
+
+struct RenderWorldAtmosphere {
+    PersistentEntityId entityId;
+    glm::vec3 groundOriginWS{0.0f};
+    AtmosphereComponentDocument parameters{};
 };
 
 class IRenderWorld {
@@ -49,6 +58,8 @@ class IRenderWorld {
     virtual std::optional<RenderWorldAmbient> worldAmbient() const = 0;
     virtual std::optional<RenderWorldEnvironment>
     worldEnvironment() const = 0;
+    virtual std::optional<RenderWorldAtmosphere>
+    worldAtmosphere() const = 0;
 };
 
 } // namespace vkr

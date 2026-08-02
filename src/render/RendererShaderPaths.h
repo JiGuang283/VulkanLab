@@ -13,6 +13,11 @@ struct RendererShaderPaths {
     std::string skyboxFrag;
     std::string bloomDownsampleComp;
     std::string bloomUpsampleComp;
+    std::string atmosphereTransmittanceComp;
+    std::string atmosphereMultipleScatteringComp;
+    std::string atmosphereSkyViewComp;
+    std::string atmosphereAerialPerspectiveComp;
+    std::string atmosphereSkyFrag;
 };
 
 } // namespace vkr

@@ -141,6 +141,36 @@ void checkGlobalUbo(const SpvReflectDescriptorBinding &binding,
                      "GlobalFrameUbo", path);
 }
 
+void checkAtmosphereUbo(const SpvReflectDescriptorBinding &binding,
+                        std::string_view path) {
+    static const std::vector<MemberLayout> members = {
+        {"planetCenterBottomRadius",
+         offsetof(vkr::AtmosphereGpuParams, planetCenterBottomRadius)},
+        {"topRadiusDensityHeights",
+         offsetof(vkr::AtmosphereGpuParams, topRadiusDensityHeights)},
+        {"rayleighScatteringOzoneHalfWidth",
+         offsetof(vkr::AtmosphereGpuParams,
+                  rayleighScatteringOzoneHalfWidth)},
+        {"mieScatteringExtinction",
+         offsetof(vkr::AtmosphereGpuParams, mieScatteringExtinction)},
+        {"ozoneAbsorptionAerialStart",
+         offsetof(vkr::AtmosphereGpuParams, ozoneAbsorptionAerialStart)},
+        {"groundAlbedoDistanceScale",
+         offsetof(vkr::AtmosphereGpuParams, groundAlbedoDistanceScale)},
+        {"sunDirectionAngularRadius",
+         offsetof(vkr::AtmosphereGpuParams, sunDirectionAngularRadius)},
+        {"sunColorIntensity",
+         offsetof(vkr::AtmosphereGpuParams, sunColorIntensity)},
+        {"cameraDistanceParams",
+         offsetof(vkr::AtmosphereGpuParams, cameraDistanceParams)},
+        {"viewportParams", offsetof(vkr::AtmosphereGpuParams, viewportParams)},
+        {"runtimeParams", offsetof(vkr::AtmosphereGpuParams, runtimeParams)},
+        {"reserved", offsetof(vkr::AtmosphereGpuParams, reserved)},
+    };
+    checkBlockLayout(binding.block, sizeof(vkr::AtmosphereGpuParams), members,
+                     "AtmosphereGpuParams", path);
+}
+
 void checkSceneLightBuffer(const SpvReflectDescriptorBinding &binding,
                            std::string_view path) {
     requireShader(binding.block.member_count == 1,
@@ -178,12 +208,15 @@ void checkSceneLightBuffer(const SpvReflectDescriptorBinding &binding,
 
 void checkPushConstant(const SpvReflectShaderModule &module,
                        vkr::ShaderProgramContract contract,
+                       bool expectsAtmosphere,
                        std::string_view path) {
     const auto blocks = enumerateVariables<SpvReflectBlockVariable>(
         module, spvReflectEnumeratePushConstantBlocks, "push constants", path);
     if (blocks.empty()) {
         const bool allowed =
             contract == vkr::ShaderProgramContract::Fullscreen ||
+            (contract == vkr::ShaderProgramContract::Compute &&
+             expectsAtmosphere) ||
             (contract == vkr::ShaderProgramContract::MainForward &&
              module.shader_stage == SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT);
         requireShader(allowed,
@@ -237,16 +270,41 @@ void checkPushConstant(const SpvReflectShaderModule &module,
 
 void checkDescriptors(const ReflectedModule &reflected,
                       vkr::ShaderProgramContract contract,
-                      bool expectsSceneLights) {
+                      bool expectsSceneLights,
+                      bool expectsAtmosphere) {
     const auto &module = reflected.module();
     const auto bindings = enumerateVariables<SpvReflectDescriptorBinding>(
         module, spvReflectEnumerateDescriptorBindings, "descriptor bindings",
         reflected.path());
     if (contract == vkr::ShaderProgramContract::Compute) {
-        requireShader(bindings.size() == 2,
-                      "Bloom compute descriptor count mismatch in " +
+        requireShader(bindings.size() == (expectsAtmosphere ? 6u : 2u),
+                      std::string(expectsAtmosphere ? "Atmosphere" : "Bloom") +
+                          " compute descriptor count mismatch in " +
                           reflected.path());
         for (const SpvReflectDescriptorBinding *binding : bindings) {
+            if (expectsAtmosphere) {
+                const bool atmosphereUbo =
+                    binding->set == 0 && binding->binding == 0 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                const bool atmosphereTexture =
+                    binding->set == 0 && binding->binding >= 1 &&
+                    binding->binding <= 4 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                const bool destination =
+                    binding->set == 1 && binding->binding == 0 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                requireShader(binding->count == 1 &&
+                                  (atmosphereUbo || atmosphereTexture ||
+                                   destination),
+                              "Atmosphere compute descriptor contract "
+                              "mismatch in " + reflected.path());
+                if (atmosphereUbo)
+                    checkAtmosphereUbo(*binding, reflected.path());
+                continue;
+            }
             const bool validSource =
                 binding->set == 0 && binding->binding == 0 &&
                 binding->descriptor_type ==
@@ -275,6 +333,7 @@ void checkDescriptors(const ReflectedModule &reflected,
     const VkShaderStageFlags stage =
         static_cast<VkShaderStageFlags>(module.shader_stage);
     bool foundSceneLights = false;
+    uint32_t atmosphereBindingCount = 0;
 
     for (const SpvReflectDescriptorBinding *binding : bindings) {
         requireShader(binding->count == 1,
@@ -330,6 +389,23 @@ void checkDescriptors(const ReflectedModule &reflected,
                     stage == VK_SHADER_STAGE_FRAGMENT_BIT,
                 "lighting descriptor contract mismatch in " +
                     reflected.path());
+        } else if (binding->set == 3 && binding->binding < 5) {
+            const bool atmosphereUbo =
+                binding->binding == 0 &&
+                binding->descriptor_type ==
+                    SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            const bool atmosphereTexture =
+                binding->binding > 0 &&
+                binding->descriptor_type ==
+                    SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            requireShader(
+                (atmosphereUbo || atmosphereTexture) &&
+                    stage == VK_SHADER_STAGE_FRAGMENT_BIT,
+                "atmosphere descriptor contract mismatch in " +
+                    reflected.path());
+            if (atmosphereUbo)
+                checkAtmosphereUbo(*binding, reflected.path());
+            ++atmosphereBindingCount;
         } else {
             throw std::runtime_error(
                 "shader contract: unexpected set=" +
@@ -341,6 +417,12 @@ void checkDescriptors(const ReflectedModule &reflected,
                   expectsSceneLights
                       ? "missing scene light SSBO in " + reflected.path()
                       : "unexpected scene light SSBO in " + reflected.path());
+    requireShader((atmosphereBindingCount == 5) == expectsAtmosphere,
+                  expectsAtmosphere
+                      ? "missing atmosphere descriptor set in " +
+                            reflected.path()
+                      : "unexpected atmosphere descriptor set in " +
+                            reflected.path());
 }
 
 void checkVertexInputs(const ReflectedModule &reflected,
@@ -449,11 +531,13 @@ void testShaderContracts() {
     std::map<std::string, std::unique_ptr<ReflectedModule>> modules;
     std::map<std::string, vkr::ShaderProgramContract> moduleContracts;
     std::map<std::string, bool> moduleSceneLightContracts;
+    std::map<std::string, bool> moduleAtmosphereContracts;
     const auto reflect =
         [&](const std::string &absolutePath, const std::string &sourcePath,
             SpvReflectShaderStageFlagBits expectedStage,
             vkr::ShaderProgramContract contract,
-            bool expectsSceneLights) -> ReflectedModule & {
+            bool expectsSceneLights,
+            bool expectsAtmosphere) -> ReflectedModule & {
         const auto existing = modules.find(absolutePath);
         if (existing != modules.end()) {
             requireShader(moduleContracts.at(absolutePath) == contract,
@@ -465,6 +549,11 @@ void testShaderContracts() {
                     expectsSceneLights,
                 "a shader module is shared across incompatible scene-light "
                 "contracts: " + sourcePath);
+            requireShader(
+                moduleAtmosphereContracts.at(absolutePath) ==
+                    expectsAtmosphere,
+                "a shader module is shared across incompatible atmosphere "
+                "contracts: " + sourcePath);
             return *existing->second;
         }
         const std::string runtimePath = "shader/" + sourcePath + ".spv";
@@ -472,14 +561,17 @@ void testShaderContracts() {
             runtimePath, std::filesystem::path(absolutePath));
         requireShader(reflected->module().shader_stage == expectedStage,
                       "stage mismatch in " + runtimePath);
-        checkDescriptors(*reflected, contract, expectsSceneLights);
-        checkPushConstant(reflected->module(), contract, reflected->path());
+        checkDescriptors(*reflected, contract, expectsSceneLights,
+                         expectsAtmosphere);
+        checkPushConstant(reflected->module(), contract, expectsAtmosphere,
+                          reflected->path());
         checkVertexInputs(*reflected, contract);
         checkFragmentOutputs(*reflected, contract);
         ReflectedModule &result = *reflected;
         modules.emplace(absolutePath, std::move(reflected));
         moduleContracts.emplace(absolutePath, contract);
         moduleSceneLightContracts.emplace(absolutePath, expectsSceneLights);
+        moduleAtmosphereContracts.emplace(absolutePath, expectsAtmosphere);
         return result;
     };
 
@@ -489,18 +581,20 @@ void testShaderContracts() {
         if (!program.vertSpvPath.empty()) {
             vertex = &reflect(program.vertSpvPath, program.vertexSourcePath,
                               SPV_REFLECT_SHADER_STAGE_VERTEX_BIT,
-                              program.contract, false);
+                              program.contract, false, false);
         }
         if (!program.fragSpvPath.empty()) {
             fragment = &reflect(program.fragSpvPath,
                                 program.fragmentSourcePath,
                                 SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT,
-                                program.contract, program.usesSceneLights);
+                                program.contract, program.usesSceneLights,
+                                program.usesAtmosphere);
         }
         if (!program.computeSpvPath.empty()) {
             (void)reflect(program.computeSpvPath, program.computeSourcePath,
                           SPV_REFLECT_SHADER_STAGE_COMPUTE_BIT,
-                          program.contract, false);
+                          program.contract, false,
+                          program.usesAtmosphere);
         }
         if (vertex)
             checkProgramInterface(*vertex, fragment);
