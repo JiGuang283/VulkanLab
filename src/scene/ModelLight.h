@@ -10,6 +10,7 @@ namespace vkr {
 struct ModelLightPrototype {
     std::string debugName;
     LightType type = LightType::Directional;
+    bool castsShadow = false;
 
     glm::vec3 positionAS{0.0f};
     float range = 10.0f;
@@ -24,6 +25,9 @@ struct ModelLightPrototype {
 };
 
 SceneLight instantiateModelLight(const ModelLightPrototype &prototype,
-                                 const glm::mat4 &rootToWorld);
+                                 const glm::mat4 &rootToWorld,
+                                 std::string stableKey,
+                                 std::optional<PersistentEntityId>
+                                     ownerEntity = std::nullopt);
 
 } // namespace vkr

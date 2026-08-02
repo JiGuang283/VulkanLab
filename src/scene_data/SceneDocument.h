@@ -28,6 +28,7 @@ struct ModelInstanceDocument {
 
 struct LightComponentDocument {
     SceneDocumentLightType type = SceneDocumentLightType::Directional;
+    bool castsShadow = true;
     glm::vec3 color{1.0f};
     float intensity = 1.0f;
     std::optional<float> range;
@@ -64,7 +65,7 @@ struct SceneEnvironmentDocument {
 };
 
 struct SceneDocument {
-    static constexpr uint32_t kSchemaVersion = 1;
+    static constexpr uint32_t kSchemaVersion = 2;
 
     uint32_t schemaVersion = kSchemaVersion;
     SceneDocumentId id;

@@ -205,14 +205,24 @@ ModelInstanceDocument parseModelInstance(const Json &value,
     }
 }
 
-LightComponentDocument parseLight(const Json &value,
-                                  const std::string &field) {
-    requireOnlyKeys(value, field,
-                    {"type", "color", "intensity", "range",
-                     "innerConeRadians", "outerConeRadians"});
+LightComponentDocument parseLight(const Json &value, const std::string &field,
+                                  uint32_t sourceSchemaVersion) {
+    if (sourceSchemaVersion >= 2) {
+        requireOnlyKeys(value, field,
+                        {"type", "castsShadow", "color", "intensity",
+                         "range", "innerConeRadians", "outerConeRadians"});
+    } else {
+        requireOnlyKeys(value, field,
+                        {"type", "color", "intensity", "range",
+                         "innerConeRadians", "outerConeRadians"});
+    }
     LightComponentDocument light;
     light.type = readLightType(value.at("type").get<std::string>(),
                                field + ".type");
+    light.castsShadow = sourceSchemaVersion >= 2
+                            ? value.at("castsShadow").get<bool>()
+                            : light.type ==
+                                  SceneDocumentLightType::Directional;
     light.color = readVec3(value.at("color"), field + ".color");
     light.intensity = finiteFloat(value.at("intensity"),
                                   field + ".intensity");
@@ -243,7 +253,8 @@ CameraComponentDocument parseCamera(const Json &value,
     return camera;
 }
 
-SceneEntityDocument parseEntity(const Json &value, size_t index) {
+SceneEntityDocument parseEntity(const Json &value, size_t index,
+                                uint32_t sourceSchemaVersion) {
     const std::string field = "entities[" + std::to_string(index) + "]";
     requireOnlyKeys(value, field,
                     {"id", "name", "parent", "enabled", "transform",
@@ -265,8 +276,9 @@ SceneEntityDocument parseEntity(const Json &value, size_t index) {
             components.at("modelInstance"), field + ".components.modelInstance");
     }
     if (components.contains("light"))
-        entity.light =
-            parseLight(components.at("light"), field + ".components.light");
+        entity.light = parseLight(components.at("light"),
+                                  field + ".components.light",
+                                  sourceSchemaVersion);
     if (components.contains("camera")) {
         entity.camera = parseCamera(components.at("camera"),
                                     field + ".components.camera");
@@ -279,7 +291,13 @@ SceneDocument parseDocument(const Json &root) {
                     {"schemaVersion", "id", "displayName", "activeCamera",
                      "ambient", "environment", "entities"});
     SceneDocument document;
-    document.schemaVersion = root.at("schemaVersion").get<uint32_t>();
+    const uint32_t sourceSchemaVersion =
+        root.at("schemaVersion").get<uint32_t>();
+    if (sourceSchemaVersion != 1 &&
+        sourceSchemaVersion != SceneDocument::kSchemaVersion) {
+        throw documentError("schemaVersion", "unsupported schema");
+    }
+    document.schemaVersion = SceneDocument::kSchemaVersion;
     try {
         document.id = SceneDocumentId(root.at("id").get<std::string>());
     } catch (const std::invalid_argument &exception) {
@@ -315,7 +333,8 @@ SceneDocument parseDocument(const Json &root) {
         throw documentError("entities", "expected an array");
     document.entities.reserve(entities.size());
     for (size_t index = 0; index < entities.size(); ++index)
-        document.entities.push_back(parseEntity(entities.at(index), index));
+        document.entities.push_back(
+            parseEntity(entities.at(index), index, sourceSchemaVersion));
     return document;
 }
 
@@ -355,6 +374,7 @@ Json serializeDocument(const SceneDocument &document) {
         }
         if (entity.light) {
             Json light = {{"type", lightTypeName(entity.light->type)},
+                          {"castsShadow", entity.light->castsShadow},
                           {"color", writeVec3(entity.light->color)},
                           {"intensity", entity.light->intensity}};
             light["range"] = entity.light->range
@@ -557,6 +577,10 @@ void SceneDocumentService::validate(
                 !std::isfinite(entity.light->outerConeRadians))
                 throw documentError(field + ".components.light",
                                     "cone angles must be finite");
+            if (entity.light->castsShadow &&
+                entity.light->type != SceneDocumentLightType::Directional)
+                throw documentError(field + ".components.light.castsShadow",
+                                    "only directional lights can cast shadows");
             if (entity.light->type == SceneDocumentLightType::Spot &&
                 (entity.light->innerConeRadians < 0.0f ||
                  entity.light->outerConeRadians <

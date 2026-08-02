@@ -1,6 +1,9 @@
 #pragma once
 
+#include "scene_data/SceneIds.h"
+
 #include <cstdint>
+#include <optional>
 #include <string>
 
 #include <glm/glm.hpp>
@@ -13,8 +16,19 @@ enum class LightType : uint32_t {
     Spot = 2,
 };
 
+enum class SceneLightSource : uint32_t {
+    Legacy,
+    ExplicitEntity,
+    ImportedModel,
+    Fallback,
+};
+
 struct SceneLight {
     std::string debugName;
+    std::string stableKey;
+    SceneLightSource source = SceneLightSource::Legacy;
+    std::optional<PersistentEntityId> ownerEntity;
+    bool castsShadow = false;
     LightType type = LightType::Directional;
 
     glm::vec3 positionWS{0.0f};

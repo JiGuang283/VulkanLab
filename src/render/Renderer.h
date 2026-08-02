@@ -5,6 +5,7 @@
 #include "core/FrameSync.h"
 #include "core/SwapChain.h"
 #include "render/RenderPipeline.h"
+#include "render/FrameGpuData.h"
 #include "render/GpuPassProfiler.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/RendererShaderPaths.h"
@@ -35,6 +36,13 @@ struct RendererViewportOutput {
     VkSampler sampler = VK_NULL_HANDLE;
     std::array<VkImage, MAX_FRAMES_IN_FLIGHT> images{};
     std::array<VkImageView, MAX_FRAMES_IN_FLIGHT> imageViews{};
+};
+
+struct SceneLightBufferStatus {
+    uint32_t limit = kMaxSceneLights;
+    uint32_t activeLights = 0;
+    std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> frameCapacities{};
+    uint64_t allocatedBytes = 0;
 };
 
 class Renderer {
@@ -75,9 +83,15 @@ class Renderer {
     float currentEnvironmentMaxSpecularLod() const;
     bool bloomSupported() const;
     const std::string &bloomUnsupportedReason() const;
+    SceneLightBufferStatus sceneLightBufferStatus() const;
 
     // ---- per-frame UBO 访问器 ----
   private:
+    struct FrameSceneLightStorage {
+        std::unique_ptr<Buffer> buffer;
+        uint32_t capacity = 0;
+    };
+
     struct LightingDescriptorGeneration {
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> sets{};
         std::shared_ptr<EnvironmentGpuResources> environment;
@@ -85,6 +99,10 @@ class Renderer {
     };
 
     void createUniformBuffers();
+    void createSceneLightBuffers();
+    void ensureSceneLightCapacity(uint32_t frameIndex,
+                                  uint32_t requiredLights);
+    void updateSceneLightDescriptor(uint32_t frameIndex);
     void createGlobalDescriptorSetLayout();
     void createGlobalDescriptorSets();
     void createLightingDescriptorSetLayout();
@@ -103,6 +121,9 @@ class Renderer {
     DescriptorAllocator *descriptorAllocator_;
 
     std::vector<std::unique_ptr<Buffer>> uniformBuffers_;
+    std::array<FrameSceneLightStorage, MAX_FRAMES_IN_FLIGHT>
+        sceneLightBuffers_{};
+    uint32_t activeSceneLightCount_ = 0;
     VkDeviceSize                         uniformBufferSize_ = 0;
     VkDescriptorSetLayout globalDescriptorSetLayout_ = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> globalDescriptorSets_;

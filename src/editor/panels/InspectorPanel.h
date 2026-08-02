@@ -20,6 +20,19 @@ struct InspectorEnvironmentOption {
     std::string displayName;
 };
 
+enum class InspectorLightUploadStatus {
+    Active,
+    Ineffective,
+    NotUploaded,
+};
+
+enum class InspectorLightShadowStatus {
+    Active,
+    Eligible,
+    Disabled,
+    Unsupported,
+};
+
 struct InspectorPanelSnapshot {
     std::optional<RuntimeEntitySnapshot> entity;
     SceneDocumentId sceneId;
@@ -31,7 +44,10 @@ struct InspectorPanelSnapshot {
     std::vector<RuntimeEntitySnapshot> cameraEntities;
     std::vector<InspectorModelOption> models;
     std::vector<InspectorEnvironmentOption> environments;
-    bool selectedLightLimitExceeded = false;
+    InspectorLightUploadStatus selectedLightUploadStatus =
+        InspectorLightUploadStatus::Ineffective;
+    InspectorLightShadowStatus selectedLightShadowStatus =
+        InspectorLightShadowStatus::Disabled;
     bool editable = false;
 };
 

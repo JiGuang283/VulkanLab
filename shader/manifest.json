@@ -11,13 +11,15 @@
       "id": "forward.pbr-lite",
       "contract": "main-forward",
       "vertex": "pbr_lite/forward.vert",
-      "fragment": "pbr_lite/forward.frag"
+      "fragment": "pbr_lite/forward.frag",
+      "sceneLights": true
     },
     {
       "id": "forward.pbr-lite-normal-mapped",
       "contract": "main-forward",
       "vertex": "pbr_lite/forward_normal_mapped.vert",
-      "fragment": "pbr_lite/forward_normal_mapped.frag"
+      "fragment": "pbr_lite/forward_normal_mapped.frag",
+      "sceneLights": true
     },
     {
       "id": "debug.base-color",

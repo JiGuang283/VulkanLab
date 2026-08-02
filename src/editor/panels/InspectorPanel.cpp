@@ -225,18 +225,56 @@ void InspectorPanel::draw(const InspectorPanelSnapshot &snapshot,
                                 : std::nullopt);
                 }
                 if (entity.light) {
-                    if (snapshot.selectedLightLimitExceeded) {
+                    ImGui::TextDisabled("Entity enabled: %s",
+                                        entity.enabled ? "Yes" : "No");
+                    ImGui::TextDisabled("Effective enabled: %s",
+                                        entity.effectiveEnabled ? "Yes"
+                                                                : "No");
+                    if (snapshot.selectedLightUploadStatus ==
+                        InspectorLightUploadStatus::NotUploaded) {
                         ImGui::TextColored(
                             editor::statusColor(editor::StatusTone::Warning),
                             "Not uploaded: GPU light limit reached");
+                    } else if (snapshot.selectedLightUploadStatus ==
+                               InspectorLightUploadStatus::Ineffective) {
+                        ImGui::TextDisabled("Upload: Ineffective");
+                    } else {
+                        ImGui::TextDisabled("Upload: Active");
                     }
+                    const char *shadowStatus = "Disabled";
+                    switch (snapshot.selectedLightShadowStatus) {
+                    case InspectorLightShadowStatus::Active:
+                        shadowStatus = "Active";
+                        break;
+                    case InspectorLightShadowStatus::Eligible:
+                        shadowStatus = "Eligible";
+                        break;
+                    case InspectorLightShadowStatus::Disabled:
+                        shadowStatus = "Disabled";
+                        break;
+                    case InspectorLightShadowStatus::Unsupported:
+                        shadowStatus = "Unsupported";
+                        break;
+                    }
+                    ImGui::TextDisabled("Shadow: %s", shadowStatus);
                     LightComponentDocument light = *entity.light;
                     int type = static_cast<int>(light.type);
                     const char *types[] = {"Directional", "Point", "Spot"};
                     if (ImGui::Combo("Type", &type, types, 3) &&
                         actions.setLight) {
                         light.type = static_cast<SceneDocumentLightType>(type);
+                        light.castsShadow =
+                            light.type ==
+                            SceneDocumentLightType::Directional;
                         actions.setLight(entity.id, light);
+                    }
+                    if (light.type == SceneDocumentLightType::Directional) {
+                        bool castsShadow = light.castsShadow;
+                        if (ImGui::Checkbox("Casts Shadow", &castsShadow) &&
+                            actions.setLight) {
+                            light.castsShadow = castsShadow;
+                            actions.setLight(entity.id, light);
+                        }
                     }
                     bool changed = ImGui::ColorEdit3("Color", &light.color.x);
                     beginContinuousIfNeeded(changed, lightEditing_,

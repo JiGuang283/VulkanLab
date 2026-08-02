@@ -131,9 +131,6 @@ void checkGlobalUbo(const SpvReflectDescriptorBinding &binding,
         {"ambientColorIntensity",
          offsetof(vkr::GlobalFrameUbo, ambientColorIntensity)},
         {"lightCounts", offsetof(vkr::GlobalFrameUbo, lightCounts)},
-        {"directionalLights",
-         offsetof(vkr::GlobalFrameUbo, directionalLights)},
-        {"punctualLights", offsetof(vkr::GlobalFrameUbo, punctualLights)},
         {"directionalShadowViewProj",
          offsetof(vkr::GlobalFrameUbo, directionalShadowViewProj)},
         {"shadowParams", offsetof(vkr::GlobalFrameUbo, shadowParams)},
@@ -142,6 +139,41 @@ void checkGlobalUbo(const SpvReflectDescriptorBinding &binding,
     };
     checkBlockLayout(binding.block, sizeof(vkr::GlobalFrameUbo), members,
                      "GlobalFrameUbo", path);
+}
+
+void checkSceneLightBuffer(const SpvReflectDescriptorBinding &binding,
+                           std::string_view path) {
+    requireShader(binding.block.member_count == 1,
+                  "SceneLightBuffer member count mismatch in " +
+                      std::string(path));
+    const SpvReflectBlockVariable &lights = binding.block.members[0];
+    requireShader(variableName(lights.name) == "lights",
+                  "SceneLightBuffer is missing lights[] in " +
+                      std::string(path));
+    requireShader(lights.array.dims_count == 1 &&
+                      lights.array.dims[0] == SPV_REFLECT_ARRAY_DIM_RUNTIME &&
+                      lights.array.stride == sizeof(vkr::GpuLight),
+                  "GpuLight runtime-array stride mismatch in " +
+                      std::string(path));
+    requireShader(lights.member_count == 4,
+                  "GpuLight member count mismatch in " + std::string(path));
+    static const std::vector<MemberLayout> members = {
+        {"positionRange", offsetof(vkr::GpuLight, positionRange)},
+        {"directionInnerCos", offsetof(vkr::GpuLight, directionInnerCos)},
+        {"colorIntensity", offsetof(vkr::GpuLight, colorIntensity)},
+        {"params", offsetof(vkr::GpuLight, params)},
+    };
+    for (const auto &[expectedName, expectedOffset] : members) {
+        const auto *member = std::find_if(
+            lights.members, lights.members + lights.member_count,
+            [expectedName](const SpvReflectBlockVariable &candidate) {
+                return candidate.name && candidate.name == expectedName;
+            });
+        requireShader(member != lights.members + lights.member_count &&
+                          member->offset == expectedOffset,
+                      "GpuLight." + std::string(expectedName) +
+                          " layout mismatch in " + std::string(path));
+    }
 }
 
 void checkPushConstant(const SpvReflectShaderModule &module,
@@ -204,7 +236,8 @@ void checkPushConstant(const SpvReflectShaderModule &module,
 }
 
 void checkDescriptors(const ReflectedModule &reflected,
-                      vkr::ShaderProgramContract contract) {
+                      vkr::ShaderProgramContract contract,
+                      bool expectsSceneLights) {
     const auto &module = reflected.module();
     const auto bindings = enumerateVariables<SpvReflectDescriptorBinding>(
         module, spvReflectEnumerateDescriptorBindings, "descriptor bindings",
@@ -241,6 +274,7 @@ void checkDescriptors(const ReflectedModule &reflected,
             std::string::npos;
     const VkShaderStageFlags stage =
         static_cast<VkShaderStageFlags>(module.shader_stage);
+    bool foundSceneLights = false;
 
     for (const SpvReflectDescriptorBinding *binding : bindings) {
         requireShader(binding->count == 1,
@@ -274,6 +308,15 @@ void checkDescriptors(const ReflectedModule &reflected,
                           "global descriptor contract mismatch in " +
                               reflected.path());
             checkGlobalUbo(*binding, reflected.path());
+        } else if (binding->set == 0 && binding->binding == 1) {
+            requireShader(
+                binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER &&
+                    stage == VK_SHADER_STAGE_FRAGMENT_BIT,
+                "scene light descriptor contract mismatch in " +
+                    reflected.path());
+            checkSceneLightBuffer(*binding, reflected.path());
+            foundSceneLights = true;
         } else if (binding->set == 1 && binding->binding < 5) {
             requireShader(
                 binding->descriptor_type ==
@@ -294,6 +337,10 @@ void checkDescriptors(const ReflectedModule &reflected,
                 std::to_string(binding->binding) + " in " + reflected.path());
         }
     }
+    requireShader(foundSceneLights == expectsSceneLights,
+                  expectsSceneLights
+                      ? "missing scene light SSBO in " + reflected.path()
+                      : "unexpected scene light SSBO in " + reflected.path());
 }
 
 void checkVertexInputs(const ReflectedModule &reflected,
@@ -401,16 +448,23 @@ void testShaderContracts() {
         vkr::ShaderRegistry::load(shaderRoot / "manifest.json");
     std::map<std::string, std::unique_ptr<ReflectedModule>> modules;
     std::map<std::string, vkr::ShaderProgramContract> moduleContracts;
+    std::map<std::string, bool> moduleSceneLightContracts;
     const auto reflect =
         [&](const std::string &absolutePath, const std::string &sourcePath,
             SpvReflectShaderStageFlagBits expectedStage,
-            vkr::ShaderProgramContract contract) -> ReflectedModule & {
+            vkr::ShaderProgramContract contract,
+            bool expectsSceneLights) -> ReflectedModule & {
         const auto existing = modules.find(absolutePath);
         if (existing != modules.end()) {
             requireShader(moduleContracts.at(absolutePath) == contract,
                           "a shader module is shared across incompatible "
                           "contracts: " +
                               sourcePath);
+            requireShader(
+                moduleSceneLightContracts.at(absolutePath) ==
+                    expectsSceneLights,
+                "a shader module is shared across incompatible scene-light "
+                "contracts: " + sourcePath);
             return *existing->second;
         }
         const std::string runtimePath = "shader/" + sourcePath + ".spv";
@@ -418,13 +472,14 @@ void testShaderContracts() {
             runtimePath, std::filesystem::path(absolutePath));
         requireShader(reflected->module().shader_stage == expectedStage,
                       "stage mismatch in " + runtimePath);
-        checkDescriptors(*reflected, contract);
+        checkDescriptors(*reflected, contract, expectsSceneLights);
         checkPushConstant(reflected->module(), contract, reflected->path());
         checkVertexInputs(*reflected, contract);
         checkFragmentOutputs(*reflected, contract);
         ReflectedModule &result = *reflected;
         modules.emplace(absolutePath, std::move(reflected));
         moduleContracts.emplace(absolutePath, contract);
+        moduleSceneLightContracts.emplace(absolutePath, expectsSceneLights);
         return result;
     };
 
@@ -434,18 +489,18 @@ void testShaderContracts() {
         if (!program.vertSpvPath.empty()) {
             vertex = &reflect(program.vertSpvPath, program.vertexSourcePath,
                               SPV_REFLECT_SHADER_STAGE_VERTEX_BIT,
-                              program.contract);
+                              program.contract, false);
         }
         if (!program.fragSpvPath.empty()) {
             fragment = &reflect(program.fragSpvPath,
                                 program.fragmentSourcePath,
                                 SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT,
-                                program.contract);
+                                program.contract, program.usesSceneLights);
         }
         if (!program.computeSpvPath.empty()) {
             (void)reflect(program.computeSpvPath, program.computeSourcePath,
                           SPV_REFLECT_SHADER_STAGE_COMPUTE_BIT,
-                          program.contract);
+                          program.contract, false);
         }
         if (vertex)
             checkProgramInterface(*vertex, fragment);

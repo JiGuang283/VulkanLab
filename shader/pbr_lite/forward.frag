@@ -2,6 +2,7 @@
 
 #extension GL_GOOGLE_include_directive : require
 #include "include/global_frame.glsl"
+#include "include/scene_lights.glsl"
 #include "include/material_push.glsl"
 #include "include/ibl.glsl"
 
@@ -174,37 +175,57 @@ vec3 evaluateDirectLighting(vec3 n, vec3 v, vec3 positionWS, vec3 albedo,
                             float roughness, float metallic)
 {
     vec3 direct = vec3(0.0);
-    int directionalCount =
-        min(int(ubo.lightCounts.x + 0.5), MAX_DIRECTIONAL_LIGHTS);
-    int punctualCount = min(int(ubo.lightCounts.y + 0.5), MAX_PUNCTUAL_LIGHTS);
+    uint directionalCount = ubo.lightCounts.x;
+    uint pointCount = ubo.lightCounts.y;
+    uint spotCount = ubo.lightCounts.z;
+    int shadowLightIndex = int(ubo.shadowParams.w);
 
-    for (int i = 0; i < directionalCount; ++i) {
-        GpuLight light = ubo.directionalLights[i];
+    for (uint i = 0u; i < directionalCount; ++i) {
+        GpuLight light = sceneLightBuffer.lights[i];
         vec3 l = normalize(light.directionInnerCos.xyz);
         vec3 radiance = light.colorIntensity.rgb * light.colorIntensity.a;
-        float visibility = i == 0 ? directionalShadowVisibility(positionWS)
-                                  : 1.0;
+        float visibility = int(i) == shadowLightIndex
+                               ? directionalShadowVisibility(positionWS)
+                               : 1.0;
         direct += visibility * evaluatePbrLight(
             n, v, l, radiance, albedo, roughness, metallic);
     }
 
-    for (int i = 0; i < punctualCount; ++i) {
-        GpuLight light = ubo.punctualLights[i];
+    uint pointOffset = directionalCount;
+    for (uint i = 0u; i < pointCount; ++i) {
+        GpuLight light = sceneLightBuffer.lights[pointOffset + i];
         vec3 toLight = light.positionRange.xyz - positionWS;
         float distanceToLight = length(toLight);
-        if (distanceToLight <= 0.0001)
+        if (distanceToLight <= 0.0001 ||
+            (light.positionRange.w > 0.0 &&
+             distanceToLight >= light.positionRange.w))
             continue;
 
         vec3 l = toLight / distanceToLight;
         float attenuation = rangeAttenuation(distanceToLight,
                                              light.positionRange.w);
-        int lightType = int(light.params.x + 0.5);
-        if (lightType == LIGHT_TYPE_SPOT) {
-            attenuation *= spotAttenuation(l, light.directionInnerCos.xyz,
-                                           light.directionInnerCos.w,
-                                           light.params.y);
-        }
+        vec3 radiance = light.colorIntensity.rgb * light.colorIntensity.a *
+                        attenuation;
+        direct += evaluatePbrLight(n, v, l, radiance, albedo, roughness,
+                                   metallic);
+    }
 
+    uint spotOffset = pointOffset + pointCount;
+    for (uint i = 0u; i < spotCount; ++i) {
+        GpuLight light = sceneLightBuffer.lights[spotOffset + i];
+        vec3 toLight = light.positionRange.xyz - positionWS;
+        float distanceToLight = length(toLight);
+        if (distanceToLight <= 0.0001 ||
+            (light.positionRange.w > 0.0 &&
+             distanceToLight >= light.positionRange.w))
+            continue;
+
+        vec3 l = toLight / distanceToLight;
+        float attenuation = rangeAttenuation(distanceToLight,
+                                             light.positionRange.w);
+        attenuation *= spotAttenuation(l, light.directionInnerCos.xyz,
+                                       light.directionInnerCos.w,
+                                       light.params.y);
         vec3 radiance = light.colorIntensity.rgb * light.colorIntensity.a *
                         attenuation;
         direct += evaluatePbrLight(n, v, l, radiance, albedo, roughness,

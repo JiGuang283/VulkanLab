@@ -1,6 +1,7 @@
 #include "ModelLight.h"
 
 #include <cmath>
+#include <utility>
 
 namespace vkr {
 namespace {
@@ -17,9 +18,16 @@ glm::vec3 transformDirection(const glm::mat4 &transform,
 } // namespace
 
 SceneLight instantiateModelLight(const ModelLightPrototype &prototype,
-                                 const glm::mat4 &rootToWorld) {
+                                 const glm::mat4 &rootToWorld,
+                                 std::string stableKey,
+                                 std::optional<PersistentEntityId>
+                                     ownerEntity) {
     SceneLight light{};
     light.debugName = prototype.debugName;
+    light.stableKey = std::move(stableKey);
+    light.source = SceneLightSource::ImportedModel;
+    light.ownerEntity = std::move(ownerEntity);
+    light.castsShadow = prototype.castsShadow;
     light.type = prototype.type;
     light.positionWS = glm::vec3(rootToWorld *
                                 glm::vec4(prototype.positionAS, 1.0f));

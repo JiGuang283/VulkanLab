@@ -190,7 +190,8 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
                 "programs[" + std::to_string(index) + "]";
             rejectUnknownFields(
                 item, field,
-                {"id", "contract", "vertex", "fragment", "compute"});
+                {"id", "contract", "vertex", "fragment", "compute",
+                 "sceneLights"});
 
             ShaderProgram program;
             program.id = requiredString(item, "id", field);
@@ -202,6 +203,7 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
             }
             program.contract = parseContract(
                 requiredString(item, "contract", field), field + ".contract");
+            program.usesSceneLights = item.value("sceneLights", false);
 
             const std::string vertex = optionalString(item, "vertex", field);
             const std::string fragment =
@@ -220,6 +222,12 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
                     validateSourcePath(compute, ".comp", field + ".compute");
             }
             validateProgramStages(program, field);
+            if (program.usesSceneLights &&
+                program.contract != ShaderProgramContract::MainForward) {
+                throw fieldError(field + ".sceneLights",
+                                 "only main-forward programs may consume "
+                                 "scene lights");
+            }
             program.vertSpvPath = resolveSpirvPath(
                 shaderRoot, program.vertexSourcePath, field + ".vertex");
             program.fragSpvPath = resolveSpirvPath(

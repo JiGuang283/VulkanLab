@@ -90,7 +90,9 @@ void Scene::rebuildDerivedState() {
                                      object.transform);
     }
 
-    for (const ModelInstance &instance : modelInstances_) {
+    for (size_t instanceIndex = 0; instanceIndex < modelInstances_.size();
+         ++instanceIndex) {
+        const ModelInstance &instance = modelInstances_[instanceIndex];
         if (!instance.visible)
             continue;
         const auto asset = instance.asset.asset();
@@ -102,9 +104,15 @@ void Scene::rebuildDerivedState() {
             if (material && seenMaterials.insert(material.get()).second)
                 materials_.push_back(material);
         }
-        for (const ModelLightPrototype &light : asset->lights)
-            lights_.push_back(
-                instantiateModelLight(light, instance.rootToWorld));
+        for (size_t lightIndex = 0; lightIndex < asset->lights.size();
+             ++lightIndex) {
+            const std::string stableKey =
+                "model-preview/" + asset->id.value() + "/" +
+                std::to_string(instanceIndex) + "/" +
+                std::to_string(lightIndex);
+            lights_.push_back(instantiateModelLight(
+                asset->lights[lightIndex], instance.rootToWorld, stableKey));
+        }
     }
 }
 

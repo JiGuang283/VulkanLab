@@ -26,6 +26,7 @@ struct ShaderProgram {
     std::string vertSpvPath;
     std::string fragSpvPath;
     std::string computeSpvPath;
+    bool usesSceneLights = false;
 };
 
 struct ShaderVariant {

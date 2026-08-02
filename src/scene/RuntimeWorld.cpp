@@ -524,6 +524,10 @@ void RuntimeWorld::rebuildDerivedState() {
         const LightComponentDocument &source = *entry->light;
         SceneLight light;
         light.debugName = entry->name;
+        light.stableKey = "entity/" + entry->id.toString();
+        light.source = SceneLightSource::ExplicitEntity;
+        light.ownerEntity = entry->id;
+        light.castsShadow = source.castsShadow;
         light.type = runtimeLightType(source.type);
         light.positionWS = glm::vec3(entry->transform.world[3]);
         light.color = source.color;
@@ -558,9 +562,15 @@ void RuntimeWorld::rebuildDerivedState() {
             if (material && seenMaterials.insert(material.get()).second)
                 materials_.push_back(material);
         }
-        for (const ModelLightPrototype &prototype : asset->lights)
-            lights_.push_back(
-                instantiateModelLight(prototype, entry->transform.world));
+        for (size_t lightIndex = 0; lightIndex < asset->lights.size();
+             ++lightIndex) {
+            const std::string stableKey =
+                "model/" + entry->id.toString() + "/" +
+                std::to_string(lightIndex);
+            lights_.push_back(instantiateModelLight(
+                asset->lights[lightIndex], entry->transform.world,
+                stableKey, entry->id));
+        }
     }
     derivedDirty_ = false;
 }

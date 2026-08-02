@@ -9,6 +9,8 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace vkr {
@@ -35,13 +37,25 @@ struct RenderViewInput {
 };
 
 struct RenderViewLightStats {
+    uint32_t effectiveLights = 0;
     uint32_t directionalLights = 0;
+    uint32_t pointLights = 0;
+    uint32_t spotLights = 0;
     uint32_t punctualLights = 0;
+    uint32_t totalLights = 0;
     uint32_t ignoredLights = 0;
+    std::vector<PersistentEntityId> ignoredEntityIds;
+    std::vector<std::string> ignoredStableKeys;
+    std::optional<PersistentEntityId> shadowCasterEntity;
+    std::string shadowCasterKey;
+    std::string shadowCasterName;
+    int32_t shadowCasterBufferIndex = -1;
+    bool shadowCasterActive = false;
 };
 
 struct RenderView {
     GlobalFrameUbo globalUbo{};
+    std::vector<GpuLight> sceneLights;
     DirectionalShadowFrameData directionalShadow{};
     RenderSettings settings{};
     RenderViewLightStats lightStats{};

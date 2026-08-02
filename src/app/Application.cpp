@@ -3195,6 +3195,31 @@ ControlJson Application::runtimeRenderStatus() {
             }
         }
     }
+    const SceneLightBufferStatus lightBufferStatus =
+        renderer_->sceneLightBufferStatus();
+    ControlJson lightCapacities = ControlJson::array();
+    for (const uint32_t capacity : lightBufferStatus.frameCapacities)
+        lightCapacities.push_back(capacity);
+    ControlJson ignoredLightEntities = ControlJson::array();
+    const size_t reportedIgnoredEntities =
+        std::min<size_t>(lastLightStats_.ignoredEntityIds.size(), 32);
+    for (size_t index = 0; index < reportedIgnoredEntities; ++index) {
+        ignoredLightEntities.push_back(
+            lastLightStats_.ignoredEntityIds[index].toString());
+    }
+    ControlJson shadowCaster = nullptr;
+    if (!lastLightStats_.shadowCasterKey.empty()) {
+        shadowCaster = {
+            {"key", lastLightStats_.shadowCasterKey},
+            {"name", lastLightStats_.shadowCasterName},
+            {"entityId",
+             lastLightStats_.shadowCasterEntity
+                 ? ControlJson(
+                       lastLightStats_.shadowCasterEntity->toString())
+                 : ControlJson(nullptr)},
+            {"bufferIndex", lastLightStats_.shadowCasterBufferIndex},
+            {"active", lastLightStats_.shadowCasterActive}};
+    }
     const VkExtent2D viewportRenderExtent = renderer_->viewportExtent();
     uint32_t viewportDisplayWidth = swapChain_->extent().width;
     uint32_t viewportDisplayHeight = swapChain_->extent().height;
@@ -3272,9 +3297,18 @@ ControlJson Application::runtimeRenderStatus() {
           {"fallbackSunActive",
            activeSceneLights == 0 && currentScene_ &&
                currentScene_->allowsFallbackSun()},
-          {"uploadedDirectional", lastUploadedDirectionalLights_},
-          {"uploadedPunctual", lastUploadedPunctualLights_},
-          {"ignored", lastIgnoredLights_}}},
+          {"effective", lastLightStats_.effectiveLights},
+          {"uploadedDirectional", lastLightStats_.directionalLights},
+          {"uploadedPoint", lastLightStats_.pointLights},
+          {"uploadedSpot", lastLightStats_.spotLights},
+          {"uploadedPunctual", lastLightStats_.punctualLights},
+          {"uploadedTotal", lastLightStats_.totalLights},
+          {"limit", lightBufferStatus.limit},
+          {"frameCapacities", std::move(lightCapacities)},
+          {"bufferBytes", lightBufferStatus.allocatedBytes},
+          {"ignored", lastLightStats_.ignoredLights},
+          {"ignoredEntityIds", std::move(ignoredLightEntities)},
+          {"shadowCaster", std::move(shadowCaster)}}},
         {"frameSerial", frameSync_->lastSubmittedSerial()},
         {"completedSubmissionSerial",
          frameSync_->completedSubmissionSerial()},
@@ -4775,13 +4809,37 @@ void Application::drawLightingPanel() {
                   currentScene_->lights().end(), isEffectiveSceneLight))
             : 0;
     if (ImGui::TreeNodeEx("Light Diagnostics")) {
+        const SceneLightBufferStatus bufferStatus =
+            renderer_->sceneLightBufferStatus();
         ImGui::Text("Scene lights: %zu", sceneLightCount);
         ImGui::Text("Active scene lights: %zu", effectiveSceneLightCount);
-        ImGui::Text("Uploaded: %u directional, %u punctual",
-                    lastUploadedDirectionalLights_,
-                    lastUploadedPunctualLights_);
-        if (lastIgnoredLights_ > 0)
-            ImGui::Text("Ignored: %u", lastIgnoredLights_);
+        ImGui::Text("Uploaded: %u / %u", lastLightStats_.totalLights,
+                    bufferStatus.limit);
+        ImGui::Text("Directional %u  Point %u  Spot %u",
+                    lastLightStats_.directionalLights,
+                    lastLightStats_.pointLights,
+                    lastLightStats_.spotLights);
+        ImGui::Text("Frame capacity: %u / %u",
+                    bufferStatus.frameCapacities[0],
+                    bufferStatus.frameCapacities[1]);
+        ImGui::Text("Light buffers: %.2f KiB",
+                    static_cast<double>(bufferStatus.allocatedBytes) /
+                        1024.0);
+        if (lastLightStats_.ignoredLights > 0)
+            ImGui::Text("Ignored: %u", lastLightStats_.ignoredLights);
+        if (!lastLightStats_.shadowCasterKey.empty()) {
+            const std::string &casterName =
+                lastLightStats_.shadowCasterName.empty()
+                    ? lastLightStats_.shadowCasterKey
+                    : lastLightStats_.shadowCasterName;
+            ImGui::Text("Shadow caster: %s", casterName.c_str());
+            ImGui::TextDisabled("Shadow: %s",
+                                lastLightStats_.shadowCasterActive
+                                    ? "Active"
+                                    : "Eligible");
+        } else {
+            ImGui::TextDisabled("Shadow caster: None");
+        }
         if (currentScene_ && !currentScene_->lights().empty()) {
             const auto &lights = currentScene_->lights();
             for (size_t index = 0; index < lights.size(); ++index) {
@@ -5824,18 +5882,8 @@ void Application::drawOutlinerPanel() {
     const std::vector<RuntimeEntitySnapshot> entities = world->entities();
     std::unordered_set<PersistentEntityId, PersistentEntityIdHash>
         lightLimitExceeded;
-    uint32_t directionalCount = 0;
-    uint32_t punctualCount = 0;
-    for (const RuntimeEntitySnapshot &entity : entities) {
-        if (!entity.effectiveEnabled || !entity.light)
-            continue;
-        if (entity.light->type == SceneDocumentLightType::Directional) {
-            if (directionalCount++ >= kMaxDirectionalLights)
-                lightLimitExceeded.insert(entity.id);
-        } else if (punctualCount++ >= kMaxPunctualLights) {
-            lightLimitExceeded.insert(entity.id);
-        }
-    }
+    lightLimitExceeded.insert(lastLightStats_.ignoredEntityIds.begin(),
+                              lastLightStats_.ignoredEntityIds.end());
     for (const RuntimeEntitySnapshot &entity : entities) {
         snapshot.entities.push_back(
             {entity.id, entity.parent, entity.name, entity.enabled,
@@ -5871,12 +5919,14 @@ void Application::drawOutlinerPanel() {
                 entity.name = "Point Light";
                 entity.light = LightComponentDocument{};
                 entity.light->type = SceneDocumentLightType::Point;
+                entity.light->castsShadow = false;
                 entity.light->range = 10.0f;
                 break;
             case OutlinerCreateKind::SpotLight:
                 entity.name = "Spot Light";
                 entity.light = LightComponentDocument{};
                 entity.light->type = SceneDocumentLightType::Spot;
+                entity.light->castsShadow = false;
                 entity.light->range = 10.0f;
                 break;
             case OutlinerCreateKind::Camera:
@@ -5988,19 +6038,38 @@ void Application::drawInspectorPanel() {
         if (entity.camera)
             snapshot.cameraEntities.push_back(entity);
     }
-    uint32_t directionalCount = 0;
-    uint32_t punctualCount = 0;
-    for (const RuntimeEntitySnapshot &entity : entities) {
-        if (!entity.effectiveEnabled || !entity.light)
-            continue;
-        bool exceeded = false;
-        if (entity.light->type == SceneDocumentLightType::Directional)
-            exceeded = directionalCount++ >= kMaxDirectionalLights;
-        else
-            exceeded = punctualCount++ >= kMaxPunctualLights;
-        if (exceeded && snapshot.entity &&
-            snapshot.entity->id == entity.id) {
-            snapshot.selectedLightLimitExceeded = true;
+    if (snapshot.entity && snapshot.entity->light) {
+        const RuntimeEntitySnapshot &entity = *snapshot.entity;
+        const LightComponentDocument &light = *entity.light;
+        const bool contributes =
+            entity.effectiveEnabled && std::isfinite(light.intensity) &&
+            light.intensity > 1.0e-5f && std::isfinite(light.color.r) &&
+            std::isfinite(light.color.g) && std::isfinite(light.color.b) &&
+            (light.color.r > 1.0e-5f || light.color.g > 1.0e-5f ||
+             light.color.b > 1.0e-5f);
+        const bool ignored =
+            std::find(lastLightStats_.ignoredEntityIds.begin(),
+                      lastLightStats_.ignoredEntityIds.end(), entity.id) !=
+            lastLightStats_.ignoredEntityIds.end();
+        snapshot.selectedLightUploadStatus =
+            ignored ? InspectorLightUploadStatus::NotUploaded
+                    : contributes ? InspectorLightUploadStatus::Active
+                                  : InspectorLightUploadStatus::Ineffective;
+
+        if (light.type != SceneDocumentLightType::Directional) {
+            snapshot.selectedLightShadowStatus =
+                InspectorLightShadowStatus::Unsupported;
+        } else if (!light.castsShadow) {
+            snapshot.selectedLightShadowStatus =
+                InspectorLightShadowStatus::Disabled;
+        } else {
+            const bool selectedCaster =
+                lastLightStats_.shadowCasterEntity &&
+                *lastLightStats_.shadowCasterEntity == entity.id;
+            snapshot.selectedLightShadowStatus =
+                selectedCaster && lastLightStats_.shadowCasterActive
+                    ? InspectorLightShadowStatus::Active
+                    : InspectorLightShadowStatus::Eligible;
         }
     }
     for (const CatalogModel &model : catalog_.models) {
@@ -6851,18 +6920,16 @@ void Application::mainLoop() {
             }
         }
         const RenderView renderView = buildRenderView(viewInput);
-        lastUploadedDirectionalLights_ =
-            renderView.lightStats.directionalLights;
-        lastUploadedPunctualLights_ = renderView.lightStats.punctualLights;
-        if (renderView.lightStats.ignoredLights != lastIgnoredLights_) {
+        if (renderView.lightStats.ignoredLights !=
+            lastLightStats_.ignoredLights) {
             if (renderView.lightStats.ignoredLights > 0) {
                 VKR_LOG_WARN(
                     "Lighting",
-                    "Ignored {} scene lights beyond GPU light limits.",
-                    renderView.lightStats.ignoredLights);
+                    "Ignored {} scene lights beyond the shared limit of {}.",
+                    renderView.lightStats.ignoredLights, kMaxSceneLights);
             }
-            lastIgnoredLights_ = renderView.lightStats.ignoredLights;
         }
+        lastLightStats_ = renderView.lightStats;
         {
             VKL_PROFILE_ZONE("RenderQueue Collect");
             renderQueue_.clear();
@@ -6888,6 +6955,15 @@ void Application::mainLoop() {
             profilePlotNumber(
                 "Frame/GraphicsPipelines",
                 static_cast<int64_t>(pipelineCache_->graphicsPipelineCount()));
+            profilePlotNumber(
+                "Lighting/Active",
+                static_cast<int64_t>(lastLightStats_.effectiveLights));
+            profilePlotNumber(
+                "Lighting/Uploaded",
+                static_cast<int64_t>(lastLightStats_.totalLights));
+            profilePlotNumber(
+                "Lighting/Ignored",
+                static_cast<int64_t>(lastLightStats_.ignoredLights));
             profilePlotNumber(
                 "Frame/ComputePipelines",
                 static_cast<int64_t>(pipelineCache_->computePipelineCount()));

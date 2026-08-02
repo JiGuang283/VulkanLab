@@ -35,6 +35,19 @@
 
 namespace vkr {
 
+namespace {
+
+constexpr uint32_t kInitialSceneLightCapacity = 16;
+
+uint32_t nextSceneLightCapacity(uint32_t required) {
+    uint32_t capacity = kInitialSceneLightCapacity;
+    while (capacity < required && capacity < kMaxSceneLights)
+        capacity *= 2;
+    return std::min(capacity, kMaxSceneLights);
+}
+
+} // namespace
+
 Renderer::Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
                    DescriptorAllocator &descriptorAllocator,
                    RendererShaderPaths shaderPaths)
@@ -43,6 +56,7 @@ Renderer::Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
       uniformBufferSize_(sizeof(GlobalFrameUbo)),
       shaderPaths_(std::move(shaderPaths)) {
     createUniformBuffers();
+    createSceneLightBuffers();
     createGlobalDescriptorSetLayout();
     createGlobalDescriptorSets();
     renderResources_ = std::make_unique<RenderResourceRegistry>(device);
@@ -81,6 +95,8 @@ Renderer::~Renderer() {
     retiredLightingGenerations_.clear();
     fallbackEnvironment_.reset();
     uniformBuffers_.clear();
+    for (auto &storage : sceneLightBuffers_)
+        storage.buffer.reset();
     vkDestroyDescriptorSetLayout(device_->logicalDevice(),
                                  lightingDescriptorSetLayout_, nullptr);
     vkDestroyDescriptorSetLayout(device_->logicalDevice(),
@@ -96,6 +112,18 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     VKL_PROFILE_ZONE("Renderer::renderFrame");
     std::memcpy(uniformBuffers_[frame.frameIndex]->mappedData(),
                 &view.globalUbo, sizeof(view.globalUbo));
+    ensureSceneLightCapacity(
+        frame.frameIndex,
+        static_cast<uint32_t>(view.sceneLights.size()));
+    FrameSceneLightStorage &lightStorage =
+        sceneLightBuffers_.at(frame.frameIndex);
+    if (!view.sceneLights.empty()) {
+        std::memcpy(lightStorage.buffer->mappedData(),
+                    view.sceneLights.data(),
+                    view.sceneLights.size() * sizeof(GpuLight));
+    }
+    activeSceneLightCount_ =
+        static_cast<uint32_t>(view.sceneLights.size());
     collectRetiredLightingGenerations();
 
     RenderFrameContext renderFrame{};
@@ -188,18 +216,58 @@ void Renderer::createUniformBuffers() {
     }
 }
 
+void Renderer::createSceneLightBuffers() {
+    for (uint32_t frame = 0; frame < sceneLightBuffers_.size(); ++frame) {
+        FrameSceneLightStorage &storage = sceneLightBuffers_[frame];
+        storage.capacity = kInitialSceneLightCapacity;
+        storage.buffer = std::make_unique<Buffer>(
+            *device_, sizeof(GpuLight) * storage.capacity,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            0, "Frame/" + std::to_string(frame) + "/SceneLightBuffer");
+        storage.buffer->map();
+    }
+}
+
+void Renderer::ensureSceneLightCapacity(uint32_t frameIndex,
+                                        uint32_t requiredLights) {
+    if (requiredLights > kMaxSceneLights)
+        throw std::runtime_error("RenderView exceeded the scene light limit");
+
+    FrameSceneLightStorage &storage = sceneLightBuffers_.at(frameIndex);
+    if (requiredLights <= storage.capacity)
+        return;
+
+    const uint32_t capacity = nextSceneLightCapacity(requiredLights);
+    storage.buffer = std::make_unique<Buffer>(
+        *device_, sizeof(GpuLight) * capacity,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        0, "Frame/" + std::to_string(frameIndex) +
+               "/SceneLightBuffer/Capacity" + std::to_string(capacity));
+    storage.buffer->map();
+    storage.capacity = capacity;
+    updateSceneLightDescriptor(frameIndex);
+}
+
 void Renderer::createGlobalDescriptorSetLayout() {
-    VkDescriptorSetLayoutBinding uboLayoutBinding{};
-    uboLayoutBinding.binding = 0;
-    uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    uboLayoutBinding.descriptorCount = 1;
-    uboLayoutBinding.stageFlags =
+    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags =
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &uboLayoutBinding;
+    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
 
     VK_CHECK(vkCreateDescriptorSetLayout(device_->logicalDevice(), &layoutInfo,
                                          nullptr,
@@ -217,7 +285,8 @@ void Renderer::createGlobalDescriptorSets() {
     for (uint32_t frame = 0; frame < globalDescriptorSets_.size(); ++frame) {
         globalDescriptorSets_[frame] = descriptorAllocator_->allocate(
             globalDescriptorSetLayout_,
-            {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}},
+            {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
+             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1}},
             "Frame/" + std::to_string(frame) + "/GlobalDescriptorSet");
     }
 
@@ -227,18 +296,45 @@ void Renderer::createGlobalDescriptorSets() {
         bufferInfo.offset = 0;
         bufferInfo.range = uniformBufferSize_;
 
-        VkWriteDescriptorSet descriptorWrite{};
-        descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrite.dstSet = globalDescriptorSets_[i];
-        descriptorWrite.dstBinding = 0;
-        descriptorWrite.dstArrayElement = 0;
-        descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        descriptorWrite.descriptorCount = 1;
-        descriptorWrite.pBufferInfo = &bufferInfo;
+        VkDescriptorBufferInfo lightBufferInfo{};
+        lightBufferInfo.buffer = sceneLightBuffers_[i].buffer->handle();
+        lightBufferInfo.offset = 0;
+        lightBufferInfo.range = VK_WHOLE_SIZE;
 
-        vkUpdateDescriptorSets(device_->logicalDevice(), 1, &descriptorWrite, 0,
-                               nullptr);
+        std::array<VkWriteDescriptorSet, 2> writes{};
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = globalDescriptorSets_[i];
+        writes[0].dstBinding = 0;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[0].descriptorCount = 1;
+        writes[0].pBufferInfo = &bufferInfo;
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = globalDescriptorSets_[i];
+        writes[1].dstBinding = 1;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[1].descriptorCount = 1;
+        writes[1].pBufferInfo = &lightBufferInfo;
+
+        vkUpdateDescriptorSets(device_->logicalDevice(),
+                               static_cast<uint32_t>(writes.size()),
+                               writes.data(), 0, nullptr);
     }
+}
+
+void Renderer::updateSceneLightDescriptor(uint32_t frameIndex) {
+    VkDescriptorBufferInfo bufferInfo{};
+    bufferInfo.buffer = sceneLightBuffers_.at(frameIndex).buffer->handle();
+    bufferInfo.offset = 0;
+    bufferInfo.range = VK_WHOLE_SIZE;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = globalDescriptorSets_.at(frameIndex);
+    write.dstBinding = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    write.descriptorCount = 1;
+    write.pBufferInfo = &bufferInfo;
+    vkUpdateDescriptorSets(device_->logicalDevice(), 1, &write, 0, nullptr);
 }
 
 void Renderer::createLightingDescriptorSetLayout() {
@@ -442,6 +538,18 @@ bool Renderer::bloomSupported() const {
 
 const std::string &Renderer::bloomUnsupportedReason() const {
     return device_->computeBloomSupport().reason;
+}
+
+SceneLightBufferStatus Renderer::sceneLightBufferStatus() const {
+    SceneLightBufferStatus status{};
+    status.activeLights = activeSceneLightCount_;
+    for (uint32_t frame = 0; frame < sceneLightBuffers_.size(); ++frame) {
+        status.frameCapacities[frame] = sceneLightBuffers_[frame].capacity;
+        status.allocatedBytes +=
+            static_cast<uint64_t>(sceneLightBuffers_[frame].capacity) *
+            sizeof(GpuLight);
+    }
+    return status;
 }
 
 void Renderer::createRenderPipeline() {

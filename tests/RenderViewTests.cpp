@@ -40,7 +40,7 @@ void testDefaultSunAndFrameData() {
                 "camera position was not packed into the frame UBO");
     requireView(view.globalUbo.ambientColorIntensity.w == 0.0f,
                 "negative ambient intensity was not clamped");
-    requireView(view.globalUbo.directionalLights[0].colorIntensity.w == 4.0f,
+    requireView(view.sceneLights[0].colorIntensity.w == 4.0f,
                 "default sun intensity was not packed");
 }
 
@@ -63,12 +63,13 @@ void testSceneWithoutDirectionalLightDisablesShadow() {
 
 void testGpuLightLimits() {
     std::vector<vkr::SceneLight> lights;
-    for (uint32_t i = 0; i < vkr::kMaxDirectionalLights + 1; ++i) {
-        vkr::SceneLight light{};
-        light.type = vkr::LightType::Directional;
-        lights.push_back(light);
-    }
-    for (uint32_t i = 0; i < vkr::kMaxPunctualLights + 2; ++i) {
+    vkr::SceneLight shadowLight{};
+    shadowLight.type = vkr::LightType::Directional;
+    shadowLight.castsShadow = true;
+    shadowLight.source = vkr::SceneLightSource::ExplicitEntity;
+    shadowLight.stableKey = "entity/shadow";
+    lights.push_back(shadowLight);
+    for (uint32_t i = 0; i < vkr::kMaxSceneLights + 2; ++i) {
         vkr::SceneLight light{};
         light.type = vkr::LightType::Point;
         lights.push_back(light);
@@ -79,13 +80,16 @@ void testGpuLightLimits() {
     input.sceneLights = &lights;
     const vkr::RenderView view = vkr::buildRenderView(input);
 
-    requireView(view.lightStats.directionalLights ==
-                    vkr::kMaxDirectionalLights,
-                "directional light limit was not enforced");
-    requireView(view.lightStats.punctualLights == vkr::kMaxPunctualLights,
-                "punctual light limit was not enforced");
+    requireView(view.lightStats.directionalLights == 1,
+                "shadow-casting directional light was not retained");
+    requireView(view.lightStats.pointLights == vkr::kMaxSceneLights - 1,
+                "shared scene light limit was not enforced");
+    requireView(view.lightStats.totalLights == vkr::kMaxSceneLights,
+                "scene light upload count is incorrect");
     requireView(view.lightStats.ignoredLights == 3,
                 "ignored light count is incorrect");
+    requireView(view.lightStats.shadowCasterBufferIndex == 0,
+                "shadow caster was not packed first");
 }
 
 void testEnvironmentFrameDataRequiresReadyResources() {

@@ -10,6 +10,7 @@
 #include "diagnostics/SceneLoadStats.h"
 #include "render/RenderQueue.h"
 #include "render/RenderSettings.h"
+#include "render/RenderView.h"
 #include "render/ShaderRegistry.h"
 #include "render/ShaderVariant.h"
 #include "scene/Camera.h"
@@ -319,9 +320,7 @@ class Application final
     glm::vec3 defaultSunDirection_{0.3f, 0.8f, 0.5f};
     glm::vec3 defaultSunColor_{1.0f};
     float     defaultSunIntensity_ = 3.0f;
-    uint32_t  lastUploadedDirectionalLights_ = 0;
-    uint32_t  lastUploadedPunctualLights_ = 0;
-    uint32_t  lastIgnoredLights_ = 0;
+    RenderViewLightStats lastLightStats_{};
     RenderSettings renderSettings_{};
 };
 
