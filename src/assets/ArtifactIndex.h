@@ -13,7 +13,7 @@
 namespace vkr {
 
 enum class ArtifactValidationMode { Fast, Admission };
-enum class ArtifactKind { Scene, Environment };
+enum class ArtifactKind { Model, Environment, SceneDocument };
 
 const char *artifactKindName(ArtifactKind kind);
 
@@ -29,8 +29,14 @@ struct ArtifactIndexBlob {
     uint64_t bytes = 0;
 };
 
+struct ArtifactIndexAssetReference {
+    ArtifactKind assetKind = ArtifactKind::Model;
+    std::string assetId;
+    std::string profileId;
+};
+
 struct ArtifactIndexRecord {
-    ArtifactKind assetKind = ArtifactKind::Scene;
+    ArtifactKind assetKind = ArtifactKind::Model;
     std::string assetId;
     std::string sceneId;
     std::string profileId;
@@ -45,6 +51,7 @@ struct ArtifactIndexRecord {
     std::string textureEncoder;
     std::string encoderSettings;
     std::vector<ArtifactIndexDependency> dependencies;
+    std::vector<ArtifactIndexAssetReference> assetReferences;
     std::vector<ArtifactIndexBlob> blobs;
     uint64_t lastSuccessfulImportTaskId = 0;
     int64_t lastSuccessfulImportUnixMs = 0;
@@ -69,7 +76,8 @@ struct ArtifactIndexUsage {
 class ArtifactIndex {
   public:
     static constexpr uint32_t kLegacySchemaVersion = 1;
-    static constexpr uint32_t kSchemaVersion = 3;
+    static constexpr uint32_t kPreviousSchemaVersion = 3;
+    static constexpr uint32_t kSchemaVersion = 4;
 
     static ArtifactIndex loadOrRebuild(
         const std::filesystem::path &cacheRoot,
@@ -87,6 +95,8 @@ class ArtifactIndex {
     void refreshEnvironment(const SceneCatalog &catalog,
                             const std::string &environmentId,
                             const std::string &profileId);
+    void refreshSceneDocument(const SceneCatalog &catalog,
+                              const std::string &sceneDocumentId);
     void recordFailure(const std::string &sceneId,
                        const std::string &profileId,
                        const std::string &code,
@@ -113,6 +123,8 @@ class ArtifactIndex {
     void refreshEnvironmentRecord(
         const CatalogEnvironment &environment,
         const EnvironmentProfile &profile);
+    void refreshSceneDocumentRecord(const SceneCatalog &catalog,
+                                    const CatalogSceneDocument &scene);
 
     std::filesystem::path cacheRoot_;
     std::filesystem::path projectRoot_;

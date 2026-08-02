@@ -3,6 +3,7 @@
 #include "ContentHash.h"
 #include "DerivedEnvironmentManifest.h"
 #include "DerivedTextureManifest.h"
+#include "scene_data/SceneDocument.h"
 
 #include <json.hpp>
 
@@ -17,6 +18,7 @@
 #include <set>
 #include <stdexcept>
 #include <system_error>
+#include <tuple>
 
 namespace vkr {
 namespace {
@@ -117,6 +119,14 @@ Json recordToJson(const ArtifactIndexRecord &record) {
     Json blobs = Json::array();
     for (const auto &blob : record.blobs)
         blobs.push_back(blobToJson(blob));
+    Json assetReferences = Json::array();
+    for (const ArtifactIndexAssetReference &reference :
+         record.assetReferences) {
+        assetReferences.push_back(
+            {{"assetKind", artifactKindName(reference.assetKind)},
+             {"assetId", reference.assetId},
+             {"profileId", reference.profileId}});
+    }
     return {{"assetKind", artifactKindName(record.assetKind)},
             {"assetId", record.assetId},
             {"sceneId", record.sceneId},
@@ -132,6 +142,7 @@ Json recordToJson(const ArtifactIndexRecord &record) {
             {"textureEncoder", record.textureEncoder},
             {"encoderSettings", record.encoderSettings},
             {"dependencies", std::move(dependencies)},
+            {"assetReferences", std::move(assetReferences)},
             {"blobs", std::move(blobs)},
             {"lastSuccessfulImportTaskId",
              record.lastSuccessfulImportTaskId},
@@ -147,23 +158,26 @@ ArtifactIndexRecord recordFromJson(const Json &json) {
     ArtifactIndexRecord record;
     const std::string kind =
         json.value("assetKind", std::string("Scene"));
-    record.assetKind =
-        kind == "Environment" ? ArtifactKind::Environment
-                              : ArtifactKind::Scene;
+    if (kind == "Environment")
+        record.assetKind = ArtifactKind::Environment;
+    else if (kind == "SceneDocument")
+        record.assetKind = ArtifactKind::SceneDocument;
+    else
+        record.assetKind = ArtifactKind::Model;
     record.sceneId = json.value("sceneId", std::string{});
     record.assetId = json.value(
-        "assetId", record.assetKind == ArtifactKind::Scene
+        "assetId", record.assetKind == ArtifactKind::Model
                        ? record.sceneId
                        : std::string{});
     if (record.assetId.empty())
         throw std::runtime_error("ArtifactIndex record has no asset ID");
-    if (record.assetKind == ArtifactKind::Scene && record.sceneId.empty())
+    if (record.assetKind == ArtifactKind::Model && record.sceneId.empty())
         record.sceneId = record.assetId;
-    record.profileId = json.at("profileId").get<std::string>();
-    record.textureLimit = json.at("textureLimit").get<uint32_t>();
+    record.profileId = json.value("profileId", std::string{});
+    record.textureLimit = json.value("textureLimit", 0u);
     record.state = stateFromName(json.value("state", "Invalid"));
     record.reason = json.value("reason", std::string{});
-    record.manifestPath = json.at("manifestPath").get<std::string>();
+    record.manifestPath = json.value("manifestPath", std::string{});
     record.manifestSize = json.value("manifestSize", uint64_t{0});
     record.manifestWriteTime = json.value("manifestWriteTime", int64_t{0});
     record.manifestSchema = json.value("manifestSchema", 0u);
@@ -176,6 +190,19 @@ ArtifactIndexRecord recordFromJson(const Json &json) {
              item.at("size").get<uint64_t>(),
              item.at("writeTime").get<int64_t>(),
              item.value("sha256", std::string{})});
+    }
+    for (const Json &item :
+         json.value("assetReferences", Json::array())) {
+        const std::string referenceKind =
+            item.at("assetKind").get<std::string>();
+        ArtifactKind kindValue = ArtifactKind::Model;
+        if (referenceKind == "Environment")
+            kindValue = ArtifactKind::Environment;
+        else if (referenceKind == "SceneDocument")
+            kindValue = ArtifactKind::SceneDocument;
+        record.assetReferences.push_back(
+            {kindValue, item.at("assetId").get<std::string>(),
+             item.value("profileId", std::string{})});
     }
     for (const Json &item : json.at("blobs")) {
         record.blobs.push_back({item.at("path").get<std::string>(),
@@ -226,7 +253,15 @@ void mergeTelemetry(ArtifactIndexRecord &target,
 } // namespace
 
 const char *artifactKindName(ArtifactKind kind) {
-    return kind == ArtifactKind::Environment ? "Environment" : "Scene";
+    switch (kind) {
+    case ArtifactKind::Model:
+        return "Model";
+    case ArtifactKind::Environment:
+        return "Environment";
+    case ArtifactKind::SceneDocument:
+        return "SceneDocument";
+    }
+    return "Model";
 }
 
 std::string artifactIndexKey(ArtifactKind kind, const std::string &assetId,
@@ -237,7 +272,7 @@ std::string artifactIndexKey(ArtifactKind kind, const std::string &assetId,
 
 std::string artifactIndexKey(const std::string &sceneId,
                              const std::string &profileId) {
-    return artifactIndexKey(ArtifactKind::Scene, sceneId, profileId);
+    return artifactIndexKey(ArtifactKind::Model, sceneId, profileId);
 }
 
 ArtifactIndex::ArtifactIndex(std::filesystem::path cacheRoot,
@@ -262,29 +297,47 @@ ArtifactIndex ArtifactIndex::loadOrRebuild(
         Json root;
         input >> root;
         const uint32_t schema = root.value("schemaVersion", 0u);
-        if (schema != kSchemaVersion ||
+        const bool migrationRequired =
+            schema == kLegacySchemaVersion ||
+            schema == kPreviousSchemaVersion;
+        if ((!migrationRequired && schema != kSchemaVersion) ||
             root.value("projectId", std::string{}) != catalog.projectId)
             throw std::runtime_error("index schema or project mismatch");
         for (const Json &item : root.at("records")) {
             ArtifactIndexRecord record = recordFromJson(item);
-            if (record.assetKind == ArtifactKind::Scene) {
+            if (record.assetKind == ArtifactKind::Model) {
                 if (!catalog.findModel(record.assetId) ||
                     catalog.importProfiles.count(record.profileId) == 0)
                     continue;
-            } else {
+            } else if (record.assetKind == ArtifactKind::Environment) {
                 if (!catalog.findEnvironment(record.assetId) ||
                     catalog.environmentProfiles.count(record.profileId) == 0)
                     continue;
+            } else if (!catalog.findSceneDocument(record.assetId)) {
+                continue;
             }
             index.records_.emplace(
                 artifactIndexKey(record.assetKind, record.assetId,
                                  record.profileId),
                 std::move(record));
         }
+        input.close();
+        for (const CatalogSceneDocument &scene : catalog.sceneDocuments) {
+            const std::string key = artifactIndexKey(
+                ArtifactKind::SceneDocument, scene.id, std::string{});
+            if (index.records_.count(key) == 0)
+                index.refreshSceneDocumentRecord(catalog, scene);
+        }
+        if (migrationRequired) {
+            index.replaceAllOnSave_ = true;
+            index.save();
+        } else if (!index.dirtyKeys_.empty()) {
+            index.save();
+        }
         if (rebuilt)
             *rebuilt = false;
         if (diagnostic)
-            *diagnostic = "loaded";
+            *diagnostic = migrationRequired ? "migrated" : "loaded";
         return index;
     } catch (const std::exception &error) {
         if (diagnostic)
@@ -320,6 +373,8 @@ ArtifactIndex ArtifactIndex::rebuild(const std::filesystem::path &cacheRoot,
                 index.refreshEnvironmentRecord(environment, profile.second);
         }
     }
+    for (const CatalogSceneDocument &scene : catalog.sceneDocuments)
+        index.refreshSceneDocumentRecord(catalog, scene);
     return index;
 }
 
@@ -330,7 +385,7 @@ void ArtifactIndex::refreshRecord(const CatalogModel &scene,
     const bool sameManifest = existing != records_.end() &&
                               existing->second.manifestSize != 0;
     ArtifactIndexRecord record;
-    record.assetKind = ArtifactKind::Scene;
+    record.assetKind = ArtifactKind::Model;
     record.assetId = scene.id;
     record.sceneId = scene.id;
     record.profileId = profile.id;
@@ -490,6 +545,73 @@ void ArtifactIndex::refreshEnvironmentRecord(
     dirtyKeys_.insert(key);
 }
 
+void ArtifactIndex::refreshSceneDocumentRecord(
+    const SceneCatalog &catalog, const CatalogSceneDocument &scene) {
+    const std::string key = artifactIndexKey(
+        ArtifactKind::SceneDocument, scene.id, std::string{});
+    ArtifactIndexRecord record;
+    record.assetKind = ArtifactKind::SceneDocument;
+    record.assetId = scene.id;
+    record.profileId.clear();
+    const std::filesystem::path path =
+        (projectRoot_ / scene.source).lexically_normal();
+    record.manifestPath = relativeGeneric(projectRoot_, path);
+    const DerivedFileStamp stamp = fileStamp(path);
+    record.manifestSize = stamp.size;
+    record.manifestWriteTime = stamp.writeTime;
+    if (stamp.size != 0) {
+        record.dependencies.push_back(
+            {record.manifestPath, stamp.size, stamp.writeTime,
+             sha256File(path)});
+    }
+
+    try {
+        const SceneDocumentReferences references = catalog.documentReferences();
+        const LoadedSceneDocument loaded = SceneDocumentService::load(
+            path, projectRoot_, &references);
+        if (loaded.document.id.value() != scene.id) {
+            throw std::runtime_error(
+                "Scene document ID does not match Catalog entry");
+        }
+        record.manifestSchema = loaded.document.schemaVersion;
+        std::set<std::tuple<std::string, std::string, std::string>> refs;
+        for (const SceneEntityDocument &entity : loaded.document.entities) {
+            if (!entity.modelInstance)
+                continue;
+            const std::string &modelId = entity.modelInstance->model.value();
+            const CatalogModel *model = catalog.findModel(modelId);
+            if (!model)
+                throw std::runtime_error("Unknown model reference: " + modelId);
+            refs.emplace("Model", modelId, model->importProfile);
+        }
+        if (loaded.document.environment) {
+            const std::string &environmentId =
+                loaded.document.environment->environmentId;
+            const CatalogEnvironment *environment =
+                catalog.findEnvironment(environmentId);
+            if (!environment) {
+                throw std::runtime_error("Unknown environment reference: " +
+                                         environmentId);
+            }
+            refs.emplace("Environment", environmentId,
+                         environment->environmentProfile);
+        }
+        for (const auto &[kind, id, profile] : refs) {
+            record.assetReferences.push_back(
+                {kind == "Environment" ? ArtifactKind::Environment
+                                       : ArtifactKind::Model,
+                 id, profile});
+        }
+        record.state = ArtifactState::Ready;
+        record.reason = "ready (scene document)";
+    } catch (const std::exception &error) {
+        record.state = ArtifactState::Invalid;
+        record.reason = error.what();
+    }
+    records_[key] = std::move(record);
+    dirtyKeys_.insert(key);
+}
+
 void ArtifactIndex::refresh(const SceneCatalog &catalog,
                             const std::string &sceneId,
                             const std::string &profileId) {
@@ -510,6 +632,17 @@ void ArtifactIndex::refreshEnvironment(
     }
     refreshEnvironmentRecord(
         *environment, catalog.environmentProfile(profileId));
+}
+
+void ArtifactIndex::refreshSceneDocument(
+    const SceneCatalog &catalog, const std::string &sceneDocumentId) {
+    const CatalogSceneDocument *scene =
+        catalog.findSceneDocument(sceneDocumentId);
+    if (!scene) {
+        throw std::runtime_error("Cannot index unknown scene document: " +
+                                 sceneDocumentId);
+    }
+    refreshSceneDocumentRecord(catalog, *scene);
 }
 
 ArtifactStatus ArtifactIndex::query(const ArtifactStatusRequest &request,
@@ -608,7 +741,7 @@ void ArtifactIndex::recordFailure(const std::string &sceneId,
                                   const std::filesystem::path &logPath) {
     ArtifactIndexRecord &record =
         records_[artifactIndexKey(sceneId, profileId)];
-    record.assetKind = ArtifactKind::Scene;
+    record.assetKind = ArtifactKind::Model;
     record.assetId = sceneId;
     record.sceneId = sceneId;
     record.profileId = profileId;
@@ -727,13 +860,18 @@ void ArtifactIndex::save() {
                 merged[key] = found->second;
                 continue;
             }
-            const std::filesystem::path manifest =
-                found->second.assetKind == ArtifactKind::Environment
-                    ? derivedEnvironmentManifestPath(
-                          cacheRoot_, found->second.assetId,
-                          found->second.profileId)
-                    : derivedManifestPath(cacheRoot_, found->second.assetId,
-                                          found->second.profileId);
+            std::filesystem::path manifest;
+            if (found->second.assetKind == ArtifactKind::Environment) {
+                manifest = derivedEnvironmentManifestPath(
+                    cacheRoot_, found->second.assetId,
+                    found->second.profileId);
+            } else if (found->second.assetKind == ArtifactKind::Model) {
+                manifest = derivedManifestPath(
+                    cacheRoot_, found->second.assetId,
+                    found->second.profileId);
+            } else {
+                manifest = projectRoot_ / found->second.manifestPath;
+            }
             const DerivedFileStamp current = fileStamp(manifest);
             const bool localIsCurrent =
                 found->second.manifestSize == current.size &&

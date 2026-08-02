@@ -308,9 +308,9 @@ void testEnvironmentRecordAndLegacyIndexCompatibility() {
         vkr::artifactIndexKey("scene-a", "desktop_512"));
     requireIndex(
         !rebuilt && legacy != index.records().end() &&
-            legacy->second.assetKind == vkr::ArtifactKind::Scene &&
+            legacy->second.assetKind == vkr::ArtifactKind::Model &&
             legacy->second.assetId == "scene-a",
-        "ArtifactIndex schema v1 record was not interpreted as a scene");
+        "legacy ArtifactIndex was not migrated as a model record");
 }
 
 } // namespace
