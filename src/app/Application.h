@@ -45,6 +45,7 @@ class ScenesPanel;
 class OutlinerPanel;
 class InspectorPanel;
 class SceneEditorSession;
+class SceneViewportController;
 #endif
 class CaptureService;
 struct RuntimeCommand;
@@ -246,6 +247,7 @@ class Application final
     std::unique_ptr<OutlinerPanel> outlinerPanel_;
     std::unique_ptr<InspectorPanel> inspectorPanel_;
     std::unique_ptr<SceneEditorSession> sceneEditorSession_;
+    std::unique_ptr<SceneViewportController> sceneViewportController_;
     struct ViewportResizeState {
         uint32_t desiredWidth = 0;
         uint32_t desiredHeight = 0;

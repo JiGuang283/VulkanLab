@@ -215,6 +215,7 @@ if(VKL_ENABLE_EDITOR_UI)
     list(APPEND VKL_ENGINE_SOURCES
         editor/EditorDockWorkspace.cpp
         editor/SceneEditorSession.cpp
+        editor/SceneViewportController.cpp
         editor/EditorTheme.cpp
         editor/EditorWidgets.cpp
         editor/panels/AssetsPanel.cpp

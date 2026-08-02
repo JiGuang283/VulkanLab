@@ -681,6 +681,7 @@ std::vector<RuntimeEntitySnapshot> RuntimeWorld::entities() const {
 
 std::optional<RuntimeEntitySnapshot>
 RuntimeWorld::entity(EntityHandle handle) const {
+    const_cast<RuntimeWorld *>(this)->rebuildDerivedState();
     const Slot *entry = slot(handle);
     if (!entry)
         return std::nullopt;

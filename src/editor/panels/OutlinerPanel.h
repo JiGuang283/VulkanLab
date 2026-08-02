@@ -44,6 +44,9 @@ struct OutlinerPanelActions {
     std::function<void(PersistentEntityId, bool)> setEnabled;
     std::function<void(PersistentEntityId)> duplicate;
     std::function<void(PersistentEntityId)> remove;
+    std::function<void(PersistentEntityId,
+                       std::optional<PersistentEntityId>)>
+        reparent;
 };
 
 class OutlinerPanel {

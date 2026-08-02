@@ -7,6 +7,8 @@
 
 namespace vkr {
 
+struct EditorViewportState;
+
 struct EditorFrameStatus {
     std::string sceneName;
     std::string loadingLabel;
@@ -25,6 +27,7 @@ struct EditorPanelCallbacks {
     std::function<void()> materials;
     std::function<void()> diagnostics;
     std::function<void()> viewportToolbar;
+    std::function<void(const EditorViewportState &)> viewportOverlay;
 
     bool sceneSessionActive = false;
     bool sceneDirty = false;

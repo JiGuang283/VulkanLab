@@ -30,6 +30,7 @@ struct SceneWorkflowItemSnapshot {
     bool canAuthor = false;
     bool canLoadSource = false;
     bool canEditCatalog = false;
+    bool canInstantiate = false;
 };
 
 struct SceneWorkflowSnapshot {

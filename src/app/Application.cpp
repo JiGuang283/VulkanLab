@@ -34,6 +34,7 @@
 #if VKL_ENABLE_EDITOR_UI
 #include "editor/EditorDockWorkspace.h"
 #include "editor/SceneEditorSession.h"
+#include "editor/SceneViewportController.h"
 #include "editor/EditorWidgets.h"
 #include "editor/panels/AssetsPanel.h"
 #include "editor/panels/InspectorPanel.h"
@@ -797,6 +798,8 @@ Application::Application(const Config &config, ProjectContext projectContext,
     outlinerPanel_ = std::make_unique<OutlinerPanel>();
     inspectorPanel_ = std::make_unique<InspectorPanel>();
     sceneEditorSession_ = std::make_unique<SceneEditorSession>();
+    sceneViewportController_ =
+        std::make_unique<SceneViewportController>();
 #endif
 #if VKL_ENABLE_RUNTIME_CONTROL
     runtimeControlPipeName_ =
@@ -3598,6 +3601,9 @@ void Application::updateInputMode() {
         if (overSceneArea)
             overUI = false;
         overUI = overUI || (io && ImGui::IsAnyItemActive());
+        overUI = overUI ||
+                 (sceneViewportController_ &&
+                  sceneViewportController_->blocksViewportInput());
 #else
         constexpr bool overSceneArea = true;
 #endif
@@ -3874,6 +3880,13 @@ void Application::drawScenePanel(bool modelsOnly) {
             item.canEditCatalog =
                 projectContext_.catalogWritable &&
                 config_.assetImportMode == AssetImportMode::OnDemand;
+            const CatalogModel *catalogModel =
+                catalog_.findModel(entry.id);
+            item.canInstantiate =
+                sceneEditorSession_ && sceneEditorSession_->active() &&
+                projectContext_.catalogWritable && item.available &&
+                !entry.builtin && catalogModel &&
+                catalogModel->type != "builtin";
         }
         for (SceneWorkflowItemSnapshot &item : snapshot.nativeScenes)
             item.current = item.index == currentSceneIndex_;
@@ -5916,6 +5929,38 @@ void Application::drawOutlinerPanel() {
         sceneEditorSession_->select(rootId);
         duplicateSelectedEditorEntity();
     };
+    actions.reparent =
+        [this](PersistentEntityId childId,
+               std::optional<PersistentEntityId> parentId) {
+            try {
+                std::string failure;
+                const bool changed = sceneEditorSession_->execute(
+                    "Reparent Entity",
+                    [childId, parentId, &failure](RuntimeWorld &world) {
+                        const EntityHandle child = world.find(childId);
+                        const std::optional<EntityHandle> parent =
+                            parentId
+                                ? std::optional<EntityHandle>(
+                                      world.find(*parentId))
+                                : std::nullopt;
+                        if (!child || (parentId && (!parent || !*parent))) {
+                            failure = "invalid_parent";
+                            return false;
+                        }
+                        return world.setParent(child, parent,
+                                               ReparentMode::KeepWorld,
+                                               &failure);
+                    });
+                if (!changed) {
+                    editorUi_->sceneError =
+                        failure.empty() ? "reparent_failed" : failure;
+                } else {
+                    editorUi_->sceneError.clear();
+                }
+            } catch (const std::exception &error) {
+                editorUi_->sceneError = error.what();
+            }
+        };
     outlinerPanel_->draw(snapshot, actions);
 }
 
@@ -6087,7 +6132,11 @@ void Application::drawInspectorPanel() {
 
 void Application::handleEditorShortcuts() {
     if (!editorUi_ || ImGui::GetIO().WantTextInput ||
-        ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
+        ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) ||
+        ImGui::IsAnyItemActive() ||
+        (sceneViewportController_ &&
+         sceneViewportController_->blocksViewportInput()) ||
+        ImGui::GetDragDropPayload() != nullptr) {
         return;
     }
     const ImGuiIO &io = ImGui::GetIO();
@@ -6249,16 +6298,103 @@ void Application::drawGui() {
     };
     if (panels.sceneSessionActive) {
         panels.viewportToolbar = [this]() {
-            int mode = sceneEditorSession_->cameraMode() ==
-                               EditorCameraMode::Editor
-                           ? 0
-                           : 1;
-            const char *labels[] = {"Editor Camera", "Active Camera"};
-            if (editor::segmentedControl("ViewportCameraMode", mode,
-                                         labels, 2, 210.0f)) {
-                sceneEditorSession_->setCameraMode(
-                    mode == 0 ? EditorCameraMode::Editor
-                              : EditorCameraMode::ActiveScene);
+            if (sceneViewportController_) {
+                sceneViewportController_->drawToolbar();
+                ImGui::SameLine();
+            }
+            const bool editorCamera = sceneEditorSession_->cameraMode() ==
+                                      EditorCameraMode::Editor;
+            ImGui::SetNextItemWidth(132.0f);
+            if (ImGui::BeginCombo("##ViewportCamera",
+                                  editorCamera ? "Editor Camera"
+                                               : "Active Camera")) {
+                if (ImGui::Selectable("Editor Camera", editorCamera))
+                    sceneEditorSession_->setCameraMode(
+                        EditorCameraMode::Editor);
+                if (ImGui::Selectable("Active Camera", !editorCamera))
+                    sceneEditorSession_->setCameraMode(
+                        EditorCameraMode::ActiveScene);
+                ImGui::EndCombo();
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Viewport camera source");
+        };
+        panels.viewportOverlay = [this](
+                                     const EditorViewportState &viewport) {
+            if (!sceneViewportController_ || !sceneEditorSession_ ||
+                !sceneEditorSession_->active() || !viewport.valid)
+                return;
+
+            const float aspect =
+                viewport.logicalHeight > 0.0f
+                    ? viewport.logicalWidth / viewport.logicalHeight
+                    : 1.0f;
+            camera_.setAspect(aspect);
+            SceneViewportCamera viewportCamera;
+            viewportCamera.view = camera_.viewMatrix();
+            viewportCamera.projection = camera_.projectionMatrix();
+            viewportCamera.position = camera_.position();
+            viewportCamera.forward = camera_.front();
+            viewportCamera.cameraDragging =
+                mode_ == InputMode::CameraDrag;
+            if (sceneEditorSession_->cameraMode() ==
+                EditorCameraMode::ActiveScene) {
+                if (const auto active =
+                        sceneEditorSession_->world()->activeCamera(aspect)) {
+                    viewportCamera.view = active->view;
+                    viewportCamera.projection = active->projection;
+                    viewportCamera.position = active->position;
+                    const glm::mat4 inverseView =
+                        glm::inverse(active->view);
+                    viewportCamera.forward = glm::normalize(
+                        -glm::vec3(inverseView[2]));
+                }
+            }
+
+            SceneViewportActions actions;
+            actions.modelDisplayName = [this](const std::string &modelId) {
+                const CatalogModel *model = catalog_.findModel(modelId);
+                return model ? model->displayName : modelId;
+            };
+            actions.instantiateModel =
+                [this](const std::string &modelId,
+                       const glm::vec3 &position) {
+                    try {
+                        const CatalogModel *model =
+                            catalog_.findModel(modelId);
+                        if (!model || model->type == "builtin")
+                            throw std::runtime_error(
+                                "model_not_instanceable");
+                        SceneEntityDocument entity;
+                        entity.id = PersistentEntityId::generate();
+                        entity.name = model->displayName;
+                        entity.transform.translation = position;
+                        entity.modelInstance = ModelInstanceDocument{
+                            ModelAssetId(modelId)};
+                        const PersistentEntityId created = entity.id;
+                        if (sceneEditorSession_->execute(
+                                "Add Model Entity",
+                                [entity = std::move(entity)](
+                                    RuntimeWorld &world) mutable {
+                                    world.createEntity(std::move(entity));
+                                    return true;
+                                })) {
+                            sceneEditorSession_->select(created);
+                            editorUi_->sceneError.clear();
+                        }
+                    } catch (const std::exception &error) {
+                        editorUi_->sceneError = error.what();
+                    }
+                };
+            actions.reportError = [this](std::string error) {
+                editorUi_->sceneError = std::move(error);
+            };
+            try {
+                sceneViewportController_->drawOverlay(
+                    viewport, viewportCamera, *sceneEditorSession_, actions);
+            } catch (const std::exception &error) {
+                editorUi_->sceneError = error.what();
+                sceneViewportController_->cancelManipulation();
             }
         };
     }
@@ -6373,6 +6509,10 @@ void Application::drawGui() {
         editorDockWorkspace_->viewportState();
     viewportVisible_ = viewport.visible;
     viewportHovered_ = viewport.hovered;
+    if ((!panels.sceneSessionActive || !viewport.visible ||
+         !viewport.valid) &&
+        sceneViewportController_)
+        sceneViewportController_->cancelManipulation();
     if (viewport.valid) {
         viewportDisplayWidth_ = viewport.pixelWidth;
         viewportDisplayHeight_ = viewport.pixelHeight;
@@ -6534,6 +6674,10 @@ void Application::mainLoop() {
         // 3. ImGui 新帧
         if (gui_)
             gui_->beginFrame();
+#if VKL_ENABLE_EDITOR_UI
+        if (gui_ && sceneViewportController_)
+            sceneViewportController_->beginFrame();
+#endif
 
         // 4. 模式切换 + 输入
         if (!config_.diagnostics.automationMode) {
@@ -6543,7 +6687,10 @@ void Application::mainLoop() {
         }
         if (input_->isKeyPressed(Key::Escape)) {
 #if VKL_ENABLE_EDITOR_UI
-            if (hasUnsavedSceneChanges()) {
+            if (sceneViewportController_ &&
+                sceneViewportController_->manipulationActive()) {
+                sceneViewportController_->cancelManipulation();
+            } else if (hasUnsavedSceneChanges()) {
                 editorUi_->pendingAction = EditorPendingActionKind::Quit;
                 editorUi_->requestDirtyModal = true;
             } else {

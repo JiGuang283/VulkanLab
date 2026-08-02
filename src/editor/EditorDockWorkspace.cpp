@@ -364,6 +364,8 @@ void EditorDockWorkspace::drawViewport(
                 ImGui::Dummy(ImVec2(width, height));
             }
             viewportState_.hovered = ImGui::IsItemHovered();
+            if (panels.viewportOverlay)
+                panels.viewportOverlay(viewportState_);
         }
     }
     ImGui::End();
