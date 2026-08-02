@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 7 implementation
+> Verified against: Procedural Sky Atmosphere v1 implementation
 
 Runtime Control 通过 Windows Named Pipe 控制已经运行的 VulkanLab。它面向本机开发、诊断和自动化，可以查询状态、加载模型预览或 Native Scene、设置环境、相机、Shader 与渲染参数、等待渲染稳定、异步截图并安全退出程序。`scene.list.entries[]` 同时返回 `kind: "modelPreview"` 和 `kind: "nativeScene"`；Native Scene 条目使用稳定 SceneDocument ID，模型预览继续返回兼容 `sceneId`、`modelId`、Catalog profile ID 和纹理限制。
 
@@ -116,11 +116,12 @@ cd build\windows-msvc-debug\Debug
 - 当前 scene、scene generation、最新 load operation，以及 Native RuntimeWorld 的 SceneDocument/entity/model/light/active camera 摘要；
 - package schema、是否为 Native Scene package 和 startup Scene；开发项目中该项显示未打包状态；
 - submitted/completed frame serial 与累计 presented frame 数；
-- 最近一个已完成 frame 的 `gpuTimings`，包含 available、frameSerial、DirectionalShadow/Skybox/MainForward、可选 Bloom、ToneMap、Present + UI 分项与 totalMs；
+- 最近一个已完成 frame 的 `gpuTimings`，包含 available、frameSerial、Atmosphere LUTs/DirectionalShadow/SkyBackground/MainForward、可选 Bloom、ToneMap、Present + UI 分项与 totalMs；
 - 待上传 texture/mesh、in-flight upload batch；
 - `modelAssetRepository` 的 Ready/Loading/Failed/Retiring 数量、prepare/build/hit/coalesced 计数和各 generation 的 consumer/资源摘要；
 - 当前选择和已发布的 environment，以及环境加载任务；
 - 当前 Scene 的 Directional/Point/Spot 数量、按类型与总计的实际上传数量、256 灯上限、每个 frame slot 的 SSBO capacity/总字节、超限数量与最多 32 个 ignored Entity ID，以及当前 Directional shadow caster；
+- `atmosphere` 的设备 support、active 状态、component/Sun Entity、Sun buffer index、相机高度、静态 LUT ready/dirty、generation、更新时间和不可用原因；
 - capture queue 计数，以及 Workspace/Viewport 各自的 capture capability；
 - `viewport` 的模式、可见/hover 状态、display extent、render extent 和 resize pending；
 - GUI 可见性、窗口最小化、swapchain recreate 和 rendering 状态。
@@ -215,7 +216,7 @@ Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模�
 
 Tone Mapping policy 由 Shader Manifest 决定：两个 PBR-lite 和 `Debug IBL Diffuse/Specular` 可配置，Legacy 与其他 Debug variant 强制 PassThrough。Bloom compatibility 也由 Manifest 决定，目前只有两个 PBR-lite variant 支持；设置会保留，但其他 variant 下 `bloomActive=false`。`render-settings get` 返回 `bloomAvailable`、`bloomActive`、`bloomUnavailableReason` 和四个 Bloom 设置。设备不满足 compute/`RGBA16F` storage image 要求时，尝试开启会返回 `bloom_unsupported`。
 
-阴影只影响 PBR-lite 的第一盏方向光，但 `Debug Shadow` 可显示最终 visibility。IBL 只在环境已发布且开关开启时替代 PBR 的 constant ambient；Skybox 开关独立。UI 的 `Render -> Pipeline/Post Processing/Lighting` 与 Runtime Control 修改同一个 `RenderSettings` 对象。
+阴影只影响被选中的 Directional shadow caster，但 `Debug Shadow` 可显示最终 visibility。IBL 只在环境已发布且开关开启时替代 PBR 的 constant ambient；Skybox 开关独立。Native Scene 的 Atmosphere 与 Atmosphere Sun 来自只读 SceneDocument/RuntimeWorld，Runtime Control v3 只报告状态，不提供大气参数 mutation。UI 的 `Render -> Pipeline/Post Processing/Lighting` 与 Runtime Control 修改同一个 `RenderSettings` 对象。
 
 ### 派生资产
 

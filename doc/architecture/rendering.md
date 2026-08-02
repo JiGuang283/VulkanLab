@@ -2,19 +2,21 @@
 
 > Status: Current
 > Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 6 implementation
+> Verified against: Procedural Sky Atmosphere v1 implementation
 
 ## 帧图与 Pass 顺序
 
 Renderer 当前采用显式的 Forward + Compute 帧图，不依赖 RHI 或 RenderGraph：
 
 ```text
+AtmosphereLutPass
+        -> transmittance / multiple scattering / sky view / aerial perspective
 DirectionalShadowPass
         -> shadow depth
-SkyboxPass
-        -> clear / linear HDR background
+SkyBackgroundPass
+        -> procedural atmosphere / skybox / clear
 MainForwardPass
-        -> linear HDR color
+        -> linear HDR color + aerial perspective
 BloomPass
         -> half-resolution bloom pyramid
 ToneMapPass
@@ -23,11 +25,11 @@ PresentPass + ImGui
         -> swapchain / Workspace capture
 ```
 
-`RenderResourceRegistry` 使用稳定的类型化 handle 管理内部 render target 和 sampler。资源描述明确指定 fixed/viewport-relative extent、相对尺寸除数、single/per-frame multiplicity、format、sample count、usage 与 aspect。当前注册 HDR resolve、可选 HDR MSAA、main depth、2048x2048 directional shadow depth、最多六级 Bloom 图像、LDR Viewport Color，以及 HDR/shadow/Bloom/Viewport sampler。每个 per-frame image 按 `MAX_FRAMES_IN_FLIGHT` 分配；HDR 优先使用 `R16G16B16A16_SFLOAT`，不满足 color attachment 与 sampled 要求时回退到 `R32G32B32A32_SFLOAT`。Viewport Color 使用 Swapchain format，以延续既有 sRGB/gamma 行为。HDR sample count 取 color/depth format 和设备能力的交集，Shadow、Bloom、ToneMap 与 Present 固定为 1x。
+`RenderResourceRegistry` 使用稳定的类型化 handle 管理内部 render target 和 sampler。资源描述明确指定 fixed/viewport-relative extent、相对尺寸除数、single/per-frame multiplicity、format、sample count、usage、aspect、array layer 和 view type。当前注册 HDR resolve、可选 HDR MSAA、main depth、2048x2048 directional shadow depth、最多六级 Bloom 图像、LDR Viewport Color，以及四张 Atmosphere LUT 和相关 sampler。每个 per-frame image 按 `MAX_FRAMES_IN_FLIGHT` 分配；HDR 优先使用 `R16G16B16A16_SFLOAT`，不满足 color attachment 与 sampled 要求时回退到 `R32G32B32A32_SFLOAT`。Viewport Color 使用 Swapchain format，以延续既有 sRGB/gamma 行为。HDR sample count 取 color/depth format 和设备能力的交集，Atmosphere、Shadow、Bloom、ToneMap 与 Present 固定为 1x。
 
-每个 Pass 通过 `resourceUsages()` 声明 attachment write、attachment read/write、sampled read、storage write/read-write、required/final layout。`RenderPipeline` 在初始化和 resize 后验证 handle、usage flag、sample/aspect、read-before-write 与相邻 layout 契约。Registry 不插入 barrier、不推导 lifetime、不重排 Pass；`RenderPipeline` 仍按 Shadow、Skybox、Forward、Bloom、ToneMap、Present 顺序记录到同一个 frame command buffer。Render pass 之间使用 final/initial layout 和 dependency，同步 Compute Bloom 时由 BloomPass 记录显式 image barrier。
+每个 Pass 通过 `resourceUsages()` 声明 attachment write、attachment read/write、sampled read、storage write/read-write、required/final layout。`RenderPipeline` 在初始化和 resize 后验证 handle、usage flag、sample/aspect、read-before-write 与相邻 layout 契约。Registry 不插入 barrier、不推导 lifetime、不重排 Pass；`RenderPipeline` 仍按 Atmosphere LUT、Shadow、Sky Background、Forward、Bloom、ToneMap、Present 顺序记录到同一个 frame command buffer。Render pass 之间使用 final/initial layout 和 dependency；AtmosphereLutPass 与 BloomPass 自行记录 compute write 到后续 compute/fragment read 的 image barrier。
 
-Application 每帧只组装 `RenderViewInput`。纯函数 `buildRenderView()` 负责默认 Sun 规则、灯光过滤与分组、稳定阴影 caster 选择和阴影矩阵计算，输出不可变 `RenderView`。Renderer 将 `GlobalFrameUbo` 与 variable-length `sceneLights` 分别上传到当前 frame slot 的 UBO 和 SSBO；Pass 通过 `RenderFrameContext::view` 读取同一份 settings 和 shadow 数据。
+Application 每帧只组装 `RenderViewInput`。纯函数 `buildRenderView()` 负责默认 Sun 规则、灯光过滤与分组、稳定阴影 caster、Atmosphere Sun 选择、阴影矩阵和 Atmosphere GPU 参数，输出不可变 `RenderView`。Renderer 将 `GlobalFrameUbo`、variable-length `sceneLights` 和 `AtmosphereGpuParams` 上传到当前 frame slot；Pass 通过 `RenderFrameContext::view` 读取同一份 settings、shadow 和 atmosphere 数据。
 
 ## RenderQueue 与 Forward
 
@@ -36,7 +38,7 @@ Application 每帧只组装 `RenderViewInput`。纯函数 `buildRenderView()` �
 - Opaque 使用 MaterialTemplate、MaterialInstance、Mesh 地址排序，减少 pipeline、descriptor 和 vertex/index buffer 切换。
 - Transparent 使用对象 world translation 到相机的距离从远到近排序。这是对象级近似，没有使用 mesh bounds，也不是 order-independent transparency。
 
-SkyboxPass 负责清空 HDR color，并在启用时绘制环境背景。MainForwardPass 使用 `LOAD` 保留该颜色，只清空 depth，然后先画 Opaque/Mask，再画 Transparent。它不再写 swapchain，也不再绘制 ImGui。MSAA HDR color 不使用 transient allocation，因为其内容必须跨 Skybox 与 MainForward 两个 render pass 保留。
+SkyBackgroundPass 负责清空 HDR color，并按优先级绘制程序化 Atmosphere、环境 Skybox 或纯色背景。MainForwardPass 使用 `LOAD` 保留该颜色，只清空 depth，然后先画 Opaque/Mask，再画 Transparent。它不再写 swapchain，也不再绘制 ImGui。MSAA HDR color 不使用 transient allocation，因为其内容必须跨 Sky Background 与 MainForward 两个 render pass 保留。
 
 | 队列 | Blending | Depth test | Depth write |
 |---|---:|---:|---:|
@@ -61,6 +63,31 @@ DirectionalShadowPass 的 caster 规则为：
 PBR-lite Forward 与 PBR-lite NormalMapped 使用 comparison sampler 和 3x3 PCF。阴影只乘到被选中 Directional caster 的 direct contribution；ambient、emissive、Point 和 Spot lighting 不受影响。透明材质可以接收阴影。Raster constant/slope bias 与 shader receiver bias 均可通过 `VulkanLab -> Render -> Lighting` 或 Runtime Control 调节。
 
 `Debug Shadow` 输出最终 visibility 灰度，用于检查投影范围、bias 和 PCF；它使用 PassThrough tone mapping。
+
+## 程序化 Sky Atmosphere
+
+Sky Atmosphere v1 依据 [Hillaire 2020](https://sebh.github.io/publications/egsr2020.pdf) 的 LUT 架构和 [MIT 参考实现](https://github.com/sebh/UnrealEngineSkyAtmosphere)，在项目内实现 Vulkan/GLSL 版本，不把参考工程作为运行时依赖。当前物理模型包含 Rayleigh、Mie 和臭氧吸收、多次散射近似、太阳圆盘、地表反照率，以及作用于 PBR 的 aerial perspective。
+
+Registry 为 Atmosphere 注册四张 `RGBA16F` storage/sampled image：
+
+- Transmittance：`256x64`，Single，物理参数变化后重算。
+- Multiple Scattering：`32x32`，Single，依赖 Transmittance。
+- Sky View：`192x108`，Per-frame，活动时按相机和 Sun 每帧更新。
+- Aerial Perspective：`32x32x32`，Per-frame 2D array，RGB 保存 in-scattering，Alpha 保存平均 transmittance。
+
+设备必须让 graphics queue 支持 compute，并支持 `R16G16B16A16_SFLOAT` sampled、linear filtering 和 storage image。能力不满足时 AtmospherePass 不创建，descriptor 仍绑定合法 fallback；普通方向光、Skybox 和 clear 背景继续工作。
+
+`AtmosphereLutPass` 在同一 graphics command buffer 中运行四个 compute program。静态物理参数变化后等待 100 ms 稳定窗口再重建 Transmittance 和 Multiple Scattering，避免拖动 Inspector 时连续重算；Sky View 和 Aerial Perspective 在 Atmosphere active 时每帧更新。Pass 只记录 image barrier，不引入 queue/device idle。
+
+Atmosphere Sun 由 SceneDocument 中标记 `atmosphereSunIndex=0` 的 Directional Light 显式选择，与 shadow caster 独立。`buildRenderView()` 会在 256 灯上限内优先保留两者，并把 Atmosphere Sun 的最终 SSBO index 写入 frame data。LUT 使用单位太阳输入，天空、太阳圆盘、直射光透射和 aerial in-scattering 最终乘该灯的 color/intensity。
+
+SkyBackgroundPass 在 PBR variant、Atmosphere 和静态 LUT 都有效时绘制程序化天空；否则保留原 Skybox/clear 路径。两个 PBR fragment shader对 Atmosphere Sun 的 direct contribution 采样 Transmittance，并在材质光照完成后应用：
+
+```glsl
+color = color * aerialTransmittance + aerialInScattering;
+```
+
+最大 aerial 距离为 `min(cameraFar, 96 km)`，计算使用 camera-relative kilometer 坐标，避免在 shader 中直接对 6360 km 行星坐标做大数相减。Legacy 和材质 Debug variants 不声明 Atmosphere descriptor，也不改变既有基线。程序化天空控制可见背景，Environment IBL 仍可独立启用；v1 不从天空动态生成 diffuse/specular IBL。
 
 ## HDR、Viewport Color 与 Present
 
@@ -91,7 +118,7 @@ BloomPass 使用当前 graphics command buffer 和 queue：
 
 ## IBL 与 Skybox
 
-环境资源只从离线派生 KTX2 加载，Renderer 不在运行时执行 equirectangular 转 cube、卷积或 BRDF integration。一个已发布的 `EnvironmentGpuResources` 包含 Radiance、Irradiance、Prefiltered Specular 和 BRDF LUT。切换环境时创建新的 Lighting descriptor generation；新资源完整就绪前继续使用旧 generation，旧资源按 frame submission serial 延迟销毁。
+环境资源只从离线派生 KTX2 加载，Renderer 不在运行时执行 equirectangular 转 cube、卷积或 BRDF integration。一个已发布的 `EnvironmentGpuResources` 包含 Radiance、Irradiance、Prefiltered Specular 和 BRDF LUT。切换环境时创建新的 Lighting descriptor generation；新资源完整就绪前继续使用旧 generation，旧资源按 frame submission serial 延迟销毁。程序化 Atmosphere 不会自动替换或重建这组 IBL 资源。
 
 `RenderSettings` 中的 `iblEnabled`、`skyboxEnabled`、`environmentIntensity` 和 `environmentRotationRadians` 默认分别为 false、false、1 和 0。选择 Environment 不自动打开 IBL/Skybox。环境旋转统一作用于 diffuse lookup、reflection vector 和 Skybox，因此光照方向与可见背景保持一致。
 
@@ -106,7 +133,7 @@ indirect = (diffuse + specular) * AO * environmentIntensity
 
 Irradiance bake 已除以 π，因此 shader 不再次除 π。AO 只乘 IBL/constant ambient 间接项，不影响 Directional、Point、Spot 或 emissive。IBL 关闭、环境未就绪或设备不支持所需 float format 时，shader 精确保留原 constant ambient 路径。
 
-SkyboxPass 使用 fullscreen triangle、inverse view-projection 和 Radiance LOD 0 输出线性 HDR。它不写 depth；MainForward 的不透明几何覆盖背景，透明/transmission 材质在已有 Skybox 上执行现有 alpha blending。`Debug IBL Diffuse` 与 `Debug IBL Specular` 分别隔离两条间接光路径。
+SkyBackgroundPass 在 Atmosphere 未接管背景时，使用 fullscreen triangle、inverse view-projection 和 Radiance LOD 0 输出线性 HDR Skybox。它不写 depth；MainForward 的不透明几何覆盖背景，透明/transmission 材质在已有背景上执行现有 alpha blending。`Debug IBL Diffuse` 与 `Debug IBL Specular` 分别隔离两条间接光路径。
 
 ## Pipeline、材质与 Descriptor
 
@@ -118,7 +145,8 @@ Compute 使用独立的 `ComputePipelineConfig`、`ComputePipelineKey` 和 `Pipe
 
 Forward descriptor 约定为：
 
-- `set=0, binding=0`：每帧 GlobalUBO，包含相机、光源和 directional shadow 数据。
+- `set=0, binding=0`：每帧 GlobalUBO，包含相机、灯光计数、directional shadow 和 Atmosphere frame 数据。
+- `set=0, binding=1`：PBR fragment shader 使用的 Scene Light SSBO。
 - `set=1, binding=0..4`：五个材质纹理槽。
 - `set=2`：统一 Lighting descriptor。
   - binding 0：当前 frame slot 的 comparison shadow map。
@@ -126,6 +154,12 @@ Forward descriptor 约定为：
   - binding 2：Prefiltered Specular cubemap。
   - binding 3：BRDF LUT。
   - binding 4：Radiance cubemap。
+- `set=3`：Atmosphere descriptor，仅 Atmosphere programs 和两个 PBR variants 声明。
+  - binding 0：每帧 `AtmosphereGpuParams` UBO。
+  - binding 1：Transmittance LUT。
+  - binding 2：Multiple Scattering LUT。
+  - binding 3：Sky View LUT。
+  - binding 4：Aerial Perspective 2D-array LUT。
 - 128 字节 push constant：model matrix 和材质因子。
 
 Lighting 的五个 binding 始终绑定真实资源或合法 fallback，不依赖 partially-bound descriptor。ToneMap 使用独立的 pass-local descriptor layout：binding 0 为 HDR，binding 1 为 Bloom。Bloom 不可用时 binding 1 绑定 HDR 作为合法占位，但 push constant 会禁止采样。Present 使用另一个 pass-local descriptor，只包含当前 frame slot 的 Viewport Color。
@@ -136,7 +170,7 @@ Lighting 的五个 binding 始终绑定真实资源或合法 fallback，不依�
 
 Application 在创建 Window/Vulkan 前加载 `ShaderRegistry`。当前选择使用稳定 variant ID，UI 使用 display name；ToneMap 和 Bloom 兼容性由 variant metadata 决定。Shadow、Bloom、ToneMap 与 Present 通过稳定 program ID 查询，不再维护 C++ 路径常量。MaterialTemplate 的基础 PipelineConfig 不携带默认 Shader，MainForwardPass 在创建 pipeline 前必须写入当前 variant 路径。
 
-测试目标静态链接固定版本的 SPIRV-Reflect，按 Manifest program contract 遍历全部 Forward、Shadow、Skybox、Bloom、ToneMap 与 Present program，校验 stage、descriptor、UBO/push size 和 member offset、vertex location/format、跨阶段 varying及 fragment output。反射不进入 VulkanLab 运行时，也不自动生成 DescriptorSetLayout；生产布局仍由显式 C++ 代码创建。
+测试目标静态链接固定版本的 SPIRV-Reflect，按 Manifest program contract 遍历全部 Forward、Shadow、Atmosphere、Sky Background、Bloom、ToneMap 与 Present program，校验 stage、descriptor、UBO/push size 和 member offset、vertex location/format、跨阶段 varying及 fragment output。反射不进入 VulkanLab 运行时，也不自动生成 DescriptorSetLayout；生产布局仍由显式 C++ 代码创建。
 
 当前 variant 包含 Legacy、两个 PBR-lite、BaseColor/Normal/Roughness/Metallic/Occlusion/Emissive/Alpha/Transmission 调试视图，以及 `Debug Shadow`、`Debug IBL Diffuse` 和 `Debug IBL Specular`。启动默认使用 `PBR-lite NormalMapped`；Legacy 保留为显式基线和兼容性检查。只有两个 PBR-lite variant 在 Manifest 中声明 `bloom: true`。PBR-lite 使用 baseColor、metallicRoughness、AO、emissive 和可选 IBL；NormalMapped 额外使用 tangent/TBN 与 normal scale。Transmission 当前仍是 alpha 与 Fresnel 轮廓近似，不采样场景颜色。
 
@@ -156,7 +190,7 @@ PBR Forward 按 Directional、Point、Spot 三段遍历 SSBO，Point/Spot 在超
 
 ## GPU Pass 计时
 
-Renderer 持有一个 `GpuPassProfiler` 和 timestamp query pool。每个 frame slot 为 `DirectionalShadow`、`Skybox`、`MainForward`、可选 `Bloom`、`ToneMap` 和 `Present + UI` 分配 begin/end query。总时间从第一个 Pass begin 到最后一个 Pass end 计算。
+Renderer 持有一个 `GpuPassProfiler` 和 timestamp query pool。每个 frame slot 为 `Atmosphere LUTs`、`DirectionalShadow`、`SkyBackground`、`MainForward`、可选 `Bloom`、`ToneMap` 和 `Present + UI` 分配 begin/end query。总时间从第一个 Pass begin 到最后一个 Pass end 计算。
 
 `FrameSync::beginFrame()` 已等待对应 slot 的 fence 后，Profiler 才使用不带 `WAIT_BIT` 的 `vkGetQueryPoolResults()` 读取旧结果，然后在新 command buffer 中 reset 该 slot。计时不会增加 queue/device idle 或额外 fence wait。换算使用设备 `timestampPeriod`，并按 graphics queue 的 `timestampValidBits` 处理计数器回绕；不支持 timestamp 的设备返回 `available=false`，渲染继续运行。结果显示在 `VulkanLab -> Diagnostics -> Performance`，并由 `render.status.gpuTimings` 返回。
 
@@ -166,7 +200,7 @@ Renderer 持有一个 `GpuPassProfiler` 和 timestamp query pool。每个 frame 
 
 Tracy Vulkan context 使用 graphics queue 和独立 transient command pool完成初始化。各 Pass 在现有 frame command buffer 中写入嵌套 GPU zone；`ModelGpuBuilder` 的 `IncrementalUploadQueue` 写入 `ModelUpload model=<id> profile=<profile>` zone，环境和 legacy 同步 `UploadContext` 保留各自的上传 zone。所有 zone 结束后，每帧调用一次 `TracyVkCollect()`，没有增加 `WAIT_BIT`、queue idle、device idle 或额外 fence。
 
-GPU 层级覆盖 DirectionalShadow/ShadowCasters、Skybox、MainForward/Opaque/Transparent、可选 Bloom Downsample/Upsample、ToneMap、Present/ImGui、ScreenshotCopy 和上传 batch。CPU 侧覆盖 Application frame、FrameSync、RenderView/RenderQueue、场景与环境 worker、glTF 各准备阶段、逐帧 GPU builder、资产工具监督、Capture encode 和 pipeline cache miss。单 draw、单纹理和单 mip 不创建 zone。
+GPU 层级覆盖 Atmosphere LUTs、DirectionalShadow/ShadowCasters、SkyBackground、MainForward/Opaque/Transparent、可选 Bloom Downsample/Upsample、ToneMap、Present/ImGui、ScreenshotCopy 和上传 batch。CPU 侧覆盖 Application frame、FrameSync、RenderView/RenderQueue、场景与环境 worker、glTF 各准备阶段、逐帧 GPU builder、资产工具监督、Capture encode 和 pipeline cache miss。单 draw、单纹理和单 mip 不创建 zone。
 
 Tracy 与 `GpuPassProfiler` 并行存在：后者是普通开发构建中的低成本数值统计，前者是按需连接的跨线程时间线。Tracy 编译和连接状态通过 `system.info.diagnostics.tracy` 与 `Diagnostics -> Performance` 显示；完整操作见 [Tracy 性能分析](../guides/tracy_profiling.md)。
 

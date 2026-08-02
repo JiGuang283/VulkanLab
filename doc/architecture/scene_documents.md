@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 7 implementation
+> Verified against: Procedural Sky Atmosphere v1 implementation
 
 VulkanLab 已将“导入模型”“可保存场景”和“运行时世界”拆成三个领域对象。模型预览与 Native Scene 都通过 `AssetRepository` 共享 `ModelAsset`；`.vkscene.json` 由 `RuntimeWorld` 实例化，并可在编辑器中修改、撤销和原子保存。
 
@@ -50,7 +50,7 @@ schema v1/v2 中的 `scenes[]` 仍按旧语义读取为 `CatalogModel`，旧 `ca
 
 `ModelAssetId` 与 `SceneDocumentId` 是稳定 asset ID 的强类型包装，继续使用项目现有的小写字母、数字、连字符和下划线规则。Entity UUID 用于场景内部引用，asset ID 用于 Catalog 和派生资产引用，二者不能互换。
 
-## SceneDocument schema v2
+## SceneDocument schema v3
 
 场景文件位于 `assets/scenes/<scene-id>.vkscene.json`。顶层保存场景 ID、显示名、active camera、ambient、可选 environment 和保持原顺序的 entity 数组。Entity 使用扁平数组与 parent UUID：
 
@@ -69,21 +69,24 @@ schema v1/v2 中的 `scenes[]` 仍按旧语义读取为 `CatalogModel`，旧 `ca
 }
 ```
 
-当前 DTO 定义并运行三类组件：
+当前 DTO 定义并运行四类组件：
 
 - `modelInstance`：引用一个 Catalog model ID。
-- `light`：Directional、Point 或 Spot 及其颜色、强度、range、cone 和 `castsShadow`。
+- `light`：Directional、Point 或 Spot 及其颜色、强度、range、cone、`castsShadow`、可选 Atmosphere Sun index 和太阳角半径。
 - `camera`：透视相机的垂直 FOV、near 和 far。
+- `atmosphere`：行星/大气半径、Rayleigh/Mie/臭氧参数、ground albedo、多次散射系数和 aerial perspective 参数。
 
 解析为严格模式：未知顶层字段、未知 Entity 字段或未知 component 都会失败，避免读写后静默丢失未来数据。UUID 必须唯一；parent 必须存在且层级无环；active camera 必须引用 Camera entity；Transform、Light 和 Camera 数值必须有限且在有效范围内；scale 分量不能接近零。Quaternion 在加载时验证并规范化。
 
-schema v1 仍可读取：旧 Directional 默认 `castsShadow=true`，Point/Spot 默认 `false`；加载后内存文档规范化为 v2，下一次保存确定性写出 v2。当前只有 Directional 可以设置 `castsShadow=true`，Point/Spot 设置该字段会被验证器拒绝。
+schema v1/v2 仍可读取：旧 Directional 默认 `castsShadow=true`，Point/Spot 默认 `false`；旧文档不自动增加 Atmosphere，也不把既有灯光绑定为 Sun。加载后内存文档规范化为 v3，下一次保存确定性写出 v3。当前只有 Directional 可以设置 `castsShadow=true` 或 `atmosphereSunIndex=0`，Point/Spot 设置这些字段会被验证器拒绝。
+
+v3 最多允许一个 Atmosphere Component 和一个 Atmosphere Sun。Atmosphere Entity 必须位于 Scene Root，rotation 为 identity、scale 为 unit；translation 表示当前地面原点。被标记的 Sun 必须是 Directional Light，`sourceAngularRadiusRadians` 必须位于 `(0, 0.1]`。存在 Atmosphere Sun 时必须同时存在 Atmosphere Component。物理系数必须有限且非负，ground albedo 限制在 `[0,1]`。
 
 不传 Catalog references 时允许模型和环境暂时未解析，便于独立编辑文件。将文档加入 Catalog 时，`SceneCatalogStore` 会使用当前 models/environments 重新加载并校验所有引用。
 
 ## 创建与保存
 
-`SceneDocumentService::createDefault()` 创建 Camera、Directional Sun、默认 ambient 和空 environment，不自动加入 ModelInstance。
+`SceneDocumentService::createDefault()` 创建 Camera、Directional Sun、Earth preset Sky Atmosphere、默认 ambient 和空 environment，不自动加入 ModelInstance。默认 Sun 标记为 Atmosphere Sun index 0，角半径为 `0.004675` radians。
 
 默认 Camera 位于 `(0,-5,2)` 并朝向原点。Directional Light 的实体局部 `-Z` 是发射方向；提交给 Renderer 时转换为从表面指向光源的方向。Camera 使用实体 world translation、局部 `-Z` forward 和局部 `+Y` up，方向只组合层级 rotation，不受 scale 影响。
 
@@ -107,7 +110,7 @@ Native Scene 加载事务先在 worker 解析文档，再按 Catalog profile 向
 
 Stage 7 以 Native SceneDocument 作为 Cook root。`CookClosureResolver` 从 Entity 的 `modelInstance` 与顶层 environment 收集唯一依赖；每个模型使用自己的 Catalog `importProfile`，重复实例只打包一个 Model artifact。builtin/OBJ 不能进入闭包，Validator Error、缺失/过期 artifact 或非 Native BC7 profile 都会阻止发布。
 
-Cook 会将旧 v1 文档规范化为 schema v2 写入 staging，但不修改项目源文件。最小 cooked Catalog 只包含已选 SceneDocuments 及其引用的 Models、Environments 和 profiles；包内 Artifact Index 使用 `Model / Environment / SceneDocument` 三类 record，并在 SceneDocument record 中保存精确 asset references。
+Cook 会将旧 v1/v2 文档规范化为 schema v3 写入 staging，但不修改项目源文件。Atmosphere 是纯程序化 SceneDocument 数据，不增加资产闭包；新增 compute/fullscreen SPIR-V 由现有 Shader Manifest 闭包带入包。最小 cooked Catalog 只包含已选 SceneDocuments 及其引用的 Models、Environments 和 profiles；包内 Artifact Index 使用 `Model / Environment / SceneDocument` 三类 record，并在 SceneDocument record 中保存精确 asset references。
 
 schema v3 package manifest 保存有序 `sceneIds` 和 `startupSceneId`。Cooked runtime 只注册这些 Native Scene，启动后通过现有异步事务构建 `RuntimeWorld`；相同 model ID 的多个 Entity 继续由 `AssetRepository` 共享同一 generation 和 GPU 资源。旧 schema v1/v2 单模型包保留 Model Preview 兼容路径。
 
@@ -118,6 +121,7 @@ schema v3 package manifest 保存有序 `sceneIds` 和 `startupSceneId`。Cooked
 - Gizmo 暂不支持 snapping；编辑器仍只支持单选和一个 Scene Viewport。
 - builtin/OBJ 模型不能放入 Native Scene；Viking Room 继续使用 legacy preview。
 - Directional、Point 和 Spot 共享 256 盏有效灯光上限。超限 Light Entity 仍会保存，并由 RenderView 的精确上传结果在 Outliner/Inspector 标记为未上传；当前 Forward shader 会直接遍历所有已上传灯光。
+- 一个 Native Scene 最多包含一个程序化 Atmosphere 和一个 index 0 Atmosphere Sun；当前只支持地面附近视角，不支持太空尺度相机。
 - Native Scene 使用各 Catalog model 的 import profile；全局 Texture Limit 仅影响模型预览。
 - Validator index、KTX2 manifest、ArtifactIndex 和 Runtime Control 中既有 `sceneId` 字段保持不变；在模型资产路径中它是 `modelId` 的兼容序列化名称，不触发缓存迁移。
 

@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 6 implementation
+> Verified against: Procedural Sky Atmosphere v1 implementation
 
 VulkanLab 的开发 UI 使用 Dear ImGui `v1.92.7-docking`，在主 GLFW
 窗口内创建一个全屏 DockSpace。Viewport、Outliner、Inspector、Scenes、Assets、
@@ -87,8 +87,9 @@ Jobs / Cache 显示项目 cache、当前任务、取消、日志和历史。
 ### Outliner 与 Inspector
 
 Outliner 显示 Native Scene 的实体层级，支持搜索、单选、创建 Empty/Model/三类 Light/
-Camera、重命名、enabled、复制和删除 subtree。Inspector 的 Entity 页编辑 parent、局部
-Translation/Euler Rotation/Scale，以及 Model、Light、Camera component；Scene 页编辑
+Camera/Sky Atmosphere、重命名、enabled、复制和删除 subtree。一个 Scene 最多创建一个
+Sky Atmosphere，且只能位于 Scene Root。Inspector 的 Entity 页编辑 parent、局部
+Translation/Euler Rotation/Scale，以及 Model、Light、Camera、Atmosphere component；Scene 页编辑
 ambient、environment 和 active camera。Parent picker 使用 Keep Local。
 
 Outliner 的 Entity 可以拖到另一个 Entity，或拖到显式 `Scene Root` 行解除父子关系。
@@ -99,6 +100,8 @@ Outliner 的 Entity 可以拖到另一个 Entity，或拖到显式 `Scene Root` 
 删除 active Camera 或移除其 Camera component 会被拒绝，必须先指定另一台 Camera。
 Directional、Point 和 Spot 共享 256 盏有效灯光上限。超限灯仍保存在文档中，并按上一帧 RenderView 的精确结果标记为 Not uploaded。Directional Inspector 可设置 `Casts Shadow`，并显示 Active/Eligible/Disabled；Point/Spot shadow 显示 Unsupported。
 
+Directional Light Inspector 还提供 `Use as Atmosphere Sun` 和太阳角半径。设置新 Sun 会在同一条 Undo 命令中清除旧 Sun。Atmosphere Inspector 提供 Earth Preset、基础行星/空气参数和 Advanced 散射参数；Atmosphere Entity 禁止 reparent、rotate、scale、duplicate，删除时会同步解除 Sun 绑定。
+
 ### Render
 
 Render 使用四个折叠区：
@@ -106,7 +109,7 @@ Render 使用四个折叠区：
 - `Common`：Shader variant、Texture Limit、Exposure EV 和 Tone Mapper。
 - `Post Processing`：Bloom 开关、Intensity 和状态；Threshold/Soft Knee 放入默认
   折叠的 Bloom Tuning。
-- `Lighting`：阴影、ambient、场景灯光、fallback Sun 和 IBL/Skybox。
+- `Lighting`：阴影、ambient、场景灯光、fallback Sun、IBL/Skybox，以及 Atmosphere support、active Sun、相机高度和 LUT generation/dirty/update 状态。
 - `Camera & Clip`：位置、移动速度、near/far clip plane 和 Scene bounds，默认折叠。
 
 Shadow bias 放入默认折叠的 Shadow Tuning；场景灯光数量和逐灯数据放入 Light
@@ -151,6 +154,8 @@ Toolbar 的 `Q/W/E/R` 分别切换 Select、Translate、Rotate 和 Scale；Trans
 支持 Local/World，Scale 固定使用 Local。左键点击使用 CPU ray 与 Ready ModelInstance
 的 asset-space bounds 求交，选择最近命中的实体；点击空白清除选择。选中模型绘制 bounds
 线框，Light、Camera 和 Empty Entity 显示 pivot 标记并继续通过 Outliner 选择。
+
+Sky Atmosphere 只允许使用 Translate Gizmo移动地表原点；Rotate 和 Scale 被禁用，相关约束也由 RuntimeWorld 与 SceneDocument validator 强制执行。
 
 Gizmo 拖动开始时捕获一次 SceneDocument before 状态，拖动期间直接更新 RuntimeWorld，
 释放时只生成一条 Undo 命令。`Escape` 取消并恢复 before 状态；隐藏 Viewport、切换选择

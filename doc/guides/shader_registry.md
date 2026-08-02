@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 6 implementation
+> Verified against: Procedural Sky Atmosphere v1 implementation
 
 Shader 注册的唯一权威来源是
 [`shader/manifest.json`](../../shader/manifest.json)。运行时不会扫描目录或根据
@@ -18,6 +18,7 @@ contract tests 都读取同一份 Manifest。
 - `vertex` / `fragment`：graphics program 的 GLSL 源路径。
 - `compute`：compute program 的 GLSL 源路径，不能与 graphics stage 混用。
 - `sceneLights`：可选布尔值，声明 Main Forward fragment shader 是否读取 `set=0 binding=1` 的 Scene Light SSBO；缺省为 `false`，当前只由两个 PBR program 启用。
+- `atmosphere`：可选布尔值，声明 program 是否使用 Atmosphere UBO/LUT descriptor；缺省为 `false`。两个 PBR program、四个 Atmosphere compute program 和 Atmosphere Sky program 启用该字段。
 
 `variants` 描述 `VulkanLab -> Render -> Pipeline` 可选择的 Main Forward program：
 
@@ -52,7 +53,7 @@ vertex layout 或 pass contract 仍需要先扩展对应 C++ 渲染接口和反�
 
 ## 内部 Program
 
-Shadow、ToneMap、Bloom Compute 和 Skybox 等内部 Shader 只登记在 `programs`，不放入
+Shadow、ToneMap、Bloom Compute、Skybox、Atmosphere LUT Compute 和 Atmosphere Sky 等内部 Shader 只登记在 `programs`，不放入
 `variants`。Renderer 使用稳定 program ID 查询路径；新增 program 不会自动创建
 或执行新的 Render Pass。`Debug IBL Diffuse/Specular` 是可选择的 Main Forward
 variant，因此同时登记在 `programs` 和 `variants`。
