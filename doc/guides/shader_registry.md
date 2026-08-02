@@ -1,8 +1,8 @@
 # Shader Registry
 
 > Status: Current
-> Last verified: 2026-07-30
-> Verified against: Compute Bloom v1 working tree
+> Last verified: 2026-08-02
+> Verified against: Scene Authoring Stage 6 implementation
 
 Shader 注册的唯一权威来源是
 [`shader/manifest.json`](../../shader/manifest.json)。运行时不会扫描目录或根据
@@ -17,6 +17,7 @@ contract tests 都读取同一份 Manifest。
 - `contract`：`main-forward`、`shadow-depth`、`fullscreen` 或 `compute`。
 - `vertex` / `fragment`：graphics program 的 GLSL 源路径。
 - `compute`：compute program 的 GLSL 源路径，不能与 graphics stage 混用。
+- `sceneLights`：可选布尔值，声明 Main Forward fragment shader 是否读取 `set=0 binding=1` 的 Scene Light SSBO；缺省为 `false`，当前只由两个 PBR program 启用。
 
 `variants` 描述 `VulkanLab -> Render -> Pipeline` 可选择的 Main Forward program：
 

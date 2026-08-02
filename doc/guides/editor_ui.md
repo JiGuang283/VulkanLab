@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 5 implementation
+> Verified against: Scene Authoring Stage 6 implementation
 
 VulkanLab 的开发 UI 使用 Dear ImGui `v1.92.7-docking`，在主 GLFW
 窗口内创建一个全屏 DockSpace。Viewport、Outliner、Inspector、Scenes、Assets、
@@ -97,7 +97,7 @@ Outliner 的 Entity 可以拖到另一个 Entity，或拖到显式 `Scene Root` 
 `transform_not_decomposable` 原子失败，原层级与 Transform 保持不变。
 
 删除 active Camera 或移除其 Camera component 会被拒绝，必须先指定另一台 Camera。
-超过 `1 directional + 8 punctual` 的显式灯仍保存在文档中，但会标记为 Not uploaded。
+Directional、Point 和 Spot 共享 256 盏有效灯光上限。超限灯仍保存在文档中，并按上一帧 RenderView 的精确结果标记为 Not uploaded。Directional Inspector 可设置 `Casts Shadow`，并显示 Active/Eligible/Disabled；Point/Spot shadow 显示 Unsupported。
 
 ### Render
 

@@ -1,8 +1,8 @@
 # 渲染流程
 
 > Status: Current
-> Last verified: 2026-08-01
-> Verified against: `86b809d`
+> Last verified: 2026-08-02
+> Verified against: Scene Authoring Stage 6 implementation
 
 ## 帧图与 Pass 顺序
 
@@ -27,7 +27,7 @@ PresentPass + ImGui
 
 每个 Pass 通过 `resourceUsages()` 声明 attachment write、attachment read/write、sampled read、storage write/read-write、required/final layout。`RenderPipeline` 在初始化和 resize 后验证 handle、usage flag、sample/aspect、read-before-write 与相邻 layout 契约。Registry 不插入 barrier、不推导 lifetime、不重排 Pass；`RenderPipeline` 仍按 Shadow、Skybox、Forward、Bloom、ToneMap、Present 顺序记录到同一个 frame command buffer。Render pass 之间使用 final/initial layout 和 dependency，同步 Compute Bloom 时由 BloomPass 记录显式 image barrier。
 
-Application 每帧只组装 `RenderViewInput`。纯函数 `buildRenderView()` 负责默认 Sun 规则、灯光截断与 GPU 打包、阴影矩阵计算，输出不可变 `RenderView`。Renderer 接收该对象并上传其中的 `GlobalFrameUbo`；Pass 通过 `RenderFrameContext::view` 读取同一份 settings 和 shadow 数据。
+Application 每帧只组装 `RenderViewInput`。纯函数 `buildRenderView()` 负责默认 Sun 规则、灯光过滤与分组、稳定阴影 caster 选择和阴影矩阵计算，输出不可变 `RenderView`。Renderer 将 `GlobalFrameUbo` 与 variable-length `sceneLights` 分别上传到当前 frame slot 的 UBO 和 SSBO；Pass 通过 `RenderFrameContext::view` 读取同一份 settings 和 shadow 数据。
 
 ## RenderQueue 与 Forward
 
@@ -47,7 +47,7 @@ SkyboxPass 负责清空 HDR color，并在启用时绘制环境背景。MainForw
 
 ## 方向光阴影
 
-`buildRenderView()` 从实际上传的第一盏 Directional light 生成 `DirectionalShadowFrameData`。零强度、零颜色或非有限参数的 Scene light 保留在场景诊断数据中，但不上传到 GPU；场景没有实际贡献光照的灯时使用默认 Sun。场景有有效灯光但没有 Directional light 时不生成阴影。无有效 bounds、无有效光方向或关闭 Shadows 时，ShadowPass 仍清除目标，但 Forward shader 不采样阴影贡献。
+`buildRenderView()` 只从 `castsShadow=true` 的有效 Directional 中选择 caster。显式 Light Entity 优先于 imported Directional，并使用 Entity UUID、Model Entity UUID 与 prototype index 组成的稳定 key 排序；被选中的 caster 保证进入 256 灯上限且位于 Directional 分段首位。零强度、零颜色或非有限参数的 Scene light 不上传到 GPU；场景没有实际贡献光照的灯时按兼容规则使用 fallback Sun。没有合格 Directional、无有效 bounds、无有效光方向或关闭 Shadows 时，ShadowPass 仍清除目标，但 Forward shader 不采样阴影贡献。
 
 阴影相机使用场景 AABB 的 8 个角点拟合：light view 看向 bounds center，XY 增加 5% padding、Z 增加 10% padding，并将 XY center 对齐到 shadow texel。投影使用 Vulkan `[0,1]` 深度的正交 ZO 矩阵。
 
@@ -58,7 +58,7 @@ DirectionalShadowPass 的 caster 规则为：
 - BLEND 与 transmission 不投射阴影。
 - `doubleSided` 继续控制 back cull 或 no cull。
 
-PBR-lite Forward 与 PBR-lite NormalMapped 使用 comparison sampler 和 3x3 PCF。阴影只乘到第一盏 Directional light 的 direct contribution；ambient、emissive、Point 和 Spot lighting 不受影响。透明材质可以接收阴影。Raster constant/slope bias 与 shader receiver bias 均可通过 `VulkanLab -> Render -> Lighting` 或 Runtime Control 调节。
+PBR-lite Forward 与 PBR-lite NormalMapped 使用 comparison sampler 和 3x3 PCF。阴影只乘到被选中 Directional caster 的 direct contribution；ambient、emissive、Point 和 Spot lighting 不受影响。透明材质可以接收阴影。Raster constant/slope bias 与 shader receiver bias 均可通过 `VulkanLab -> Render -> Lighting` 或 Runtime Control 调节。
 
 `Debug Shadow` 输出最终 visibility 灰度，用于检查投影范围、bias 和 PCF；它使用 PassThrough tone mapping。
 
@@ -148,7 +148,9 @@ Application 在创建 Window/Vulkan 前加载 `ShaderRegistry`。当前选择使
 
 SceneLight 支持 Directional、Point 和 Spot。glTF loader 解析 `KHR_lights_punctual` 根定义和当前 scene 的 node 引用，应用完整 node world transform后生成静态世界空间灯光。同一 light definition 可以由多个 node 实例化。glTF Directional 的局部 `-Z` 发射方向会翻转为引擎使用的 surface-to-light 方向；Spot 保留 light-to-scene 发射方向。
 
-GlobalUBO 最多上传 1 个 directional light 和 8 个 punctual lights；Point 与 Spot 共用 punctual 配额，超出部分保留在 Scene 并计入 ignored。存在任意有效场景灯光时不注入 fallback Sun；如果场景声明的灯全部为零强度、零颜色或非法值，则跳过这些灯并使用 fallback Sun。第一盏实际上传的 Directional 继续驱动唯一的方向光 shadow map，Point/Spot 当前不投射阴影。颜色和 intensity 保持 glTF 物理单位，不做自动缩放；高强度场景通过 Exposure EV 和 Tone Mapping 调整。没有可用 IBL 时，环境项由 ambient color/intensity 提供；AO 只影响间接项。
+`GlobalFrameUbo` 只保存 `directional/point/spot/total` 计数，不再内嵌灯数组。`set=0 binding=1` 是 Fragment stage 的只读 `std430` Scene Light SSBO；`GpuLight` stride 固定 64 字节。Renderer 为每个 frame slot 分配持续映射的独立 buffer，容量从 16 按 2 的幂增长，最多 256 且不自动收缩；替换只发生在该 slot 的 fence 已完成后，不调用 `vkDeviceWaitIdle()`。
+
+PBR Forward 按 Directional、Point、Spot 三段遍历 SSBO，Point/Spot 在超出 range 时提前跳过。三类灯共享 256 灯上限，超出部分保留在 SceneDocument 并计入 ignored；Legacy 继续使用 baseline 光照且不读取 SSBO。存在任意有效场景灯光时不注入 fallback Sun；如果场景灯全部无效，则按兼容规则使用 fallback Sun。Point/Spot 当前不投射阴影。颜色和 intensity 保持 glTF 物理单位，不做自动缩放；高强度场景通过 Exposure EV 和 Tone Mapping 调整。没有可用 IBL 时，环境项由 ambient color/intensity 提供；AO 只影响间接项。
 
 当前只支持一张全局环境和一张方向光 shadow map；没有 CSM、Point/Spot shadow、local reflection probe、parallax correction、deferred rendering 或 auto exposure。Bloom 是同步 compute 后处理，不使用异步 compute、lens dirt、anamorphic filter 或 temporal stabilization。
 

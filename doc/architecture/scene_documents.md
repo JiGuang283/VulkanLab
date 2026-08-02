@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 5 implementation
+> Verified against: Scene Authoring Stage 6 implementation
 
 VulkanLab 已将“导入模型”“可保存场景”和“运行时世界”拆成三个领域对象。模型预览与 Native Scene 都通过 `AssetRepository` 共享 `ModelAsset`；`.vkscene.json` 由 `RuntimeWorld` 实例化，并可在编辑器中修改、撤销和原子保存。
 
@@ -50,7 +50,7 @@ schema v1/v2 中的 `scenes[]` 仍按旧语义读取为 `CatalogModel`，旧 `ca
 
 `ModelAssetId` 与 `SceneDocumentId` 是稳定 asset ID 的强类型包装，继续使用项目现有的小写字母、数字、连字符和下划线规则。Entity UUID 用于场景内部引用，asset ID 用于 Catalog 和派生资产引用，二者不能互换。
 
-## SceneDocument schema v1
+## SceneDocument schema v2
 
 场景文件位于 `assets/scenes/<scene-id>.vkscene.json`。顶层保存场景 ID、显示名、active camera、ambient、可选 environment 和保持原顺序的 entity 数组。Entity 使用扁平数组与 parent UUID：
 
@@ -72,10 +72,12 @@ schema v1/v2 中的 `scenes[]` 仍按旧语义读取为 `CatalogModel`，旧 `ca
 当前 DTO 定义并运行三类组件：
 
 - `modelInstance`：引用一个 Catalog model ID。
-- `light`：Directional、Point 或 Spot 及其颜色、强度、range 和 cone。
+- `light`：Directional、Point 或 Spot 及其颜色、强度、range、cone 和 `castsShadow`。
 - `camera`：透视相机的垂直 FOV、near 和 far。
 
 解析为严格模式：未知顶层字段、未知 Entity 字段或未知 component 都会失败，避免读写后静默丢失未来数据。UUID 必须唯一；parent 必须存在且层级无环；active camera 必须引用 Camera entity；Transform、Light 和 Camera 数值必须有限且在有效范围内；scale 分量不能接近零。Quaternion 在加载时验证并规范化。
+
+schema v1 仍可读取：旧 Directional 默认 `castsShadow=true`，Point/Spot 默认 `false`；加载后内存文档规范化为 v2，下一次保存确定性写出 v2。当前只有 Directional 可以设置 `castsShadow=true`，Point/Spot 设置该字段会被验证器拒绝。
 
 不传 Catalog references 时允许模型和环境暂时未解析，便于独立编辑文件。将文档加入 Catalog 时，`SceneCatalogStore` 会使用当前 models/environments 重新加载并校验所有引用。
 
@@ -107,7 +109,7 @@ Native Scene 加载事务先在 worker 解析文档，再按 Catalog profile 向
 - Viewport picking 只使用 ModelAsset bounds，暂不支持 primitive picking、重叠对象循环选择或 GPU Object-ID Pass。
 - Gizmo 暂不支持 snapping；编辑器仍只支持单选和一个 Scene Viewport。
 - builtin/OBJ 模型不能放入 Native Scene；Viking Room 继续使用 legacy preview。
-- GPU ABI 仍限制为一盏 Directional 和八盏 Point/Spot。超限 Light Entity 会保存，但在 Outliner/Inspector 标记为未上传。
+- Directional、Point 和 Spot 共享 256 盏有效灯光上限。超限 Light Entity 仍会保存，并由 RenderView 的精确上传结果在 Outliner/Inspector 标记为未上传；当前 Forward shader 会直接遍历所有已上传灯光。
 - Native Scene 使用各 Catalog model 的 import profile；全局 Texture Limit 仅影响模型预览。
 - Validator index、KTX2 manifest、ArtifactIndex 和 Runtime Control 中既有 `sceneId` 字段保持不变；在模型资产路径中它是 `modelId` 的兼容序列化名称，不触发缓存迁移。
 

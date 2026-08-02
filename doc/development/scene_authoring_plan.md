@@ -2,7 +2,7 @@
 
 > Status: Active
 > Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 5 implementation
+> Verified against: Scene Authoring Stage 6 implementation
 
 ## Summary
 
@@ -36,7 +36,8 @@ VulkanLab 当前可以导入、准备、上传并渲染一个完整 glTF/GLB，�
 - Stage 3 已完成：新增 `IRenderWorld` 与 `RuntimeWorld`，原生 SceneDocument 进入 Registry；模型和 environment 全部 Ready 后才原子发布新 World，旧 World 按 submission serial 延迟释放。
 - Stage 4 已完成：新增 SceneEditorSession、256 项 Undo/Redo、Dirty/file-stamp 事务、New/Open/Save/Save As/Convert Preview、Outliner、Inspector、Editor/Active Camera 模式及异步 Model binding。
 - Stage 5 已完成：加入 Editor-only ImGuizmo、CPU bounds picking、选中 overlay、单事务 Transform Gizmo、模型拖入 Viewport，以及 Outliner Keep World reparent/unparent。
-- 下一阶段是 Stage 6 的可扩展场景灯光；Stage 7 的 Cook closure 仍未开始。
+- Stage 6 已完成：场景灯光迁入 per-frame SSBO，Directional/Point/Spot 共享 256 灯上限；SceneDocument schema v2 持久化 `castsShadow`，阴影方向光按稳定身份确定性选择。
+- 下一阶段是 Stage 7 的 Cook closure。
 
 当前事实说明见[场景数据与 Catalog](../architecture/scene_documents.md)。
 
@@ -67,7 +68,7 @@ VulkanLab 当前可以导入、准备、上传并渲染一个完整 glTF/GLB，�
 - 关闭并重新打开场景后，实体身份、层级、Transform、模型引用、灯光、相机和环境设置保持一致。
 - 添加或删除一个模型实例不销毁和重建整个 RuntimeWorld。
 - glTF 内嵌灯光在 ModelAsset 中保持局部定义，并随 ModelInstance 正确实例化。
-- 新场景可以创建和编辑 Directional、Point、Spot 灯光；后续阶段将固定 UBO 灯光数组迁移到 SSBO。
+- 新场景可以创建和编辑 Directional、Point、Spot 灯光；三类灯已统一通过 per-frame SSBO 上传。
 - 旧 Catalog、旧派生纹理 manifest、现有 Runtime Control scene ID 和视觉场景入口在迁移期间继续可用。
 - Cook 从原生 SceneDocument 计算模型、环境、shader 和派生 blob 的完整闭包。
 
@@ -442,8 +443,8 @@ Catalog、cache 和控制协议需要渐进迁移，不能要求用户一次性�
 - Light direction 由 Entity world rotation 的 local `-Z` 计算，与 glTF spot/directional 约定一致。
 - Point/Spot position 来自 Entity world translation。
 - UI 显示当前 GPU 上限、已上传和被忽略数量。
-- 本阶段仍使用现有 `1 directional + 8 punctual` GPU ABI；超过上限的实体保留在 SceneDocument，但明确显示未参与渲染。
-- 只有选定的首个有效 Directional 使用现有 shadow map；Point/Spot 的 `castsShadow` 在 v1 中显示 Unsupported，不产生错误实体阴影。
+- Stage 4 当时仍使用 `1 directional + 8 punctual` GPU ABI；Stage 6 已将其替换为共享 256 灯的 per-frame SSBO。
+- 只有一盏确定性选中的有效 Directional 使用现有 shadow map；Point/Spot shadow 仍显示 Unsupported。
 
 ### Exit Criteria
 
@@ -475,16 +476,18 @@ Catalog、cache 和控制协议需要渐进迁移，不能要求用户一次性�
 
 ## Stage 6: Scalable Scene Lights
 
+> Implementation status: Complete
+
 ### Scope
 
 - 将 variable-length scene light list 从 `GlobalFrameUbo` 固定数组迁移到 per-frame storage buffer。
 - Global UBO 只保存 camera、ambient、environment、shadow 和灯光计数；`GpuLight` ABI 保持 16-byte aligned。
 - Frame-global descriptor 增加 storage buffer binding，PBR Shader 按 Directional/Point/Spot count 遍历。
-- Renderer 根据当前 Scene 灯光数量增长 buffer capacity，设置明确的开发上限，例如 256；不每帧重新分配。
+- Renderer 根据当前 Scene 灯光数量按 2 的幂增长每个 frame slot 的 buffer capacity；初始 16、共享上限 256，容量不自动收缩。
 - Legacy 和 Debug variants 明确声明是否消费 scene-light buffer；Shader contract 同步更新。
 - Light Inspector 增加 enabled、type、color、intensity、range、cone 和 shadow support 状态。
 - imported lights 与 editor-created lights 使用同一上传路径和统计。
-- 方向光阴影选择规则变为稳定字段：优先 `castsShadow=true` 的第一盏有效 Directional，再按 Entity UUID 稳定排序；没有时禁用 shadow。
+- 方向光阴影按来源与稳定身份选择：显式 Entity 优先于 imported light，再按 Entity/model key 排序；只有 `castsShadow=true` 的有效 Directional 可成为 caster，没有候选时禁用 shadow。
 
 ### Performance Boundary
 

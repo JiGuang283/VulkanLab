@@ -119,7 +119,7 @@ cd build\windows-msvc-debug\Debug
 - 待上传 texture/mesh、in-flight upload batch；
 - `modelAssetRepository` 的 Ready/Loading/Failed/Retiring 数量、prepare/build/hit/coalesced 计数和各 generation 的 consumer/资源摘要；
 - 当前选择和已发布的 environment，以及环境加载任务；
-- 当前 Scene 的 Directional/Point/Spot 数量、实际上传数量和超限忽略数量；
+- 当前 Scene 的 Directional/Point/Spot 数量、按类型与总计的实际上传数量、256 灯上限、每个 frame slot 的 SSBO capacity/总字节、超限数量与最多 32 个 ignored Entity ID，以及当前 Directional shadow caster；
 - capture queue 计数，以及 Workspace/Viewport 各自的 capture capability；
 - `viewport` 的模式、可见/hover 状态、display extent、render extent 和 resize pending；
 - GUI 可见性、窗口最小化、swapchain recreate 和 rendering 状态。
