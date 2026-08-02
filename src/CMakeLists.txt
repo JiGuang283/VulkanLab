@@ -267,7 +267,7 @@ target_link_libraries(vkl_engine
         uuid
 )
 if(VKL_ENABLE_EDITOR_UI)
-    target_link_libraries(vkl_engine PRIVATE vkl_imgui)
+    target_link_libraries(vkl_engine PRIVATE vkl_imgui vkl_imguizmo)
 endif()
 
 add_executable(VulkanLab
