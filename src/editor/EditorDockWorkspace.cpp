@@ -312,23 +312,38 @@ void EditorDockWorkspace::drawViewport(
                                    ImGuiWindowFlags_NoScrollWithMouse;
     const bool open = ImGui::Begin(kViewportWindow, nullptr, flags);
     if (open) {
-        const float statusHeight = ImGui::GetFrameHeight();
         const float statusStartY = ImGui::GetCursorPosY();
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.0f);
         ImGui::SetCursorPosY(statusStartY + 2.0f);
-        if (panels.viewportToolbar) {
+        const bool hasToolbar = static_cast<bool>(panels.viewportToolbar);
+        if (hasToolbar)
             panels.viewportToolbar();
-            ImGui::SameLine();
-        }
+        char renderStatus[96]{};
         if (viewport.resizePending) {
-            ImGui::TextDisabled("Render %u x %u  |  Resizing...",
-                                viewport.renderWidth,
-                                viewport.renderHeight);
+            std::snprintf(renderStatus, sizeof(renderStatus),
+                          "Render %u x %u | Resizing...",
+                          viewport.renderWidth, viewport.renderHeight);
         } else {
-            ImGui::TextDisabled("Render %u x %u", viewport.renderWidth,
-                                viewport.renderHeight);
+            std::snprintf(renderStatus, sizeof(renderStatus),
+                          "Render %u x %u", viewport.renderWidth,
+                          viewport.renderHeight);
         }
-        ImGui::SetCursorPosY(statusStartY + statusHeight + 2.0f);
+        if (hasToolbar) {
+            const float contentRight =
+                ImGui::GetWindowPos().x +
+                ImGui::GetWindowContentRegionMax().x;
+            const float remaining =
+                contentRight - ImGui::GetItemRectMax().x;
+            const float required = ImGui::GetStyle().ItemSpacing.x +
+                                   ImGui::CalcTextSize(renderStatus).x;
+            if (remaining >= required)
+                ImGui::SameLine();
+        }
+        ImGui::TextDisabled("%s", renderStatus);
+        const float toolbarEndY = ImGui::GetCursorPosY();
+        ImGui::SetCursorPosY(
+            std::max(statusStartY + ImGui::GetFrameHeight() + 2.0f,
+                     toolbarEndY + 2.0f));
         ImGui::Separator();
 
         const ImVec2 origin = ImGui::GetCursorScreenPos();

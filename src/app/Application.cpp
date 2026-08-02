@@ -6300,7 +6300,15 @@ void Application::drawGui() {
         panels.viewportToolbar = [this]() {
             if (sceneViewportController_) {
                 sceneViewportController_->drawToolbar();
-                ImGui::SameLine();
+                const float contentRight =
+                    ImGui::GetWindowPos().x +
+                    ImGui::GetWindowContentRegionMax().x;
+                const float remaining =
+                    contentRight - ImGui::GetItemRectMax().x;
+                if (remaining >=
+                    132.0f + ImGui::GetStyle().ItemSpacing.x) {
+                    ImGui::SameLine();
+                }
             }
             const bool editorCamera = sceneEditorSession_->cameraMode() ==
                                       EditorCameraMode::Editor;
