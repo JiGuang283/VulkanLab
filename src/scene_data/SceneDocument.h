@@ -50,7 +50,7 @@ struct AtmosphereComponentDocument {
     glm::vec3 ozoneAbsorptionPerKm{0.000650f, 0.001881f, 0.000085f};
     float ozoneCenterHeightKm = 25.0f;
     float ozoneHalfWidthKm = 15.0f;
-    glm::vec3 groundAlbedo{0.0f};
+    glm::vec3 groundAlbedo{0.1f};
     float multipleScatteringFactor = 1.0f;
     float aerialPerspectiveStartMeters = 100.0f;
     float aerialPerspectiveDistanceScale = 1.0f;

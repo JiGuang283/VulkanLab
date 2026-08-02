@@ -66,7 +66,7 @@ PBR-lite Forward 与 PBR-lite NormalMapped 使用 comparison sampler 和 3x3 PCF
 
 ## 程序化 Sky Atmosphere
 
-Sky Atmosphere v1 依据 [Hillaire 2020](https://sebh.github.io/publications/egsr2020.pdf) 的 LUT 架构和 [MIT 参考实现](https://github.com/sebh/UnrealEngineSkyAtmosphere)，在项目内实现 Vulkan/GLSL 版本，不把参考工程作为运行时依赖。当前物理模型包含 Rayleigh、Mie 和臭氧吸收、多次散射近似、太阳圆盘、地表反照率，以及作用于 PBR 的 aerial perspective。
+Sky Atmosphere v1 依据 [Hillaire 2020](https://sebh.github.io/publications/egsr2020.pdf) 的 LUT 架构和 [MIT 参考实现](https://github.com/sebh/UnrealEngineSkyAtmosphere)，在项目内实现 Vulkan/GLSL 版本，不把参考工程作为运行时依赖。当前物理模型包含 Rayleigh、Mie 和臭氧吸收、多次散射近似、太阳圆盘、受视线与太阳大气透射影响的 Lambert 地表反射，以及作用于 PBR 的 aerial perspective。新建场景的 Earth Preset 使用 `0.1` 中性 Ground Albedo；显式设置为黑色时，下半球仍按物理语义显示为黑色。
 
 Registry 为 Atmosphere 注册四张 `RGBA16F` storage/sampled image：
 
