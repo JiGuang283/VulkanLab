@@ -1,8 +1,8 @@
 # VulkanLab 可编辑场景与多模型世界实施计划
 
-> Status: Active
+> Status: Complete
 > Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 6 implementation
+> Verified against: Scene Authoring Stage 7 implementation
 
 ## Summary
 
@@ -503,6 +503,8 @@ Catalog、cache 和控制协议需要渐进迁移，不能要求用户一次性�
 - 现有单方向光阴影和 fallback 兼容场景保持工作。
 
 ## Stage 7: Cook, Package And Runtime Integration
+
+> Implementation status: Complete
 
 ### Scope
 

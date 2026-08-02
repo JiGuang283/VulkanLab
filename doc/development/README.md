@@ -1,8 +1,8 @@
 # 开发文档工作区
 
 > Status: Current
-> Last verified: 2026-08-01
-> Verified against: `86b809d`
+> Last verified: 2026-08-02
+> Verified against: Scene Authoring Stage 7 implementation
 
 本目录只存放正在讨论或执行的开发计划。不要根据历史归档推断下一阶段目标。
 
@@ -11,11 +11,11 @@
 - [大型场景响应式加载路线图](async_scene_loading_plan.md)：从现有同步加载演进到后台准备、增量 GPU 上传、任务取消和压缩纹理资产管线。
 - [工程结构与构建系统重构计划](engineering_refactor_plan.md)：用 target-based CMake、build-tree Shader、ProjectContext 资源路径和 Application 职责拆分支撑后续工具开发。
 - [开发诊断与自动化工具链计划](development_toolchain_plan.md)：Stage 0-5 已完成，下一未完成阶段是 Windows CI 与质量门禁。
-- [可编辑场景与多模型世界实施计划](scene_authoring_plan.md)：将导入模型、可编辑场景和运行时 World 分层，逐步实现多模型实例、实体编辑、独立灯光与 Cook 集成。
 
 ## Completed Records
 
 - [工程基础到自动视觉回归执行记录](../archive/plans/engineering/engineering_to_visual_regression_execution_plan.md)：已完成 M0-M7，包含提交、自动测试和人工门禁证据。
+- [可编辑场景与多模型世界实施计划](../archive/plans/scene_authoring/scene_authoring_plan.md)：已完成 Stage 0-7，包含共享 ModelAsset、RuntimeWorld、场景编辑、可扩展灯光与 Native Scene Cook。
 
 ## 新计划规则
 

@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 6 implementation
+> Verified against: Scene Authoring Stage 7 implementation
 
 VulkanLab 已将“导入模型”“可保存场景”和“运行时世界”拆成三个领域对象。模型预览与 Native Scene 都通过 `AssetRepository` 共享 `ModelAsset`；`.vkscene.json` 由 `RuntimeWorld` 实例化，并可在编辑器中修改、撤销和原子保存。
 
@@ -103,6 +103,14 @@ schema v1 仍可读取：旧 Directional 默认 `castsShadow=true`，Point/Spot 
 
 Native Scene 加载事务先在 worker 解析文档，再按 Catalog profile 向 `AssetRepository` 请求唯一模型集合，并等待模型与 environment 全部 Ready。新 World 完整构造后才原子发布；失败或取消时旧 World 与旧 environment 保持可用。旧 World 和共享资源按 submission serial 延迟释放，不调用 `vkDeviceWaitIdle()`。
 
+## Cook 与发布运行时
+
+Stage 7 以 Native SceneDocument 作为 Cook root。`CookClosureResolver` 从 Entity 的 `modelInstance` 与顶层 environment 收集唯一依赖；每个模型使用自己的 Catalog `importProfile`，重复实例只打包一个 Model artifact。builtin/OBJ 不能进入闭包，Validator Error、缺失/过期 artifact 或非 Native BC7 profile 都会阻止发布。
+
+Cook 会将旧 v1 文档规范化为 schema v2 写入 staging，但不修改项目源文件。最小 cooked Catalog 只包含已选 SceneDocuments 及其引用的 Models、Environments 和 profiles；包内 Artifact Index 使用 `Model / Environment / SceneDocument` 三类 record，并在 SceneDocument record 中保存精确 asset references。
+
+schema v3 package manifest 保存有序 `sceneIds` 和 `startupSceneId`。Cooked runtime 只注册这些 Native Scene，启动后通过现有异步事务构建 `RuntimeWorld`；相同 model ID 的多个 Entity 继续由 `AssetRepository` 共享同一 generation 和 GPU 资源。旧 schema v1/v2 单模型包保留 Model Preview 兼容路径。
+
 ## 当前限制
 
 - 一次只打开一个 Native Scene 编辑会话；模型预览仍作为独立兼容入口。
@@ -113,4 +121,4 @@ Native Scene 加载事务先在 worker 解析文档，再按 Catalog profile 向
 - Native Scene 使用各 Catalog model 的 import profile；全局 Texture Limit 仅影响模型预览。
 - Validator index、KTX2 manifest、ArtifactIndex 和 Runtime Control 中既有 `sceneId` 字段保持不变；在模型资产路径中它是 `modelId` 的兼容序列化名称，不触发缓存迁移。
 
-后续 RuntimeWorld、编辑和多模型实例阶段见[可编辑场景实施计划](../development/scene_authoring_plan.md)。
+Stage 0-7 的完整演进记录见[可编辑场景实施计划归档](../archive/plans/scene_authoring/scene_authoring_plan.md)。

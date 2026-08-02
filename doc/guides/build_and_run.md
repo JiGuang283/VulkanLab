@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 5 implementation
+> Verified against: Scene Authoring Stage 7 implementation
 
 ## 环境要求
 
@@ -400,56 +400,68 @@ DerivedAssets/<projectId>/
 
 ## Cook 与独立运行包
 
-先构建 Release，并确保目标 scene/profile 的派生纹理处于 Ready。下面的命令只发布 Main Sponza 1024：
+Stage 7 的 Cook 只接受 Native SceneDocument 作为发布根，不再接受模型预览。先构建精简 Release runtime 和开发 AssetTool，并确保场景引用模型的 Validator 报告、Native BC7 纹理和环境 KTX2 都处于 Ready：
 
 ```powershell
-cmake --build build-release --config Release
+cmake --preset windows-msvc-runtime
+cmake --build build/windows-msvc-runtime --config Release --target VulkanLab
 
-.\build-release\Release\VulkanLabAssetTool.exe cook `
+cmake --preset windows-msvc-dev-fast
+cmake --build build/windows-msvc-dev-fast --config Debug `
+  --target VulkanLabAssetTool
+
+.\build\windows-msvc-dev-fast\Debug\VulkanLabAssetTool.exe cook `
   --project . `
-  --runtime-dir .\build-release\Release `
-  --output .\dist\main-sponza `
-  --platform windows-x64 `
-  --profile desktop_1024 `
-  --model-id main-sponza `
-  --environment-id studio
+  --runtime-dir .\build\windows-msvc-runtime\Release `
+  --output .\dist\my-scene `
+  --scene-id my-scene `
+  --startup-scene my-scene `
+  --build-missing
 ```
 
-可以重复传入 `--model-id` 和 `--environment-id`；`--scene-id` 仍是 model ID 的兼容别名。省略 model ID 时选择 Catalog 中 `optional=false` 的模型预览；省略 environment ID 时包含 Catalog 中所有环境。Stage 1 尚不把原生 SceneDocument 纳入 Cook。默认要求所有选中 artifact 已经 Ready；需要在 cook 前自动补建时显式增加 `--build-missing`，也可以用 `--workers` 和 `--memory-budget-mib` 控制编码器。省略 `--cache-root` 时使用项目共享缓存。
+可以重复传入 `--scene-id`，一个包可包含多个 Native Scene。`--startup-scene` 必须属于已选场景；省略时使用 Catalog 顺序中的第一个已选场景。完全省略 `--scene-id` 时选择所有 `optional=false` 的 Native Scene。模型、import profile 和环境均从 SceneDocument/Catalog 闭包推导；Cook 中使用 `--model-id`、`--environment-id` 或 `--profile` 会返回迁移错误。
+
+默认要求全部 artifact 已经 Ready。`--build-missing` 会按唯一 `(modelId, profileId)` 和 environment/profile 补建；`--workers` 与 `--memory-budget-mib` 控制离线构建。每个模型使用自身 Catalog `importProfile`，Windows 包只接受实际使用的 Native BC7 profile。Cook 还要求精确版本 glTF Validator 的结果为 Valid 或 Warnings；规范 Error 不可绕过。
+
+Cook 会调用目标 `VulkanLab.exe --build-info-json`。目标必须是 `windows-msvc-runtime` 的 Release 产物，Editor、Runtime Control、Capture、Asset Authoring、Validation、Debug Utils、GPU Profiler 和 Tracy 必须全部未编译。全功能 Debug/Release 不能作为发布 runtime。
 
 交付前使用同一套 hash 校验：
 
 ```powershell
-.\build-release\Release\VulkanLabAssetTool.exe package verify `
-  --path .\dist\main-sponza
+.\build\windows-msvc-dev-fast\Debug\VulkanLabAssetTool.exe package verify `
+  --path .\dist\my-scene
 ```
 
 典型输出布局为：
 
 ```text
-dist/main-sponza/
+dist/my-scene/
   VulkanLab.exe
-  VulkanLabCtl.exe
   package_manifest.json
   assets/catalog.json
+  assets/scenes/*.vkscene.json
   shader/manifest.json               # Shader program/variant 权威清单
   shader/...                         # Manifest 实际引用的唯一 SPIR-V
   models/...                         # glTF/GLB 与必要 buffer，不含源图片
   runtime_assets/artifact_index.json
-  runtime_assets/manifests/...       # scene 和 environment manifests
+  runtime_assets/manifests/...       # model 和 environment manifests
   runtime_assets/blobs/*.ktx2
 ```
 
-Cook 先在输出目录旁构建 staging，验证 package manifest 后才原子替换旧包。环境闭包只包含四个派生 KTX2 与 manifest，不包含源 HDR。输出目录不能与 runtime 或 cache 相互包含，也不能包含项目根目录。失败不会发布 staging，也不会破坏已经存在的包。
+Cooked Catalog 只保留选中的 SceneDocument、其引用的唯一 Models/Environments 和必要 profiles，不注册 Model Preview。重复 ModelInstance 不复制模型或 GPU 资源；内容寻址 blob 跨模型去重。环境闭包只包含派生 KTX2 与 manifest，不包含源 HDR。包内也不包含 PNG/JPEG、AssetTool、VulkanLabCtl、编辑器、文档或 shader source。
+
+Cook 先在输出目录旁构建 staging。发布前会复核 Catalog 与 SceneDocument 未在 Cook 期间变化，并验证 schema v3 package manifest、最小 Catalog、SceneDocument 引用、Artifact Index、KTX2 metadata、shader closure、所有文件大小和 SHA-256；成功后才原子替换旧包。失败会删除 staging 并保留旧包。
 
 包内运行不需要源码 locator 或用户级 derived cache：
 
 ```powershell
-cd .\dist\main-sponza
-.\VulkanLab.exe --runtime-control
+cd .\dist\my-scene
+.\VulkanLab.exe
 ```
 
-程序从可执行文件旁发现 `package_manifest.json`，在创建窗口/Vulkan 前校验所有列出文件的大小和 SHA-256，然后使用包内只读 Catalog 与 `runtime_assets`。此时自动强制 `CookedOnly`，纹理限制固定为 package profile，`--project`、`--cache-root`、`--asset-tool`、非 cooked asset mode 和运行时纹理档位修改都会被拒绝。Windows package 要求所有 scene texture manifest 都是 Native BC7；目标设备不支持 BC7 sampled、linear filtering 和 transfer destination 时返回 `bc7_required`。KTX2 manifest、entry、blob、format、payload 或 mip 数据出错会使加载失败，不会读取 PNG/JPEG fallback。Cooked package 也关闭开发 validation layer 依赖；目标机器仍需 Vulkan 显卡驱动和 MSVC Release Runtime。
+程序从可执行文件旁发现 `package_manifest.json`，在创建窗口/Vulkan 前完成相同验证，然后只注册 Native Scene，并异步加载 `startupSceneId`。此时自动强制 `CookedOnly`；每个模型使用包内 Catalog profile，环境使用 SceneDocument 引用。`--project`、`--cache-root`、`--asset-tool` 和非 cooked asset mode 都会被拒绝。`windows-msvc-runtime` 不包含 Runtime Control，因此 `--runtime-control` 也会在 Vulkan 初始化前明确报错。
+
+目标设备不支持 BC7 sampled、linear filtering 和 transfer destination 时返回 `bc7_required`。KTX2 manifest、entry、blob、format、payload 或 mip 数据出错会使加载失败，不会读取 PNG/JPEG fallback。目标机器仍需 Vulkan 显卡驱动和 MSVC Release Runtime。旧 schema v1/v2 单模型包仍可读取，并继续走 Model Preview 兼容路径。
 
 `package_manifest.json` 包含 `VulkanLab.exe` 本身的 hash。若发布流程还要进行代码签名，应先完成签名，再重新生成 package manifest；当前 `cook` 命令假定输入 executable 已经是最终字节。
 

@@ -2,13 +2,13 @@
 
 > Status: Current
 > Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 4 working tree
+> Verified against: Scene Authoring Stage 7 implementation
 
 ## 项目、Catalog 与导入
 
 `ProjectContextResolver` 先检查可执行文件旁的 `package_manifest.json`。存在时完整校验 package 并返回只读 package root、Catalog、cache root 和 profile，禁止 `--project` 覆盖。否则按开发规则优先使用 `--project <path>`，再读取可执行文件旁由 CMake 生成的 `vulkanlab_project.json`，最后才从当前目录祖先查找 Catalog。解析结果明确区分 `projectRoot`、`runtimeRoot`、`cacheRoot` 和 `captureRoot`；后续 subsystem 只消费已经解析的路径，不再按当前工作目录拼接资源。Debug、Release 和资产工具因此指向同一个源码 `assets/catalog.json`。Catalog schema v3 将 `models[]`、原生 `scenes[]` 和 `environments[]` 分开；schema v1/v2 的旧 `scenes[]` 继续按模型预览读取，且只读启动不会改写旧文件。具体模型和环境不再硬编码在 `main.cpp`。
 
-开发模式下 Catalog model、glTF/GLB、外部 buffer/image 以及 Viking Room 的 OBJ/PNG 从 `projectRoot` 读取，SPIR-V 和 sibling 工具从 executable 所在的 `runtimeRoot` 读取。Cooked package 中 `projectRoot` 与 `runtimeRoot` 都是 package root，`cacheRoot` 固定为包内 `runtime_assets`。Stage 1 的原生 `.vkscene.json` 只由数据服务解析和保存，尚不参与运行时加载。
+开发模式下 Catalog model、Native SceneDocument、glTF/GLB、外部 buffer/image 以及 Viking Room 的 OBJ/PNG 从 `projectRoot` 读取，SPIR-V 和 sibling 工具从 executable 所在的 `runtimeRoot` 读取。Cooked package 中 `projectRoot` 与 `runtimeRoot` 都是 package root，`cacheRoot` 固定为包内 `runtime_assets`。Native `.vkscene.json` 由 `SceneLoadManager` 解析，再通过 `AssetRepository` 和 Environment loader 事务性构造 `RuntimeWorld`。
 
 `VulkanLab -> Scene -> Scenes` 的 `Import Model...` 通过 Win32 `IFileOpenDialog` 选择 `.gltf/.glb`。新源文件先由 `ModelImportService::preflight` 检查本地 URI 与依赖闭包，再由独立 `VulkanLabAssetTool validate scene` 进程运行固定版本 Khronos glTF Validator。只有 `Valid/Warnings` 才能继续；`Unavailable` 需要用户显式勾选未校验导入；`Invalid/Stale/Failed/NotChecked` 都会阻止复制、Catalog 写入和后续 BC7 构建。
 
@@ -180,29 +180,32 @@ VMA 快照在 ModelGpuBuilder 完成并发布后采集；Repository 面板另外
 
 ## Cook 与 packaged runtime
 
-`VulkanLabAssetTool cook` 将开发项目和共享 cache 转换成只读运行目录。输入是 ProjectContext、一个精确 scene profile、选中的 scene/environment ID、已构建 runtime 目录和输出目录。默认选择非 optional scenes 和全部 Catalog environments；显式 ID 可以形成更小的产品包。缺失 artifact 默认直接失败，`--build-missing` 才会在 cook 前调用现有 importer/baker。
+`VulkanLabAssetTool cook` 将开发项目和共享 cache 转换成只读运行目录。发布根固定为一个或多个 Native `SceneDocument`；模型预览、builtin/OBJ 和显式 model/environment/profile 选择不再是 Cook 入口。省略 `--scene-id` 时选择 Catalog 中 `optional=false` 的 Native Scene，`--startup-scene` 省略时使用 Catalog 顺序中的第一个已选场景。
 
-`CookPackageBuilder` 建立以下引用闭包：
+`CookClosureResolver` 加载并验证 SceneDocument，按 Catalog 顺序建立只读闭包：
 
-1. `VulkanLab.exe`、可选 `VulkanLabCtl.exe`、Shader Manifest 及其 programs 实际引用的唯一 SPIR-V。
-2. 只含选中场景、环境、单一 scene profile 和所需 environment profile 的 cooked Catalog。
-3. 选中的 builtin scene 明确需要的 OBJ/PNG；当前为 Viking Room。
-4. glTF/GLB 主文件；外部 `.gltf` 只复制 buffer URI，不复制源图片。
-5. 每个 glTF scene/profile 的 manifest 及其内容寻址 KTX2 blob 去重集合。
-6. 每个选中 environment/profile 的 manifest 及四个浮点 KTX2 blob，不包含源 HDR。
-7. 从 cooked Catalog、manifests 和 blobs 重建的 package-local ArtifactIndex。
+1. 有序 SceneDocument roots 和 `startupSceneId`。
+2. Entity 引用的唯一 Catalog Models；每个 Model 使用自身 `importProfile`。
+3. SceneDocument 引用的唯一 Environments 和各自 environment profile。
+4. `VulkanLab.exe`、Shader Manifest 及其 programs 实际引用的唯一 SPIR-V。
+5. glTF/GLB 主文件和外部 buffer；不复制源 PNG/JPEG。
+6. 每个 Model/profile 的 Native BC7 manifest 与内容寻址 KTX2 blob 去重集合。
+7. 每个 Environment/profile 的 manifest 与四类浮点 KTX2 blob；不复制源 HDR。
 
-Cooked scene manifest 将 source stamp 改写为包内 scene stamp；cooked environment 在 Catalog 中标记为 optional，因为源 HDR 不进入包。源图片和 HDR 因此不属于运行闭包；blob 内容由 package manifest SHA-256 保护，运行时 KTX2 loader 再验证结构和 subresource。Main Sponza 包不会包含 PNG/JPEG、FBX、USD、MAX 或未登记 shader。
+`CookPackageBuilder` 将 v1 SceneDocument 规范化为 schema v2 写入 staging，不修改项目源文件。Cooked Catalog 只保留闭包内 Scene、Model、Environment 和解析必需 profiles，且不创建 Model Preview entry。Model 的 Validator 报告必须为 Valid/Warnings，实际使用 profile 必须为 Native BC7。Cooked texture manifest 的 source stamp 改写为包内 glTF/GLB stamp；environment source stamp 清空，因为源 HDR 不进入包。
 
-所有文件先写入输出目录旁的唯一 staging。生成 sorted schema v1 `package_manifest.json` 后，工具验证每个文件的规范化相对路径、大小和 SHA-256，再通过目录 rename 发布。替换已有包时先保留 sibling backup；构建或验证失败时移除 staging，原包保持可验证。`package verify` 和运行时启动调用同一 verifier。
+Artifact Index schema v4 将记录分类为 `Model`、`Environment` 和 `SceneDocument`；旧 `Scene` 读取为 Model。SceneDocument record 保存文档 stamp 和精确 Model/profile、Environment/profile references。包内索引由 cooked closure 重建，不从开发索引直接复制。
+
+所有文件先写入输出目录旁的唯一 staging。schema v3 `package_manifest.json` 记录 Scene roots、startup Scene、默认 profile、目标 runtime build revision/configuration/features、BC7 要求及完整文件 hash。`package verify` 在 size/SHA-256 后继续验证最小 Catalog、SceneDocument 引用、Artifact Index references、KTX2 metadata 与 Shader closure。发布前再次比较源 Catalog/SceneDocument 内容哈希；任一变化或验证失败都会删除 staging 并保留旧包。
 
 packaged `main()` 在 Vulkan 初始化前强制以下契约：
 
-- Package project/profile 必须与 cooked Catalog 一致。
+- Package project/default profile、Scene roots 和 startup Scene 必须与 cooked Catalog 一致。
 - cache root 固定为包内 `runtime_assets`，asset mode 固定为 CookedOnly。
-- 不创建 AssetImportManager，不写 package ArtifactIndex，也不允许 source fallback、外部 cache/tool/project override 或纹理 profile 切换。
-- Windows package 的全部 scene texture artifact 必须是 Native BC7；目标设备不支持 BC7 sampled、linear filtering 和 transfer destination 时返回 `bc7_required`。
-- 关闭 validation layer，避免 Release 包依赖 Vulkan SDK 开发层。
+- schema v3 package 只注册 Native Scene，并异步加载 `startupSceneId`；v1/v2 单模型包继续走旧 Model Preview 兼容路径。
+- 不创建 AssetImportManager，不写 package ArtifactIndex，也不允许 source fallback 或外部 cache/tool/project override。
+- `windows-msvc-runtime` 必须是 Release，并在编译期移除 Editor、Runtime Control、Capture、Asset Authoring、Validation、Debug Utils、GPU Profiler 和 Tracy。
+- Windows package 的全部 Model texture artifact 必须是 Native BC7；目标设备不支持 BC7 sampled、linear filtering 和 transfer destination 时返回 `bc7_required`。
 
 开发 CMake 的 `POST_BUILD` 只 stage project locator，不复制完整 `models/` 或 `textures/`。开发运行直接读取 `projectRoot`，正式运行目录由 `cook` 的闭包决定。
 

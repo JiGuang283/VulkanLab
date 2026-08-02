@@ -2,9 +2,9 @@
 
 > Status: Current
 > Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 2 working tree
+> Verified against: Scene Authoring Stage 7 implementation
 
-Runtime Control 通过 Windows Named Pipe 控制已经运行的 VulkanLab。它面向本机开发、诊断和自动化，可以查询状态、加载模型预览和环境、设置相机、Shader 与渲染参数、等待渲染稳定、异步截图并安全退出程序。Stage 1 继续保留 `scene.*` 协议名称；`scene.list.entries[]` 是 Catalog model previews，同时返回 `kind: "modelPreview"`、稳定 `modelId`、兼容 `sceneId`、Catalog profile ID 和该 profile 的纹理限制。原生 SceneDocument 尚不出现在此接口。
+Runtime Control 通过 Windows Named Pipe 控制已经运行的 VulkanLab。它面向本机开发、诊断和自动化，可以查询状态、加载模型预览或 Native Scene、设置环境、相机、Shader 与渲染参数、等待渲染稳定、异步截图并安全退出程序。`scene.list.entries[]` 同时返回 `kind: "modelPreview"` 和 `kind: "nativeScene"`；Native Scene 条目使用稳定 SceneDocument ID，模型预览继续返回兼容 `sceneId`、`modelId`、Catalog profile ID 和纹理限制。
 
 Runtime Control 默认关闭。启用时必须显式传入 `--runtime-control`；Named Pipe 拒绝远程客户端，不开放网络端口。
 
@@ -77,9 +77,9 @@ cd build\windows-msvc-debug\Debug
 .\VulkanLabCtl.exe quit
 ```
 
-场景名称使用 Catalog 的完整 display name，不区分 ASCII 大小写。`scene list --json` 同时返回兼容的 `scenes` 名称数组和带稳定 `id`、`profileId`、`available`、`source` 的 `entries`。
+场景名称使用 Catalog 的完整 display name，不区分 ASCII 大小写。`scene list --json` 同时返回兼容的 `scenes` 名称数组和带稳定 `id`、`kind`、`available`、`source` 的 `entries`。Model Preview 还返回 `modelId/profileId/textureLimit`；Native Scene 的这些字段为 null。`scene.current` 对 RuntimeWorld 增加 SceneDocument ID、entity/model/light 数量和 active camera。
 
-`scene.load` 和 `scene.reload` 立即返回 task ID。`VulkanLabCtl` 默认每 100 ms 轮询 `load.status`，直到整个 import/prepare/upload operation 完成；`--no-wait` 可关闭客户端等待。普通 `scene.load` 使用 Repository Ready cache 或合并相同 model/profile 的活动请求，`scene.reload` 强制创建新的 ModelAsset generation。任务响应包含 `modelId`、`profileId`、`modelGeneration`、`repositoryHit` 和 `coalescedRequest`。任务状态包括 `Queued`、`PreparingCpu`、`ReadyForUpload`、`Uploading`、`WaitingForGpu`、`ReadyToPublish`、`Completed`、`Cancelling`、`Cancelled` 和 `Failed`。
+`scene.load` 和 `scene.reload` 立即返回 task ID。`VulkanLabCtl` 默认每 100 ms 轮询 `load.status`，直到整个 parse/resolve/prepare/upload/publish operation 完成；`--no-wait` 可关闭客户端等待。Model Preview 的普通 load 使用 Repository Ready cache，reload 创建新的 ModelAsset generation。Native Scene load 解析 SceneDocument、解析唯一 Models/Environment 并事务性发布 RuntimeWorld；reload 重新读取文档但对未失效模型使用 Repository cache。任务响应保留模型预览的 generation/hit/coalesced 字段，并对 Native Scene 增加 document phase、唯一模型数量、Ready 数量和失败 asset ID。
 
 `quit` 的成功响应会先写回并 flush，随后 Application 才退出主循环、停止管道和截图 worker。
 
@@ -113,7 +113,8 @@ cd build\windows-msvc-debug\Debug
 
 `render.status --json` 返回：
 
-- 当前 scene、scene generation 和最新 load operation；
+- 当前 scene、scene generation、最新 load operation，以及 Native RuntimeWorld 的 SceneDocument/entity/model/light/active camera 摘要；
+- package schema、是否为 Native Scene package 和 startup Scene；开发项目中该项显示未打包状态；
 - submitted/completed frame serial 与累计 presented frame 数；
 - 最近一个已完成 frame 的 `gpuTimings`，包含 available、frameSerial、DirectionalShadow/Skybox/MainForward、可选 Bloom、ToneMap、Present + UI 分项与 totalMs；
 - 待上传 texture/mesh、in-flight upload batch；
@@ -153,7 +154,7 @@ Viewport Color 截取纯场景，输出尺寸是实际 Viewport render extent。
 
 截图路径必须是 capture root 下的非空相对 `.png` 路径。绝对路径、`..` 逃逸、其他扩展名和解析后落在根目录外的路径都会以 `invalid_capture_path` 拒绝。PNG 先写临时文件再原子发布；取消或失败不会留下最终文件。
 
-开发运行默认 capture root 位于 runtime 旁的 `artifacts/captures/`，可通过 `--capture-root <path>` 覆盖。Cooked package 不创建 CaptureService，也不允许覆盖 capture root，因此截图命令返回 `capture_disabled`。Viewport Color 或 Swapchain source 不支持 8-bit RGBA/BGRA transfer-source 时返回 `capture_unsupported`；另一个来源仍可独立保持可用。
+开发运行默认 capture root 位于 runtime 旁的 `artifacts/captures/`，可通过 `--capture-root <path>` 覆盖。标准 `windows-msvc-runtime` 和 Stage 7 Cooked package均未编译 Runtime Control 或 Capture，因此没有 Named Pipe endpoint；传入 `--runtime-control` 会在 Vulkan 初始化前报错。自定义构建若保留 Runtime Control 但裁剪 Capture，截图协议返回 `feature_not_compiled`。Viewport Color 或 Swapchain source 不支持 8-bit RGBA/BGRA transfer-source 时返回 `capture_unsupported`；另一个来源仍可独立保持可用。
 
 常见截图错误码还有 `capture_queue_full`、`capture_not_found`、`capture_not_cancellable` 和 `capture_failed`。截图路径不会调用 `vkQueueWaitIdle()` 或 `vkDeviceWaitIdle()`；完成状态由正常 frame fence 的 submission serial 推进。
 
@@ -169,7 +170,7 @@ Viewport Color 截取纯场景，输出尺寸是实际 Viewport render extent。
 .\VulkanLabCtl.exe texture-limit set full
 ```
 
-Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模式修改纹理限制会触发当前 glTF 场景的新加载任务；控制工具默认等待完成。允许值为 `full`、`512`、`1024` 和 `2048`。CookedOnly profile 固定，修改返回 `texture_limit_locked`。
+Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模式修改纹理限制只影响 Model Preview，并触发当前预览的新加载任务；Native Scene 始终使用各 Catalog Model 的 import profile。允许值为 `full`、`512`、`1024` 和 `2048`。CookedOnly profile 固定，修改返回 `texture_limit_locked`。
 
 ### Environment
 
