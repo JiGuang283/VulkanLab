@@ -2,9 +2,9 @@
 
 > Status: Current
 > Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 2 working tree
+> Verified against: Scene Authoring Stage 4 working tree
 
-VulkanLab 已将“导入的模型”和“可编辑场景文档”拆成两个领域对象。模型预览现在由共享 `ModelAsset` 驱动；原生场景文档仍只具备数据与存储基础，尚未转换为运行时 World，也不会出现在 Scenes 列表或 `scene.list` 中。
+VulkanLab 已将“导入模型”“可保存场景”和“运行时世界”拆成三个领域对象。模型预览与 Native Scene 都通过 `AssetRepository` 共享 `ModelAsset`；`.vkscene.json` 由 `RuntimeWorld` 实例化，并可在编辑器中修改、撤销和原子保存。
 
 ## 数据分层
 
@@ -16,7 +16,8 @@ CatalogModel
 CatalogSceneDocument
   -> assets/scenes/<id>.vkscene.json
   -> Entity/Transform/Component DTO
-  -> Stage 3 才接入 RuntimeWorld
+  -> RuntimeWorld
+  -> RenderQueue / RenderView
 ```
 
 `vkl_scene_data` 是独立静态库，提供持久 ID 与 SceneDocument DTO、解析、验证和原子存储。它不依赖 Renderer、Vulkan、ImGui、`vkl_engine` 或 `vkl_asset_core`；`vkl_asset_core` 和 `vkl_engine` 反向依赖它。
@@ -68,7 +69,7 @@ schema v1/v2 中的 `scenes[]` 仍按旧语义读取为 `CatalogModel`，旧 `ca
 }
 ```
 
-当前 DTO 定义三类组件，但尚不运行它们：
+当前 DTO 定义并运行三类组件：
 
 - `modelInstance`：引用一个 Catalog model ID。
 - `light`：Directional、Point 或 Spot 及其颜色、强度、range 和 cone。
@@ -82,19 +83,27 @@ schema v1/v2 中的 `scenes[]` 仍按旧语义读取为 `CatalogModel`，旧 `ca
 
 `SceneDocumentService::createDefault()` 创建 Camera、Directional Sun、默认 ambient 和空 environment，不自动加入 ModelInstance。
 
+默认 Camera 位于 `(0,-5,2)` 并朝向原点。Directional Light 的实体局部 `-Z` 是发射方向；提交给 Renderer 时转换为从表面指向光源的方向。Camera 使用实体 world translation、局部 `-Z` forward 和局部 `+Y` up，方向只组合层级 rotation，不受 scale 影响。
+
 `saveAtomic()` 只接受项目根目录内且以 `.vkscene.json` 结尾的路径。保存前会重新验证；调用者必须传入加载时的 file stamp 才能覆盖已有文件。磁盘内容被外部修改时返回 `scene_changed_on_disk`，临时文件会清理，旧文件保持不变。`SceneCatalogStore::addSceneDocument()` 只能在场景文件已经成功保存后调用。
 
 ## 工作流与 UI 边界
 
 `SceneWorkflowController` 持有 Catalog、模型预览 registry、选择状态和导入/派生资产任务状态，不依赖 ImGui 或 Vulkan。Application 注入加载、相机和窗口相关 action，并继续拥有实际 Vulkan Scene、GPU builder 与 Renderer。
 
-`ScenesPanel` 和 `AssetsPanel` 位于 `src/editor/panels/`。它们只接收 `SceneWorkflowSnapshot`/panel snapshot 与回调 action，只保存搜索文本、modal 草稿和选中项等临时 UI 状态。Runtime Control 与 UI 最终调用同一 Application/workflow 入口；兼容协议仍使用 `scene.*` 表示模型预览。
+`ScenesPanel`、`AssetsPanel`、`OutlinerPanel` 和 `InspectorPanel` 位于 `src/editor/panels/`。它们只接收 snapshot 与回调 action，只保存搜索文本、modal 草稿和选中项等临时 UI 状态。
+
+`SceneEditorSession` 持有当前 `RuntimeWorld`、文档路径/file stamp、UUID selection、Editor/Active Camera 模式和最多 256 项的命令栈。`RuntimeWorld` 是编辑期间唯一内存真源；保存时调用 `toDocument()`。命令只保存 before/after `SceneDocument`，不保存 `EntityHandle`、裸指针或 GPU 资源。连续拖动在激活时捕获一次 before，并在释放时提交一个命令。
+
+Native Scene 加载事务先在 worker 解析文档，再按 Catalog profile 向 `AssetRepository` 请求唯一模型集合，并等待模型与 environment 全部 Ready。新 World 完整构造后才原子发布；失败或取消时旧 World 与旧 environment 保持可用。旧 World 和共享资源按 submission serial 延迟释放，不调用 `vkDeviceWaitIdle()`。
 
 ## 当前限制
 
-- 主 Scenes 窗口标题语义是 `Model Previews`，一次仍只运行一个模型预览。
-- Catalog v3 的原生 `scenes[]` 会被解析和验证，但不会生成 `SceneEntry`。
-- 当前没有 New/Open/Save Scene UI、Outliner、Inspector、Undo/Redo、Dirty 状态或 RuntimeWorld。
+- 一次只打开一个 Native Scene 编辑会话；模型预览仍作为独立兼容入口。
+- Stage 4 仅支持数值式编辑、Outliner 选择和 Inspector 属性，不支持 Viewport picking、drag/drop reparent 或 Gizmo。
+- builtin/OBJ 模型不能放入 Native Scene；Viking Room 继续使用 legacy preview。
+- GPU ABI 仍限制为一盏 Directional 和八盏 Point/Spot。超限 Light Entity 会保存，但在 Outliner/Inspector 标记为未上传。
+- Native Scene 使用各 Catalog model 的 import profile；全局 Texture Limit 仅影响模型预览。
 - Validator index、KTX2 manifest、ArtifactIndex 和 Runtime Control 中既有 `sceneId` 字段保持不变；在模型资产路径中它是 `modelId` 的兼容序列化名称，不触发缓存迁移。
 
 后续 RuntimeWorld、编辑和多模型实例阶段见[可编辑场景实施计划](../development/scene_authoring_plan.md)。

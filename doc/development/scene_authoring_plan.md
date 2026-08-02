@@ -2,7 +2,7 @@
 
 > Status: Active
 > Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 2 working tree
+> Verified against: Scene Authoring Stage 4 working tree
 
 ## Summary
 
@@ -33,7 +33,9 @@ VulkanLab 当前可以导入、准备、上传并渲染一个完整 glTF/GLB，�
 - Stage 0 已完成：`SceneWorkflowController` 持有 Catalog/模型预览 registry 和任务状态；Scenes/Assets 已迁入独立 panel，并通过 snapshot/action 与 Application 交互。
 - Stage 1 已完成：新增 `vkl_scene_data`、持久 UUID、Catalog schema v3、`SceneCatalogStore`、规范化 Model Import API 和严格的 SceneDocument schema/原子存储。
 - Stage 2 已完成：glTF 准备与 GPU 构建已拆为 `PreparedModelData`、`ModelGpuBuilder`、共享 `ModelAsset` 和按 generation 管理的 `AssetRepository`；模型预览通过临时 `ModelInstance` 继续兼容旧 `Scene`。
-- 原生 `.vkscene.json` 仍按计划不进入主列表或运行时；下一未完成阶段是 Stage 3 RuntimeWorld 与 Native Scene Loading。
+- Stage 3 已完成：新增 `IRenderWorld` 与 `RuntimeWorld`，原生 SceneDocument 进入 Registry；模型和 environment 全部 Ready 后才原子发布新 World，旧 World 按 submission serial 延迟释放。
+- Stage 4 已完成：新增 SceneEditorSession、256 项 Undo/Redo、Dirty/file-stamp 事务、New/Open/Save/Save As/Convert Preview、Outliner、Inspector、Editor/Active Camera 模式及异步 Model binding。
+- 下一阶段是 Stage 5 的 Viewport picking、Outliner drag/drop Keep World 与 Gizmo；Stage 6/7 的多光源 GPU 数据扩展和 Cook closure 仍未开始。
 
 当前事实说明见[场景数据与 Catalog](../architecture/scene_documents.md)。
 

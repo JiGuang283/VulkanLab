@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 2 working tree
+> Verified against: Scene Authoring Stage 4 working tree
 
 ## 项目、Catalog 与导入
 
@@ -40,7 +40,9 @@ Catalog v3 与 `.vkscene.json` 的数据契约见[场景数据与 Catalog](scene
 
 ## 共享 ModelAsset 加载
 
-`AssetRepository` 按 `(modelId, profileId)` 管理 ModelAsset generation，并持有一个 FIFO CPU worker 和最多一个活动 `ModelGpuBuilder`。相同 key 的加载请求共享 CPU prepare 和 GPU build；Ready 请求直接复用同一资源。`Reload` 创建新 generation，旧 generation 在已有 Scene lease 释放前保持有效。`SceneLoadManager` 现在只保留预览操作 ID、进度、取消和历史兼容语义，不再拥有 worker 或 GPU builder。
+`AssetRepository` 按 `(modelId, profileId)` 管理 ModelAsset generation，并持有一个 FIFO CPU worker 和最多一个活动 `ModelGpuBuilder`。相同 key 的加载请求共享 CPU prepare 和 GPU build；Ready 请求直接复用同一资源。`Reload` 创建新 generation，旧 generation 在已有 Scene lease 释放前保持有效。`SceneLoadManager` 不拥有模型 GPU builder；它保留模型预览操作兼容接口，并使用独立单 worker 解析 Native SceneDocument。
+
+Native Scene 加载分为 `parsingDocument -> resolvingModels -> loadingModels -> loadingEnvironment -> publishingWorld`。文档解析后，主线程按实体顺序去重 model ID，并使用各 `CatalogModel.importProfile` 请求 Repository。所有 ModelAsset 和目标 environment Ready 后才创建 `RuntimeWorld`；任一依赖失败、任务取消或发布前出现新的未保存编辑都会终止事务并保留当前 World。
 
 Repository worker 调用 `GltfPreparer` 完成：
 

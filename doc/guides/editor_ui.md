@@ -1,12 +1,12 @@
 # 编辑器 Docking 与 Scene Viewport
 
 > Status: Current
-> Last verified: 2026-08-01
-> Verified against: Scene Authoring Stage 0-1 working tree
+> Last verified: 2026-08-02
+> Verified against: Scene Authoring Stage 4 working tree
 
 VulkanLab 的开发 UI 使用 Dear ImGui `v1.92.7-docking`，在主 GLFW
-窗口内创建一个全屏 DockSpace。Viewport、Scenes、Assets、Render、Materials
-和 Diagnostics 是可以停靠、合并为 Tab、浮动或隐藏的独立窗口。
+窗口内创建一个全屏 DockSpace。Viewport、Outliner、Inspector、Scenes、Assets、
+Render、Materials 和 Diagnostics 是可以停靠、合并为 Tab、浮动或隐藏的独立窗口。
 
 当前没有启用 ImGui Multi-viewports，不会为工具窗口创建额外的操作系统窗口。
 
@@ -16,13 +16,13 @@ VulkanLab 的开发 UI 使用 Dear ImGui `v1.92.7-docking`，在主 GLFW
 
 ```text
 ┌ View / Layout ─── Scene ─── FPS / GPU / Loading ┐
-│ Scenes + Assets │      Viewport        │ Render  │
-│                 │                      │ Material│
+│ Outliner        │      Viewport        │Inspector│
+│ Scenes / Assets │                      │Render/Mat│
 └─────────────────┴──────────────────────┴─────────┘
 ```
 
-- Scenes 和 Assets 默认停靠在左侧同一节点。
-- Render 和 Materials 默认停靠在右侧同一节点。
+- Outliner 位于左上，Scenes 与 Assets 位于左下同一节点。
+- Inspector 位于右上，Render 与 Materials 位于右下同一节点。
 - Diagnostics 默认隐藏，但已经停靠到左侧节点，可通过 View 菜单打开。
 - Viewport 默认停靠在中央节点，显示 Renderer 生成的 per-frame Viewport Color。
 - 窗口宽度小于 `1100px` 时首次使用 Compact preset，只显示 Scenes 和 Render
@@ -45,7 +45,9 @@ resize 时重排用户布局。DockSpace v3 会执行一次布局迁移；删除
 
 DockSpace 顶部菜单栏提供：
 
-- `View`：显示或隐藏 Viewport、Scenes、Assets、Render、Materials 和 Diagnostics。
+- `File`：New/Open/Save/Save As/Close Native Scene，以及把当前模型预览转换为 SceneDocument。
+- `Edit`：Undo/Redo。
+- `View`：显示或隐藏 Viewport、Outliner、Inspector、Scenes、Assets、Render、Materials 和 Diagnostics。
 - `Layout -> Viewport/Debugging/Compact`：应用指定工作区 preset。
 - `Layout -> Reset Current Layout`：恢复当前 preset 的默认节点结构。
 - 状态区：当前 Scene、FPS、可用时的 GPU frame time，以及活跃加载任务的
@@ -68,21 +70,25 @@ Vulkan 对象。
 
 ### Scenes
 
-Scenes 当前展示 `Model Previews`，使用独立的 Model/Status 表格和 Selected Model
-属性区。状态不再拼入名称，而是使用语义状态点；双击列表项或点击 Load 都会加载
-该模型的预览场景。Reimport、Validate、source fallback、保存 preview camera 和移除
-操作集中在 `...` 菜单，避免窄面板下按钮截断。活跃加载任务的详细阶段、资源进度
-和 Cancel 位于同一窗口底部。
-
-`Import Model` 和 Remove 继续使用 modal，Docking 不改变 Validator、Catalog
-transaction、Native BC7 import 或异步 preview load 数据流。Catalog v3 原生
-SceneDocument 尚未接入此窗口。
+Scenes 只显示 Catalog v3 的 Native Scene Documents。双击或点击 Load 会启动事务式
+Native Scene 加载；当前文档在列表中标记为 Open。加载期间旧 World 继续渲染，详细阶段、
+模型解析进度和 Cancel 位于窗口底部。
 
 ### Assets
 
-Assets 使用属性表显示项目、Catalog、cache 和当前 Model artifact 状态，并保留
-资产导入进度、取消、日志和任务历史。该窗口也管理 HDR environment 的导入、
-派生资源 Build/Rebuild、Cancel 和 Remove。
+Assets 包含 `Models`、`Environments` 与 `Jobs / Cache` 三个 Tab。Models 管理导入、
+Validator、预览、重导入和模型派生资源；Environments 管理 HDR 导入及 IBL artifact；
+Jobs / Cache 显示项目 cache、当前任务、取消、日志和历史。
+
+### Outliner 与 Inspector
+
+Outliner 显示 Native Scene 的实体层级，支持搜索、单选、创建 Empty/Model/三类 Light/
+Camera、重命名、enabled、复制和删除 subtree。Inspector 的 Entity 页编辑 parent、局部
+Translation/Euler Rotation/Scale，以及 Model、Light、Camera component；Scene 页编辑
+ambient、environment 和 active camera。Parent picker 使用 Keep Local。
+
+删除 active Camera 或移除其 Camera component 会被拒绝，必须先指定另一台 Camera。
+超过 `1 directional + 8 punctual` 的显式灯仍保存在文档中，但会标记为 Not uploaded。
 
 ### Render
 
@@ -102,9 +108,8 @@ Diagnostics。不可用功能保留控件位置，并通过禁用状态或 toolt
 
 ### Materials
 
-Materials 仍是只读诊断窗口，使用搜索、材质列表和单项详情显示 Surface、PBR、
-Textures 与 Derived Render State。切换 Scene generation 后选择会重置到有效
-材质。
+Materials 仍是只读诊断窗口。模型预览时显示整个预览的材质；Native Scene 中优先
+显示 Outliner 当前选中 ModelInstance 所共享的 ModelAsset 材质。
 
 ### Diagnostics
 
@@ -130,6 +135,9 @@ Viewport 图像上方保留一行只读状态，显示当前 render extent；资
 首次出现有效尺寸会在下一帧立即应用。隐藏、折叠或零尺寸时继续使用最后一个
 有效 render extent。
 
+Native Scene 的 Viewport toolbar 可在 `Editor Camera` 与 `Active Camera` 间切换。
+Active Camera 直接使用场景 Camera component，且不会响应 FPS 相机输入。
+
 右键相机模式只能从实际 Viewport 图像区域启动。在标题栏、Tab、工具窗口、菜单、
 modal 或 docking 拖动目标上按右键不会进入相机模式。进入 CameraDrag 后仍使用
 现有 GLFW 鼠标捕获和 `W/S/A/D/Q/E` 移动逻辑。
@@ -146,3 +154,16 @@ modal 或 docking 拖动目标上按右键不会进入相机模式。进入 Came
 
 当前只支持一个 Scene Viewport。对象拾取、Gizmo、可调 render scale 和 ImGui
 Multi-viewports 尚未实现。
+
+## 文件与快捷键
+
+- `Ctrl+N/O/S`：New/Open/Save。
+- `Ctrl+Shift+S`：Save As。
+- `Ctrl+Z/Y`：Undo/Redo。
+- `Ctrl+D`：复制选中 subtree。
+- `Delete`：删除选中 subtree。
+- `F2`：重命名选中实体。
+
+切换场景、关闭或退出时，Dirty 会话提供 Save/Discard/Cancel。保存使用加载时的 file
+stamp；外部修改冲突只允许 Reload、Save As 或 Cancel，不提供强制覆盖。文本输入活跃
+或 modal 打开时不会触发实体快捷键。
