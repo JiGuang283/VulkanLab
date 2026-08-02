@@ -35,6 +35,7 @@ struct SceneWorkflowItemSnapshot {
 struct SceneWorkflowSnapshot {
     std::string projectId;
     std::vector<SceneWorkflowItemSnapshot> models;
+    std::vector<SceneWorkflowItemSnapshot> nativeScenes;
     int selectedIndex = -1;
     bool showImport = false;
     bool canImport = false;
@@ -67,6 +68,7 @@ struct SceneWorkflowActions {
     std::function<void()> beginModelImport;
     std::function<void(int)> selectModel;
     std::function<void(int)> loadPreview;
+    std::function<void(int)> loadSceneDocument;
     std::function<void(int)> reimportModel;
     std::function<void(int)> validateModel;
     std::function<void(int)> loadSourceFallback;

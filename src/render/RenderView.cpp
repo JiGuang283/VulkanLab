@@ -119,7 +119,7 @@ RenderView buildRenderView(const RenderViewInput &input) {
             uploadLight(light);
         }
     }
-    if (!hasEffectiveSceneLights) {
+    if (!hasEffectiveSceneLights && input.fallbackSunEnabled) {
         fallbackSun = makeDefaultSun(input.defaultSun);
         uploadLight(fallbackSun);
     }

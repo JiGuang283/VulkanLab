@@ -21,6 +21,7 @@ void pathValue(std::string_view value);
 void emptyState(const char *message);
 
 bool segmentedControl(const char *id, int &selected,
-                      const char *const *labels, size_t labelCount);
+                      const char *const *labels, size_t labelCount,
+                      float totalWidth = 0.0f);
 
 } // namespace vkr::editor

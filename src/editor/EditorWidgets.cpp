@@ -79,15 +79,19 @@ void emptyState(const char *message) {
 }
 
 bool segmentedControl(const char *id, int &selected,
-                      const char *const *labels, size_t labelCount) {
+                      const char *const *labels, size_t labelCount,
+                      float totalWidth) {
     if (!labels || labelCount == 0)
         return false;
 
     bool changed = false;
     ImGui::PushID(id);
     const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    const float available = totalWidth > 0.0f
+                                ? totalWidth
+                                : ImGui::GetContentRegionAvail().x;
     const float width = std::max(
-        1.0f, (ImGui::GetContentRegionAvail().x -
+        1.0f, (available -
                spacing * static_cast<float>(labelCount - 1)) /
                   static_cast<float>(labelCount));
     for (size_t i = 0; i < labelCount; ++i) {

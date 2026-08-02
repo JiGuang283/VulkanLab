@@ -3,9 +3,12 @@
 #include "SceneLoadTask.h"
 
 #include <cstdint>
+#include <condition_variable>
 #include <deque>
+#include <filesystem>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <unordered_map>
 
 namespace vkr {
@@ -23,6 +26,12 @@ class SceneLoadManager {
             const std::string &modelId, const std::string &profileId,
             uint32_t textureLimit, ModelAssetHandle modelAsset,
             bool repositoryHit, bool coalescedRequest);
+    std::shared_ptr<SceneLoadTask> requestNative(
+        int sceneIndex, const std::string &sceneName,
+        const std::string &sceneDocumentId,
+        const std::filesystem::path &documentPath,
+        const std::filesystem::path &projectRoot,
+        SceneDocumentReferences references);
     bool cancel(uint64_t taskId);
     void cancelActive();
     std::shared_ptr<SceneLoadTask> task(uint64_t taskId) const;
@@ -34,14 +43,26 @@ class SceneLoadManager {
   private:
     void cancelTask(const std::shared_ptr<SceneLoadTask> &task);
     void pruneHistoryLocked();
+    void workerLoop();
+
+    struct NativeWorkItem {
+        std::shared_ptr<SceneLoadTask> task;
+        std::string expectedDocumentId;
+        std::filesystem::path documentPath;
+        std::filesystem::path projectRoot;
+        SceneDocumentReferences references;
+    };
 
     mutable std::mutex mutex_;
+    std::condition_variable condition_;
+    std::thread worker_;
     bool stopping_ = false;
     uint64_t nextTaskId_ = 1;
     uint64_t generation_ = 0;
     std::shared_ptr<SceneLoadTask> latest_;
     std::deque<uint64_t> historyOrder_;
     std::unordered_map<uint64_t, std::shared_ptr<SceneLoadTask>> tasks_;
+    std::unique_ptr<NativeWorkItem> pendingNative_;
 };
 
 } // namespace vkr

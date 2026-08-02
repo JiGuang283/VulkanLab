@@ -30,6 +30,40 @@ const char *sceneLoadStateName(SceneLoadState state) {
     return "Unknown";
 }
 
+const char *sceneLoadKindName(SceneLoadKind kind) {
+    switch (kind) {
+    case SceneLoadKind::ModelPreview:
+        return "modelPreview";
+    case SceneLoadKind::NativeScene:
+        return "nativeScene";
+    }
+    return "unknown";
+}
+
+const char *sceneLoadPhaseName(SceneLoadPhase phase) {
+    switch (phase) {
+    case SceneLoadPhase::Queued:
+        return "queued";
+    case SceneLoadPhase::PreparingModel:
+        return "preparingModel";
+    case SceneLoadPhase::UploadingModel:
+        return "uploadingModel";
+    case SceneLoadPhase::ParsingDocument:
+        return "parsingDocument";
+    case SceneLoadPhase::ResolvingModels:
+        return "resolvingModels";
+    case SceneLoadPhase::LoadingModels:
+        return "loadingModels";
+    case SceneLoadPhase::LoadingEnvironment:
+        return "loadingEnvironment";
+    case SceneLoadPhase::PublishingWorld:
+        return "publishingWorld";
+    case SceneLoadPhase::Complete:
+        return "complete";
+    }
+    return "unknown";
+}
+
 bool isTerminalSceneLoadState(SceneLoadState state) {
     return state == SceneLoadState::Completed ||
            state == SceneLoadState::Cancelled ||

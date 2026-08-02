@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SceneLight.h"
+#include "IRenderWorld.h"
 #include "ModelInstance.h"
 #include "SceneObject.h"
 #include "SceneTypes.h"
@@ -20,7 +21,7 @@ class MaterialTemplate;
 class RenderQueue;
 class Texture;
 
-class Scene {
+class Scene final : public IRenderWorld {
   public:
     using UpdateFn = std::function<void(Scene &, float dt, float time)>;
 
@@ -45,11 +46,11 @@ class Scene {
     bool removeModelInstance(size_t index);
 
     // ---- 渲染提交 ----
-    void collectRenderCommands(RenderQueue &queue) const;
+    void collectRenderCommands(RenderQueue &queue) const override;
 
     // ---- 每帧 tick（可选） ----
     void setUpdateFn(UpdateFn fn) { updateFn_ = std::move(fn); }
-    void update(float dt, float time) {
+    void update(float dt, float time) override {
         if (updateFn_)
             updateFn_(*this, dt, time);
     }
@@ -60,13 +61,25 @@ class Scene {
     const std::vector<ModelInstance> &modelInstances() const {
         return modelInstances_;
     }
-    const std::vector<std::shared_ptr<MaterialInstance>> &materials() const {
+    const std::vector<std::shared_ptr<MaterialInstance>> &materials() const override {
         return materials_;
     }
     std::vector<SceneLight>        &lights() { return lights_; }
-    const std::vector<SceneLight>  &lights() const { return lights_; }
-    const Bounds                   &bounds() const { return bounds_; }
-    size_t renderableCount() const;
+    const std::vector<SceneLight>  &lights() const override { return lights_; }
+    const Bounds                   &bounds() const override { return bounds_; }
+    size_t renderableCount() const override;
+    bool allowsFallbackSun() const override { return true; }
+    std::optional<CameraPose> initialEditorCamera() const override {
+        return initialCamera;
+    }
+    std::optional<RuntimeCameraView>
+    activeCamera(float) const override { return std::nullopt; }
+    std::optional<RenderWorldAmbient> worldAmbient() const override {
+        return std::nullopt;
+    }
+    std::optional<RenderWorldEnvironment> worldEnvironment() const override {
+        return std::nullopt;
+    }
     std::optional<CameraPose> initialCamera;
 
   private:

@@ -10,12 +10,22 @@
 
 namespace vkr {
 
+const char *sceneEntryKindName(SceneEntryKind kind) {
+    switch (kind) {
+    case SceneEntryKind::ModelPreview:
+        return "modelPreview";
+    case SceneEntryKind::NativeScene:
+        return "nativeScene";
+    }
+    return "unknown";
+}
+
 std::vector<SceneEntry>
 buildSceneRegistry(const SceneCatalog &catalog,
                    const ProjectContext &projectContext,
                    const Config &config) {
     std::vector<SceneEntry> entries;
-    entries.reserve(catalog.models.size());
+    entries.reserve(catalog.models.size() + catalog.sceneDocuments.size());
     for (const CatalogModel &model : catalog.models) {
         SceneEntry entry;
         entry.id = model.id;
@@ -47,6 +57,21 @@ buildSceneRegistry(const SceneCatalog &catalog,
         } else {
             entry.prepareFactory =
                 gltfSceneFactory(source.string(), model.previewCamera);
+        }
+        entries.push_back(std::move(entry));
+    }
+    for (const CatalogSceneDocument &scene : catalog.sceneDocuments) {
+        SceneEntry entry;
+        entry.kind = SceneEntryKind::NativeScene;
+        entry.id = scene.id;
+        entry.name = scene.displayName;
+        const std::filesystem::path source =
+            projectContext.resolveProjectPath(scene.source);
+        entry.sourcePath = source.string();
+        entry.available = std::filesystem::is_regular_file(source);
+        if (!entry.available) {
+            entry.unavailableReason = "Scene document is missing: " +
+                                      source.string();
         }
         entries.push_back(std::move(entry));
     }

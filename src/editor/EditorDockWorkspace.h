@@ -17,11 +17,29 @@ struct EditorFrameStatus {
 };
 
 struct EditorPanelCallbacks {
+    std::function<void()> outliner;
+    std::function<void()> inspector;
     std::function<void()> scenes;
     std::function<void()> assets;
     std::function<void()> render;
     std::function<void()> materials;
     std::function<void()> diagnostics;
+    std::function<void()> viewportToolbar;
+
+    bool sceneSessionActive = false;
+    bool sceneDirty = false;
+    bool canUndo = false;
+    bool canRedo = false;
+    std::string undoLabel;
+    std::string redoLabel;
+    std::function<void()> newScene;
+    std::function<void()> openScene;
+    std::function<void()> saveScene;
+    std::function<void()> saveSceneAs;
+    std::function<void()> closeScene;
+    std::function<void()> convertPreview;
+    std::function<void()> undo;
+    std::function<void()> redo;
 };
 
 struct EditorViewportFrame {
@@ -62,13 +80,17 @@ class EditorDockWorkspace {
     void buildDefaultLayout(unsigned int dockspaceId, float x, float y,
                             float width, float height,
                             EditorWorkspacePreset preset);
-    void drawMenuBar(const EditorFrameStatus &status);
-    void drawViewport(const EditorViewportFrame &viewport);
+    void drawMenuBar(const EditorFrameStatus &status,
+                     const EditorPanelCallbacks &panels);
+    void drawViewport(const EditorViewportFrame &viewport,
+                      const EditorPanelCallbacks &panels);
     void drawPanel(const char *name, bool &visible,
                    const std::function<void()> &callback);
 
     EditorViewportState viewportState_{};
     bool viewportVisible_ = true;
+    bool outlinerVisible_ = true;
+    bool inspectorVisible_ = true;
     bool scenesVisible_ = true;
     bool assetsVisible_ = true;
     bool renderVisible_ = true;

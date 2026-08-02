@@ -19,6 +19,8 @@ constexpr const char *kHostWindow =
     "VulkanLab DockSpace###VulkanLab.DockHost";
 constexpr const char *kDockspaceName = "VulkanLab.DockSpace.v3";
 constexpr const char *kViewportWindow = "Viewport###VulkanLab.Viewport";
+constexpr const char *kOutlinerWindow = "Outliner###VulkanLab.Outliner";
+constexpr const char *kInspectorWindow = "Inspector###VulkanLab.Inspector";
 constexpr const char *kScenesWindow = "Scenes###VulkanLab.Scenes";
 constexpr const char *kAssetsWindow = "Assets###VulkanLab.Assets";
 constexpr const char *kRenderWindow = "Render###VulkanLab.Render";
@@ -62,7 +64,7 @@ void EditorDockWorkspace::draw(const EditorFrameStatus &status,
     ImGui::Begin(kHostWindow, nullptr, hostFlags);
     ImGui::PopStyleVar(3);
 
-    drawMenuBar(status);
+    drawMenuBar(status, panels);
 
     const ImGuiID dockspaceId = ImGui::GetID(kDockspaceName);
     const ImVec2 dockspacePosition = ImGui::GetCursorScreenPos();
@@ -88,7 +90,9 @@ void EditorDockWorkspace::draw(const EditorFrameStatus &status,
     ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f));
     ImGui::End();
 
-    drawViewport(viewportFrame);
+    drawViewport(viewportFrame, panels);
+    drawPanel(kOutlinerWindow, outlinerVisible_, panels.outliner);
+    drawPanel(kInspectorWindow, inspectorVisible_, panels.inspector);
     drawPanel(kMaterialsWindow, materialsVisible_, panels.materials);
     drawPanel(kRenderWindow, renderVisible_, panels.render);
     drawPanel(kAssetsWindow, assetsVisible_, panels.assets);
@@ -119,6 +123,8 @@ void EditorDockWorkspace::buildDefaultLayout(unsigned int dockspaceId,
                                              float height,
                                              EditorWorkspacePreset preset) {
     scenesVisible_ = true;
+    outlinerVisible_ = true;
+    inspectorVisible_ = true;
     assetsVisible_ = preset != EditorWorkspacePreset::Compact;
     renderVisible_ = true;
     materialsVisible_ = preset != EditorWorkspacePreset::Compact;
@@ -145,6 +151,8 @@ void EditorDockWorkspace::buildDefaultLayout(unsigned int dockspaceId,
     ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Left, leftRatio, &leftId,
                                 &centerId);
     if (compact) {
+        ImGui::DockBuilderDockWindow(kOutlinerWindow, leftId);
+        ImGui::DockBuilderDockWindow(kInspectorWindow, leftId);
         ImGui::DockBuilderDockWindow(kScenesWindow, leftId);
         ImGui::DockBuilderDockWindow(kAssetsWindow, leftId);
         ImGui::DockBuilderDockWindow(kRenderWindow, leftId);
@@ -158,10 +166,21 @@ void EditorDockWorkspace::buildDefaultLayout(unsigned int dockspaceId,
             rightWidth / widthAfterLeft, 0.20f, 0.46f);
         ImGui::DockBuilderSplitNode(centerId, ImGuiDir_Right, rightRatio,
                                     &rightId, &centerId);
-        ImGui::DockBuilderDockWindow(kScenesWindow, leftId);
-        ImGui::DockBuilderDockWindow(kAssetsWindow, leftId);
-        ImGui::DockBuilderDockWindow(kRenderWindow, rightId);
-        ImGui::DockBuilderDockWindow(kMaterialsWindow, rightId);
+        ImGuiID leftBottomId = 0;
+        ImGuiID leftTopId = leftId;
+        ImGui::DockBuilderSplitNode(leftTopId, ImGuiDir_Down, 0.48f,
+                                    &leftBottomId, &leftTopId);
+        ImGui::DockBuilderDockWindow(kOutlinerWindow, leftTopId);
+        ImGui::DockBuilderDockWindow(kScenesWindow, leftBottomId);
+        ImGui::DockBuilderDockWindow(kAssetsWindow, leftBottomId);
+
+        ImGuiID rightBottomId = 0;
+        ImGuiID rightTopId = rightId;
+        ImGui::DockBuilderSplitNode(rightTopId, ImGuiDir_Down, 0.48f,
+                                    &rightBottomId, &rightTopId);
+        ImGui::DockBuilderDockWindow(kInspectorWindow, rightTopId);
+        ImGui::DockBuilderDockWindow(kRenderWindow, rightBottomId);
+        ImGui::DockBuilderDockWindow(kMaterialsWindow, rightBottomId);
 
         if (preset == EditorWorkspacePreset::Debugging) {
             ImGuiID bottomId = 0;
@@ -177,12 +196,54 @@ void EditorDockWorkspace::buildDefaultLayout(unsigned int dockspaceId,
     ImGui::DockBuilderFinish(dockspaceId);
 }
 
-void EditorDockWorkspace::drawMenuBar(const EditorFrameStatus &status) {
+void EditorDockWorkspace::drawMenuBar(
+    const EditorFrameStatus &status,
+    const EditorPanelCallbacks &panels) {
     if (!ImGui::BeginMenuBar())
         return;
 
+    if (ImGui::BeginMenu("File")) {
+        if (ImGui::MenuItem("New Scene", "Ctrl+N") && panels.newScene)
+            panels.newScene();
+        if (ImGui::MenuItem("Open Scene", "Ctrl+O") && panels.openScene)
+            panels.openScene();
+        ImGui::Separator();
+        if (ImGui::MenuItem("Save", "Ctrl+S", false,
+                            panels.sceneSessionActive) && panels.saveScene)
+            panels.saveScene();
+        if (ImGui::MenuItem("Save As", "Ctrl+Shift+S", false,
+                            panels.sceneSessionActive) &&
+            panels.saveSceneAs)
+            panels.saveSceneAs();
+        if (ImGui::MenuItem("Close Scene", nullptr, false,
+                            panels.sceneSessionActive) && panels.closeScene)
+            panels.closeScene();
+        ImGui::Separator();
+        if (ImGui::MenuItem("Convert Model Preview", nullptr, false,
+                            !panels.sceneSessionActive) &&
+            panels.convertPreview)
+            panels.convertPreview();
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Edit")) {
+        const std::string undoText = panels.undoLabel.empty()
+                                         ? "Undo"
+                                         : "Undo " + panels.undoLabel;
+        const std::string redoText = panels.redoLabel.empty()
+                                         ? "Redo"
+                                         : "Redo " + panels.redoLabel;
+        if (ImGui::MenuItem(undoText.c_str(), "Ctrl+Z", false,
+                            panels.canUndo) && panels.undo)
+            panels.undo();
+        if (ImGui::MenuItem(redoText.c_str(), "Ctrl+Y", false,
+                            panels.canRedo) && panels.redo)
+            panels.redo();
+        ImGui::EndMenu();
+    }
     if (ImGui::BeginMenu("View")) {
         ImGui::MenuItem("Viewport", nullptr, &viewportVisible_);
+        ImGui::MenuItem("Outliner", nullptr, &outlinerVisible_);
+        ImGui::MenuItem("Inspector", nullptr, &inspectorVisible_);
         ImGui::MenuItem("Scenes", nullptr, &scenesVisible_);
         ImGui::MenuItem("Assets", nullptr, &assetsVisible_);
         ImGui::MenuItem("Render", nullptr, &renderVisible_);
@@ -207,7 +268,8 @@ void EditorDockWorkspace::drawMenuBar(const EditorFrameStatus &status) {
 
     ImGui::Separator();
     const std::string sceneName =
-        status.sceneName.empty() ? "No Scene" : status.sceneName;
+        (status.sceneName.empty() ? "No Scene" : status.sceneName) +
+        (panels.sceneDirty ? " *" : "");
     ImGui::TextUnformatted(sceneName.c_str());
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", sceneName.c_str());
@@ -239,7 +301,8 @@ void EditorDockWorkspace::drawMenuBar(const EditorFrameStatus &status) {
 }
 
 void EditorDockWorkspace::drawViewport(
-    const EditorViewportFrame &viewport) {
+    const EditorViewportFrame &viewport,
+    const EditorPanelCallbacks &panels) {
     viewportState_ = {};
     if (!viewportVisible_)
         return;
@@ -253,6 +316,10 @@ void EditorDockWorkspace::drawViewport(
         const float statusStartY = ImGui::GetCursorPosY();
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.0f);
         ImGui::SetCursorPosY(statusStartY + 2.0f);
+        if (panels.viewportToolbar) {
+            panels.viewportToolbar();
+            ImGui::SameLine();
+        }
         if (viewport.resizePending) {
             ImGui::TextDisabled("Render %u x %u  |  Resizing...",
                                 viewport.renderWidth,

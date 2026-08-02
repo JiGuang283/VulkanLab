@@ -57,17 +57,22 @@ SceneWorkflowSnapshot SceneWorkflowController::snapshot() const {
     SceneWorkflowSnapshot result;
     result.projectId = catalog_.projectId;
     result.selectedIndex = assetOperations_.selectedSceneIndex;
-    result.models.reserve(entries_.size());
+    result.models.reserve(catalog_.models.size());
+    result.nativeScenes.reserve(catalog_.sceneDocuments.size());
     for (int index = 0; index < static_cast<int>(entries_.size()); ++index) {
         const SceneEntry &entry = entries_[index];
-        result.models.push_back({index,
-                                 entry.id,
-                                 entry.name,
-                                 entry.sourcePath,
-                                 entry.profileId,
-                                 entry.builtin,
-                                 entry.available,
-                                 entry.unavailableReason});
+        SceneWorkflowItemSnapshot item{index,
+                                       entry.id,
+                                       entry.name,
+                                       entry.sourcePath,
+                                       entry.profileId,
+                                       entry.builtin,
+                                       entry.available,
+                                       entry.unavailableReason};
+        if (entry.isNativeScene())
+            result.nativeScenes.push_back(std::move(item));
+        else
+            result.models.push_back(std::move(item));
     }
     return result;
 }

@@ -105,7 +105,8 @@ struct AssetsPanelActions {
 class AssetsPanel {
   public:
     void draw(const AssetsPanelSnapshot &snapshot,
-              const AssetsPanelActions &actions);
+              const AssetsPanelActions &actions,
+              bool environmentsOnly = false);
 
   private:
     std::string selectedEnvironmentId_;

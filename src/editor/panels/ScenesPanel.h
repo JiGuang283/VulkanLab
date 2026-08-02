@@ -10,7 +10,8 @@ namespace vkr {
 class ScenesPanel {
   public:
     void draw(const SceneWorkflowSnapshot &snapshot,
-              const SceneWorkflowActions &actions);
+              const SceneWorkflowActions &actions,
+              bool modelsOnly = false);
 
   private:
     void drawImportDialog(const SceneWorkflowSnapshot &snapshot,

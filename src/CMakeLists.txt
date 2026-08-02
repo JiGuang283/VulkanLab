@@ -184,6 +184,7 @@ set(VKL_ENGINE_SOURCES
     scene/AssetRepository.cpp
     scene/ModelGpuBuilder.cpp
     scene/ModelLight.cpp
+    scene/RuntimeWorld.cpp
     scene/SceneLoadManager.cpp
     scene/SceneLoadTask.cpp
     scene/SceneRegistryBuilder.cpp
@@ -212,9 +213,12 @@ endif()
 if(VKL_ENABLE_EDITOR_UI)
     list(APPEND VKL_ENGINE_SOURCES
         editor/EditorDockWorkspace.cpp
+        editor/SceneEditorSession.cpp
         editor/EditorTheme.cpp
         editor/EditorWidgets.cpp
         editor/panels/AssetsPanel.cpp
+        editor/panels/InspectorPanel.cpp
+        editor/panels/OutlinerPanel.cpp
         editor/panels/ScenesPanel.cpp
         render/GuiSystem.cpp
     )

@@ -23,6 +23,18 @@ constexpr float kEpsilon = 1.0e-6f;
 constexpr float kHalfPi = 1.57079632679f;
 constexpr float kPi = 3.14159265359f;
 
+glm::quat rotationLookingAlong(const glm::vec3 &forward,
+                               const glm::vec3 &upHint) {
+    const glm::vec3 normalizedForward = glm::normalize(forward);
+    glm::vec3 right = glm::cross(normalizedForward, upHint);
+    if (glm::dot(right, right) <= kEpsilon)
+        right = glm::cross(normalizedForward, glm::vec3(0.0f, 1.0f, 0.0f));
+    right = glm::normalize(right);
+    const glm::vec3 up = glm::normalize(glm::cross(right, normalizedForward));
+    return glm::normalize(
+        glm::quat_cast(glm::mat3(right, up, -normalizedForward)));
+}
+
 std::runtime_error documentError(const std::string &field,
                                  const std::string &message) {
     return std::runtime_error("Invalid scene document field '" + field +
@@ -445,6 +457,8 @@ SceneDocument SceneDocumentService::createDefault(
     camera.id = PersistentEntityId::generate();
     camera.name = "Camera";
     camera.transform.translation = {0.0f, -5.0f, 2.0f};
+    camera.transform.rotation = rotationLookingAlong(
+        -camera.transform.translation, glm::vec3(0.0f, 0.0f, 1.0f));
     camera.camera = CameraComponentDocument{};
     document.activeCamera = camera.id;
     document.entities.push_back(camera);
@@ -455,6 +469,10 @@ SceneDocument SceneDocumentService::createDefault(
     sun.light = LightComponentDocument{};
     sun.light->type = SceneDocumentLightType::Directional;
     sun.light->intensity = 3.0f;
+    const glm::vec3 surfaceToSun =
+        glm::normalize(glm::vec3(0.3f, 0.8f, 0.5f));
+    sun.transform.rotation = rotationLookingAlong(
+        -surfaceToSun, glm::vec3(0.0f, 0.0f, 1.0f));
     document.entities.push_back(sun);
 
     validate(document);

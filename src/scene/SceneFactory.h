@@ -48,7 +48,15 @@ using ModelPrepareFactory = std::function<PreparedModelData(
 
 using ScenePrepareFactory = ModelPrepareFactory;
 
+enum class SceneEntryKind {
+    ModelPreview,
+    NativeScene,
+};
+
+const char *sceneEntryKindName(SceneEntryKind kind);
+
 struct SceneEntry {
+    SceneEntryKind kind = SceneEntryKind::ModelPreview;
     std::string         name;
     SceneFactory        factory;
     ScenePrepareFactory prepareFactory;
@@ -61,6 +69,12 @@ struct SceneEntry {
 
     bool supportsBackgroundPrepare() const {
         return static_cast<bool>(prepareFactory);
+    }
+    bool isModelPreview() const {
+        return kind == SceneEntryKind::ModelPreview;
+    }
+    bool isNativeScene() const {
+        return kind == SceneEntryKind::NativeScene;
     }
 };
 

@@ -13,6 +13,7 @@
 #include "render/ShaderRegistry.h"
 #include "render/ShaderVariant.h"
 #include "scene/Camera.h"
+#include "scene/IRenderWorld.h"
 #include "scene/Scene.h"
 #include "scene/SceneFactory.h"
 
@@ -41,6 +42,9 @@ class GuiSystem;
 class EditorDockWorkspace;
 class AssetsPanel;
 class ScenesPanel;
+class OutlinerPanel;
+class InspectorPanel;
+class SceneEditorSession;
 #endif
 class CaptureService;
 struct RuntimeCommand;
@@ -53,6 +57,7 @@ struct ModelAsset;
 class EnvironmentLoadManager;
 class EnvironmentGpuBuilder;
 struct EnvironmentLoadTask;
+struct EnvironmentGpuResources;
 class SceneWorkflowController;
 struct ModelImportUiState;
 struct SceneAssetOperationState;
@@ -99,11 +104,27 @@ class Application final
     void processRuntimeCommand();
 #endif
     void updateSceneLoading();
+    void updateNativeSceneLoading(
+        const std::shared_ptr<SceneLoadTask> &task);
+    void resolveNativeSceneModels(
+        const std::shared_ptr<SceneLoadTask> &task);
+    void publishNativeScene(const std::shared_ptr<SceneLoadTask> &task);
     void updateEnvironmentLoading();
     void updateAssetImports();
-    void drawScenePanel();
+    void drawScenePanel(bool modelsOnly = false);
+    void drawOutlinerPanel();
+    void drawInspectorPanel();
+    void drawSceneAuthoringDialogs();
+    void updateEditorModelBindings();
+    void requestEditorSceneLoad(int index);
+    void saveEditorScene();
+    void executePendingEditorAction(bool saveFirst);
+    void deleteSelectedEditorEntity();
+    void duplicateSelectedEditorEntity();
+    void handleEditorShortcuts();
+    bool hasUnsavedSceneChanges() const;
     void drawSceneLoadingPanel();
-    void drawAssetsPanel();
+    void drawAssetsPanel(bool environmentsOnly = false);
     void drawRenderPanel();
     void drawPostProcessingPanel();
     void drawLightingPanel();
@@ -136,6 +157,8 @@ class Application final
     uint64_t setTextureLimit(uint32_t limit);
     void setShaderVariant(const std::string &id);
     uint64_t setEnvironment(const std::string &id);
+    uint64_t queueEnvironmentLoad(const CatalogEnvironment &environment,
+                                  bool stagedForNativeScene);
     uint64_t reloadCurrentEnvironment();
     void applyRenderSettings(const RenderSettingsPatch &patch);
     int findSceneIndexByName(const std::string &name) const;
@@ -220,6 +243,9 @@ class Application final
     std::unique_ptr<EditorDockWorkspace> editorDockWorkspace_;
     std::unique_ptr<AssetsPanel> assetsPanel_;
     std::unique_ptr<ScenesPanel> scenesPanel_;
+    std::unique_ptr<OutlinerPanel> outlinerPanel_;
+    std::unique_ptr<InspectorPanel> inspectorPanel_;
+    std::unique_ptr<SceneEditorSession> sceneEditorSession_;
     struct ViewportResizeState {
         uint32_t desiredWidth = 0;
         uint32_t desiredHeight = 0;
@@ -241,10 +267,10 @@ class Application final
     // 场景切换
     SceneLoadContext        sceneLoadContext_;
     std::unique_ptr<AssetRepository> assetRepository_;
-    std::unique_ptr<Scene>  currentScene_;
+    std::shared_ptr<IRenderWorld> currentScene_;
     struct RetiredScene {
         uint64_t retireAfterSerial = 0;
-        std::unique_ptr<Scene> scene;
+        std::shared_ptr<IRenderWorld> scene;
     };
     std::deque<RetiredScene> retiredScenes_;
     int                     currentSceneIndex_ = -1;
@@ -255,6 +281,8 @@ class Application final
     std::unique_ptr<EnvironmentLoadManager> environmentLoadManager_;
     std::unique_ptr<EnvironmentGpuBuilder> environmentGpuBuilder_;
     std::shared_ptr<EnvironmentLoadTask> latestEnvironmentLoadTask_;
+    uint64_t stagedEnvironmentTaskId_ = 0;
+    std::shared_ptr<EnvironmentGpuResources> stagedEnvironmentResources_;
     std::string selectedEnvironmentId_;
     uint64_t lastFinalizedTaskId_ = 0;
     std::unique_ptr<AssetImportManager> assetImportManager_;

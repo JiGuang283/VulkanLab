@@ -28,6 +28,7 @@ struct RenderViewInput {
     glm::vec3 ambientColor{1.0f};
     float ambientIntensity = 0.08f;
     DefaultSunSettings defaultSun{};
+    bool fallbackSunEnabled = true;
     RenderSettings settings{};
     bool environmentReady = false;
     float maxSpecularLod = 0.0f;

@@ -30,7 +30,9 @@ editor::StatusTone statusTone(const std::string &state) {
 } // namespace
 
 void AssetsPanel::draw(const AssetsPanelSnapshot &snapshot,
-                       const AssetsPanelActions &actions) {
+                       const AssetsPanelActions &actions,
+                       bool environmentsOnly) {
+    if (!environmentsOnly) {
     ImGui::SeparatorText("Project Cache");
     if (editor::beginPropertyGrid("AssetProjectSummary", 0.34f)) {
         editor::propertyLabel("Project");
@@ -93,6 +95,9 @@ void AssetsPanel::draw(const AssetsPanelSnapshot &snapshot,
         }
     }
 
+    }
+
+    if (environmentsOnly) {
     ImGui::SeparatorText("Environments");
     const auto selected = std::find_if(
         snapshot.environments.begin(), snapshot.environments.end(),
@@ -241,6 +246,9 @@ void AssetsPanel::draw(const AssetsPanelSnapshot &snapshot,
         editor::statusIndicator(snapshot.environmentError.c_str(),
                                 editor::StatusTone::Error);
 
+    }
+
+    if (!environmentsOnly) {
     ImGui::SeparatorText("Current Import");
     if (snapshot.activeTask) {
         const AssetTaskSnapshot &task = *snapshot.activeTask;
@@ -303,6 +311,7 @@ void AssetsPanel::draw(const AssetsPanelSnapshot &snapshot,
             }
             ImGui::PopID();
         }
+    }
     }
 }
 

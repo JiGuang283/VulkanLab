@@ -12,6 +12,7 @@
 #include "assets/EnvironmentLoadManager.h"
 #include "assets/SceneImportService.h"
 #include "assets/SceneCatalogEditor.h"
+#include "assets/SceneCatalogStore.h"
 #if VKL_ENABLE_RUNTIME_CONTROL
 #include "control/NamedPipeServerWin32.h"
 #include "control/RuntimeCommand.h"
@@ -32,8 +33,11 @@
 #include "diagnostics/TracyProfiler.h"
 #if VKL_ENABLE_EDITOR_UI
 #include "editor/EditorDockWorkspace.h"
+#include "editor/SceneEditorSession.h"
 #include "editor/EditorWidgets.h"
 #include "editor/panels/AssetsPanel.h"
+#include "editor/panels/InspectorPanel.h"
+#include "editor/panels/OutlinerPanel.h"
 #include "editor/panels/ScenesPanel.h"
 #endif
 #include "editor/EditorUiState.h"
@@ -47,12 +51,14 @@
 #include "render/Renderer.h"
 #include "render/RendererShaderPaths.h"
 #include "scene/AssetRepository.h"
+#include "scene/ModelAsset.h"
 #include "scene/ModelInstance.h"
 #include "scene/SceneFactory.h"
 #include "scene/SceneLight.h"
 #include "scene/SceneLoadManager.h"
 #include "scene/SceneLoadTask.h"
 #include "scene/SceneRegistryBuilder.h"
+#include "scene/RuntimeWorld.h"
 #include "window/InputManager.h"
 #include "window/Window.h"
 #if VKL_ENABLE_EDITOR_UI && VKL_ENABLE_ASSET_AUTHORING
@@ -117,6 +123,18 @@ glm::vec3 sunDirectionFromAngles(float azimuth, float elevation) {
             horizontalLength * std::sin(azimuth), std::sin(elevation)};
 }
 
+glm::quat rotationLookingAlong(const glm::vec3 &forward,
+                               const glm::vec3 &upHint) {
+    const glm::vec3 normalizedForward = glm::normalize(forward);
+    glm::vec3 right = glm::cross(normalizedForward, upHint);
+    if (glm::dot(right, right) <= 1.0e-8f)
+        right = glm::cross(normalizedForward, glm::vec3(0.0f, 1.0f, 0.0f));
+    right = glm::normalize(right);
+    const glm::vec3 up = glm::normalize(glm::cross(right, normalizedForward));
+    return glm::normalize(
+        glm::quat_cast(glm::mat3(right, up, -normalizedForward)));
+}
+
 const char *alphaModeName(AlphaMode mode) {
     switch (mode) {
     case AlphaMode::Opaque:
@@ -145,7 +163,8 @@ const char *lightIntensityUnit(LightType type) {
     return type == LightType::Directional ? "lux" : "candela";
 }
 
-void populateSceneLightStats(SceneLoadStats &stats, const Scene *scene) {
+void populateSceneLightStats(SceneLoadStats &stats,
+                             const IRenderWorld *scene) {
     stats.lightInstanceCount = scene ? scene->lights().size() : 0;
     stats.directionalLightCount = 0;
     stats.pointLightCount = 0;
@@ -468,6 +487,8 @@ ControlJson sceneLoadTaskToJson(
     ControlJson result = {
         {"taskId", task->id},
         {"generation", task->generation},
+        {"kind", sceneLoadKindName(task->kind)},
+        {"phase", sceneLoadPhaseName(task->phase.load())},
         {"scene", task->sceneName},
         {"sceneIndex", task->sceneIndex},
         {"modelId", task->modelId},
@@ -475,6 +496,15 @@ ControlJson sceneLoadTaskToJson(
         {"modelGeneration", task->modelGeneration},
         {"repositoryHit", task->repositoryHit},
         {"coalescedRequest", task->coalescedRequest},
+        {"uniqueModels", task->uniqueModelCount},
+        {"readyModels", task->readyModelCount},
+        {"failedModelId",
+         task->failedModelId.empty() ? ControlJson(nullptr)
+                                     : ControlJson(task->failedModelId)},
+        {"environmentId",
+         task->targetEnvironmentId.empty()
+             ? ControlJson(nullptr)
+             : ControlJson(task->targetEnvironmentId)},
         {"textureLimit", task->textureLimit},
         {"state", sceneLoadStateName(state)},
         {"terminal", terminal},
@@ -764,6 +794,9 @@ Application::Application(const Config &config, ProjectContext projectContext,
     editorDockWorkspace_ = std::make_unique<EditorDockWorkspace>();
     assetsPanel_ = std::make_unique<AssetsPanel>();
     scenesPanel_ = std::make_unique<ScenesPanel>();
+    outlinerPanel_ = std::make_unique<OutlinerPanel>();
+    inspectorPanel_ = std::make_unique<InspectorPanel>();
+    sceneEditorSession_ = std::make_unique<SceneEditorSession>();
 #endif
 #if VKL_ENABLE_RUNTIME_CONTROL
     runtimeControlPipeName_ =
@@ -984,6 +1017,10 @@ void Application::loadScene(int index, bool replaceCurrent) {
     if (!entry.available)
         throw RuntimeCommandError("scene_unavailable",
                                   entry.unavailableReason);
+    if (entry.isNativeScene()) {
+        throw std::logic_error(
+            "Native scenes must use the asynchronous load path");
+    }
     sceneLoadContext_.sceneId = entry.id;
     sceneLoadContext_.modelId = entry.id;
     sceneLoadContext_.profileId = profileIdForTextureLimit(entry);
@@ -1047,10 +1084,14 @@ void Application::loadScene(int index, bool replaceCurrent) {
             syncAfter.queueWaitIdleCalls - syncBefore.queueWaitIdleCalls;
 
         currentScene_ = std::move(loadedScene);
+#if VKL_ENABLE_EDITOR_UI
+        if (sceneEditorSession_)
+            sceneEditorSession_->detach();
+#endif
         currentSceneIndex_ = index;
         ++sceneGeneration_;
-        if (currentScene_->initialCamera) {
-            const auto &p = *currentScene_->initialCamera;
+        if (const auto initialCamera = currentScene_->initialEditorCamera()) {
+            const auto &p = *initialCamera;
             camera_.setPosition(p.position);
             camera_.setYawPitch(p.yaw, p.pitch);
         }
@@ -1145,6 +1186,11 @@ uint64_t Application::setTextureLimit(uint32_t limit) {
     refreshAllArtifactStatuses();
     VKR_LOG_INFO("Renderer", "glTF texture limit set to {}",
                  textureLimitLabel(limit));
+    if (currentSceneIndex_ >= 0 &&
+        currentSceneIndex_ < static_cast<int>(sceneRegistry_.size()) &&
+        sceneRegistry_[currentSceneIndex_].isNativeScene()) {
+        return 0;
+    }
     if (latestSceneLoadTask_ &&
         !isTerminalSceneLoadState(latestSceneLoadTask_->state.load())) {
         return requestSceneOperation(latestSceneLoadTask_->sceneIndex);
@@ -1161,6 +1207,23 @@ uint64_t Application::requestSceneLoad(int index, bool sourceFallback,
     if (!entry.available)
         throw RuntimeCommandError("scene_unavailable",
                                   entry.unavailableReason);
+    if (entry.isNativeScene()) {
+        if (sourceFallback)
+            throw RuntimeCommandError(
+                "source_fallback_not_applicable",
+                "Source fallback applies only to model previews.");
+        latestSceneLoadTask_ = sceneLoadManager_->requestNative(
+            index, entry.name, entry.id,
+            std::filesystem::u8path(entry.sourcePath),
+            projectContext_.projectRoot, catalog_.documentReferences());
+        if (!latestSceneLoadTask_)
+            throw std::runtime_error("Scene load manager is shutting down");
+        latestSceneLoadTask_->stats.allocatorBefore =
+            device_->allocatorMemorySnapshot();
+        VKR_LOG_INFO("Scene", "Queued native scene task {} for {}",
+                     latestSceneLoadTask_->id, entry.name);
+        return latestSceneLoadTask_->id;
+    }
     sceneLoadContext_.sceneId = entry.id;
     sceneLoadContext_.modelId = entry.id;
     sceneLoadContext_.profileId =
@@ -1233,6 +1296,8 @@ uint64_t Application::setEnvironment(const std::string &id) {
         }
         if (environmentGpuBuilder_)
             environmentGpuBuilder_->cancel();
+        stagedEnvironmentTaskId_ = 0;
+        stagedEnvironmentResources_.reset();
         selectedEnvironmentId_.clear();
         renderer_->clearEnvironment();
         VKR_LOG_INFO("Environment", "Environment cleared");
@@ -1250,17 +1315,22 @@ uint64_t Application::setEnvironment(const std::string &id) {
             "unknown_environment",
             "Unknown environment '" + id + "'.");
     }
+    return queueEnvironmentLoad(*environment, false);
+}
+
+uint64_t Application::queueEnvironmentLoad(
+    const CatalogEnvironment &environment, bool stagedForNativeScene) {
     const EnvironmentProfile &profile =
-        catalog_.environmentProfile(environment->environmentProfile);
+        catalog_.environmentProfile(environment.environmentProfile);
     (void)profile;
     const std::filesystem::path source =
-        projectContext_.resolveProjectPath(environment->source);
+        projectContext_.resolveProjectPath(environment.source);
     if (!projectContext_.cookedPackage) {
         const ArtifactStatus status = inspectEnvironmentArtifacts(
             {std::filesystem::u8path(
                  config_.derivedTextureCachePath),
-             source, catalog_.projectId, environment->id,
-             environment->environmentProfile});
+             source, catalog_.projectId, environment.id,
+             environment.environmentProfile});
         if (!status.ready()) {
             throw RuntimeCommandError(
                 "environment_artifacts_unavailable",
@@ -1274,19 +1344,28 @@ uint64_t Application::setEnvironment(const std::string &id) {
 
     if (environmentGpuBuilder_)
         environmentGpuBuilder_->cancel();
-    selectedEnvironmentId_ = environment->id;
+    if (!stagedForNativeScene) {
+        stagedEnvironmentTaskId_ = 0;
+        stagedEnvironmentResources_.reset();
+        selectedEnvironmentId_ = environment.id;
+    }
     latestEnvironmentLoadTask_ =
         environmentLoadManager_->request(
             {std::filesystem::u8path(
                  config_.derivedTextureCachePath),
-             source, catalog_.projectId, environment->id,
-             environment->displayName,
-             environment->environmentProfile,
+             source, catalog_.projectId, environment.id,
+             environment.displayName,
+             environment.environmentProfile,
              !projectContext_.cookedPackage});
+    if (stagedForNativeScene) {
+        stagedEnvironmentTaskId_ = latestEnvironmentLoadTask_->id;
+        stagedEnvironmentResources_.reset();
+    }
     VKR_LOG_INFO("Environment",
-                 "Queued environment load task {} for {}",
+                 "Queued {}environment load task {} for {}",
+                 stagedForNativeScene ? "staged " : "",
                  latestEnvironmentLoadTask_->id,
-                 environment->displayName);
+                 environment.displayName);
     return latestEnvironmentLoadTask_->id;
 }
 
@@ -1302,8 +1381,12 @@ void Application::updateEnvironmentLoading() {
         environmentGpuBuilder_->pump();
         const auto task = environmentGpuBuilder_->task();
         if (environmentGpuBuilder_->ready()) {
-            renderer_->publishEnvironment(
-                environmentGpuBuilder_->takeResources());
+            auto resources = environmentGpuBuilder_->takeResources();
+            if (task->id == stagedEnvironmentTaskId_) {
+                stagedEnvironmentResources_ = std::move(resources);
+            } else {
+                renderer_->publishEnvironment(std::move(resources));
+            }
             environmentGpuBuilder_.reset();
             task->state = EnvironmentLoadState::Completed;
             if (artifactIndex_) {
@@ -1311,9 +1394,11 @@ void Application::updateEnvironmentLoading() {
                     task->environmentId, task->profileId);
                 persistArtifactIndex();
             }
-            VKR_LOG_INFO("Environment",
-                         "Published environment '{}' from task {}",
-                         task->displayName, task->id);
+            VKR_LOG_INFO(
+                "Environment", "{} environment '{}' from task {}",
+                task->id == stagedEnvironmentTaskId_ ? "Prepared staged"
+                                                     : "Published",
+                task->displayName, task->id);
         } else if (environmentGpuBuilder_->finished()) {
             environmentGpuBuilder_.reset();
         }
@@ -1342,8 +1427,29 @@ void Application::updateSceneLoading() {
         return;
 
     sceneLoadManager_->refresh(latestSceneLoadTask_);
+    if (latestSceneLoadTask_->kind == SceneLoadKind::NativeScene) {
+        updateNativeSceneLoading(latestSceneLoadTask_);
+        return;
+    }
     const SceneLoadState state = latestSceneLoadTask_->state.load();
     if (state == SceneLoadState::ReadyToPublish) {
+#if VKL_ENABLE_EDITOR_UI
+        if (hasUnsavedSceneChanges()) {
+            {
+                std::lock_guard<std::mutex> lock(
+                    latestSceneLoadTask_->mutex);
+                latestSceneLoadTask_->error =
+                    "Scene changed while another world was loading";
+            }
+            latestSceneLoadTask_->state = SceneLoadState::Failed;
+            latestSceneLoadTask_->phase = SceneLoadPhase::Complete;
+            sceneLoadManager_->releaseAsset(latestSceneLoadTask_);
+            latestSceneLoadTask_->stats.allocatorAfter =
+                device_->allocatorMemorySnapshot();
+            finalizeSceneLoad(latestSceneLoadTask_, false);
+            return;
+        }
+#endif
         const ModelAssetHandleSnapshot snapshot =
             latestSceneLoadTask_->modelAsset.snapshot();
         const std::shared_ptr<const ModelAsset> asset =
@@ -1389,10 +1495,14 @@ void Application::updateSceneLoading() {
 
         retireCurrentScene();
         currentScene_ = std::move(preview);
+#if VKL_ENABLE_EDITOR_UI
+        if (sceneEditorSession_)
+            sceneEditorSession_->detach();
+#endif
         currentSceneIndex_ = latestSceneLoadTask_->sceneIndex;
         ++sceneGeneration_;
-        if (currentScene_->initialCamera) {
-            const auto &pose = *currentScene_->initialCamera;
+        if (const auto initialCamera = currentScene_->initialEditorCamera()) {
+            const auto &pose = *initialCamera;
             camera_.setPosition(pose.position);
             camera_.setYawPitch(pose.yaw, pose.pitch);
         }
@@ -1409,6 +1519,301 @@ void Application::updateSceneLoading() {
         sceneLoadManager_->releaseAsset(latestSceneLoadTask_);
         finalizeSceneLoad(latestSceneLoadTask_, false);
     }
+}
+
+void Application::resolveNativeSceneModels(
+    const std::shared_ptr<SceneLoadTask> &task) {
+    LoadedSceneDocument loaded;
+    {
+        std::lock_guard<std::mutex> lock(task->mutex);
+        if (!task->loadedDocument)
+            return;
+        loaded = *task->loadedDocument;
+    }
+
+    std::vector<std::string> modelIds;
+    std::unordered_set<std::string> seen;
+    for (const SceneEntityDocument &entity : loaded.document.entities) {
+        if (entity.modelInstance &&
+            seen.insert(entity.modelInstance->model.value()).second) {
+            modelIds.push_back(entity.modelInstance->model.value());
+        }
+    }
+
+    std::vector<NativeSceneModelBinding> bindings;
+    bindings.reserve(modelIds.size());
+    bool allHits = !modelIds.empty();
+    bool anyCoalesced = false;
+    for (const std::string &modelId : modelIds) {
+        const CatalogModel *model = catalog_.findModel(modelId);
+        if (!model)
+            throw std::runtime_error("Scene references unknown model: " +
+                                     modelId);
+        if (model->type == "builtin") {
+            throw RuntimeCommandError(
+                "model_not_instanceable",
+                "Builtin model cannot be instanced in a native scene: " +
+                    modelId);
+        }
+        const auto entry = std::find_if(
+            sceneRegistry_.begin(), sceneRegistry_.end(),
+            [&](const SceneEntry &candidate) {
+                return candidate.isModelPreview() &&
+                       candidate.id == modelId;
+            });
+        if (entry == sceneRegistry_.end() || !entry->available ||
+            !entry->prepareFactory) {
+            throw std::runtime_error(
+                "Model is unavailable or not instanceable: " + modelId);
+        }
+        const ImportProfile &profile = catalog_.profile(model->importProfile);
+        SceneLoadContext context = sceneLoadContext_;
+        context.sceneId = modelId;
+        context.modelId = modelId;
+        context.profileId = model->importProfile;
+        context.maxTextureSize = profile.textureLimit;
+        context.loadStats = nullptr;
+        ModelAssetRequest request{};
+        request.key = {ModelAssetId(modelId), model->importProfile};
+        request.displayName = model->displayName;
+        request.sourcePath = std::filesystem::u8path(entry->sourcePath);
+        request.prepareFactory = entry->prepareFactory;
+        request.loadContext = std::move(context);
+        request.policy = ModelAssetRequestPolicy::UseCached;
+        bool hit = false;
+        bool coalesced = false;
+        ModelAssetHandle handle = assetRepository_->requestModel(
+            request, &hit, &coalesced);
+        allHits = allHits && hit;
+        anyCoalesced = anyCoalesced || coalesced;
+        bindings.push_back(
+            {ModelAssetId(modelId), model->importProfile,
+             std::move(handle)});
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(task->mutex);
+        task->nativeModels = std::move(bindings);
+        task->uniqueModelCount = modelIds.size();
+        task->readyModelCount = 0;
+        task->repositoryHit = allHits;
+        task->coalescedRequest = anyCoalesced;
+        task->targetEnvironmentId =
+            loaded.document.environment
+                ? loaded.document.environment->environmentId
+                : std::string{};
+    }
+    task->phase = SceneLoadPhase::LoadingModels;
+    task->state = modelIds.empty() ? SceneLoadState::ReadyForUpload
+                                   : SceneLoadState::PreparingCpu;
+}
+
+void Application::updateNativeSceneLoading(
+    const std::shared_ptr<SceneLoadTask> &task) {
+    const SceneLoadState state = task->state.load();
+    if ((state == SceneLoadState::Failed ||
+         state == SceneLoadState::Cancelled) &&
+        task->id != lastFinalizedTaskId_) {
+        if (task->environmentTaskId != 0)
+            cancelEnvironmentLoad(task->environmentTaskId);
+        if (task->environmentTaskId == stagedEnvironmentTaskId_) {
+            stagedEnvironmentTaskId_ = 0;
+            stagedEnvironmentResources_.reset();
+        }
+        task->stats.allocatorAfter = device_->allocatorMemorySnapshot();
+        finalizeSceneLoad(task, false);
+        return;
+    }
+
+    try {
+        SceneLoadPhase phase = task->phase.load();
+        if (phase == SceneLoadPhase::ResolvingModels) {
+            resolveNativeSceneModels(task);
+            phase = task->phase.load();
+        }
+        if (phase == SceneLoadPhase::LoadingModels) {
+            uint64_t ready = 0;
+            uint64_t textureDone = 0;
+            uint64_t textureTotal = 0;
+            uint64_t meshDone = 0;
+            uint64_t meshTotal = 0;
+            uint64_t processedBytes = 0;
+            std::string failedModel;
+            std::string failure;
+            {
+                std::lock_guard<std::mutex> lock(task->mutex);
+                for (const NativeSceneModelBinding &binding :
+                     task->nativeModels) {
+                    const ModelAssetHandleSnapshot snapshot =
+                        binding.asset.snapshot();
+                    textureDone += snapshot.texturesCompleted;
+                    textureTotal += snapshot.texturesTotal;
+                    meshDone += snapshot.meshesCompleted;
+                    meshTotal += snapshot.meshesTotal;
+                    processedBytes += snapshot.processedBytes;
+                    if (snapshot.state == ModelAssetState::Ready ||
+                        snapshot.state == ModelAssetState::Retiring) {
+                        ++ready;
+                    } else if (snapshot.state == ModelAssetState::Failed ||
+                               snapshot.state ==
+                                   ModelAssetState::Cancelled) {
+                        failedModel = binding.modelId.value();
+                        failure = snapshot.error.empty()
+                                      ? "Model load was cancelled"
+                                      : snapshot.error;
+                        break;
+                    }
+                }
+                task->readyModelCount = ready;
+                task->failedModelId = failedModel;
+            }
+            task->progress.completedTextures = textureDone;
+            task->progress.totalTextures = textureTotal;
+            task->progress.completedMeshes = meshDone;
+            task->progress.totalMeshes = meshTotal;
+            task->progress.processedBytes = processedBytes;
+            if (!failedModel.empty()) {
+                throw std::runtime_error("Model '" + failedModel +
+                                         "' failed: " + failure);
+            }
+            if (ready < task->uniqueModelCount) {
+                task->state = SceneLoadState::Uploading;
+                return;
+            }
+
+            if (task->targetEnvironmentId.empty()) {
+                task->environmentReady = true;
+                task->phase = SceneLoadPhase::PublishingWorld;
+                task->state = SceneLoadState::ReadyToPublish;
+            } else if (renderer_->environmentReady() &&
+                       renderer_->currentEnvironmentId() ==
+                           task->targetEnvironmentId) {
+                task->environmentReady = true;
+                task->phase = SceneLoadPhase::PublishingWorld;
+                task->state = SceneLoadState::ReadyToPublish;
+            } else {
+                const CatalogEnvironment *environment =
+                    catalog_.findEnvironment(task->targetEnvironmentId);
+                if (!environment) {
+                    throw std::runtime_error(
+                        "Scene references unknown environment: " +
+                        task->targetEnvironmentId);
+                }
+                task->environmentTaskId =
+                    queueEnvironmentLoad(*environment, true);
+                task->phase = SceneLoadPhase::LoadingEnvironment;
+                task->state = SceneLoadState::WaitingForGpu;
+                return;
+            }
+        }
+
+        if (task->phase.load() == SceneLoadPhase::LoadingEnvironment) {
+            const auto environmentTask = environmentLoadManager_->task(
+                task->environmentTaskId);
+            if (!environmentTask)
+                throw std::runtime_error(
+                    "Environment load task disappeared");
+            const EnvironmentLoadState environmentState =
+                environmentTask->state.load();
+            if (environmentState == EnvironmentLoadState::Failed ||
+                environmentState == EnvironmentLoadState::Cancelled) {
+                std::lock_guard<std::mutex> lock(environmentTask->mutex);
+                throw std::runtime_error(
+                    "Environment '" + task->targetEnvironmentId +
+                    "' failed: " + environmentTask->error);
+            }
+            if (environmentState != EnvironmentLoadState::Completed ||
+                !stagedEnvironmentResources_) {
+                task->state = SceneLoadState::WaitingForGpu;
+                return;
+            }
+            task->environmentReady = true;
+            task->phase = SceneLoadPhase::PublishingWorld;
+            task->state = SceneLoadState::ReadyToPublish;
+        }
+
+        if (task->phase.load() == SceneLoadPhase::PublishingWorld)
+            publishNativeScene(task);
+    } catch (const std::exception &error) {
+        {
+            std::lock_guard<std::mutex> lock(task->mutex);
+            task->error = error.what();
+        }
+        task->state = SceneLoadState::Failed;
+        task->phase = SceneLoadPhase::Complete;
+    }
+}
+
+void Application::publishNativeScene(
+    const std::shared_ptr<SceneLoadTask> &task) {
+#if VKL_ENABLE_EDITOR_UI
+    if (hasUnsavedSceneChanges()) {
+        throw RuntimeCommandError(
+            "unsaved_changes",
+            "Scene changed while another world was loading");
+    }
+#endif
+    LoadedSceneDocument loaded;
+    std::vector<ResolvedModelAsset> assets;
+    {
+        std::lock_guard<std::mutex> lock(task->mutex);
+        if (!task->loadedDocument)
+            throw std::runtime_error("Native scene document is unavailable");
+        loaded = *task->loadedDocument;
+        assets.reserve(task->nativeModels.size());
+        for (const NativeSceneModelBinding &binding : task->nativeModels) {
+            assets.push_back(
+                {binding.modelId, binding.profileId, binding.asset});
+        }
+    }
+    auto world = RuntimeWorld::fromDocument(loaded.document, assets);
+    populateSceneLightStats(task->stats, world.get());
+    task->stats.materialCount = world->materials().size();
+    task->stats.objectCount = world->renderableCount();
+    task->stats.primitiveCount = task->stats.objectCount;
+
+    if (loaded.document.environment) {
+        const std::string &environmentId =
+            loaded.document.environment->environmentId;
+        if (renderer_->currentEnvironmentId() != environmentId) {
+            if (!stagedEnvironmentResources_)
+                throw std::runtime_error(
+                    "Staged environment is not ready for publication");
+            renderer_->publishEnvironment(stagedEnvironmentResources_);
+        }
+        selectedEnvironmentId_ = environmentId;
+        renderSettings_.environmentIntensity =
+            loaded.document.environment->intensity;
+        renderSettings_.environmentRotationRadians =
+            loaded.document.environment->rotationRadians;
+    } else {
+        renderer_->clearEnvironment();
+        selectedEnvironmentId_.clear();
+    }
+    stagedEnvironmentTaskId_ = 0;
+    stagedEnvironmentResources_.reset();
+
+    retireCurrentScene();
+    std::shared_ptr<RuntimeWorld> sharedWorld(std::move(world));
+    currentScene_ = sharedWorld;
+#if VKL_ENABLE_EDITOR_UI
+    if (sceneEditorSession_ && gui_) {
+        sceneEditorSession_->attach(sharedWorld, loaded.path,
+                                    loaded.sourceStamp);
+        sceneEditorSession_->setWorldChangedCallback(
+            [this]() { updateEditorModelBindings(); });
+    }
+#endif
+    currentSceneIndex_ = task->sceneIndex;
+    ++sceneGeneration_;
+    applySceneCameraDefaults();
+    task->stats.allocatorAfter = device_->allocatorMemorySnapshot();
+    {
+        std::lock_guard<std::mutex> lock(task->mutex);
+        task->nativeModels.clear();
+    }
+    finalizeSceneLoad(task, true);
+    task->phase = SceneLoadPhase::Complete;
 }
 
 void Application::retireCurrentScene() {
@@ -1539,6 +1944,7 @@ void Application::finalizeSceneLoad(
     else
         task->state = SceneLoadState::Failed;
     task->stats.finalState = sceneLoadStateName(task->state.load());
+    task->phase = SceneLoadPhase::Complete;
     lastSceneLoadStats_ = task->stats;
     lastFinalizedTaskId_ = task->id;
     validateSceneLoadStats(task->stats);
@@ -1546,7 +1952,7 @@ void Application::finalizeSceneLoad(
     if (success && artifactIndex_ && task->sceneIndex >= 0 &&
         task->sceneIndex < static_cast<int>(sceneRegistry_.size())) {
         const SceneEntry &entry = sceneRegistry_[task->sceneIndex];
-        if (!entry.builtin) {
+        if (entry.isModelPreview() && !entry.builtin) {
             std::string profileId;
             const auto preferred = catalog_.importProfiles.find(entry.profileId);
             if (preferred != catalog_.importProfiles.end() &&
@@ -1627,6 +2033,8 @@ Application::findEnvironmentByName(const std::string &name) const {
 
 std::string
 Application::profileIdForTextureLimit(const SceneEntry &entry) const {
+    if (!entry.isModelPreview())
+        return {};
     const auto preferred = catalog_.importProfiles.find(entry.profileId);
     if (preferred != catalog_.importProfiles.end() &&
         preferred->second.textureLimit == sceneLoadContext_.maxTextureSize)
@@ -1686,6 +2094,8 @@ void Application::refreshArtifactStatus(int sceneIndex, bool admission) {
         sceneIndex >= static_cast<int>(sceneRegistry_.size()))
         return;
     const SceneEntry &entry = sceneRegistry_[sceneIndex];
+    if (!entry.isModelPreview())
+        return;
     const std::string profileId = profileIdForTextureLimit(entry);
     const std::string key = artifactStatusKey(entry.id, profileId);
     if (entry.builtin) {
@@ -1745,6 +2155,8 @@ void Application::refreshValidationStatus(int sceneIndex) {
         return;
 
     const SceneEntry &entry = sceneRegistry_[sceneIndex];
+    if (!entry.isModelPreview())
+        return;
     AssetValidationQuery query;
     const CatalogModel *catalogModel = catalog_.findModel(entry.id);
     if (entry.builtin || !catalogModel || catalogModel->type != "gltf") {
@@ -1774,6 +2186,13 @@ uint64_t Application::requestSceneOperation(int index, bool sourceFallback,
                                             bool reloadAsset) {
     if (index < 0 || index >= static_cast<int>(sceneRegistry_.size()))
         throw RuntimeCommandError("invalid_scene", "Invalid scene index.");
+#if VKL_ENABLE_EDITOR_UI
+    if (hasUnsavedSceneChanges()) {
+        throw RuntimeCommandError(
+            "unsaved_changes",
+            "The active native scene has unsaved changes.");
+    }
+#endif
     const SceneEntry &entry = sceneRegistry_[index];
     if (!entry.available)
         throw RuntimeCommandError("scene_unavailable",
@@ -1783,6 +2202,12 @@ uint64_t Application::requestSceneOperation(int index, bool sourceFallback,
         sceneAssetOperations_->coordinator.beginOperation();
     sceneAssetOperations_->selectedSceneIndex = index;
     sceneAssetOperations_->error.clear();
+
+    if (entry.isNativeScene()) {
+        if (!loadAfter)
+            return 0;
+        return requestSceneLoad(index, false, reloadAsset);
+    }
 
     if (entry.builtin) {
         return loadAfter ? requestSceneLoad(index, false, reloadAsset) : 0;
@@ -1827,6 +2252,99 @@ uint64_t Application::requestSceneOperation(int index, bool sourceFallback,
     VKR_LOG_INFO("Assets", "Queued import task {} for scene '{}' profile '{}'",
                  task->id, entry.id, profileId);
     return task->id;
+}
+
+bool Application::hasUnsavedSceneChanges() const {
+#if VKL_ENABLE_EDITOR_UI
+    return sceneEditorSession_ && sceneEditorSession_->active() &&
+           sceneEditorSession_->dirty();
+#else
+    return false;
+#endif
+}
+
+void Application::requestEditorSceneLoad(int index) {
+#if VKL_ENABLE_EDITOR_UI
+    if (hasUnsavedSceneChanges()) {
+        editorUi_->pendingAction = EditorPendingActionKind::LoadScene;
+        editorUi_->pendingSceneIndex = index;
+        editorUi_->requestDirtyModal = true;
+        return;
+    }
+#endif
+    requestSceneOperation(index);
+}
+
+void Application::updateEditorModelBindings() {
+#if VKL_ENABLE_EDITOR_UI
+    if (!sceneEditorSession_ || !sceneEditorSession_->active() ||
+        !assetRepository_)
+        return;
+    const std::shared_ptr<RuntimeWorld> world = sceneEditorSession_->world();
+    for (const RuntimeEntitySnapshot &entity : world->entities()) {
+        if (!entity.modelInstance ||
+            entity.modelBindingState != ModelBindingState::Unresolved)
+            continue;
+        const std::string modelId = entity.modelInstance->model.value();
+        const CatalogModel *model = catalog_.findModel(modelId);
+        if (!model || model->type == "builtin") {
+            world->bindModel(entity.handle, entity.modelBindingRevision, {},
+                             {}, "Model is not instanceable: " + modelId);
+            continue;
+        }
+        const auto entry = std::find_if(
+            sceneRegistry_.begin(), sceneRegistry_.end(),
+            [&](const SceneEntry &candidate) {
+                return candidate.isModelPreview() &&
+                       candidate.id == modelId;
+            });
+        if (entry == sceneRegistry_.end() || !entry->available ||
+            !entry->prepareFactory) {
+            world->bindModel(entity.handle, entity.modelBindingRevision, {},
+                             {}, "Model source is unavailable: " + modelId);
+            continue;
+        }
+        try {
+            const ImportProfile &profile =
+                catalog_.profile(model->importProfile);
+            SceneLoadContext context = sceneLoadContext_;
+            context.sceneId = modelId;
+            context.modelId = modelId;
+            context.profileId = model->importProfile;
+            context.maxTextureSize = profile.textureLimit;
+            context.loadStats = nullptr;
+            ModelAssetRequest request{};
+            request.key = {ModelAssetId(modelId), model->importProfile};
+            request.displayName = model->displayName;
+            request.sourcePath = std::filesystem::u8path(entry->sourcePath);
+            request.prepareFactory = entry->prepareFactory;
+            request.loadContext = std::move(context);
+            ModelAssetHandle handle = assetRepository_->requestModel(request);
+            world->bindModel(entity.handle, entity.modelBindingRevision,
+                             model->importProfile, std::move(handle));
+        } catch (const std::exception &error) {
+            world->bindModel(entity.handle, entity.modelBindingRevision, {},
+                             {}, error.what());
+        }
+    }
+
+    const auto environment = world->worldEnvironment();
+    try {
+        if (!environment) {
+            if (!selectedEnvironmentId_.empty())
+                setEnvironment("None");
+        } else if (selectedEnvironmentId_ != environment->id) {
+            setEnvironment(environment->id);
+        }
+        if (environment) {
+            renderSettings_.environmentIntensity = environment->intensity;
+            renderSettings_.environmentRotationRadians =
+                environment->rotationRadians;
+        }
+    } catch (const std::exception &error) {
+        editorUi_->sceneError = error.what();
+    }
+#endif
 }
 
 void Application::updateAssetImports() {
@@ -2012,6 +2530,7 @@ ControlJson Application::runtimeSystemInfo() {
                         ? ControlJson(sceneRegistry_[currentSceneIndex_].id)
                         : ControlJson(nullptr)},
         {"modelId", currentScene_ && currentSceneIndex_ >= 0
+                        && sceneRegistry_[currentSceneIndex_].isModelPreview()
                         ? ControlJson(sceneRegistry_[currentSceneIndex_].id)
                         : ControlJson(nullptr)},
         {"projectId", catalog_.projectId},
@@ -2096,17 +2615,26 @@ ControlJson Application::runtimeSceneList() {
     for (const auto &entry : sceneRegistry_)
         scenes.push_back(entry.name);
     for (const auto &entry : sceneRegistry_) {
-        entries.push_back({{"id", entry.id},
-                           {"sceneId", entry.id},
-                           {"modelId", entry.id},
-                           {"assetKind", "model"},
-                           {"kind", "modelPreview"},
-                           {"name", entry.name},
-                           {"profileId", entry.profileId},
-                           {"textureLimit",
-                            catalog_.profile(entry.profileId).textureLimit},
-                           {"available", entry.available},
-                           {"source", entry.sourcePath}});
+        ControlJson item = {{"id", entry.id},
+                            {"sceneId", entry.id},
+                            {"assetKind", entry.isNativeScene()
+                                              ? "scene"
+                                              : "model"},
+                            {"kind", sceneEntryKindName(entry.kind)},
+                            {"name", entry.name},
+                            {"available", entry.available},
+                            {"source", entry.sourcePath}};
+        if (entry.isModelPreview()) {
+            item["modelId"] = entry.id;
+            item["profileId"] = entry.profileId;
+            item["textureLimit"] =
+                catalog_.profile(entry.profileId).textureLimit;
+        } else {
+            item["modelId"] = nullptr;
+            item["profileId"] = nullptr;
+            item["textureLimit"] = nullptr;
+        }
+        entries.push_back(std::move(item));
     }
     return {{"scenes", std::move(scenes)},
             {"entries", std::move(entries)}};
@@ -2121,11 +2649,33 @@ ControlJson Application::runtimeSceneCurrent() {
         currentScene_ && currentSceneIndex_ >= 0
             ? ControlJson(sceneRegistry_[currentSceneIndex_].id)
             : ControlJson(nullptr);
-    return {{"name", name},
-            {"id", id},
-            {"sceneId", id},
-            {"modelId", id},
-            {"assetKind", "model"}};
+    const SceneEntry *entry =
+        currentScene_ && currentSceneIndex_ >= 0
+            ? &sceneRegistry_[currentSceneIndex_]
+            : nullptr;
+    ControlJson result = {{"name", name},
+                          {"id", id},
+                          {"sceneId", id},
+                          {"modelId", entry && entry->isModelPreview()
+                                          ? id
+                                          : ControlJson(nullptr)},
+                          {"assetKind", entry && entry->isNativeScene()
+                                            ? "scene"
+                                            : "model"},
+                          {"kind", entry ? sceneEntryKindName(entry->kind)
+                                         : "none"}};
+    if (const auto *world =
+            dynamic_cast<const RuntimeWorld *>(currentScene_.get())) {
+        result["sceneDocumentId"] = world->id().value();
+        result["entityCount"] = world->entityCount();
+        result["modelInstanceCount"] = world->modelInstanceCount();
+        result["lightCount"] = world->lights().size();
+        result["activeCamera"] =
+            world->activeCameraId()
+                ? ControlJson(world->activeCameraId()->toString())
+                : ControlJson(nullptr);
+    }
+    return result;
 }
 
 ControlJson Application::runtimeSceneOperationResult(int index,
@@ -2292,9 +2842,10 @@ ControlJson Application::runtimeIndexedArtifactStatus(
 
 int Application::runtimeAssetSceneIndex(const std::string &name) const {
     int index = findSceneIndexByName(name);
-    if (index >= 0)
+    if (index >= 0 && sceneRegistry_[index].isModelPreview())
         return index;
-    return sceneWorkflow_->findEntryById(name);
+    index = sceneWorkflow_->findEntryById(name);
+    return index >= 0 && sceneRegistry_[index].isModelPreview() ? index : -1;
 }
 
 ControlJson Application::runtimeAssetCatalog() {
@@ -2584,7 +3135,9 @@ ControlJson Application::runtimeRenderStatus() {
     ControlJson scene = nullptr;
     if (currentScene_ && currentSceneIndex_ >= 0) {
         scene = {{"id", sceneRegistry_[currentSceneIndex_].id},
-                 {"name", sceneRegistry_[currentSceneIndex_].name}};
+                 {"name", sceneRegistry_[currentSceneIndex_].name},
+                 {"kind", sceneEntryKindName(
+                              sceneRegistry_[currentSceneIndex_].kind)}};
     }
 
     ControlJson loadTask = sceneLoadTaskToJson(latestSceneLoadTask_);
@@ -2671,8 +3224,27 @@ ControlJson Application::runtimeRenderStatus() {
              {"primitives", record.primitiveCount},
              {"error", record.error}});
     }
+    ControlJson runtimeWorld = nullptr;
+    if (const auto *world =
+            dynamic_cast<const RuntimeWorld *>(currentScene_.get())) {
+        runtimeWorld = {
+            {"sceneDocumentId", world->id().value()},
+            {"entities", world->entityCount()},
+            {"modelInstances", world->modelInstanceCount()},
+            {"explicitLights", world->explicitLightCount()},
+            {"renderables", world->renderableCount()},
+            {"activeCamera",
+             world->activeCameraId()
+                 ? ControlJson(world->activeCameraId()->toString())
+                 : ControlJson(nullptr)},
+            {"environment",
+             world->worldEnvironment()
+                 ? ControlJson(world->worldEnvironment()->id)
+                 : ControlJson(nullptr)}};
+    }
     return {
         {"scene", std::move(scene)},
+        {"runtimeWorld", std::move(runtimeWorld)},
         {"sceneGeneration", sceneGeneration_},
         {"loadTask", std::move(loadTask)},
         {"environment",
@@ -2694,7 +3266,9 @@ ControlJson Application::runtimeRenderStatus() {
           {"scenePoint", pointSceneLights},
           {"sceneSpot", spotSceneLights},
           {"activeSceneLights", activeSceneLights},
-          {"fallbackSunActive", activeSceneLights == 0},
+          {"fallbackSunActive",
+           activeSceneLights == 0 && currentScene_ &&
+               currentScene_->allowsFallbackSun()},
           {"uploadedDirectional", lastUploadedDirectionalLights_},
           {"uploadedPunctual", lastUploadedPunctualLights_},
           {"ignored", lastIgnoredLights_}}},
@@ -2957,6 +3531,11 @@ ControlJson Application::runtimeLastLoadStats() {
 }
 
 ControlJson Application::runtimeQuit() {
+    if (hasUnsavedSceneChanges()) {
+        throw RuntimeCommandError(
+            "unsaved_changes",
+            "The active native scene has unsaved changes.");
+    }
     return {{"quitting", true}};
 }
 #endif
@@ -2975,7 +3554,7 @@ void Application::applySceneCameraDefaults() {
     }
 
     const Bounds &bounds = currentScene_->bounds();
-    if (!currentScene_->initialCamera) {
+    if (!currentScene_->initialEditorCamera()) {
         const float distance = std::max(bounds.radius * 2.2f, 1.0f);
         const glm::vec3 direction =
             glm::normalize(glm::vec3(1.0f, 1.0f, 0.65f));
@@ -2995,6 +3574,19 @@ void Application::applySceneCameraDefaults() {
 void Application::updateInputMode() {
 #if VKL_ENABLE_EDITOR_UI
     ImGuiIO *io = gui_ ? &ImGui::GetIO() : nullptr;
+    const bool activeSceneCamera =
+        sceneEditorSession_ && sceneEditorSession_->active() &&
+        sceneEditorSession_->cameraMode() == EditorCameraMode::ActiveScene;
+    if (activeSceneCamera) {
+        if (mode_ == InputMode::CameraDrag) {
+            input_->setCursorCaptured(false);
+            input_->setCursorPos(savedCursor_);
+            if (io)
+                io->ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+            mode_ = InputMode::UI;
+        }
+        return;
+    }
 #endif
 
     if (mode_ == InputMode::UI) {
@@ -3197,7 +3789,7 @@ void Application::updateModelImport() {
 #endif
 }
 
-void Application::drawScenePanel() {
+void Application::drawScenePanel(bool modelsOnly) {
     ModelImportUiState &ui = *modelImportUi_;
 
     if (scenesPanel_) {
@@ -3237,8 +3829,9 @@ void Application::drawScenePanel() {
             std::lock_guard<std::mutex> lock(ui.worker->mutex);
             snapshot.copyFile = ui.worker->currentFile;
         }
-        snapshot.openImportDialog = ui.requestOpenModal;
-        ui.requestOpenModal = false;
+        snapshot.openImportDialog = modelsOnly && ui.requestOpenModal;
+        if (modelsOnly)
+            ui.requestOpenModal = false;
         snapshot.importPreflight = ui.preflight;
         snapshot.importValidation = ui.validationReport;
         snapshot.importValidationReportPath = ui.validationReportPath;
@@ -3282,6 +3875,8 @@ void Application::drawScenePanel() {
                 projectContext_.catalogWritable &&
                 config_.assetImportMode == AssetImportMode::OnDemand;
         }
+        for (SceneWorkflowItemSnapshot &item : snapshot.nativeScenes)
+            item.current = item.index == currentSceneIndex_;
 
         SceneWorkflowActions actions;
 #if VKL_ENABLE_ASSET_AUTHORING
@@ -3320,7 +3915,14 @@ void Application::drawScenePanel() {
         };
         actions.loadPreview = [this](int index) {
             try {
-                requestSceneOperation(index);
+                requestEditorSceneLoad(index);
+            } catch (const std::exception &error) {
+                sceneAssetOperations_->error = error.what();
+            }
+        };
+        actions.loadSceneDocument = [this](int index) {
+            try {
+                requestEditorSceneLoad(index);
             } catch (const std::exception &error) {
                 sceneAssetOperations_->error = error.what();
             }
@@ -3439,12 +4041,12 @@ void Application::drawScenePanel() {
             ui.validationReportPath.clear();
             ui.allowUnvalidated = false;
         };
-        scenesPanel_->draw(snapshot, actions);
+        scenesPanel_->draw(snapshot, actions, modelsOnly);
         return;
     }
 }
 
-void Application::drawAssetsPanel() {
+void Application::drawAssetsPanel(bool environmentsOnly) {
     if (assetsPanel_) {
         AssetsPanelSnapshot snapshot;
         snapshot.projectId = catalog_.projectId;
@@ -3467,7 +4069,8 @@ void Application::drawAssetsPanel() {
         const int selectedModel =
             sceneAssetOperations_->selectedSceneIndex;
         if (selectedModel >= 0 &&
-            selectedModel < static_cast<int>(sceneRegistry_.size())) {
+            selectedModel < static_cast<int>(sceneRegistry_.size()) &&
+            sceneRegistry_[selectedModel].isModelPreview()) {
             const SceneEntry &entry = sceneRegistry_[selectedModel];
             const std::string profileId =
                 profileIdForTextureLimit(entry);
@@ -3691,7 +4294,7 @@ void Application::drawAssetsPanel() {
                 ShellExecuteW(nullptr, L"open", path.c_str(), nullptr,
                               nullptr, SW_SHOWNORMAL);
         };
-        assetsPanel_->draw(snapshot, actions);
+        assetsPanel_->draw(snapshot, actions, environmentsOnly);
         return;
     }
 }
@@ -3860,8 +4463,13 @@ void Application::drawRenderPanel() {
             ImGui::SetTooltip("%s", current);
     }
     constexpr uint32_t textureLimits[] = {0, 2048, 1024, 512};
+    const bool nativeSceneActive =
+        currentSceneIndex_ >= 0 &&
+        currentSceneIndex_ < static_cast<int>(sceneRegistry_.size()) &&
+        sceneRegistry_[currentSceneIndex_].isNativeScene();
     ImGui::BeginDisabled(config_.assetImportMode ==
-                         AssetImportMode::CookedOnly);
+                             AssetImportMode::CookedOnly ||
+                         nativeSceneActive);
     if (ImGui::BeginCombo("Texture Limit",
                           textureLimitLabel(sceneLoadContext_.maxTextureSize))) {
         for (uint32_t limit : textureLimits) {
@@ -3875,8 +4483,12 @@ void Application::drawRenderPanel() {
         }
         ImGui::EndCombo();
     }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Changing texture quality reloads the current scene.");
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip(
+            nativeSceneActive
+                ? "Preview only. Native scenes use each model's Catalog profile."
+                : "Changing texture quality reloads the current model preview.");
+    }
     ImGui::EndDisabled();
     ImGui::Separator();
     float exposureEv = renderSettings_.exposureEv;
@@ -3964,6 +4576,18 @@ void Application::drawSceneLoadingPanel() {
                 static_cast<unsigned long long>(task->id));
     ImGui::Text("Scene: %s", task->sceneName.c_str());
     ImGui::Text("State: %s", sceneLoadStateName(state));
+    ImGui::Text("Phase: %s", sceneLoadPhaseName(task->phase.load()));
+    if (task->kind == SceneLoadKind::NativeScene) {
+        ImGui::Text("Models: %llu / %llu",
+                    static_cast<unsigned long long>(task->readyModelCount),
+                    static_cast<unsigned long long>(task->uniqueModelCount));
+        if (!task->targetEnvironmentId.empty())
+            ImGui::Text("Environment: %s",
+                        task->targetEnvironmentId.c_str());
+        if (!task->failedModelId.empty())
+            ImGui::Text("Failed Model: %s",
+                        task->failedModelId.c_str());
+    }
     const uint64_t textureTotal = task->progress.totalTextures.load();
     const uint64_t textureDone =
         task->progress.completedTextures.load();
@@ -4219,11 +4843,27 @@ void Application::drawLightingPanel() {
 
 void Application::drawMaterialsPanel() {
     EditorUiState &ui = *editorUi_;
+    std::vector<std::shared_ptr<MaterialInstance>> selectedMaterials;
+    const std::vector<std::shared_ptr<MaterialInstance>> *materialsView =
+        currentScene_ ? &currentScene_->materials() : nullptr;
+    if (sceneEditorSession_ && sceneEditorSession_->active()) {
+        materialsView = &selectedMaterials;
+    }
+    if (sceneEditorSession_ && sceneEditorSession_->active() &&
+        sceneEditorSession_->selection()) {
+        const std::shared_ptr<RuntimeWorld> world =
+            sceneEditorSession_->world();
+        const auto asset = world->modelAsset(
+            world->find(*sceneEditorSession_->selection()));
+        if (asset) {
+            selectedMaterials = asset->materials;
+        }
+    }
     if (ui.materialSceneGeneration != sceneGeneration_) {
         ui.materialSceneGeneration = sceneGeneration_;
         ui.selectedMaterialIndex = 0;
-        if (currentScene_) {
-            const auto &materials = currentScene_->materials();
+        if (materialsView) {
+            const auto &materials = *materialsView;
             const auto firstValid =
                 std::find_if(materials.begin(), materials.end(),
                              [](const auto &material) {
@@ -4236,12 +4876,12 @@ void Application::drawMaterialsPanel() {
         }
     }
 
-    if (!currentScene_) {
+    if (!materialsView) {
         editor::emptyState("No scene is loaded.");
         return;
     }
 
-    const auto &materials = currentScene_->materials();
+    const auto &materials = *materialsView;
     ImGui::InputTextWithHint("##MaterialSearch", "Search materials...",
                              ui.materialSearch.data(),
                              ui.materialSearch.size());
@@ -4702,6 +5342,808 @@ void Application::drawLoadStatsPanel() {
     }
 }
 
+void Application::saveEditorScene() {
+    if (!sceneEditorSession_ || !sceneEditorSession_->active())
+        return;
+    try {
+        sceneEditorSession_->save(projectContext_.projectRoot,
+                                  catalog_.documentReferences());
+        editorUi_->sceneStatus = "Scene saved";
+        editorUi_->sceneError.clear();
+    } catch (const std::exception &error) {
+        if (std::string(error.what()) == "scene_changed_on_disk")
+            editorUi_->requestSceneConflictModal = true;
+        else
+            editorUi_->sceneError = error.what();
+    }
+}
+
+void Application::executePendingEditorAction(bool saveFirst) {
+    if (saveFirst) {
+        saveEditorScene();
+        if (hasUnsavedSceneChanges() ||
+            editorUi_->requestSceneConflictModal)
+            return;
+    }
+    const EditorPendingActionKind action = editorUi_->pendingAction;
+    const int sceneIndex = editorUi_->pendingSceneIndex;
+    editorUi_->pendingAction = EditorPendingActionKind::None;
+    editorUi_->pendingSceneIndex = -1;
+    editorUi_->requestDirtyModal = false;
+    if (!saveFirst && sceneEditorSession_ && sceneEditorSession_->active())
+        sceneEditorSession_->discardChanges();
+
+    try {
+        switch (action) {
+        case EditorPendingActionKind::None:
+            break;
+        case EditorPendingActionKind::NewScene:
+            editorUi_->requestNewSceneModal = true;
+            break;
+        case EditorPendingActionKind::LoadScene:
+            requestSceneOperation(sceneIndex);
+            break;
+        case EditorPendingActionKind::CloseScene:
+            if (sceneEditorSession_)
+                sceneEditorSession_->detach();
+            retireCurrentScene();
+            renderer_->clearEnvironment();
+            selectedEnvironmentId_.clear();
+            currentSceneIndex_ = -1;
+            ++sceneGeneration_;
+            break;
+        case EditorPendingActionKind::Quit:
+            if (sceneEditorSession_)
+                sceneEditorSession_->detach();
+            editorUi_->quitConfirmed = true;
+            window_->setShouldClose(true);
+            break;
+        }
+    } catch (const std::exception &error) {
+        editorUi_->sceneError = error.what();
+    }
+}
+
+void Application::drawSceneAuthoringDialogs() {
+    EditorUiState &ui = *editorUi_;
+    if (ui.requestNewSceneModal) {
+        ui.requestNewSceneModal = false;
+        std::snprintf(ui.sceneDisplayName.data(), ui.sceneDisplayName.size(),
+                      "%s", "New Scene");
+        std::snprintf(ui.sceneId.data(), ui.sceneId.size(), "%s",
+                      "new-scene");
+        ImGui::OpenPopup("New Scene");
+    }
+    if (ImGui::BeginPopupModal("New Scene", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::InputText("Name", ui.sceneDisplayName.data(),
+                         ui.sceneDisplayName.size());
+        ImGui::InputText("Scene ID", ui.sceneId.data(), ui.sceneId.size());
+        const bool valid = ui.sceneDisplayName[0] != '\0' &&
+                           isStableAssetId(ui.sceneId.data());
+        ImGui::BeginDisabled(!valid);
+        if (ImGui::Button("Create")) {
+            try {
+                const std::string id = ui.sceneId.data();
+                const std::string name = ui.sceneDisplayName.data();
+                const std::filesystem::path relative =
+                    std::filesystem::path("assets/scenes") /
+                    (id + ".vkscene.json");
+                const std::filesystem::path path =
+                    projectContext_.resolveProjectPath(relative);
+                std::filesystem::create_directories(path.parent_path());
+                const SceneDocument document =
+                    SceneDocumentService::createDefault(id, name);
+                SceneDocumentService::saveAtomic(
+                    path, projectContext_.projectRoot, document,
+                    std::nullopt);
+                try {
+                    SceneCatalogStore::addSceneDocument(
+                        projectContext_, {id, name, relative, false});
+                } catch (...) {
+                    std::error_code ignored;
+                    std::filesystem::remove(path, ignored);
+                    throw;
+                }
+                refreshSceneRegistry(id);
+                const int index = sceneWorkflow_->findEntryById(id);
+                requestSceneOperation(index);
+                ui.sceneStatus = "Created " + name;
+                ui.sceneError.clear();
+                ImGui::CloseCurrentPopup();
+            } catch (const std::exception &error) {
+                ui.sceneError = error.what();
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    if (ui.requestOpenSceneModal) {
+        ui.requestOpenSceneModal = false;
+        ui.openSceneIndex = -1;
+        ImGui::OpenPopup("Open Scene");
+    }
+    if (ImGui::BeginPopupModal("Open Scene", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::BeginChild("OpenSceneList", ImVec2(420.0f, 260.0f),
+                          ImGuiChildFlags_Borders);
+        for (int index = 0; index < static_cast<int>(sceneRegistry_.size());
+             ++index) {
+            const SceneEntry &entry = sceneRegistry_[index];
+            if (!entry.isNativeScene())
+                continue;
+            ImGui::BeginDisabled(!entry.available);
+            if (ImGui::Selectable(entry.name.c_str(),
+                                  ui.openSceneIndex == index))
+                ui.openSceneIndex = index;
+            ImGui::EndDisabled();
+        }
+        ImGui::EndChild();
+        ImGui::BeginDisabled(ui.openSceneIndex < 0);
+        if (ImGui::Button("Open")) {
+            requestEditorSceneLoad(ui.openSceneIndex);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    if (ui.requestSaveAsModal) {
+        ui.requestSaveAsModal = false;
+        const auto world = sceneEditorSession_ ? sceneEditorSession_->world()
+                                               : nullptr;
+        std::snprintf(ui.sceneDisplayName.data(), ui.sceneDisplayName.size(),
+                      "%s", world ? world->displayName().c_str() : "Scene");
+        std::snprintf(ui.sceneId.data(), ui.sceneId.size(), "%s",
+                      world ? (world->id().value() + "-copy").c_str()
+                            : "scene-copy");
+        ImGui::OpenPopup("Save Scene As");
+    }
+    if (ImGui::BeginPopupModal("Save Scene As", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::InputText("Name", ui.sceneDisplayName.data(),
+                         ui.sceneDisplayName.size());
+        ImGui::InputText("Scene ID", ui.sceneId.data(), ui.sceneId.size());
+        const bool valid = sceneEditorSession_ &&
+                           sceneEditorSession_->active() &&
+                           ui.sceneDisplayName[0] != '\0' &&
+                           isStableAssetId(ui.sceneId.data());
+        ImGui::BeginDisabled(!valid);
+        if (ImGui::Button("Save As")) {
+            try {
+                const std::string id = ui.sceneId.data();
+                const std::string name = ui.sceneDisplayName.data();
+                const std::filesystem::path relative =
+                    std::filesystem::path("assets/scenes") /
+                    (id + ".vkscene.json");
+                const std::filesystem::path path =
+                    projectContext_.resolveProjectPath(relative);
+                std::filesystem::create_directories(path.parent_path());
+                SceneDocument document =
+                    sceneEditorSession_->world()->toDocument();
+                document.id = SceneDocumentId(id);
+                document.displayName = name;
+                const SceneDocumentReferences references =
+                    catalog_.documentReferences();
+                SceneDocumentService::validate(document, &references);
+                const SceneDocumentFileStamp stamp =
+                    SceneDocumentService::saveAtomic(
+                        path, projectContext_.projectRoot, document,
+                        std::nullopt);
+                try {
+                    SceneCatalogStore::addSceneDocument(
+                        projectContext_, {id, name, relative, false});
+                } catch (...) {
+                    std::error_code ignored;
+                    std::filesystem::remove(path, ignored);
+                    throw;
+                }
+                const auto world = sceneEditorSession_->world();
+                world->replaceDocument(document);
+                sceneEditorSession_->attach(world, path, stamp);
+                sceneEditorSession_->setWorldChangedCallback(
+                    [this]() { updateEditorModelBindings(); });
+                refreshSceneRegistry(id);
+                currentSceneIndex_ = sceneWorkflow_->findEntryById(id);
+                ui.sceneStatus = "Saved as " + name;
+                ui.sceneError.clear();
+                ImGui::CloseCurrentPopup();
+            } catch (const std::exception &error) {
+                ui.sceneError = error.what();
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    if (ui.requestConvertPreviewModal) {
+        ui.requestConvertPreviewModal = false;
+        const SceneEntry *entry =
+            currentSceneIndex_ >= 0
+                ? &sceneRegistry_[currentSceneIndex_]
+                : nullptr;
+        const std::string baseId = entry ? entry->id + "-scene" : "scene";
+        const std::string baseName =
+            entry ? entry->name + " Scene" : "Converted Scene";
+        std::snprintf(ui.sceneDisplayName.data(), ui.sceneDisplayName.size(),
+                      "%s", baseName.c_str());
+        std::snprintf(ui.sceneId.data(), ui.sceneId.size(), "%s",
+                      baseId.c_str());
+        ImGui::OpenPopup("Convert Model Preview");
+    }
+    if (ImGui::BeginPopupModal("Convert Model Preview", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::InputText("Name", ui.sceneDisplayName.data(),
+                         ui.sceneDisplayName.size());
+        ImGui::InputText("Scene ID", ui.sceneId.data(), ui.sceneId.size());
+        const bool previewValid =
+            currentSceneIndex_ >= 0 &&
+            currentSceneIndex_ < static_cast<int>(sceneRegistry_.size()) &&
+            sceneRegistry_[currentSceneIndex_].isModelPreview() &&
+            !sceneRegistry_[currentSceneIndex_].builtin;
+        const bool valid = previewValid &&
+                           ui.sceneDisplayName[0] != '\0' &&
+                           isStableAssetId(ui.sceneId.data());
+        ImGui::BeginDisabled(!valid);
+        if (ImGui::Button("Convert")) {
+            try {
+                const SceneEntry preview = sceneRegistry_[currentSceneIndex_];
+                const std::string id = ui.sceneId.data();
+                const std::string name = ui.sceneDisplayName.data();
+                SceneDocument document =
+                    SceneDocumentService::createDefault(id, name);
+                SceneEntityDocument model;
+                model.id = PersistentEntityId::generate();
+                model.name = preview.name;
+                model.modelInstance =
+                    ModelInstanceDocument{ModelAssetId(preview.id)};
+                document.entities.push_back(std::move(model));
+                for (SceneEntityDocument &entity : document.entities) {
+                    if (entity.camera) {
+                        entity.transform.translation = camera_.position();
+                        entity.transform.rotation = rotationLookingAlong(
+                            camera_.front(), camera_.up());
+                        break;
+                    }
+                }
+                const std::filesystem::path relative =
+                    std::filesystem::path("assets/scenes") /
+                    (id + ".vkscene.json");
+                const std::filesystem::path path =
+                    projectContext_.resolveProjectPath(relative);
+                std::filesystem::create_directories(path.parent_path());
+                SceneDocumentService::saveAtomic(
+                    path, projectContext_.projectRoot, document,
+                    std::nullopt);
+                try {
+                    SceneCatalogStore::addSceneDocument(
+                        projectContext_, {id, name, relative, false});
+                } catch (...) {
+                    std::error_code ignored;
+                    std::filesystem::remove(path, ignored);
+                    throw;
+                }
+                refreshSceneRegistry(id);
+                requestEditorSceneLoad(sceneWorkflow_->findEntryById(id));
+                ui.sceneStatus = "Converted preview to " + name;
+                ImGui::CloseCurrentPopup();
+            } catch (const std::exception &error) {
+                ui.sceneError = error.what();
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    if (ui.requestDirtyModal) {
+        ui.requestDirtyModal = false;
+        ImGui::OpenPopup("Unsaved Scene Changes");
+    }
+    if (ImGui::BeginPopupModal("Unsaved Scene Changes", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped(
+            "The current scene has unsaved changes. Save them before "
+            "continuing?");
+        if (ImGui::Button("Save")) {
+            executePendingEditorAction(true);
+            if (editorUi_->requestSceneConflictModal) {
+                editorUi_->pendingAction = EditorPendingActionKind::None;
+                editorUi_->pendingSceneIndex = -1;
+                ImGui::CloseCurrentPopup();
+            } else if (!hasUnsavedSceneChanges()) {
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Discard")) {
+            executePendingEditorAction(false);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            ui.pendingAction = EditorPendingActionKind::None;
+            ui.pendingSceneIndex = -1;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (ui.requestSceneConflictModal) {
+        ui.requestSceneConflictModal = false;
+        ImGui::OpenPopup("Scene Changed On Disk");
+    }
+    if (ImGui::BeginPopupModal("Scene Changed On Disk", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped(
+            "The scene file changed outside VulkanLab. Reload it or save "
+            "the current work under a new scene ID.");
+        if (ImGui::Button("Reload")) {
+            try {
+                sceneEditorSession_->reload(
+                    projectContext_.projectRoot,
+                    catalog_.documentReferences());
+                ImGui::CloseCurrentPopup();
+            } catch (const std::exception &error) {
+                ui.sceneError = error.what();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Save As")) {
+            ui.requestSaveAsModal = true;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+}
+
+void Application::deleteSelectedEditorEntity() {
+    if (!sceneEditorSession_ || !sceneEditorSession_->active() ||
+        !sceneEditorSession_->selection())
+        return;
+    const PersistentEntityId id = *sceneEditorSession_->selection();
+    try {
+        if (sceneEditorSession_->execute(
+                "Delete Entity", [id](RuntimeWorld &world) {
+                    return world.destroyEntity(world.find(id), true);
+                })) {
+            sceneEditorSession_->select(std::nullopt);
+        }
+    } catch (const std::exception &error) {
+        editorUi_->sceneError = error.what();
+    }
+}
+
+void Application::duplicateSelectedEditorEntity() {
+    if (!sceneEditorSession_ || !sceneEditorSession_->active() ||
+        !sceneEditorSession_->selection())
+        return;
+    const PersistentEntityId rootId = *sceneEditorSession_->selection();
+    try {
+        PersistentEntityId duplicateRoot;
+        sceneEditorSession_->execute(
+            "Duplicate Entity", [&](RuntimeWorld &world) {
+                const std::vector<RuntimeEntitySnapshot> entities =
+                    world.entities();
+                std::unordered_set<PersistentEntityId,
+                                   PersistentEntityIdHash>
+                    subtree{rootId};
+                bool changed = true;
+                while (changed) {
+                    changed = false;
+                    for (const RuntimeEntitySnapshot &entity : entities) {
+                        if (entity.parent &&
+                            subtree.count(*entity.parent) != 0 &&
+                            subtree.insert(entity.id).second) {
+                            changed = true;
+                        }
+                    }
+                }
+                std::unordered_map<PersistentEntityId, PersistentEntityId,
+                                   PersistentEntityIdHash>
+                    remap;
+                for (const RuntimeEntitySnapshot &source : entities) {
+                    if (subtree.count(source.id) == 0)
+                        continue;
+                    SceneEntityDocument copy;
+                    copy.id = PersistentEntityId::generate();
+                    copy.name = source.id == rootId
+                                    ? source.name + " Copy"
+                                    : source.name;
+                    copy.enabled = source.enabled;
+                    copy.transform = source.transform;
+                    copy.modelInstance = source.modelInstance;
+                    copy.light = source.light;
+                    copy.camera = source.camera;
+                    remap[source.id] = copy.id;
+                    if (source.id == rootId)
+                        duplicateRoot = copy.id;
+                    world.createEntity(std::move(copy));
+                }
+                for (const RuntimeEntitySnapshot &source : entities) {
+                    if (subtree.count(source.id) == 0)
+                        continue;
+                    std::optional<EntityHandle> parent;
+                    if (source.parent) {
+                        const auto remapped = remap.find(*source.parent);
+                        parent = remapped != remap.end()
+                                     ? world.find(remapped->second)
+                                     : world.find(*source.parent);
+                    }
+                    if (!world.setParent(world.find(remap.at(source.id)),
+                                         parent)) {
+                        return false;
+                    }
+                }
+                return true;
+            });
+        if (!duplicateRoot.empty())
+            sceneEditorSession_->select(duplicateRoot);
+    } catch (const std::exception &error) {
+        editorUi_->sceneError = error.what();
+    }
+}
+
+void Application::drawOutlinerPanel() {
+    if (!outlinerPanel_ || !sceneEditorSession_ ||
+        !sceneEditorSession_->active()) {
+        ImGui::TextDisabled("Open a native scene to edit entities.");
+        return;
+    }
+    const std::shared_ptr<RuntimeWorld> world = sceneEditorSession_->world();
+    OutlinerPanelSnapshot snapshot;
+    snapshot.editable = projectContext_.catalogWritable;
+    const std::vector<RuntimeEntitySnapshot> entities = world->entities();
+    std::unordered_set<PersistentEntityId, PersistentEntityIdHash>
+        lightLimitExceeded;
+    uint32_t directionalCount = 0;
+    uint32_t punctualCount = 0;
+    for (const RuntimeEntitySnapshot &entity : entities) {
+        if (!entity.effectiveEnabled || !entity.light)
+            continue;
+        if (entity.light->type == SceneDocumentLightType::Directional) {
+            if (directionalCount++ >= kMaxDirectionalLights)
+                lightLimitExceeded.insert(entity.id);
+        } else if (punctualCount++ >= kMaxPunctualLights) {
+            lightLimitExceeded.insert(entity.id);
+        }
+    }
+    for (const RuntimeEntitySnapshot &entity : entities) {
+        snapshot.entities.push_back(
+            {entity.id, entity.parent, entity.name, entity.enabled,
+             sceneEditorSession_->selection() &&
+                 *sceneEditorSession_->selection() == entity.id,
+             entity.modelBindingState, entity.modelInstance.has_value(),
+             lightLimitExceeded.count(entity.id) != 0});
+    }
+
+    OutlinerPanelActions actions;
+    actions.select = [this](std::optional<PersistentEntityId> id) {
+        sceneEditorSession_->select(std::move(id));
+    };
+    actions.create = [this](OutlinerCreateKind kind,
+                            std::optional<PersistentEntityId> parentId) {
+        try {
+            SceneEntityDocument entity;
+            entity.id = PersistentEntityId::generate();
+            switch (kind) {
+            case OutlinerCreateKind::Empty:
+                entity.name = "Entity";
+                break;
+            case OutlinerCreateKind::Model:
+                entity.name = "Model";
+                break;
+            case OutlinerCreateKind::DirectionalLight:
+                entity.name = "Directional Light";
+                entity.light = LightComponentDocument{};
+                entity.light->type = SceneDocumentLightType::Directional;
+                entity.light->intensity = 3.0f;
+                break;
+            case OutlinerCreateKind::PointLight:
+                entity.name = "Point Light";
+                entity.light = LightComponentDocument{};
+                entity.light->type = SceneDocumentLightType::Point;
+                entity.light->range = 10.0f;
+                break;
+            case OutlinerCreateKind::SpotLight:
+                entity.name = "Spot Light";
+                entity.light = LightComponentDocument{};
+                entity.light->type = SceneDocumentLightType::Spot;
+                entity.light->range = 10.0f;
+                break;
+            case OutlinerCreateKind::Camera:
+                entity.name = "Camera";
+                entity.camera = CameraComponentDocument{};
+                break;
+            }
+            const PersistentEntityId createdId = entity.id;
+            sceneEditorSession_->execute(
+                "Create Entity",
+                [entity = std::move(entity), parentId](RuntimeWorld &world) {
+                    const EntityHandle created = world.createEntity(entity);
+                    if (parentId) {
+                        const EntityHandle parent = world.find(*parentId);
+                        return parent && world.setParent(created, parent);
+                    }
+                    return true;
+                });
+            sceneEditorSession_->select(createdId);
+        } catch (const std::exception &error) {
+            editorUi_->sceneError = error.what();
+        }
+    };
+    actions.rename = [this](PersistentEntityId id, std::string name) {
+        try {
+            sceneEditorSession_->execute(
+                "Rename Entity", [id, name = std::move(name)](
+                                     RuntimeWorld &world) mutable {
+                    return world.setName(world.find(id), std::move(name));
+                });
+        } catch (const std::exception &error) {
+            editorUi_->sceneError = error.what();
+        }
+    };
+    actions.setEnabled = [this](PersistentEntityId id, bool enabled) {
+        try {
+            sceneEditorSession_->execute(
+                "Set Entity Enabled", [id, enabled](RuntimeWorld &world) {
+                    return world.setEnabled(world.find(id), enabled);
+                });
+        } catch (const std::exception &error) {
+            editorUi_->sceneError = error.what();
+        }
+    };
+    actions.remove = [this](PersistentEntityId id) {
+        sceneEditorSession_->select(id);
+        deleteSelectedEditorEntity();
+    };
+    actions.duplicate = [this](PersistentEntityId rootId) {
+        sceneEditorSession_->select(rootId);
+        duplicateSelectedEditorEntity();
+    };
+    outlinerPanel_->draw(snapshot, actions);
+}
+
+void Application::drawInspectorPanel() {
+    if (!inspectorPanel_ || !sceneEditorSession_ ||
+        !sceneEditorSession_->active()) {
+        ImGui::TextDisabled("Open a native scene to inspect it.");
+        return;
+    }
+    const std::shared_ptr<RuntimeWorld> world = sceneEditorSession_->world();
+    InspectorPanelSnapshot snapshot;
+    snapshot.sceneId = world->id();
+    snapshot.sceneDisplayName = world->displayName();
+    snapshot.ambient = world->ambient();
+    snapshot.environment = world->environment();
+    snapshot.activeCamera = world->activeCameraId();
+    snapshot.editable = projectContext_.catalogWritable;
+    const std::vector<RuntimeEntitySnapshot> entities = world->entities();
+    snapshot.entities = entities;
+    if (sceneEditorSession_->selection()) {
+        snapshot.entity =
+            world->entity(world->find(*sceneEditorSession_->selection()));
+    }
+    for (const RuntimeEntitySnapshot &entity : entities) {
+        if (entity.camera)
+            snapshot.cameraEntities.push_back(entity);
+    }
+    uint32_t directionalCount = 0;
+    uint32_t punctualCount = 0;
+    for (const RuntimeEntitySnapshot &entity : entities) {
+        if (!entity.effectiveEnabled || !entity.light)
+            continue;
+        bool exceeded = false;
+        if (entity.light->type == SceneDocumentLightType::Directional)
+            exceeded = directionalCount++ >= kMaxDirectionalLights;
+        else
+            exceeded = punctualCount++ >= kMaxPunctualLights;
+        if (exceeded && snapshot.entity &&
+            snapshot.entity->id == entity.id) {
+            snapshot.selectedLightLimitExceeded = true;
+        }
+    }
+    for (const CatalogModel &model : catalog_.models) {
+        snapshot.models.push_back(
+            {model.id, model.displayName, model.type != "builtin"});
+    }
+    for (const CatalogEnvironment &environment : catalog_.environments) {
+        snapshot.environments.push_back(
+            {environment.id, environment.displayName});
+    }
+
+    InspectorPanelActions actions;
+    actions.setName = [this](PersistentEntityId id, std::string value) {
+        sceneEditorSession_->execute(
+            "Rename Entity", [id, value = std::move(value)](
+                                 RuntimeWorld &world) mutable {
+                return world.setName(world.find(id), std::move(value));
+            });
+    };
+    actions.setEnabled = [this](PersistentEntityId id, bool value) {
+        sceneEditorSession_->execute(
+            "Set Entity Enabled", [id, value](RuntimeWorld &world) {
+                return world.setEnabled(world.find(id), value);
+            });
+    };
+    actions.setParent =
+        [this](PersistentEntityId id,
+               std::optional<PersistentEntityId> parentId) {
+            sceneEditorSession_->execute(
+                "Change Parent", [id, parentId](RuntimeWorld &world) {
+                    const EntityHandle handle = world.find(id);
+                    const std::optional<EntityHandle> parent =
+                        parentId
+                            ? std::optional<EntityHandle>(
+                                  world.find(*parentId))
+                            : std::nullopt;
+                    return handle && (!parentId || (parent && *parent)) &&
+                           world.setParent(handle, parent);
+                });
+        };
+    actions.setTransform = [this](PersistentEntityId id,
+                                  SceneTransformDocument value) {
+        if (auto world = sceneEditorSession_->world())
+            world->setTransform(world->find(id), value);
+    };
+    actions.setModel = [this](PersistentEntityId id,
+                              std::optional<ModelInstanceDocument> value) {
+        sceneEditorSession_->execute(
+            "Set Model Component", [id, value = std::move(value)](
+                                       RuntimeWorld &world) mutable {
+                return world.setModelInstance(world.find(id),
+                                              std::move(value));
+            });
+    };
+    actions.setLight = [this](PersistentEntityId id,
+                              std::optional<LightComponentDocument> value) {
+        if (sceneEditorSession_->continuousEditActive()) {
+            if (auto world = sceneEditorSession_->world())
+                world->setLight(world->find(id), std::move(value));
+            return;
+        }
+        sceneEditorSession_->execute(
+            "Set Light Component", [id, value = std::move(value)](
+                                       RuntimeWorld &world) mutable {
+                return world.setLight(world.find(id), std::move(value));
+            });
+    };
+    actions.setCamera = [this](PersistentEntityId id,
+                               std::optional<CameraComponentDocument> value) {
+        if (sceneEditorSession_->continuousEditActive()) {
+            if (auto world = sceneEditorSession_->world())
+                world->setCamera(world->find(id), std::move(value));
+            return;
+        }
+        sceneEditorSession_->execute(
+            "Set Camera Component", [id, value = std::move(value)](
+                                        RuntimeWorld &world) mutable {
+                return world.setCamera(world.find(id), std::move(value));
+            });
+    };
+    actions.setActiveCamera = [this](PersistentEntityId id) {
+        sceneEditorSession_->execute(
+            "Set Active Camera", [id](RuntimeWorld &world) {
+                return world.setActiveCamera(id);
+            });
+    };
+    actions.setAmbient = [this](SceneAmbientDocument value) {
+        if (sceneEditorSession_->continuousEditActive()) {
+            if (auto world = sceneEditorSession_->world())
+                world->setAmbient(value);
+        } else {
+            sceneEditorSession_->execute(
+                "Edit Ambient", [value](RuntimeWorld &world) {
+                    world.setAmbient(value);
+                    return true;
+                });
+        }
+    };
+    actions.setEnvironment =
+        [this](std::optional<SceneEnvironmentDocument> value) {
+            if (sceneEditorSession_->continuousEditActive()) {
+                if (auto world = sceneEditorSession_->world())
+                    world->setEnvironment(std::move(value));
+            } else {
+                sceneEditorSession_->execute(
+                    "Set Environment", [value = std::move(value)](
+                                           RuntimeWorld &world) mutable {
+                        world.setEnvironment(std::move(value));
+                        return true;
+                    });
+            }
+        };
+    actions.beginContinuous = [this](std::string label) {
+        sceneEditorSession_->beginContinuousEdit(std::move(label));
+    };
+    actions.commitContinuous = [this]() {
+        try {
+            sceneEditorSession_->commitContinuousEdit();
+        } catch (const std::exception &error) {
+            editorUi_->sceneError = error.what();
+        }
+    };
+    try {
+        inspectorPanel_->draw(snapshot, actions);
+    } catch (const std::exception &error) {
+        editorUi_->sceneError = error.what();
+    }
+}
+
+void Application::handleEditorShortcuts() {
+    if (!editorUi_ || ImGui::GetIO().WantTextInput ||
+        ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
+        return;
+    }
+    const ImGuiIO &io = ImGui::GetIO();
+    const auto pressed = [](ImGuiKey key) {
+        return ImGui::IsKeyPressed(key, false);
+    };
+    if (io.KeyCtrl && io.KeyShift && pressed(ImGuiKey_S)) {
+        if (sceneEditorSession_ && sceneEditorSession_->active())
+            editorUi_->requestSaveAsModal = true;
+        return;
+    }
+    if (io.KeyCtrl && pressed(ImGuiKey_N)) {
+        if (hasUnsavedSceneChanges()) {
+            editorUi_->pendingAction = EditorPendingActionKind::NewScene;
+            editorUi_->requestDirtyModal = true;
+        } else {
+            editorUi_->requestNewSceneModal = true;
+        }
+        return;
+    }
+    if (io.KeyCtrl && pressed(ImGuiKey_O)) {
+        editorUi_->requestOpenSceneModal = true;
+        return;
+    }
+    if (io.KeyCtrl && pressed(ImGuiKey_S)) {
+        saveEditorScene();
+        return;
+    }
+    if (io.KeyCtrl && pressed(ImGuiKey_Z)) {
+        if (sceneEditorSession_)
+            sceneEditorSession_->undo();
+        return;
+    }
+    if (io.KeyCtrl && pressed(ImGuiKey_Y)) {
+        if (sceneEditorSession_)
+            sceneEditorSession_->redo();
+        return;
+    }
+    if (io.KeyCtrl && pressed(ImGuiKey_D)) {
+        duplicateSelectedEditorEntity();
+        return;
+    }
+    if (pressed(ImGuiKey_Delete)) {
+        deleteSelectedEditorEntity();
+        return;
+    }
+    if (pressed(ImGuiKey_F2) && outlinerPanel_ && sceneEditorSession_ &&
+        sceneEditorSession_->selection()) {
+        const auto entity = sceneEditorSession_->world()->entity(
+            sceneEditorSession_->world()->find(
+                *sceneEditorSession_->selection()));
+        if (entity)
+            outlinerPanel_->beginRename(entity->id, entity->name);
+    }
+}
+
 void Application::drawGui() {
     VKL_PROFILE_ZONE("Build Editor UI");
     updateModelImport();
@@ -4759,14 +6201,108 @@ void Application::drawGui() {
     }
 
     EditorPanelCallbacks panels{};
+    panels.outliner = [this]() { drawOutlinerPanel(); };
+    panels.inspector = [this]() { drawInspectorPanel(); };
+    panels.sceneSessionActive =
+        sceneEditorSession_ && sceneEditorSession_->active();
+    panels.sceneDirty = hasUnsavedSceneChanges();
+    panels.canUndo = panels.sceneSessionActive &&
+                     sceneEditorSession_->canUndo();
+    panels.canRedo = panels.sceneSessionActive &&
+                     sceneEditorSession_->canRedo();
+    if (panels.canUndo)
+        panels.undoLabel = sceneEditorSession_->undoLabel();
+    if (panels.canRedo)
+        panels.redoLabel = sceneEditorSession_->redoLabel();
+    panels.newScene = [this]() {
+        if (hasUnsavedSceneChanges()) {
+            editorUi_->pendingAction = EditorPendingActionKind::NewScene;
+            editorUi_->requestDirtyModal = true;
+        } else {
+            editorUi_->requestNewSceneModal = true;
+        }
+    };
+    panels.openScene = [this]() {
+        editorUi_->requestOpenSceneModal = true;
+    };
+    panels.saveScene = [this]() { saveEditorScene(); };
+    panels.saveSceneAs = [this]() {
+        editorUi_->requestSaveAsModal = true;
+    };
+    panels.closeScene = [this]() {
+        editorUi_->pendingAction = EditorPendingActionKind::CloseScene;
+        if (hasUnsavedSceneChanges())
+            editorUi_->requestDirtyModal = true;
+        else
+            executePendingEditorAction(false);
+    };
+    panels.convertPreview = [this]() {
+        editorUi_->requestConvertPreviewModal = true;
+    };
+    panels.undo = [this]() {
+        if (sceneEditorSession_)
+            sceneEditorSession_->undo();
+    };
+    panels.redo = [this]() {
+        if (sceneEditorSession_)
+            sceneEditorSession_->redo();
+    };
+    if (panels.sceneSessionActive) {
+        panels.viewportToolbar = [this]() {
+            int mode = sceneEditorSession_->cameraMode() ==
+                               EditorCameraMode::Editor
+                           ? 0
+                           : 1;
+            const char *labels[] = {"Editor Camera", "Active Camera"};
+            if (editor::segmentedControl("ViewportCameraMode", mode,
+                                         labels, 2, 210.0f)) {
+                sceneEditorSession_->setCameraMode(
+                    mode == 0 ? EditorCameraMode::Editor
+                              : EditorCameraMode::ActiveScene);
+            }
+        };
+    }
     panels.scenes = [this, hasActiveLoad]() {
-        drawScenePanel();
+        drawScenePanel(false);
         if (hasActiveLoad) {
             ImGui::SeparatorText("Loading");
             drawSceneLoadingPanel();
         }
+        if (!editorUi_->sceneStatus.empty()) {
+            ImGui::Separator();
+            editor::statusIndicator(editorUi_->sceneStatus.c_str(),
+                                    editor::StatusTone::Success);
+        }
+        if (!editorUi_->sceneError.empty()) {
+            ImGui::Separator();
+            ImGui::TextColored(editor::statusColor(
+                                   editor::StatusTone::Error),
+                               "%s", editorUi_->sceneError.c_str());
+        }
     };
-    panels.assets = [this]() { drawAssetsPanel(); };
+    panels.assets = [this]() {
+        if (!ImGui::BeginTabBar("AssetTabs"))
+            return;
+        if (ImGui::BeginTabItem("Models")) {
+            ImGui::PushID("Models");
+            drawScenePanel(true);
+            ImGui::PopID();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Environments")) {
+            ImGui::PushID("Environments");
+            drawAssetsPanel(true);
+            ImGui::PopID();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Jobs / Cache")) {
+            ImGui::PushID("JobsCache");
+            drawAssetsPanel(false);
+            ImGui::PopID();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    };
     panels.render = [this]() {
         ImGui::PushItemWidth(-145.0f);
         if (ImGui::CollapsingHeader("Common",
@@ -4821,6 +6357,8 @@ void Application::drawGui() {
         }
     };
 
+    handleEditorShortcuts();
+
     const VkExtent2D renderExtent = renderer_->viewportExtent();
     EditorViewportFrame viewportFrame{};
     viewportFrame.textureId =
@@ -4829,6 +6367,7 @@ void Application::drawGui() {
     viewportFrame.renderHeight = renderExtent.height;
     viewportFrame.resizePending = viewportResize_.pending;
     editorDockWorkspace_->draw(status, viewportFrame, panels);
+    drawSceneAuthoringDialogs();
 
     const EditorViewportState &viewport =
         editorDockWorkspace_->viewportState();
@@ -4940,10 +6479,21 @@ void Application::mainLoop() {
     profileConfigureMemoryPlot("VMA/BlockBytes");
     float simulationTime = 0.0f;
 
-    while (!window_->shouldClose()) {
+    while (true) {
         VKL_PROFILE_ZONE("Application Frame");
         window_->pollEvents();
         input_->update();
+
+#if VKL_ENABLE_EDITOR_UI
+        if (window_->shouldClose() && hasUnsavedSceneChanges() &&
+            editorUi_ && !editorUi_->quitConfirmed) {
+            window_->setShouldClose(false);
+            editorUi_->pendingAction = EditorPendingActionKind::Quit;
+            editorUi_->requestDirtyModal = true;
+        }
+#endif
+        if (window_->shouldClose())
+            break;
 
         if (captureService_) {
             captureService_->update(
@@ -4991,8 +6541,18 @@ void Application::mainLoop() {
             if (mode_ == InputMode::CameraDrag)
                 processCameraInput(dt);
         }
-        if (input_->isKeyDown(Key::Escape))
+        if (input_->isKeyPressed(Key::Escape)) {
+#if VKL_ENABLE_EDITOR_UI
+            if (hasUnsavedSceneChanges()) {
+                editorUi_->pendingAction = EditorPendingActionKind::Quit;
+                editorUi_->requestDirtyModal = true;
+            } else {
+                window_->setShouldClose(true);
+            }
+#else
             window_->setShouldClose(true);
+#endif
+        }
 #if VKL_ENABLE_CAPTURE
         if (input_->isKeyPressed(Key::F12))
             requestManualCapture(captureIncludeGui_);
@@ -5094,9 +6654,46 @@ void Application::mainLoop() {
         viewInput.environmentReady = renderer_->environmentReady();
         viewInput.maxSpecularLod =
             renderer_->currentEnvironmentMaxSpecularLod();
+        glm::vec3 renderCameraPosition = camera_.position();
         if (currentScene_) {
             viewInput.sceneBounds = currentScene_->bounds();
             viewInput.sceneLights = &currentScene_->lights();
+            viewInput.fallbackSunEnabled =
+                currentScene_->allowsFallbackSun();
+            if (const auto ambient = currentScene_->worldAmbient()) {
+                viewInput.ambientColor = ambient->color;
+                viewInput.ambientIntensity = ambient->intensity;
+            }
+            if (const auto environment =
+                    currentScene_->worldEnvironment()) {
+                viewInput.settings.environmentIntensity =
+                    environment->intensity;
+                viewInput.settings.environmentRotationRadians =
+                    environment->rotationRadians;
+            }
+            bool useActiveSceneCamera = !gui_;
+#if VKL_ENABLE_EDITOR_UI
+            useActiveSceneCamera =
+                useActiveSceneCamera ||
+                (sceneEditorSession_ && sceneEditorSession_->active() &&
+                 sceneEditorSession_->cameraMode() ==
+                     EditorCameraMode::ActiveScene);
+#endif
+            if (useActiveSceneCamera) {
+                const VkExtent2D extent = renderer_->viewportExtent();
+                const float aspect =
+                    extent.height == 0
+                        ? 1.0f
+                        : static_cast<float>(extent.width) /
+                              static_cast<float>(extent.height);
+                if (const auto activeCamera =
+                        currentScene_->activeCamera(aspect)) {
+                    viewInput.view = activeCamera->view;
+                    viewInput.projection = activeCamera->projection;
+                    viewInput.cameraPosition = activeCamera->position;
+                    renderCameraPosition = activeCamera->position;
+                }
+            }
         }
         const RenderView renderView = buildRenderView(viewInput);
         lastUploadedDirectionalLights_ =
@@ -5120,7 +6717,7 @@ void Application::mainLoop() {
         {
             VKL_PROFILE_ZONE("RenderQueue Sort");
             renderQueue_.sortOpaque();
-            renderQueue_.sortTransparent(camera_.position());
+            renderQueue_.sortTransparent(renderCameraPosition);
         }
 
         if constexpr (build::kTracy) {

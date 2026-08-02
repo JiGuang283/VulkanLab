@@ -2,6 +2,7 @@
 
 #include "diagnostics/SceneLoadStats.h"
 #include "ModelAssetHandle.h"
+#include "scene_data/SceneDocument.h"
 
 #include <atomic>
 #include <chrono>
@@ -27,7 +28,26 @@ enum class SceneLoadState : uint32_t {
     Failed,
 };
 
+enum class SceneLoadKind : uint32_t {
+    ModelPreview,
+    NativeScene,
+};
+
+enum class SceneLoadPhase : uint32_t {
+    Queued,
+    PreparingModel,
+    UploadingModel,
+    ParsingDocument,
+    ResolvingModels,
+    LoadingModels,
+    LoadingEnvironment,
+    PublishingWorld,
+    Complete,
+};
+
 const char *sceneLoadStateName(SceneLoadState state);
+const char *sceneLoadKindName(SceneLoadKind kind);
+const char *sceneLoadPhaseName(SceneLoadPhase phase);
 bool isTerminalSceneLoadState(SceneLoadState state);
 
 class CancellationToken {
@@ -56,10 +76,17 @@ struct SceneLoadProgress {
     std::atomic<uint64_t> processedBytes{0};
 };
 
+struct NativeSceneModelBinding {
+    ModelAssetId modelId;
+    std::string profileId;
+    ModelAssetHandle asset;
+};
+
 struct SceneLoadTask {
     uint64_t id = 0;
     uint64_t generation = 0;
     int      sceneIndex = -1;
+    SceneLoadKind kind = SceneLoadKind::ModelPreview;
     std::string sceneName;
     std::string modelId;
     std::string profileId;
@@ -68,6 +95,7 @@ struct SceneLoadTask {
     bool repositoryHit = false;
     bool coalescedRequest = false;
     std::atomic<SceneLoadState> state{SceneLoadState::Queued};
+    std::atomic<SceneLoadPhase> phase{SceneLoadPhase::Queued};
     std::atomic_bool finalized{false};
     SceneLoadProgress progress;
     SceneLoadStats stats;
@@ -78,6 +106,14 @@ struct SceneLoadTask {
 
     mutable std::mutex mutex;
     ModelAssetHandle modelAsset;
+    std::optional<LoadedSceneDocument> loadedDocument;
+    std::vector<NativeSceneModelBinding> nativeModels;
+    uint64_t uniqueModelCount = 0;
+    uint64_t readyModelCount = 0;
+    std::string failedModelId;
+    std::string targetEnvironmentId;
+    uint64_t environmentTaskId = 0;
+    bool environmentReady = false;
     std::string error;
 };
 

@@ -46,7 +46,57 @@ editor::StatusTone statusTone(const std::string &state, bool available) {
 } // namespace
 
 void ScenesPanel::draw(const SceneWorkflowSnapshot &snapshot,
-                       const SceneWorkflowActions &actions) {
+                       const SceneWorkflowActions &actions,
+                       bool modelsOnly) {
+    if (!modelsOnly) {
+        ImGui::SetNextItemWidth(-92.0f);
+        ImGui::InputTextWithHint("##SceneSearch", "Search scenes...",
+                                 search_.data(), search_.size());
+        ImGui::SameLine();
+        ImGui::BeginDisabled(snapshot.busy);
+        if (ImGui::Button("Refresh") && actions.refresh)
+            actions.refresh();
+        ImGui::EndDisabled();
+
+        if (snapshot.nativeScenes.empty()) {
+            editor::emptyState("No native scenes in the Catalog.");
+            return;
+        }
+        ImGui::BeginChild("NativeSceneBrowser", ImVec2(0.0f, 0.0f),
+                          ImGuiChildFlags_Borders);
+        for (const SceneWorkflowItemSnapshot &item : snapshot.nativeScenes) {
+            if (!containsIgnoreCase(item.displayName, search_.data()) &&
+                !containsIgnoreCase(item.id, search_.data())) {
+                continue;
+            }
+            ImGui::PushID(item.id.c_str());
+            ImGui::BeginDisabled(!item.available);
+            const bool selected = item.index == snapshot.selectedIndex;
+            if (ImGui::Selectable(item.displayName.c_str(), selected)) {
+                if (actions.selectModel)
+                    actions.selectModel(item.index);
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+                    actions.loadSceneDocument) {
+                    actions.loadSceneDocument(item.index);
+                }
+            }
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("%s\n%s", item.id.c_str(),
+                                  item.available
+                                      ? "Double-click to open"
+                                      : item.unavailableReason.c_str());
+            }
+            if (item.current) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("Open");
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndChild();
+        return;
+    }
+
     if (snapshot.showImport) {
         ImGui::BeginDisabled(snapshot.busy || !snapshot.canImport);
         if (ImGui::Button("Import Model...") && actions.beginModelImport)
