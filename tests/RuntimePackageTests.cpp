@@ -52,9 +52,12 @@ void testRuntimePackageRoundTrip() {
     writePackageFile(temporary.root / "VulkanLab.exe", "executable");
 
     vkr::RuntimePackageManifest manifest;
+    manifest.schemaVersion =
+        vkr::RuntimePackageManifest::kNativeTextureSchemaVersion;
     manifest.platform = "windows-x64";
     manifest.projectId = "package-test";
     manifest.profileId = "desktop-512";
+    manifest.requiredTextureEncoder = "bc7";
     manifest.files = {packageFile(temporary.root, "VulkanLab.exe"),
                       packageFile(temporary.root, "assets/catalog.json")};
     std::sort(manifest.files.begin(), manifest.files.end(),
@@ -114,9 +117,12 @@ void testUnsafeRuntimePackagePath() {
     writePackageFile(temporary.root / "assets/catalog.json", "catalog");
     writePackageFile(temporary.root / "VulkanLab.exe", "executable");
     vkr::RuntimePackageManifest manifest;
+    manifest.schemaVersion =
+        vkr::RuntimePackageManifest::kNativeTextureSchemaVersion;
     manifest.platform = "windows-x64";
     manifest.projectId = "package-test";
     manifest.profileId = "desktop-512";
+    manifest.requiredTextureEncoder = "bc7";
     manifest.files = {{"../outside", 1, std::string(64, '0')},
                       packageFile(temporary.root, "VulkanLab.exe"),
                       packageFile(temporary.root, "assets/catalog.json")};
@@ -135,9 +141,12 @@ void testRuntimePackageRequiresExecutable() {
     TemporaryPackage temporary;
     writePackageFile(temporary.root / "assets/catalog.json", "catalog");
     vkr::RuntimePackageManifest manifest;
+    manifest.schemaVersion =
+        vkr::RuntimePackageManifest::kNativeTextureSchemaVersion;
     manifest.platform = "windows-x64";
     manifest.projectId = "package-test";
     manifest.profileId = "desktop-512";
+    manifest.requiredTextureEncoder = "bc7";
     manifest.files = {packageFile(temporary.root, "assets/catalog.json")};
     std::string error;
     requirePackage(!vkr::saveRuntimePackageManifest(

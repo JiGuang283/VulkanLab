@@ -1,4 +1,5 @@
 #include "TextureCacheBuilder.h"
+#include "CookClosureResolver.h"
 #include "CookPackageBuilder.h"
 #include "EnvironmentCacheBuilder.h"
 #include "GltfValidator.h"
@@ -84,15 +85,17 @@ void printUsage(std::ostream &output) {
         << "  VulkanLabAssetTool cache prune [--older-than-days <n>] "
            "[--execute] [options]\n\n"
         << "  VulkanLabAssetTool cook --platform windows-x64 "
-           "--profile <id> --output <path> "
-           "[--environment-id <id>]... [options]\n\n"
+           "--output <path> [--scene-id <native-scene-id>]... "
+           "[--startup-scene <id>] [options]\n\n"
         << "  VulkanLabAssetTool package verify --path <package-root>\n\n"
         << "Options:\n"
         << "  --project <path>     Source project root (otherwise use "
            "locator)\n"
         << "  --scene <path>       Legacy alias; match a Catalog source path\n"
         << "  --model-id <id>      Stable Catalog model ID\n"
-        << "  --scene-id <id>      Compatibility alias for --model-id\n"
+        << "  --scene-id <id>      Native SceneDocument ID for cook; model "
+           "ID elsewhere\n"
+        << "  --startup-scene <id> Startup SceneDocument in a cooked package\n"
         << "  --environment-id <id> Stable Catalog environment ID\n"
         << "  --profile <id>       Import profile (default: model profile)\n"
         << "  --texture-limit <n>  Override profile limit: 0/512/1024/2048\n"
@@ -717,7 +720,16 @@ int main(int argc, char **argv) {
             std::cout << "Package verified\n"
                       << "  path: " << packageRoot.string()
                       << "\n  project: " << manifest.projectId
-                      << "\n  profile: " << manifest.profileId
+                      << "\n  schema: " << manifest.schemaVersion
+                      << "\n  default profile: "
+                      << manifest.defaultImportProfile;
+            if (manifest.schemaVersion >=
+                vkr::RuntimePackageManifest::kSchemaVersion) {
+                std::cout << "\n  scenes: " << manifest.sceneIds.size()
+                          << "\n  startup scene: "
+                          << manifest.startupSceneId;
+            }
+            std::cout
                       << "\n  files: " << verified.fileCount
                       << "\n  bytes: " << verified.totalBytes << '\n';
             return EXIT_SUCCESS;
@@ -836,15 +848,20 @@ int main(int argc, char **argv) {
                         requireValue(i, argc, argv, argument);
                 } else if (argument == "--platform") {
                     cook.platform = requireValue(i, argc, argv, argument);
-                } else if (argument == "--profile") {
-                    cook.profileId = requireValue(i, argc, argv, argument);
+                } else if (argument == "--scene-id") {
+                    cook.sceneDocumentIds.push_back(
+                        requireValue(i, argc, argv, argument));
+                } else if (argument == "--startup-scene") {
+                    cook.startupSceneId =
+                        requireValue(i, argc, argv, argument);
                 } else if (argument == "--model-id" ||
-                           argument == "--scene-id") {
-                    cook.sceneIds.push_back(
-                        requireValue(i, argc, argv, argument));
-                } else if (argument == "--environment-id") {
-                    cook.environmentIds.push_back(
-                        requireValue(i, argc, argv, argument));
+                           argument == "--environment-id" ||
+                           argument == "--profile") {
+                    throw std::invalid_argument(
+                        argument +
+                        " is no longer accepted by cook; select native "
+                        "SceneDocument roots with --scene-id and use Catalog "
+                        "asset profiles");
                 } else if (argument == "--build-missing") {
                     buildMissing = true;
                 } else if (argument == "--ktx-tool") {
@@ -871,10 +888,6 @@ int main(int argc, char **argv) {
             const vkr::SceneCatalog catalog = vkr::SceneCatalog::load(
                 project.catalogPath, project.projectRoot);
             cook.projectRoot = project.projectRoot;
-            if (cook.profileId.empty())
-                cook.profileId = catalog.defaultImportProfile;
-            const vkr::ImportProfile &profile =
-                catalog.profile(cook.profileId);
             if (cook.cacheRoot.empty()) {
                 cook.cacheRoot = vkr::DerivedAssetPaths::defaultCacheRoot(
                     catalog.projectId);
@@ -888,18 +901,14 @@ int main(int argc, char **argv) {
             std::atomic_bool cancelRequested{false};
             ConsoleCancellationHandler cancellationHandler(cancelRequested);
             vkr::assettool::Win32JobProcessRunner validatorRunner;
-            std::unordered_set<std::string> validationRequested(
-                cook.sceneIds.begin(), cook.sceneIds.end());
-            for (const vkr::CatalogModel &scene : catalog.models) {
-                const bool selected =
-                    cook.sceneIds.empty()
-                        ? !scene.optional
-                        : validationRequested.count(scene.id) > 0;
-                if (!selected || scene.type != "gltf")
-                    continue;
+            const vkr::assettool::CookClosure closure =
+                vkr::assettool::resolveCookClosure(
+                    catalog, project.projectRoot,
+                    cook.sceneDocumentIds, cook.startupSceneId);
+            for (const vkr::CatalogModel *scene : closure.models) {
                 vkr::assettool::GltfValidationOptions validationOptions;
                 validationOptions.sourcePath =
-                    project.projectRoot / scene.source;
+                    project.projectRoot / scene->source;
                 validationOptions.cacheRoot = cook.cacheRoot;
                 validationOptions.validatorPath = validatorPath;
                 validationOptions.requireExecutable = true;
@@ -910,7 +919,7 @@ int main(int argc, char **argv) {
                     validation.report.state !=
                         vkr::AssetValidationState::Warnings) {
                     throw std::runtime_error(
-                        "Cook rejected scene '" + scene.id +
+                        "Cook rejected model '" + scene->id +
                         "' because validation is " +
                         vkr::assetValidationStateName(
                             validation.report.state) +
@@ -920,34 +929,29 @@ int main(int argc, char **argv) {
                                    validation.report.failureReason));
                 }
                 (void)vkr::bindSceneValidation(
-                    cook.cacheRoot, project.projectRoot, scene.id,
-                    scene.source,
+                    cook.cacheRoot, project.projectRoot, scene->id,
+                    scene->source,
                     vkr::sceneValidationReceipt(validation.report));
             }
             if (buildMissing) {
-                std::unordered_set<std::string> requested(
-                    cook.sceneIds.begin(), cook.sceneIds.end());
-                for (const vkr::CatalogModel &scene : catalog.models) {
-                    const bool selected = cook.sceneIds.empty()
-                                              ? !scene.optional
-                                              : requested.count(scene.id) > 0;
-                    if (!selected || scene.type != "gltf")
-                        continue;
+                for (const vkr::CatalogModel *scene : closure.models) {
+                    const vkr::ImportProfile &profile =
+                        catalog.profile(scene->importProfile);
                     const std::filesystem::path source =
-                        project.projectRoot / scene.source;
+                        project.projectRoot / scene->source;
                     const vkr::ArtifactStatus status =
                         vkr::inspectTextureArtifacts(
                             {cook.cacheRoot, source, catalog.projectId,
-                             scene.id, profile.id, profile.textureLimit,
+                             scene->id, profile.id, profile.textureLimit,
                              *vkr::textureEncoderFromName(
                                  profile.textureEncoder)});
                     if (status.ready())
                         continue;
                     build.scene = source;
-                    build.sceneProjectPath = scene.source;
+                    build.sceneProjectPath = scene->source;
                     build.cacheRoot = cook.cacheRoot;
                     build.projectId = catalog.projectId;
-                    build.sceneId = scene.id;
+                    build.sceneId = scene->id;
                     build.profileId = profile.id;
                     build.textureLimit = profile.textureLimit;
                     build.qualityPreset = profile.qualityPreset;
@@ -961,36 +965,28 @@ int main(int argc, char **argv) {
                     if (buildResult != 0)
                         return buildResult;
                 }
-                std::unordered_set<std::string> requestedEnvironments(
-                    cook.environmentIds.begin(),
-                    cook.environmentIds.end());
-                for (const vkr::CatalogEnvironment &environment :
-                     catalog.environments) {
-                    const bool selected =
-                        cook.environmentIds.empty() ||
-                        requestedEnvironments.count(environment.id) > 0;
-                    if (!selected)
-                        continue;
+                for (const vkr::CatalogEnvironment *environment :
+                     closure.environments) {
                     const std::filesystem::path source =
-                        project.projectRoot / environment.source;
+                        project.projectRoot / environment->source;
                     const vkr::ArtifactStatus status =
                         vkr::inspectEnvironmentArtifacts(
                             {cook.cacheRoot, source, catalog.projectId,
-                             environment.id,
-                             environment.environmentProfile});
+                             environment->id,
+                             environment->environmentProfile});
                     if (status.ready())
                         continue;
                     vkr::assettool::EnvironmentCacheBuildOptions
                         environmentBuild;
                     environmentBuild.source = source;
                     environmentBuild.sourceProjectPath =
-                        environment.source;
+                        environment->source;
                     environmentBuild.cacheRoot = cook.cacheRoot;
                     environmentBuild.projectId = catalog.projectId;
-                    environmentBuild.environmentId = environment.id;
+                    environmentBuild.environmentId = environment->id;
                     environmentBuild.profile =
                         catalog.environmentProfile(
-                            environment.environmentProfile);
+                            environment->environmentProfile);
                     environmentBuild.maxWorkers = build.maxWorkers;
                     environmentBuild.cancelRequested =
                         &cancelRequested;
@@ -1008,6 +1004,7 @@ int main(int argc, char **argv) {
             std::cout << "Cook complete\n"
                       << "  output: " << report.outputDirectory.string()
                       << "\n  scenes: " << report.sceneCount
+                      << "\n  models: " << report.modelCount
                       << "\n  environments: " << report.environmentCount
                       << "\n  manifests: " << report.manifestCount
                       << "\n  unique blobs: " << report.blobCount

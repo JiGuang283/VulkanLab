@@ -1,6 +1,9 @@
 #include "CookPackageBuilder.h"
 
+#include "CookClosureResolver.h"
+
 #include "GltfValidator.h"
+#include "ProcessRunner.h"
 
 #include "assets/AssetValidation.h"
 #include "assets/ArtifactIndex.h"
@@ -20,12 +23,12 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <fstream>
 #include <set>
 #include <stdexcept>
 #include <system_error>
-#include <unordered_set>
 
 namespace vkr::assettool {
 namespace {
@@ -101,47 +104,46 @@ void copySceneGeometry(const std::filesystem::path &projectRoot,
     }
 }
 
-Json cameraJson(const CameraPose &camera) {
-    return {{"position", {camera.position.x, camera.position.y,
-                           camera.position.z}},
-            {"yaw", camera.yaw},
-            {"pitch", camera.pitch}};
-}
-
 void saveCookedCatalog(const std::filesystem::path &path,
                        const SceneCatalog &catalog,
-                       const std::vector<const CatalogModel *> &scenes,
-                       const std::vector<const CatalogEnvironment *> &environments,
-                       const ImportProfile &profile) {
+                       const CookClosure &closure) {
+    Json modelArray = Json::array();
+    for (const CatalogModel *model : closure.models) {
+        modelArray.push_back({{"id", model->id},
+                              {"displayName", model->displayName},
+                              {"source", generic(model->source)},
+                              {"importProfile", model->importProfile},
+                              {"optional", false}});
+    }
     Json sceneArray = Json::array();
-    for (const CatalogModel *scene : scenes) {
-        Json item = {{"id", scene->id},
-                     {"displayName", scene->displayName},
-                     {"importProfile", profile.id}};
-        if (scene->type == "builtin") {
-            item["type"] = "builtin";
-            item["builtinFactory"] = scene->builtinFactory;
-        } else {
-            item["source"] = generic(scene->source);
-        }
-        if (scene->previewCamera)
-            item["previewCamera"] = cameraJson(*scene->previewCamera);
-        sceneArray.push_back(std::move(item));
+    for (const CookSceneRoot &scene : closure.scenes) {
+        sceneArray.push_back(
+            {{"id", scene.catalogEntry->id},
+             {"displayName", scene.catalogEntry->displayName},
+             {"source", generic(scene.catalogEntry->source)},
+             {"optional", false}});
+    }
+
+    Json importProfiles = Json::object();
+    for (const ImportProfile *profile : closure.importProfiles) {
+        importProfiles[profile->id] = {
+            {"textureLimit", profile->textureLimit},
+            {"textureEncoder", profile->textureEncoder},
+            {"qualityPreset", profile->qualityPreset}};
     }
     Json environmentArray = Json::array();
     Json environmentProfiles = Json::object();
-    for (const auto &entry : catalog.environmentProfiles) {
-        const EnvironmentProfile &environmentProfile = entry.second;
-        environmentProfiles[environmentProfile.id] = {
-            {"radianceSize", environmentProfile.radianceSize},
-            {"irradianceSize", environmentProfile.irradianceSize},
-            {"prefilteredSize", environmentProfile.prefilteredSize},
-            {"brdfLutSize", environmentProfile.brdfLutSize},
-            {"diffuseSamples", environmentProfile.diffuseSamples},
-            {"specularSamples", environmentProfile.specularSamples},
-            {"brdfSamples", environmentProfile.brdfSamples}};
+    for (const EnvironmentProfile *profile : closure.environmentProfiles) {
+        environmentProfiles[profile->id] = {
+            {"radianceSize", profile->radianceSize},
+            {"irradianceSize", profile->irradianceSize},
+            {"prefilteredSize", profile->prefilteredSize},
+            {"brdfLutSize", profile->brdfLutSize},
+            {"diffuseSamples", profile->diffuseSamples},
+            {"specularSamples", profile->specularSamples},
+            {"brdfSamples", profile->brdfSamples}};
     }
-    for (const CatalogEnvironment *environment : environments) {
+    for (const CatalogEnvironment *environment : closure.environments) {
         environmentArray.push_back(
             {{"id", environment->id},
              {"displayName", environment->displayName},
@@ -155,24 +157,12 @@ void saveCookedCatalog(const std::filesystem::path &path,
     Json root = {
         {"schemaVersion", SceneCatalog::kSchemaVersion},
         {"projectId", catalog.projectId},
-        {"defaultImportProfile", profile.id},
-        {"importProfiles",
-         {{profile.id,
-           {{"textureLimit", profile.textureLimit},
-            {"textureEncoder", profile.textureEncoder},
-            {"qualityPreset", profile.qualityPreset}}}}},
-        {"models", std::move(sceneArray)},
-        {"scenes", Json::array()},
+        {"defaultImportProfile", catalog.defaultImportProfile},
+        {"importProfiles", std::move(importProfiles)},
+        {"models", std::move(modelArray)},
+        {"scenes", std::move(sceneArray)},
         {"environmentProfiles", std::move(environmentProfiles)},
         {"environments", std::move(environmentArray)}};
-    if (catalog.defaultEnvironment &&
-        std::any_of(environments.begin(), environments.end(),
-                    [&](const CatalogEnvironment *environment) {
-                        return environment->id ==
-                               *catalog.defaultEnvironment;
-                    })) {
-        root["defaultEnvironment"] = *catalog.defaultEnvironment;
-    }
     std::filesystem::create_directories(path.parent_path());
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     if (!output)
@@ -180,54 +170,6 @@ void saveCookedCatalog(const std::filesystem::path &path,
     output << root.dump(2) << '\n';
     if (!output)
         throw std::runtime_error("could not write cooked catalog");
-}
-
-std::vector<const CatalogModel *>
-selectScenes(const SceneCatalog &catalog,
-             const std::vector<std::string> &requested) {
-    std::unordered_set<std::string> selectedIds(requested.begin(),
-                                                requested.end());
-    if (selectedIds.size() != requested.size())
-        throw std::invalid_argument("cook scene IDs must be unique");
-    std::vector<const CatalogModel *> result;
-    for (const CatalogModel &scene : catalog.models) {
-        const bool selected = requested.empty() ? !scene.optional
-                                                : selectedIds.erase(scene.id) > 0;
-        if (selected)
-            result.push_back(&scene);
-    }
-    if (!selectedIds.empty())
-        throw std::invalid_argument("unknown cook scene ID: " +
-                                    *selectedIds.begin());
-    if (result.empty())
-        throw std::invalid_argument("cook selected no scenes");
-    return result;
-}
-
-std::vector<const CatalogEnvironment *> selectEnvironments(
-    const SceneCatalog &catalog,
-    const std::vector<std::string> &requested) {
-    std::unordered_set<std::string> selectedIds(requested.begin(),
-                                                requested.end());
-    if (selectedIds.size() != requested.size()) {
-        throw std::invalid_argument(
-            "cook environment IDs must be unique");
-    }
-    std::vector<const CatalogEnvironment *> result;
-    for (const CatalogEnvironment &environment :
-         catalog.environments) {
-        const bool selected =
-            requested.empty() ||
-            selectedIds.erase(environment.id) > 0;
-        if (selected)
-            result.push_back(&environment);
-    }
-    if (!selectedIds.empty()) {
-        throw std::invalid_argument(
-            "unknown cook environment ID: " +
-            *selectedIds.begin());
-    }
-    return result;
 }
 
 void copyShaders(const std::filesystem::path &runtimeDirectory,
@@ -251,14 +193,109 @@ bool pathsOverlap(const std::filesystem::path &left,
     return pathIsWithin(left, right) || pathIsWithin(right, left);
 }
 
+struct CookClosureInputSnapshot {
+    std::string catalogSha256;
+    std::vector<std::pair<std::filesystem::path, std::string>> sceneDocuments;
+};
+
+CookClosureInputSnapshot captureClosureInputs(
+    const std::filesystem::path &projectRoot, const CookClosure &closure) {
+    CookClosureInputSnapshot snapshot;
+    snapshot.catalogSha256 =
+        sha256File(projectRoot / "assets/catalog.json");
+    snapshot.sceneDocuments.reserve(closure.scenes.size());
+    for (const CookSceneRoot &scene : closure.scenes) {
+        const std::filesystem::path path =
+            (projectRoot / scene.catalogEntry->source).lexically_normal();
+        snapshot.sceneDocuments.emplace_back(path, sha256File(path));
+    }
+    return snapshot;
+}
+
+void verifyClosureInputsUnchanged(
+    const std::filesystem::path &projectRoot,
+    const CookClosureInputSnapshot &snapshot) {
+    if (sha256File(projectRoot / "assets/catalog.json") !=
+        snapshot.catalogSha256) {
+        throw std::runtime_error(
+            "cook_closure_changed: Catalog changed during cook");
+    }
+    for (const auto &[path, expectedSha256] : snapshot.sceneDocuments) {
+        if (!std::filesystem::is_regular_file(path) ||
+            sha256File(path) != expectedSha256) {
+            throw std::runtime_error(
+                "cook_closure_changed: SceneDocument changed during cook: " +
+                path.string());
+        }
+    }
+}
+
+RuntimePackageBuildInfo inspectRuntimeBuild(
+    const std::filesystem::path &runtimeExecutable) {
+    std::atomic_bool cancelled{false};
+    Win32JobProcessRunner runner;
+    ProcessRequest request;
+    request.executable = runtimeExecutable;
+    request.arguments = {L"--build-info-json"};
+    request.timeoutMs = 30000;
+    request.maxStdoutBytes = 64 * 1024;
+    request.maxStderrBytes = 64 * 1024;
+    const ProcessResult result = runner.run(request, cancelled);
+    if (result.cancelled || result.timedOut || result.stdoutTruncated ||
+        result.stderrTruncated || result.exitCode != 0) {
+        throw std::runtime_error(
+            "could not query VulkanLab runtime build information" +
+            (result.stderrText.empty() ? std::string{}
+                                       : ": " + result.stderrText));
+    }
+    try {
+        const Json root = Json::parse(result.stdoutText);
+        if (root.at("schemaVersion").get<uint32_t>() != 1)
+            throw std::runtime_error("unsupported build info schema");
+        RuntimePackageBuildInfo build;
+        build.revision = root.at("revision").get<std::string>();
+        build.configuration =
+            root.at("configuration").get<std::string>();
+        const Json &features = root.at("features");
+        build.editorUi = features.at("editorUi").get<bool>();
+        build.runtimeControl = features.at("runtimeControl").get<bool>();
+        build.capture = features.at("capture").get<bool>();
+        build.assetAuthoring = features.at("assetAuthoring").get<bool>();
+        build.validation = features.at("validation").get<bool>();
+        build.gpuDebugUtils = features.at("gpuDebugUtils").get<bool>();
+        build.gpuProfiling = features.at("gpuProfiling").get<bool>();
+        build.tracy = features.at("tracy").get<bool>();
+        if (build.configuration != "Release")
+            throw std::runtime_error("runtime build must be Release");
+        if (build.editorUi || build.runtimeControl || build.capture ||
+            build.assetAuthoring || build.validation || build.gpuDebugUtils ||
+            build.gpuProfiling || build.tracy) {
+            throw std::runtime_error(
+                "runtime build contains development-only features; use the "
+                "windows-msvc-runtime preset");
+        }
+        return build;
+    } catch (const std::exception &error) {
+        throw std::runtime_error(
+            "invalid VulkanLab --build-info-json response: " +
+            std::string(error.what()));
+    }
+}
+
 RuntimePackageManifest makePackageManifest(
     const std::filesystem::path &stagingRoot, const SceneCatalog &catalog,
-    const ImportProfile &profile, const std::string &platform) {
+    const CookClosure &closure, const RuntimePackageBuildInfo &runtimeBuild,
+    const std::string &platform) {
     RuntimePackageManifest manifest;
     manifest.platform = platform;
     manifest.projectId = catalog.projectId;
-    manifest.profileId = profile.id;
+    manifest.defaultImportProfile = catalog.defaultImportProfile;
+    manifest.profileId = manifest.defaultImportProfile;
     manifest.requiredTextureEncoder = "bc7";
+    manifest.startupSceneId = closure.startupSceneId;
+    manifest.runtimeBuild = runtimeBuild;
+    for (const CookSceneRoot &scene : closure.scenes)
+        manifest.sceneIds.push_back(scene.catalogEntry->id);
     std::error_code error;
     for (std::filesystem::recursive_directory_iterator it(
              stagingRoot,
@@ -318,8 +355,6 @@ void publishDirectory(const std::filesystem::path &staging,
 CookPackageReport buildCookPackage(const CookPackageOptions &options) {
     if (options.platform != "windows-x64")
         throw std::invalid_argument("cook supports only windows-x64");
-    if (options.profileId.empty())
-        throw std::invalid_argument("cook profile is required");
     const std::filesystem::path projectRoot =
         std::filesystem::absolute(options.projectRoot).lexically_normal();
     const std::filesystem::path cacheRoot =
@@ -336,78 +371,78 @@ CookPackageReport buildCookPackage(const CookPackageOptions &options) {
 
     const SceneCatalog catalog =
         SceneCatalog::load(projectRoot / "assets/catalog.json", projectRoot);
-    const ImportProfile &profile = catalog.profile(options.profileId);
-    if (profile.textureEncoder != "bc7") {
-        throw std::runtime_error(
-            "windows-x64 cooked packages require a native BC7 import profile");
+    const CookClosure closure = resolveCookClosure(
+        catalog, projectRoot, options.sceneDocumentIds,
+        options.startupSceneId);
+    const CookClosureInputSnapshot closureInputs =
+        captureClosureInputs(projectRoot, closure);
+    for (const CatalogModel *model : closure.models) {
+        const ImportProfile &profile = catalog.profile(model->importProfile);
+        if (profile.textureEncoder != "bc7") {
+            throw std::runtime_error(
+                "windows-x64 cooked packages require native BC7 import "
+                "profiles; '" + profile.id + "' uses " +
+                profile.textureEncoder);
+        }
     }
-    const std::vector<const CatalogModel *> scenes =
-        selectScenes(catalog, options.sceneIds);
-    const std::vector<const CatalogEnvironment *> environments =
-        selectEnvironments(catalog, options.environmentIds);
+    const std::filesystem::path runtimeExecutable =
+        runtimeDirectory / "VulkanLab.exe";
+    const RuntimePackageBuildInfo runtimeBuild =
+        inspectRuntimeBuild(runtimeExecutable);
     const std::filesystem::path staging = uniqueSibling(output, ".staging");
     std::filesystem::create_directories(output.parent_path());
     std::filesystem::create_directories(staging);
     CookPackageReport report;
     report.outputDirectory = output;
+    report.sceneCount = closure.scenes.size();
+    report.modelCount = closure.models.size();
     std::set<std::string> copiedBlobs;
     try {
-        copyFile(runtimeDirectory / "VulkanLab.exe",
-                 staging / "VulkanLab.exe");
-        if (std::filesystem::is_regular_file(runtimeDirectory /
-                                             "VulkanLabCtl.exe")) {
-            copyFile(runtimeDirectory / "VulkanLabCtl.exe",
-                     staging / "VulkanLabCtl.exe");
-        }
+        copyFile(runtimeExecutable, staging / "VulkanLab.exe");
         copyShaders(runtimeDirectory, staging);
 
-        for (const CatalogModel *scene : scenes) {
-            ++report.sceneCount;
-            if (scene->type == "builtin") {
-                if (scene->builtinFactory != "viking_room")
-                    throw std::runtime_error(
-                        "unsupported cooked builtin scene: " + scene->id);
-                copyFile(projectRoot / "models/viking_room.obj",
-                         staging / "models/viking_room.obj");
-                copyFile(projectRoot / "textures/viking_room.png",
-                         staging / "textures/viking_room.png");
-                continue;
-            }
+        for (const CookSceneRoot &scene : closure.scenes) {
+            SceneDocumentService::saveAtomic(
+                staging / scene.catalogEntry->source, staging,
+                scene.loaded.document);
+        }
 
-            const std::filesystem::path source = projectRoot / scene->source;
+        for (const CatalogModel *model : closure.models) {
+            const ImportProfile &profile = catalog.profile(model->importProfile);
+            const std::filesystem::path source = projectRoot / model->source;
             const AssetValidationQuery validation = querySceneValidation(
-                cacheRoot, projectRoot, scene->id);
+                cacheRoot, projectRoot, model->id);
             if (!validation.report ||
                 (validation.state != AssetValidationState::Valid &&
                  validation.state != AssetValidationState::Warnings) ||
                 validation.report->validatorVersion !=
                     kGltfValidatorVersion) {
                 throw std::runtime_error(
-                    "validation is not current for '" + scene->id +
+                    "validation is not current for '" + model->id +
                     "': " + assetValidationStateName(validation.state) +
                     (validation.reason.empty()
                          ? std::string{}
                          : " (" + validation.reason + ")"));
             }
             const ArtifactStatus status = inspectTextureArtifacts(
-                {cacheRoot, source, catalog.projectId, scene->id, profile.id,
+                {cacheRoot, source, catalog.projectId, model->id, profile.id,
                  profile.textureLimit, TextureEncoder::Bc7});
             if (!status.ready())
                 throw std::runtime_error("artifacts are not Ready for '" +
-                                         scene->id + "': " + status.reason);
-            copySceneGeometry(projectRoot, *scene, staging);
+                                         model->id + "': " + status.reason);
+            copySceneGeometry(projectRoot, *model, staging);
 
             DerivedTextureManifest manifest;
             std::string error;
             const std::filesystem::path sourceManifest =
-                derivedManifestPath(cacheRoot, scene->id, profile.id);
+                derivedManifestPath(cacheRoot, model->id, profile.id);
             if (!loadDerivedTextureManifest(sourceManifest, manifest, error))
                 throw std::runtime_error("could not load artifact manifest: " +
                                          error);
-            const std::filesystem::path cookedScene = staging / scene->source;
-            manifest.scenePath = generic(scene->source);
+            const std::filesystem::path cookedScene = staging / model->source;
+            manifest.scenePath = generic(model->source);
             manifest.scene = fileStamp(cookedScene, sha256File(cookedScene));
-            manifest.scene.path = scene->source.filename().generic_string();
+            manifest.scene.path = model->source.filename().generic_string();
             for (DerivedTextureEntry &entry : manifest.entries) {
                 const std::filesystem::path sourceBlob = cacheRoot / entry.blob;
                 const std::filesystem::path cookedBlob =
@@ -419,7 +454,7 @@ CookPackageReport buildCookPackage(const CookPackageOptions &options) {
                 entry.source = manifest.scene;
             }
             const std::filesystem::path cookedManifest =
-                derivedManifestPath(staging / "runtime_assets", scene->id,
+                derivedManifestPath(staging / "runtime_assets", model->id,
                                     profile.id);
             if (!saveDerivedTextureManifest(cookedManifest, manifest, error))
                 throw std::runtime_error(
@@ -427,7 +462,7 @@ CookPackageReport buildCookPackage(const CookPackageOptions &options) {
             ++report.manifestCount;
         }
 
-        for (const CatalogEnvironment *environment : environments) {
+        for (const CatalogEnvironment *environment : closure.environments) {
             const std::filesystem::path source =
                 projectRoot / environment->source;
             const ArtifactStatus status = inspectEnvironmentArtifacts(
@@ -475,8 +510,7 @@ CookPackageReport buildCookPackage(const CookPackageOptions &options) {
             ++report.manifestCount;
         }
 
-        saveCookedCatalog(staging / "assets/catalog.json", catalog, scenes,
-                          environments, profile);
+        saveCookedCatalog(staging / "assets/catalog.json", catalog, closure);
         const SceneCatalog cookedCatalog = SceneCatalog::load(
             staging / "assets/catalog.json", staging);
         ArtifactIndex index = ArtifactIndex::rebuild(
@@ -484,7 +518,7 @@ CookPackageReport buildCookPackage(const CookPackageOptions &options) {
         index.save();
 
         RuntimePackageManifest package = makePackageManifest(
-            staging, cookedCatalog, profile, options.platform);
+            staging, cookedCatalog, closure, runtimeBuild, options.platform);
         std::string error;
         if (!saveRuntimePackageManifest(staging / "package_manifest.json",
                                         package, error)) {
@@ -493,6 +527,7 @@ CookPackageReport buildCookPackage(const CookPackageOptions &options) {
         }
         const RuntimePackageVerification verified =
             verifyRuntimePackage(staging, package);
+        verifyClosureInputsUnchanged(projectRoot, closureInputs);
         report.fileCount = verified.fileCount;
         report.totalBytes = verified.totalBytes;
         publishDirectory(staging, output);

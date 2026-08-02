@@ -1,4 +1,5 @@
 add_library(vkl_asset_tool_core STATIC
+    CookClosureResolver.cpp
     CookPackageBuilder.cpp
     EnvironmentCacheBuilder.cpp
     GltfValidator.cpp

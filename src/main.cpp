@@ -7,6 +7,7 @@
 #include "core/Log.h"
 
 #include <BuildFeatures.h>
+#include <json.hpp>
 
 #include <cstdlib>
 #include <cwchar>
@@ -70,6 +71,8 @@ void printUsage(std::ostream &out) {
            "delta in (0, 1].\n"
         << "  --no-gui          Disable ImGui initialization and rendering.\n"
         << "  --capture-root <path>  Override the diagnostics output root.\n"
+        << "  --build-info-json  Print machine-readable build information "
+           "and exit.\n"
         << "  --help             Show this help and exit.\n"
         << "\nCompiled features:\n"
         << "  editor-ui=" << (vkr::build::kEditorUi ? "on" : "off")
@@ -84,6 +87,31 @@ void printUsage(std::ostream &out) {
         << ", gpu-profiling="
         << (vkr::build::kGpuProfiling ? "on" : "off")
         << ", tracy=" << (vkr::build::kTracy ? "on" : "off") << "\n";
+}
+
+void printBuildInfoJson(std::ostream &out) {
+    const vkr::BuildInfo &build = vkr::currentBuildInfo();
+    const vkr::BuildFeatureInfo &features = build.features;
+    const nlohmann::json root = {
+        {"schemaVersion", 1},
+        {"revision", build.revision},
+        {"dirty", build.dirty},
+        {"configuration", build.configuration},
+        {"compiler", build.compiler},
+        {"vulkanSdk", build.vulkanSdk},
+        {"features",
+         {{"editorUi", features.editorUi},
+          {"runtimeControl", features.runtimeControl},
+          {"capture", features.capture},
+          {"assetAuthoring", features.assetAuthoring},
+          {"validation", features.validation},
+          {"gpuDebugUtils", features.gpuDebugUtils},
+          {"gpuProfiling", features.gpuProfiling},
+          {"tracy", features.tracy},
+          {"assetTool", features.assetTool},
+          {"controlTool", features.controlTool},
+          {"renderTest", features.renderTest}}}};
+    out << root.dump() << '\n';
 }
 
 bool parseArguments(int argc, wchar_t **argv, vkr::Config &config) {
@@ -221,6 +249,10 @@ bool parseArguments(int argc, wchar_t **argv, vkr::Config &config) {
 } // namespace
 
 int wmain(int argc, wchar_t **argv) {
+    if (argc == 2 && std::wstring(argv[1]) == L"--build-info-json") {
+        printBuildInfoJson(std::cout);
+        return EXIT_SUCCESS;
+    }
     vkr::Config config;
     try {
         if (!parseArguments(argc, argv, config)) {
