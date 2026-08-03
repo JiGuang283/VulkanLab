@@ -6,6 +6,7 @@
 #include "DerivedEnvironmentManifest.h"
 #include "DerivedTextureManifest.h"
 #include "SceneCatalog.h"
+#include "scene_data/PrimitiveModelDefinitions.h"
 #include "scene_data/SceneDocument.h"
 
 #include <json.hpp>
@@ -181,6 +182,10 @@ void verifyArtifactIndexClosure(
                 continue;
             const CatalogModel *model = catalog.findModel(
                 entity.modelInstance->model.value());
+            if (!model &&
+                isPrimitiveModelId(entity.modelInstance->model.value())) {
+                continue;
+            }
             if (!model)
                 throw std::runtime_error(
                     "artifact index scene references an unknown model");
@@ -281,8 +286,6 @@ void verifyNativeSceneClosure(const std::filesystem::path &packageRoot,
         }
     }
 
-    if (modelIds.size() != catalog.models.size())
-        throw std::runtime_error("cooked Catalog contains unreferenced models");
     for (const CatalogModel &model : catalog.models) {
         if (modelIds.erase(model.id) == 0)
             throw std::runtime_error("cooked Catalog model is not referenced: " +
@@ -330,6 +333,10 @@ void verifyNativeSceneClosure(const std::filesystem::path &packageRoot,
                 "': " + textureStatus.reason);
         }
         (void)source;
+    }
+    for (const PrimitiveModelDefinition &primitive :
+         primitiveModelDefinitions()) {
+        modelIds.erase(std::string(primitive.id));
     }
     if (!modelIds.empty())
         throw std::runtime_error("packaged SceneDocument model is missing");

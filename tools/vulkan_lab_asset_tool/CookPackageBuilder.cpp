@@ -395,7 +395,8 @@ CookPackageReport buildCookPackage(const CookPackageOptions &options) {
     CookPackageReport report;
     report.outputDirectory = output;
     report.sceneCount = closure.scenes.size();
-    report.modelCount = closure.models.size();
+    report.modelCount =
+        closure.models.size() + closure.primitiveModels.size();
     std::set<std::string> copiedBlobs;
     try {
         copyFile(runtimeExecutable, staging / "VulkanLab.exe");

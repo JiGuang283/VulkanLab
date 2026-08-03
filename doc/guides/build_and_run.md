@@ -398,6 +398,19 @@ DerivedAssets/<projectId>/
 
 在 `VulkanLab -> Render -> Lighting` 选择环境，再分别开启 `Image-Based Lighting` 和 `Skybox`。二者默认关闭，选择环境本身不会隐式打开开关。环境在 worker 读取 KTX2，并通过增量上传队列分帧发布；切换失败或取消时旧环境保持有效。设备不支持 float cubemap/LUT 线性采样时只禁用 IBL，原有 constant ambient 路径仍可使用。
 
+## 基础几何体
+
+打开一个可写 Native Scene 后，可以通过 Outliner 的 `Create -> 3D Object`
+创建 Plane、Cube、Sphere、Cylinder、Cone 和 Capsule，也可以从 Models 页的
+`Engine Primitives` 区域拖入 Viewport。它们使用普通 ModelInstance，因此支持
+现有的 Picking、Gizmo、父子层级、Undo/Redo、阴影和场景保存。
+
+基础几何体由运行时生成，不需要下载或导入模型，也不会出现在项目 Catalog
+中。默认尺寸为一米量级并使用 Z-up；通过 Entity Transform 调整尺寸。它们使用
+固定的 `engine-primitive-v1` Repository profile 和中性 PBR 材质，同类型实例
+共享 GPU 资源。Cook 时这些模型是零文件依赖，不要求 Validator、Native BC7
+缓存或源资源。
+
 ## Cook 与独立运行包
 
 Stage 7 的 Cook 只接受 Native SceneDocument 作为发布根，不再接受模型预览。先构建精简 Release runtime 和开发 AssetTool，并确保场景引用模型的 Validator 报告、Native BC7 纹理和环境 KTX2 都处于 Ready：

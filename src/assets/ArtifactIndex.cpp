@@ -3,6 +3,7 @@
 #include "ContentHash.h"
 #include "DerivedEnvironmentManifest.h"
 #include "DerivedTextureManifest.h"
+#include "scene_data/PrimitiveModelDefinitions.h"
 #include "scene_data/SceneDocument.h"
 
 #include <json.hpp>
@@ -580,6 +581,8 @@ void ArtifactIndex::refreshSceneDocumentRecord(
                 continue;
             const std::string &modelId = entity.modelInstance->model.value();
             const CatalogModel *model = catalog.findModel(modelId);
+            if (!model && isPrimitiveModelId(modelId))
+                continue;
             if (!model)
                 throw std::runtime_error("Unknown model reference: " + modelId);
             refs.emplace("Model", modelId, model->importProfile);

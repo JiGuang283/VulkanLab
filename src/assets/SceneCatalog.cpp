@@ -1,5 +1,6 @@
 #include "SceneCatalog.h"
 
+#include "scene_data/PrimitiveModelDefinitions.h"
 #include "scene_data/SceneDocument.h"
 
 #include <json.hpp>
@@ -213,6 +214,8 @@ CatalogModel parseModel(const Json &item, const std::string &field,
 
     if (!isStableAssetId(model.id))
         throw fieldError(field + ".id", "invalid stable ID");
+    if (isPrimitiveModelId(model.id))
+        throw fieldError(field + ".id", "reserved engine model ID");
     if (model.displayName.empty())
         throw fieldError(field + ".displayName", "cannot be empty");
     if (catalog.importProfiles.count(model.importProfile) == 0)
@@ -437,6 +440,10 @@ SceneDocumentReferences SceneCatalog::documentReferences() const {
     SceneDocumentReferences references;
     for (const CatalogModel &model : models)
         references.modelIds.insert(model.id);
+    for (const PrimitiveModelDefinition &primitive :
+         primitiveModelDefinitions()) {
+        references.modelIds.insert(std::string(primitive.id));
+    }
     for (const CatalogEnvironment &environment : environments)
         references.environmentIds.insert(environment.id);
     return references;

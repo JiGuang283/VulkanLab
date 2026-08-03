@@ -30,6 +30,7 @@ target_link_libraries(vkl_shader_catalog
 )
 
 add_library(vkl_scene_data STATIC
+    scene_data/PrimitiveModelDefinitions.cpp
     scene_data/SceneDocument.cpp
     scene_data/SceneIds.cpp
 )
@@ -185,6 +186,9 @@ set(VKL_ENGINE_SOURCES
     scene/AssetRepository.cpp
     scene/ModelGpuBuilder.cpp
     scene/ModelLight.cpp
+    scene/ModelSourceResolver.cpp
+    scene/PrimitiveMeshGenerator.cpp
+    scene/PrimitiveModelFactory.cpp
     scene/RuntimeWorld.cpp
     scene/TransformMath.cpp
     scene/SceneLoadManager.cpp

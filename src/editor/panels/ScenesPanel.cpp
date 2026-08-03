@@ -124,6 +124,43 @@ void ScenesPanel::draw(const SceneWorkflowSnapshot &snapshot,
             actions.cancelImport();
     }
 
+    if (!snapshot.enginePrimitives.empty()) {
+        ImGui::SeparatorText("Engine Primitives");
+        ImGui::BeginChild("EnginePrimitiveBrowser", ImVec2(0.0f, 92.0f),
+                          ImGuiChildFlags_Borders);
+        const float itemWidth = std::max(96.0f,
+                                         ImGui::GetContentRegionAvail().x /
+                                             3.0f - 6.0f);
+        for (size_t index = 0; index < snapshot.enginePrimitives.size();
+             ++index) {
+            const EnginePrimitiveItemSnapshot &primitive =
+                snapshot.enginePrimitives[index];
+            ImGui::PushID(primitive.id.c_str());
+            ImGui::BeginDisabled(!primitive.canInstantiate);
+            ImGui::Button(primitive.displayName.c_str(),
+                          ImVec2(itemWidth, 30.0f));
+            ImGui::EndDisabled();
+            if (primitive.canInstantiate && ImGui::BeginDragDropSource()) {
+                ImGui::SetDragDropPayload(
+                    editor::kModelAssetPayload, primitive.id.c_str(),
+                    primitive.id.size() + 1);
+                ImGui::TextUnformatted(primitive.displayName.c_str());
+                ImGui::TextDisabled("Drop into the Viewport");
+                ImGui::EndDragDropSource();
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip(
+                    primitive.canInstantiate
+                        ? "Drag into the Viewport to create an instance"
+                        : "Open a writable native scene to instantiate");
+            }
+            if ((index + 1) % 3 != 0)
+                ImGui::SameLine();
+            ImGui::PopID();
+        }
+        ImGui::EndChild();
+    }
+
     ImGui::SeparatorText("Model Previews");
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##ModelSearch", "Search model previews...",

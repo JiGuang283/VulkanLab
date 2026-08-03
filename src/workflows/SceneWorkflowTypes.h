@@ -33,9 +33,16 @@ struct SceneWorkflowItemSnapshot {
     bool canInstantiate = false;
 };
 
+struct EnginePrimitiveItemSnapshot {
+    std::string id;
+    std::string displayName;
+    bool canInstantiate = false;
+};
+
 struct SceneWorkflowSnapshot {
     std::string projectId;
     std::vector<SceneWorkflowItemSnapshot> models;
+    std::vector<EnginePrimitiveItemSnapshot> enginePrimitives;
     std::vector<SceneWorkflowItemSnapshot> nativeScenes;
     int selectedIndex = -1;
     bool showImport = false;

@@ -97,6 +97,11 @@ CookClosure resolveCookClosure(
         importProfileIds.insert(model.importProfile);
         modelIds.erase(model.id);
     }
+    for (const PrimitiveModelDefinition &primitive :
+         primitiveModelDefinitions()) {
+        if (modelIds.erase(std::string(primitive.id)) > 0)
+            closure.primitiveModels.push_back(&primitive);
+    }
     if (!modelIds.empty())
         throw std::runtime_error("native scene references unknown model: " +
                                  *modelIds.begin());

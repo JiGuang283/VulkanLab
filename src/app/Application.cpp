@@ -54,12 +54,14 @@
 #include "scene/AssetRepository.h"
 #include "scene/ModelAsset.h"
 #include "scene/ModelInstance.h"
+#include "scene/ModelSourceResolver.h"
 #include "scene/SceneFactory.h"
 #include "scene/SceneLight.h"
 #include "scene/SceneLoadManager.h"
 #include "scene/SceneLoadTask.h"
 #include "scene/SceneRegistryBuilder.h"
 #include "scene/RuntimeWorld.h"
+#include "scene_data/PrimitiveModelDefinitions.h"
 #include "window/InputManager.h"
 #include "window/Window.h"
 #if VKL_ENABLE_EDITOR_UI && VKL_ENABLE_ASSET_AUTHORING
@@ -1577,39 +1579,35 @@ void Application::resolveNativeSceneModels(
     bool allHits = !modelIds.empty();
     bool anyCoalesced = false;
     for (const std::string &modelId : modelIds) {
-        const CatalogModel *model = catalog_.findModel(modelId);
-        if (!model)
+        const auto source = resolveModelSource(
+            catalog_, projectContext_, ModelAssetId(modelId));
+        if (!source)
             throw std::runtime_error("Scene references unknown model: " +
                                      modelId);
-        if (model->type == "builtin") {
+        if (!source->instanceable) {
             throw RuntimeCommandError(
                 "model_not_instanceable",
                 "Builtin model cannot be instanced in a native scene: " +
                     modelId);
         }
-        const auto entry = std::find_if(
-            sceneRegistry_.begin(), sceneRegistry_.end(),
-            [&](const SceneEntry &candidate) {
-                return candidate.isModelPreview() &&
-                       candidate.id == modelId;
-            });
-        if (entry == sceneRegistry_.end() || !entry->available ||
-            !entry->prepareFactory) {
+        if (!source->available || !source->prepareFactory) {
             throw std::runtime_error(
-                "Model is unavailable or not instanceable: " + modelId);
+                "Model is unavailable: " + modelId +
+                (source->unavailableReason.empty()
+                     ? std::string{}
+                     : " (" + source->unavailableReason + ")"));
         }
-        const ImportProfile &profile = catalog_.profile(model->importProfile);
         SceneLoadContext context = sceneLoadContext_;
         context.sceneId = modelId;
         context.modelId = modelId;
-        context.profileId = model->importProfile;
-        context.maxTextureSize = profile.textureLimit;
+        context.profileId = source->profileId;
+        context.maxTextureSize = source->textureLimit;
         context.loadStats = nullptr;
         ModelAssetRequest request{};
-        request.key = {ModelAssetId(modelId), model->importProfile};
-        request.displayName = model->displayName;
-        request.sourcePath = std::filesystem::u8path(entry->sourcePath);
-        request.prepareFactory = entry->prepareFactory;
+        request.key = {ModelAssetId(modelId), source->profileId};
+        request.displayName = source->displayName;
+        request.sourcePath = source->sourcePath;
+        request.prepareFactory = source->prepareFactory;
         request.loadContext = std::move(context);
         request.policy = ModelAssetRequestPolicy::UseCached;
         bool hit = false;
@@ -1619,8 +1617,7 @@ void Application::resolveNativeSceneModels(
         allHits = allHits && hit;
         anyCoalesced = anyCoalesced || coalesced;
         bindings.push_back(
-            {ModelAssetId(modelId), model->importProfile,
-             std::move(handle)});
+            {ModelAssetId(modelId), source->profileId, std::move(handle)});
     }
 
     {
@@ -2318,42 +2315,37 @@ void Application::updateEditorModelBindings() {
             entity.modelBindingState != ModelBindingState::Unresolved)
             continue;
         const std::string modelId = entity.modelInstance->model.value();
-        const CatalogModel *model = catalog_.findModel(modelId);
-        if (!model || model->type == "builtin") {
+        const auto source = resolveModelSource(
+            catalog_, projectContext_, ModelAssetId(modelId));
+        if (!source || !source->instanceable) {
             world->bindModel(entity.handle, entity.modelBindingRevision, {},
                              {}, "Model is not instanceable: " + modelId);
             continue;
         }
-        const auto entry = std::find_if(
-            sceneRegistry_.begin(), sceneRegistry_.end(),
-            [&](const SceneEntry &candidate) {
-                return candidate.isModelPreview() &&
-                       candidate.id == modelId;
-            });
-        if (entry == sceneRegistry_.end() || !entry->available ||
-            !entry->prepareFactory) {
+        if (!source->available || !source->prepareFactory) {
             world->bindModel(entity.handle, entity.modelBindingRevision, {},
-                             {}, "Model source is unavailable: " + modelId);
+                             {}, source->unavailableReason.empty()
+                                     ? "Model source is unavailable: " +
+                                           modelId
+                                     : source->unavailableReason);
             continue;
         }
         try {
-            const ImportProfile &profile =
-                catalog_.profile(model->importProfile);
             SceneLoadContext context = sceneLoadContext_;
             context.sceneId = modelId;
             context.modelId = modelId;
-            context.profileId = model->importProfile;
-            context.maxTextureSize = profile.textureLimit;
+            context.profileId = source->profileId;
+            context.maxTextureSize = source->textureLimit;
             context.loadStats = nullptr;
             ModelAssetRequest request{};
-            request.key = {ModelAssetId(modelId), model->importProfile};
-            request.displayName = model->displayName;
-            request.sourcePath = std::filesystem::u8path(entry->sourcePath);
-            request.prepareFactory = entry->prepareFactory;
+            request.key = {ModelAssetId(modelId), source->profileId};
+            request.displayName = source->displayName;
+            request.sourcePath = source->sourcePath;
+            request.prepareFactory = source->prepareFactory;
             request.loadContext = std::move(context);
             ModelAssetHandle handle = assetRepository_->requestModel(request);
             world->bindModel(entity.handle, entity.modelBindingRevision,
-                             model->importProfile, std::move(handle));
+                             source->profileId, std::move(handle));
         } catch (const std::exception &error) {
             world->bindModel(entity.handle, entity.modelBindingRevision, {},
                              {}, error.what());
@@ -3945,6 +3937,17 @@ void Application::drawScenePanel(bool modelsOnly) {
         snapshot.defaultImportProfileIndex = ui.profileIndex;
         snapshot.defaultReferenceExisting = ui.referenceExisting;
         snapshot.defaultLoadAfterImport = ui.loadAfterImport;
+
+        const bool canInstantiatePrimitive =
+            sceneEditorSession_ && sceneEditorSession_->active() &&
+            projectContext_.catalogWritable;
+        for (const PrimitiveModelDefinition &primitive :
+             primitiveModelDefinitions()) {
+            snapshot.enginePrimitives.push_back(
+                {std::string(primitive.id),
+                 std::string(primitive.displayName),
+                 canInstantiatePrimitive});
+        }
 
         for (SceneWorkflowItemSnapshot &item : snapshot.models) {
             if (item.index < 0 ||
@@ -6035,12 +6038,31 @@ void Application::drawOutlinerPanel() {
         try {
             SceneEntityDocument entity;
             entity.id = PersistentEntityId::generate();
+            const PrimitiveModelDefinition *primitive = nullptr;
             switch (kind) {
             case OutlinerCreateKind::Empty:
                 entity.name = "Entity";
                 break;
             case OutlinerCreateKind::Model:
                 entity.name = "Model";
+                break;
+            case OutlinerCreateKind::Plane:
+                primitive = findPrimitiveModel(PrimitiveType::Plane);
+                break;
+            case OutlinerCreateKind::Cube:
+                primitive = findPrimitiveModel(PrimitiveType::Cube);
+                break;
+            case OutlinerCreateKind::Sphere:
+                primitive = findPrimitiveModel(PrimitiveType::Sphere);
+                break;
+            case OutlinerCreateKind::Cylinder:
+                primitive = findPrimitiveModel(PrimitiveType::Cylinder);
+                break;
+            case OutlinerCreateKind::Cone:
+                primitive = findPrimitiveModel(PrimitiveType::Cone);
+                break;
+            case OutlinerCreateKind::Capsule:
+                primitive = findPrimitiveModel(PrimitiveType::Capsule);
                 break;
             case OutlinerCreateKind::DirectionalLight:
                 entity.name = "Directional Light";
@@ -6071,6 +6093,11 @@ void Application::drawOutlinerPanel() {
                 entity.atmosphere = AtmosphereComponentDocument{};
                 parentId.reset();
                 break;
+            }
+            if (primitive) {
+                entity.name = std::string(primitive->displayName);
+                entity.modelInstance = ModelInstanceDocument{
+                    ModelAssetId(std::string(primitive->id))};
             }
             const PersistentEntityId createdId = entity.id;
             sceneEditorSession_->execute(
@@ -6218,6 +6245,11 @@ void Application::drawInspectorPanel() {
     for (const CatalogModel &model : catalog_.models) {
         snapshot.models.push_back(
             {model.id, model.displayName, model.type != "builtin"});
+    }
+    for (const PrimitiveModelDefinition &primitive :
+         primitiveModelDefinitions()) {
+        snapshot.models.push_back({std::string(primitive.id),
+                                   std::string(primitive.displayName), true});
     }
     for (const CatalogEnvironment &environment : catalog_.environments) {
         snapshot.environments.push_back(
@@ -6610,21 +6642,22 @@ void Application::drawGui() {
 
             SceneViewportActions actions;
             actions.modelDisplayName = [this](const std::string &modelId) {
-                const CatalogModel *model = catalog_.findModel(modelId);
-                return model ? model->displayName : modelId;
+                const auto source = resolveModelSource(
+                    catalog_, projectContext_, ModelAssetId(modelId));
+                return source ? source->displayName : modelId;
             };
             actions.instantiateModel =
                 [this](const std::string &modelId,
                        const glm::vec3 &position) {
                     try {
-                        const CatalogModel *model =
-                            catalog_.findModel(modelId);
-                        if (!model || model->type == "builtin")
+                        const auto source = resolveModelSource(
+                            catalog_, projectContext_, ModelAssetId(modelId));
+                        if (!source || !source->instanceable)
                             throw std::runtime_error(
                                 "model_not_instanceable");
                         SceneEntityDocument entity;
                         entity.id = PersistentEntityId::generate();
-                        entity.name = model->displayName;
+                        entity.name = source->displayName;
                         entity.transform.translation = position;
                         entity.modelInstance = ModelInstanceDocument{
                             ModelAssetId(modelId)};

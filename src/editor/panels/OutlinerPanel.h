@@ -13,6 +13,12 @@ namespace vkr {
 enum class OutlinerCreateKind {
     Empty,
     Model,
+    Plane,
+    Cube,
+    Sphere,
+    Cylinder,
+    Cone,
+    Capsule,
     DirectionalLight,
     PointLight,
     SpotLight,

@@ -234,6 +234,15 @@ void OutlinerPanel::drawCreateMenu(
     };
     create("Empty", OutlinerCreateKind::Empty);
     create("Model", OutlinerCreateKind::Model);
+    if (ImGui::BeginMenu("3D Object")) {
+        create("Plane", OutlinerCreateKind::Plane);
+        create("Cube", OutlinerCreateKind::Cube);
+        create("Sphere", OutlinerCreateKind::Sphere);
+        create("Cylinder", OutlinerCreateKind::Cylinder);
+        create("Cone", OutlinerCreateKind::Cone);
+        create("Capsule", OutlinerCreateKind::Capsule);
+        ImGui::EndMenu();
+    }
     ImGui::Separator();
     create("Directional Light", OutlinerCreateKind::DirectionalLight);
     create("Point Light", OutlinerCreateKind::PointLight);

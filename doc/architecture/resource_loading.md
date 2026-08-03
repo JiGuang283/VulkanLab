@@ -60,6 +60,8 @@ glTF 灯光与 mesh 使用同一套 node hierarchy 和 Y-up 到 Z-up 根变换�
 
 `ModelGpuBuilder` 在主线程按帧预算创建 Texture、Mesh、Material 和 descriptor，完成后发布 `shared_ptr<const ModelAsset>`。Repository 只使用 graphics queue 的增量上传 fence，不在 glTF 切换中调用 `vkDeviceWaitIdle()` 或清空 Pipeline Cache。预览仍暴露旧 `Scene` facade，但内部只放置一个 identity `ModelInstance`；RenderCommand 的矩阵为 `rootToWorld * localToAsset`。被替换的 Scene 和无消费者 ModelAsset 都按 FrameSync submission serial 延迟释放。
 
+引擎基础几何使用同一条 Repository 链路，但 CPU prepare 来自 `PrimitiveMeshGenerator`，不读取源文件或派生缓存。Plane、Cube、Sphere、Cylinder、Cone 和 Capsule 分别使用保留 model ID 与固定 `engine-primitive-v1` profile；同类型实例只生成和上传一份 `ModelAsset`。Cook 将它们视为零文件依赖，不创建 Validator、BC7 或 Artifact Index Model record。
+
 图片格式仍按语义选择：BaseColor/Emissive 使用 sRGB，Normal/MetallicRoughness/Occlusion 使用 linear。同一 glTF image 在不同语义下可以对应不同派生纹理，不能只按 image index 复用；sampler 映射 repeat、clamp、mirrored repeat、min/mag filter 和 mipmap mode。
 
 ## KTX2 派生资产

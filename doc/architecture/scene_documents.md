@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-02
-> Verified against: Procedural Sky Atmosphere v1 implementation
+> Verified against: Engine primitives and Procedural Sky Atmosphere v1
 
 VulkanLab 已将“导入模型”“可保存场景”和“运行时世界”拆成三个领域对象。模型预览与 Native Scene 都通过 `AssetRepository` 共享 `ModelAsset`；`.vkscene.json` 由 `RuntimeWorld` 实例化，并可在编辑器中修改、撤销和原子保存。
 
@@ -21,6 +21,36 @@ CatalogSceneDocument
 ```
 
 `vkl_scene_data` 是独立静态库，提供持久 ID 与 SceneDocument DTO、解析、验证和原子存储。它不依赖 Renderer、Vulkan、ImGui、`vkl_engine` 或 `vkl_asset_core`；`vkl_asset_core` 和 `vkl_engine` 反向依赖它。
+
+## Engine Primitives
+
+基础几何体是引擎提供的零文件 `ModelAsset`，不写入项目
+`assets/catalog.json`。当前保留以下稳定 model ID：
+
+```text
+vkl-primitive-plane
+vkl-primitive-cube
+vkl-primitive-sphere
+vkl-primitive-cylinder
+vkl-primitive-cone
+vkl-primitive-capsule
+```
+
+SceneDocument 继续通过普通 `modelInstance.model` 引用这些 ID，因此不需要
+新增 component 或升级 schema。`SceneCatalog::documentReferences()` 会把项目
+Catalog model 与引擎 primitive 合并校验，同时禁止项目 model 占用保留 ID。
+
+运行时由 `PrimitiveMeshGenerator` 生成完整 position、normal、UV0/UV1、tangent
+和 vertex color，再通过普通 `PreparedModelData -> ModelGpuBuilder ->
+AssetRepository` 链路上传。固定 profile ID 为 `engine-primitive-v1`；相同类型的
+多个 Entity 共享同一 Repository generation、Mesh、Material 和 GPU buffer。
+primitive 使用中性 PBR 材质，不执行 glTF Validator、纹理解码或派生 BC7
+构建。
+
+Cook 将 primitive 识别为零文件 engine dependency。它们保留在 SceneDocument
+中，但不进入 cooked Catalog 的 model 数组，也不生成 Artifact Index Model
+record、texture manifest 或 blob；package verification 会检查所有保留 ID 都由
+目标 runtime 支持。
 
 ## Catalog schema v3
 
