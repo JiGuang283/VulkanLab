@@ -1,0 +1,2765 @@
+{
+  "schemaVersion": 3,
+  "id": "algorithm-playground",
+  "displayName": "Algorithm Playground",
+  "activeCamera": "a1100000-0000-4000-8000-000000000001",
+  "ambient": {
+    "color": [
+      0.03,
+      0.035,
+      0.045
+    ],
+    "intensity": 0.8
+  },
+  "environment": null,
+  "entities": [
+    {
+      "id": "a1100000-0000-4000-8000-000000000001",
+      "name": "Overview Camera",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          -18,
+          8
+        ],
+        "rotation": [
+          0.580971505,
+          0,
+          0,
+          0.813923897
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "camera": {
+          "verticalFovRadians": 0.959931089,
+          "nearPlane": 0.05,
+          "farPlane": 250
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000002",
+      "name": "Atmosphere Sun",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0.258165074,
+          -0.097001684,
+          -0.33808627,
+          0.899799501
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "light": {
+          "type": "directional",
+          "castsShadow": true,
+          "atmosphereSunIndex": 0,
+          "sourceAngularRadiusRadians": 0.004675,
+          "color": [
+            1,
+            0.95,
+            0.86
+          ],
+          "intensity": 2.2,
+          "range": null,
+          "innerConeRadians": 0,
+          "outerConeRadians": 0.785398163
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000003",
+      "name": "Sky Atmosphere",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "atmosphere": {
+          "bottomRadiusKm": 6360,
+          "atmosphereHeightKm": 100,
+          "rayleighScatteringPerKm": [
+            0.005802,
+            0.013558,
+            0.0331
+          ],
+          "rayleighScaleHeightKm": 8,
+          "mieScatteringPerKm": 0.003996,
+          "mieExtinctionPerKm": 0.00444,
+          "mieScaleHeightKm": 1.2,
+          "mieAnisotropy": 0.8,
+          "ozoneAbsorptionPerKm": [
+            0.00065,
+            0.001881,
+            0.000085
+          ],
+          "ozoneCenterHeightKm": 25,
+          "ozoneHalfWidthKm": 15,
+          "groundAlbedo": [
+            0.16,
+            0.18,
+            0.2
+          ],
+          "multipleScatteringFactor": 1,
+          "aerialPerspectiveStartMeters": 10,
+          "aerialPerspectiveDistanceScale": 1
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000004",
+      "name": "Architecture",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {}
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000005",
+      "name": "Ground Plane",
+      "parent": "a1100000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0,
+          0.01
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          30,
+          20,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-plane"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000006",
+      "name": "Back Wall",
+      "parent": "a1100000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          10,
+          2.5
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          30,
+          0.35,
+          5
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cube"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000007",
+      "name": "Left Wall",
+      "parent": "a1100000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -15,
+          0,
+          2.5
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.35,
+          20,
+          5
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cube"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000008",
+      "name": "Right Wall",
+      "parent": "a1100000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          15,
+          0,
+          2.5
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.35,
+          20,
+          5
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cube"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000009",
+      "name": "Back Column Left",
+      "parent": "a1100000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -12,
+          8.8,
+          2.5
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1.1,
+          1.1,
+          5
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cylinder"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000000a",
+      "name": "Back Column Right",
+      "parent": "a1100000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          12,
+          8.8,
+          2.5
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1.1,
+          1.1,
+          5
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cylinder"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000000b",
+      "name": "Front Column Left",
+      "parent": "a1100000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -14,
+          -8,
+          1.5
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.6,
+          0.6,
+          3
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cylinder"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000000c",
+      "name": "Front Column Right",
+      "parent": "a1100000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          14,
+          -8,
+          1.5
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.6,
+          0.6,
+          3
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cylinder"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000000d",
+      "name": "Rear Beam",
+      "parent": "a1100000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          8.8,
+          5.15
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          25,
+          0.35,
+          0.3
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cube"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000000e",
+      "name": "Geometry Step Wide",
+      "parent": "a1100000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          3.15,
+          0.1
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          6,
+          1,
+          0.2
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cube"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000000f",
+      "name": "Geometry Step Narrow",
+      "parent": "a1100000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          3.65,
+          0.22
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          4,
+          0.8,
+          0.44
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cube"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000010",
+      "name": "Geometry Lab",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {}
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000011",
+      "name": "Geometry Stage",
+      "parent": "a1100000-0000-4000-8000-000000000010",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          6,
+          0.15
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          10,
+          5,
+          0.3
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cube"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000012",
+      "name": "Geometry Backdrop",
+      "parent": "a1100000-0000-4000-8000-000000000010",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          8.45,
+          2.4
+        ],
+        "rotation": [
+          0.707106781,
+          0,
+          0,
+          0.707106781
+        ],
+        "scale": [
+          10,
+          4,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-plane"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000013",
+      "name": "Sphere Plinth",
+      "parent": "a1100000-0000-4000-8000-000000000010",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -3.4,
+          6.15,
+          0.65
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1.2,
+          1.2,
+          0.7
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cube"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000014",
+      "name": "Test Sphere",
+      "parent": "a1100000-0000-4000-8000-000000000010",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -3.4,
+          6.15,
+          1.55
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.95,
+          0.95,
+          0.95
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-sphere"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000015",
+      "name": "Cube Plinth",
+      "parent": "a1100000-0000-4000-8000-000000000010",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -1.7,
+          6.15,
+          0.65
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1.2,
+          1.2,
+          0.7
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cube"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000016",
+      "name": "Test Cube",
+      "parent": "a1100000-0000-4000-8000-000000000010",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -1.7,
+          6.15,
+          1.55
+        ],
+        "rotation": [
+          0,
+          0,
+          0.156434465,
+          0.987688341
+        ],
+        "scale": [
+          0.95,
+          0.95,
+          0.95
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cube"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000017",
+      "name": "Cylinder Plinth",
+      "parent": "a1100000-0000-4000-8000-000000000010",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          6.15,
+          0.65
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1.2,
+          1.2,
+          0.7
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cube"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000018",
+      "name": "Test Cylinder",
+      "parent": "a1100000-0000-4000-8000-000000000010",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          6.15,
+          1.55
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.9,
+          0.9,
+          1.4
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cylinder"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000019",
+      "name": "Cone Plinth",
+      "parent": "a1100000-0000-4000-8000-000000000010",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          1.7,
+          6.15,
+          0.65
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1.2,
+          1.2,
+          0.7
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cube"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000001a",
+      "name": "Test Cone",
+      "parent": "a1100000-0000-4000-8000-000000000010",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          1.7,
+          6.15,
+          1.55
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1.4
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cone"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000001b",
+      "name": "Capsule Plinth",
+      "parent": "a1100000-0000-4000-8000-000000000010",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          3.4,
+          6.15,
+          0.65
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1.2,
+          1.2,
+          0.7
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cube"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000001c",
+      "name": "Test Capsule",
+      "parent": "a1100000-0000-4000-8000-000000000010",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          3.4,
+          6.15,
+          1.55
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.75,
+          0.75,
+          0.9
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-capsule"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000001d",
+      "name": "Non-uniform Sphere",
+      "parent": "a1100000-0000-4000-8000-000000000010",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -3.8,
+          4.55,
+          1.15
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1.5,
+          0.65,
+          1.2
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-sphere"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000001e",
+      "name": "Horizontal Capsule",
+      "parent": "a1100000-0000-4000-8000-000000000010",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          3.8,
+          4.55,
+          1.05
+        ],
+        "rotation": [
+          0,
+          0.707106781,
+          0,
+          0.707106781
+        ],
+        "scale": [
+          0.65,
+          0.65,
+          1.2
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-capsule"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000001f",
+      "name": "PBR Hero Chair",
+      "parent": "a1100000-0000-4000-8000-000000000010",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          4.65,
+          0.3
+        ],
+        "rotation": [
+          0,
+          0,
+          1,
+          0
+        ],
+        "scale": [
+          0.85,
+          0.85,
+          0.85
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "sheen-chair"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000020",
+      "name": "Living Area",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -8,
+          1.7,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1.25,
+          1.25,
+          1.25
+        ]
+      },
+      "components": {}
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000021",
+      "name": "Living Rug",
+      "parent": "a1100000-0000-4000-8000-000000000020",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0,
+          0.02
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          2.4,
+          2,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-rug-rectangle"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000022",
+      "name": "Living Sofa",
+      "parent": "a1100000-0000-4000-8000-000000000020",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          2,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          1,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-lounge-sofa"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000023",
+      "name": "Lounge Chair Left",
+      "parent": "a1100000-0000-4000-8000-000000000020",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -2.2,
+          -0.25,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          -0.173648178,
+          0.984807753
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-lounge-chair"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000024",
+      "name": "Lounge Chair Right",
+      "parent": "a1100000-0000-4000-8000-000000000020",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          2.2,
+          -0.25,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0.173648178,
+          0.984807753
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-lounge-chair"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000025",
+      "name": "Glass Coffee Table",
+      "parent": "a1100000-0000-4000-8000-000000000020",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0.45,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-table-coffee-glass"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000026",
+      "name": "Glass Side Display",
+      "parent": "a1100000-0000-4000-8000-000000000020",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -2.8,
+          -1.45,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0.216439614,
+          0.976296007
+        ],
+        "scale": [
+          0.75,
+          0.75,
+          0.75
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-table-coffee-glass"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000027",
+      "name": "TV Cabinet",
+      "parent": "a1100000-0000-4000-8000-000000000020",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          -2.7,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-cabinet-television"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000028",
+      "name": "Television",
+      "parent": "a1100000-0000-4000-8000-000000000027",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0,
+          1
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.9,
+          0.9,
+          0.9
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-television-modern"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000029",
+      "name": "Speaker Left",
+      "parent": "a1100000-0000-4000-8000-000000000027",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -1.05,
+          0,
+          0.7
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.75,
+          0.75,
+          0.75
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-speaker"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000002a",
+      "name": "Speaker Right",
+      "parent": "a1100000-0000-4000-8000-000000000027",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          1.05,
+          0,
+          0.7
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.75,
+          0.75,
+          0.75
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-speaker"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000002b",
+      "name": "Living Side Table",
+      "parent": "a1100000-0000-4000-8000-000000000020",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -3.15,
+          1.45,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-side-table"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000002c",
+      "name": "Living Table Lamp",
+      "parent": "a1100000-0000-4000-8000-00000000002b",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0,
+          0.72
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.9,
+          0.9,
+          0.9
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-lamp-round-table"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000002d",
+      "name": "Living Potted Plant",
+      "parent": "a1100000-0000-4000-8000-000000000020",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          3.25,
+          1.7,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-potted-plant"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000002e",
+      "name": "Sofa Pillow",
+      "parent": "a1100000-0000-4000-8000-000000000022",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0,
+          0.55
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.75,
+          0.75,
+          0.75
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-pillow"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000002f",
+      "name": "Office Area",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [
+          7.5,
+          1.7,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1.25,
+          1.25,
+          1.25
+        ]
+      },
+      "components": {}
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000030",
+      "name": "Office Desk",
+      "parent": "a1100000-0000-4000-8000-00000000002f",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          1,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          1,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-desk"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000031",
+      "name": "Office Chair",
+      "parent": "a1100000-0000-4000-8000-00000000002f",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          -0.45,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-chair-desk"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000032",
+      "name": "Office Monitor",
+      "parent": "a1100000-0000-4000-8000-000000000030",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0.05,
+          0.9
+        ],
+        "rotation": [
+          0,
+          0,
+          1,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-computer-screen"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000033",
+      "name": "Office Keyboard",
+      "parent": "a1100000-0000-4000-8000-000000000030",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          -0.4,
+          0.78
+        ],
+        "rotation": [
+          0,
+          0,
+          1,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-computer-keyboard"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000034",
+      "name": "Office Mouse",
+      "parent": "a1100000-0000-4000-8000-000000000030",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0.55,
+          -0.4,
+          0.78
+        ],
+        "rotation": [
+          0,
+          0,
+          1,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-computer-mouse"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000035",
+      "name": "Office Laptop",
+      "parent": "a1100000-0000-4000-8000-000000000030",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -0.85,
+          -0.1,
+          0.78
+        ],
+        "rotation": [
+          0,
+          0,
+          0.991444861,
+          0.130526192
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-laptop"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000036",
+      "name": "Office Bookcase",
+      "parent": "a1100000-0000-4000-8000-00000000002f",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          3.1,
+          2.2,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          1,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-bookcase-open"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000037",
+      "name": "Bookcase Books",
+      "parent": "a1100000-0000-4000-8000-000000000036",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0,
+          1.05
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-books"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000038",
+      "name": "Office Coat Rack",
+      "parent": "a1100000-0000-4000-8000-00000000002f",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -3,
+          2.1,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-coat-rack-standing"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000039",
+      "name": "Desk Plant",
+      "parent": "a1100000-0000-4000-8000-000000000030",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0.95,
+          0.15,
+          0.82
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.8,
+          0.8,
+          0.8
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-plant-small1"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000003a",
+      "name": "Radio Side Table",
+      "parent": "a1100000-0000-4000-8000-00000000002f",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          3,
+          -1.35,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-side-table"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000003b",
+      "name": "Office Radio",
+      "parent": "a1100000-0000-4000-8000-00000000003a",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0,
+          0.65
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.75,
+          0.75,
+          0.75
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-radio"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000003c",
+      "name": "Dining Area",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -7,
+          -5.2,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1.35,
+          1.35,
+          1.35
+        ]
+      },
+      "components": {}
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000003d",
+      "name": "Dining Rug",
+      "parent": "a1100000-0000-4000-8000-00000000003c",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0,
+          0.015
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          2.6,
+          2.3,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-rug-rectangle"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000003e",
+      "name": "Dining Table",
+      "parent": "a1100000-0000-4000-8000-00000000003c",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-table"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000003f",
+      "name": "Dining Chair North",
+      "parent": "a1100000-0000-4000-8000-00000000003c",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          1.55,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          1,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-chair"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000040",
+      "name": "Dining Chair South",
+      "parent": "a1100000-0000-4000-8000-00000000003c",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          -1.55,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-chair"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000041",
+      "name": "Dining Chair West",
+      "parent": "a1100000-0000-4000-8000-00000000003c",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -1.7,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          -0.707106781,
+          0.707106781
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-chair"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000042",
+      "name": "Dining Chair East",
+      "parent": "a1100000-0000-4000-8000-00000000003c",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          1.7,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0.707106781,
+          0.707106781
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-chair"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000043",
+      "name": "Table Centerpiece",
+      "parent": "a1100000-0000-4000-8000-00000000003e",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0,
+          0.85
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.6,
+          0.6,
+          0.6
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-bear"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000044",
+      "name": "Dining Ceiling Lamp",
+      "parent": "a1100000-0000-4000-8000-00000000003c",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0,
+          4
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-lamp-square-ceiling"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000045",
+      "name": "Kitchen Area",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [
+          7.5,
+          -5.2,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1.25,
+          1.25,
+          1.25
+        ]
+      },
+      "components": {}
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000046",
+      "name": "Kitchen Refrigerator",
+      "parent": "a1100000-0000-4000-8000-000000000045",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -3,
+          1,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-kitchen-fridge"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000047",
+      "name": "Kitchen Stove",
+      "parent": "a1100000-0000-4000-8000-000000000045",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -1,
+          1,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-kitchen-stove"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000048",
+      "name": "Kitchen Washer",
+      "parent": "a1100000-0000-4000-8000-000000000045",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          1.1,
+          1,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-washer"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000049",
+      "name": "Kitchen Appliance Table",
+      "parent": "a1100000-0000-4000-8000-000000000045",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          3,
+          1,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-side-table"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000004a",
+      "name": "Kitchen Microwave",
+      "parent": "a1100000-0000-4000-8000-000000000049",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0,
+          0.72
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-kitchen-microwave"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000004b",
+      "name": "Toaster Table",
+      "parent": "a1100000-0000-4000-8000-000000000045",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          3,
+          -0.55,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-side-table"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000004c",
+      "name": "Kitchen Toaster",
+      "parent": "a1100000-0000-4000-8000-00000000004b",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0,
+          0.68
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.8,
+          0.8,
+          0.8
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-toaster"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000004d",
+      "name": "Kitchen Trash Can",
+      "parent": "a1100000-0000-4000-8000-000000000045",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          3,
+          -2,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-trashcan"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000004e",
+      "name": "Storage Box Closed",
+      "parent": "a1100000-0000-4000-8000-000000000045",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -2.2,
+          -1.9,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0.104528463,
+          0.994521895
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-cardboard-box-closed"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000004f",
+      "name": "Storage Box Open",
+      "parent": "a1100000-0000-4000-8000-000000000045",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -1.45,
+          -1.85,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          -0.139173101,
+          0.990268069
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-cardboard-box-open"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000050",
+      "name": "Bedroom Nook",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [
+          11,
+          6.2,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1.2,
+          1.2,
+          1.2
+        ]
+      },
+      "components": {}
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000051",
+      "name": "Double Bed",
+      "parent": "a1100000-0000-4000-8000-000000000050",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0.707106781,
+          0.707106781
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-bed-double"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000052",
+      "name": "Bedside Table",
+      "parent": "a1100000-0000-4000-8000-000000000050",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -1.8,
+          0.2,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-side-table"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000053",
+      "name": "Bedside Floor Lamp",
+      "parent": "a1100000-0000-4000-8000-000000000050",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -2.55,
+          0.8,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-lamp-round-floor"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000054",
+      "name": "Bed Pillow",
+      "parent": "a1100000-0000-4000-8000-000000000051",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0.3,
+          0.62
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          0.75,
+          0.75,
+          0.75
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-pillow"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000055",
+      "name": "Bedroom Mirror",
+      "parent": "a1100000-0000-4000-8000-000000000050",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          1.1,
+          2.7,
+          1.45
+        ],
+        "rotation": [
+          0,
+          0,
+          1,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "kenney-furniture-bathroom-mirror"
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000056",
+      "name": "Local Lights",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {}
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000057",
+      "name": "Warm Living Fill",
+      "parent": "a1100000-0000-4000-8000-000000000056",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -8,
+          2,
+          3.4
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "light": {
+          "type": "point",
+          "castsShadow": false,
+          "atmosphereSunIndex": null,
+          "sourceAngularRadiusRadians": 0.004675,
+          "color": [
+            1,
+            0.52,
+            0.24
+          ],
+          "intensity": 32,
+          "range": 7,
+          "innerConeRadians": 0,
+          "outerConeRadians": 0.785398163
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000058",
+      "name": "Cool Office Fill",
+      "parent": "a1100000-0000-4000-8000-000000000056",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          7.5,
+          2,
+          3.5
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "light": {
+          "type": "point",
+          "castsShadow": false,
+          "atmosphereSunIndex": null,
+          "sourceAngularRadiusRadians": 0.004675,
+          "color": [
+            0.35,
+            0.55,
+            1
+          ],
+          "intensity": 24,
+          "range": 7,
+          "innerConeRadians": 0,
+          "outerConeRadians": 0.785398163
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-000000000059",
+      "name": "Dining Spot",
+      "parent": "a1100000-0000-4000-8000-000000000056",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -7,
+          -5.2,
+          6
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "light": {
+          "type": "spot",
+          "castsShadow": false,
+          "atmosphereSunIndex": null,
+          "sourceAngularRadiusRadians": 0.004675,
+          "color": [
+            1,
+            0.72,
+            0.45
+          ],
+          "intensity": 75,
+          "range": 11,
+          "innerConeRadians": 0.32,
+          "outerConeRadians": 0.62
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000005a",
+      "name": "Geometry Lab Spot",
+      "parent": "a1100000-0000-4000-8000-000000000056",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0,
+          6,
+          7
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "light": {
+          "type": "spot",
+          "castsShadow": false,
+          "atmosphereSunIndex": null,
+          "sourceAngularRadiusRadians": 0.004675,
+          "color": [
+            0.72,
+            0.85,
+            1
+          ],
+          "intensity": 95,
+          "range": 13,
+          "innerConeRadians": 0.3,
+          "outerConeRadians": 0.68
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000005b",
+      "name": "Kitchen Fill",
+      "parent": "a1100000-0000-4000-8000-000000000056",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          7.5,
+          -5.2,
+          3.4
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "light": {
+          "type": "point",
+          "castsShadow": false,
+          "atmosphereSunIndex": null,
+          "sourceAngularRadiusRadians": 0.004675,
+          "color": [
+            1,
+            0.82,
+            0.58
+          ],
+          "intensity": 28,
+          "range": 7,
+          "innerConeRadians": 0,
+          "outerConeRadians": 0.785398163
+        }
+      }
+    },
+    {
+      "id": "a1100000-0000-4000-8000-00000000005c",
+      "name": "Bedroom Spot",
+      "parent": "a1100000-0000-4000-8000-000000000056",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          11,
+          6.2,
+          5.8
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "components": {
+        "light": {
+          "type": "spot",
+          "castsShadow": false,
+          "atmosphereSunIndex": null,
+          "sourceAngularRadiusRadians": 0.004675,
+          "color": [
+            1,
+            0.6,
+            0.35
+          ],
+          "intensity": 48,
+          "range": 9,
+          "innerConeRadians": 0.34,
+          "outerConeRadians": 0.66
+        }
+      }
+    }
+  ]
+}

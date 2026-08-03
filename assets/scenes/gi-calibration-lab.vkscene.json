@@ -1,0 +1,463 @@
+{
+  "schemaVersion": 3,
+  "id": "gi-calibration-lab",
+  "displayName": "GI Calibration Lab",
+  "activeCamera": "b1000000-0000-4000-8000-000000000001",
+  "ambient": {
+    "color": [0.0, 0.0, 0.0],
+    "intensity": 0.0
+  },
+  "environment": null,
+  "entities": [
+    {
+      "id": "b1000000-0000-4000-8000-000000000001",
+      "name": "Overview Camera",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [0.0, -5.8, 2.3],
+        "rotation": [0.66748152, 0.0, 0.0, 0.744626363],
+        "scale": [1.0, 1.0, 1.0]
+      },
+      "components": {
+        "camera": {
+          "verticalFovRadians": 1.221730476,
+          "nearPlane": 0.03,
+          "farPlane": 60.0
+        }
+      }
+    },
+    {
+      "id": "b1000000-0000-4000-8000-000000000002",
+      "name": "Dark Chamber Camera",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [0.0, 0.1, 1.75],
+        "rotation": [0.689225066, 0.0, 0.0, 0.724547313],
+        "scale": [1.0, 1.0, 1.0]
+      },
+      "components": {
+        "camera": {
+          "verticalFovRadians": 1.047197551,
+          "nearPlane": 0.03,
+          "farPlane": 40.0
+        }
+      }
+    },
+    {
+      "id": "b1000000-0000-4000-8000-000000000003",
+      "name": "Color Bleed Camera",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [0.0, -3.6, 1.45],
+        "rotation": [0.707106781, 0.0, 0.0, 0.707106781],
+        "scale": [1.0, 1.0, 1.0]
+      },
+      "components": {
+        "camera": {
+          "verticalFovRadians": 1.047197551,
+          "nearPlane": 0.03,
+          "farPlane": 40.0
+        }
+      }
+    },
+    {
+      "id": "b1000000-0000-4000-8000-000000000004",
+      "name": "Calibration Architecture",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [0.0, 0.0, 0.0],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.0, 1.0, 1.0]
+      },
+      "components": {}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-000000000005",
+      "name": "Neutral Floor",
+      "parent": "b1000000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [0.0, 0.0, -0.1],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [12.0, 14.0, 0.2]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-cube-white"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-000000000006",
+      "name": "Neutral Ceiling",
+      "parent": "b1000000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [0.0, 0.0, 4.1],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [12.0, 14.0, 0.2]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-cube-white"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-000000000007",
+      "name": "Red Bounce Wall",
+      "parent": "b1000000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [-6.1, 0.0, 2.0],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [0.2, 14.0, 4.0]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-cube-red"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-000000000008",
+      "name": "Green Bounce Wall",
+      "parent": "b1000000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [6.1, 0.0, 2.0],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [0.2, 14.0, 4.0]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-cube-green"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-000000000009",
+      "name": "Back Wall",
+      "parent": "b1000000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [0.0, 7.1, 2.0],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [12.0, 0.2, 4.0]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-cube-white"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-00000000000a",
+      "name": "Front Wall Left",
+      "parent": "b1000000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [-4.0, -7.1, 2.0],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [4.0, 0.2, 4.0]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-cube-white"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-00000000000b",
+      "name": "Front Wall Right",
+      "parent": "b1000000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [4.0, -7.1, 2.0],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [4.0, 0.2, 4.0]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-cube-white"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-00000000000c",
+      "name": "Front Door Lintel",
+      "parent": "b1000000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [0.0, -7.1, 3.35],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [4.0, 0.2, 1.3]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-cube-white"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-00000000000d",
+      "name": "Inner Divider Left",
+      "parent": "b1000000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [-3.45, 1.5, 2.0],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [5.1, 0.3, 4.0]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-cube-white"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-00000000000e",
+      "name": "Inner Divider Right",
+      "parent": "b1000000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [3.45, 1.5, 2.0],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [5.1, 0.3, 4.0]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-cube-white"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-00000000000f",
+      "name": "Inner Door Lintel",
+      "parent": "b1000000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [0.0, 1.5, 3.25],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.8, 0.3, 1.5]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-cube-white"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-000000000010",
+      "name": "Thin Wall Leak Test",
+      "parent": "b1000000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [-2.4, 4.6, 1.5],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [0.08, 3.2, 3.0]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-cube-dark"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-000000000011",
+      "name": "Thin Wall Receiver",
+      "parent": "b1000000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [-3.25, 4.6, 0.65],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.0, 1.0, 1.3]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-cube-white"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-000000000012",
+      "name": "Thick Wall Reference",
+      "parent": "b1000000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [2.4, 4.6, 1.5],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [0.45, 3.2, 3.0]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-cube-dark"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-000000000013",
+      "name": "Thick Wall Receiver",
+      "parent": "b1000000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [3.35, 4.6, 0.6],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.2, 1.2, 1.2]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-sphere"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-000000000014",
+      "name": "Calibration Props",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [0.0, 0.0, 0.0],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.0, 1.0, 1.0]
+      },
+      "components": {}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-000000000015",
+      "name": "Red Bounce Pedestal",
+      "parent": "b1000000-0000-4000-8000-000000000014",
+      "enabled": true,
+      "transform": {
+        "translation": [-4.25, -1.8, 0.4],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.3, 1.3, 0.8]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-cube-red"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-000000000016",
+      "name": "Left Neutral Sphere",
+      "parent": "b1000000-0000-4000-8000-000000000014",
+      "enabled": true,
+      "transform": {
+        "translation": [-4.25, -1.8, 1.35],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.1, 1.1, 1.1]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-sphere"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-000000000017",
+      "name": "Green Bounce Pedestal",
+      "parent": "b1000000-0000-4000-8000-000000000014",
+      "enabled": true,
+      "transform": {
+        "translation": [4.25, -1.8, 0.4],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.3, 1.3, 0.8]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-cube-green"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-000000000018",
+      "name": "Right Neutral Sphere",
+      "parent": "b1000000-0000-4000-8000-000000000014",
+      "enabled": true,
+      "transform": {
+        "translation": [4.25, -1.8, 1.35],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.1, 1.1, 1.1]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-sphere"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-000000000019",
+      "name": "Center Occluder",
+      "parent": "b1000000-0000-4000-8000-000000000014",
+      "enabled": true,
+      "transform": {
+        "translation": [0.0, -0.6, 0.9],
+        "rotation": [0.0, 0.0, 0.258819045, 0.965925826],
+        "scale": [1.4, 1.4, 1.8]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-cube-white"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-00000000001a",
+      "name": "Dark Contact Sphere",
+      "parent": "b1000000-0000-4000-8000-000000000014",
+      "enabled": true,
+      "transform": {
+        "translation": [1.5, -0.4, 0.45],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [0.9, 0.9, 0.9]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-sphere"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-00000000001b",
+      "name": "Back Chamber Box",
+      "parent": "b1000000-0000-4000-8000-000000000014",
+      "enabled": true,
+      "transform": {
+        "translation": [0.0, 5.2, 0.6],
+        "rotation": [0.0, 0.0, 0.130526192, 0.991444861],
+        "scale": [1.2, 1.2, 1.2]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-cube-white"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-00000000001c",
+      "name": "Emissive Reference Panel",
+      "parent": "b1000000-0000-4000-8000-000000000014",
+      "enabled": true,
+      "transform": {
+        "translation": [0.0, 6.92, 2.5],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [2.4, 0.08, 0.8]
+      },
+      "components": {"modelInstance": {"model": "vkl-primitive-cube-emissive"}}
+    },
+    {
+      "id": "b1000000-0000-4000-8000-00000000001d",
+      "name": "GI Directional Key",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [0.0, 0.0, 0.0],
+        "rotation": [0.632455532, 0.0, 0.0, 0.774596669],
+        "scale": [1.0, 1.0, 1.0]
+      },
+      "components": {
+        "light": {
+          "type": "directional",
+          "castsShadow": true,
+          "atmosphereSunIndex": null,
+          "sourceAngularRadiusRadians": 0.004675,
+          "color": [1.0, 0.96, 0.9],
+          "intensity": 3.0,
+          "range": null,
+          "innerConeRadians": 0.0,
+          "outerConeRadians": 0.785398163
+        }
+      }
+    },
+    {
+      "id": "b1000000-0000-4000-8000-00000000001e",
+      "name": "Optional Local Point",
+      "parent": null,
+      "enabled": false,
+      "transform": {
+        "translation": [0.0, -1.8, 3.0],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.0, 1.0, 1.0]
+      },
+      "components": {
+        "light": {
+          "type": "point",
+          "castsShadow": false,
+          "atmosphereSunIndex": null,
+          "sourceAngularRadiusRadians": 0.004675,
+          "color": [1.0, 0.72, 0.42],
+          "intensity": 48.0,
+          "range": 9.0,
+          "innerConeRadians": 0.0,
+          "outerConeRadians": 0.785398163
+        }
+      }
+    },
+    {
+      "id": "b1000000-0000-4000-8000-00000000001f",
+      "name": "Optional Back Point",
+      "parent": null,
+      "enabled": false,
+      "transform": {
+        "translation": [0.0, 5.4, 2.8],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.0, 1.0, 1.0]
+      },
+      "components": {
+        "light": {
+          "type": "point",
+          "castsShadow": false,
+          "atmosphereSunIndex": null,
+          "sourceAngularRadiusRadians": 0.004675,
+          "color": [0.38, 0.55, 1.0],
+          "intensity": 22.0,
+          "range": 5.0,
+          "innerConeRadians": 0.0,
+          "outerConeRadians": 0.785398163
+        }
+      }
+    },
+    {
+      "id": "b1000000-0000-4000-8000-000000000020",
+      "name": "Optional Emissive Companion Spot",
+      "parent": null,
+      "enabled": false,
+      "transform": {
+        "translation": [0.0, 6.6, 3.2],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.0, 1.0, 1.0]
+      },
+      "components": {
+        "light": {
+          "type": "spot",
+          "castsShadow": false,
+          "atmosphereSunIndex": null,
+          "sourceAngularRadiusRadians": 0.004675,
+          "color": [1.0, 0.65, 0.32],
+          "intensity": 60.0,
+          "range": 6.0,
+          "innerConeRadians": 0.35,
+          "outerConeRadians": 0.6
+        }
+      }
+    }
+  ]
+}

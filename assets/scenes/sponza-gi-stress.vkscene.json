@@ -1,0 +1,330 @@
+{
+  "schemaVersion": 3,
+  "id": "sponza-gi-stress",
+  "displayName": "Sponza GI Stress",
+  "activeCamera": "c1000000-0000-4000-8000-000000000002",
+  "ambient": {
+    "color": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "intensity": 0.0
+  },
+  "environment": null,
+  "entities": [
+    {
+      "id": "c1000000-0000-4000-8000-000000000001",
+      "name": "Sponza Camera 01",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [
+          8.807430267333984,
+          -0.8582578301429749,
+          1.5922194719314575
+        ],
+        "rotation": [
+          0.5949543714523315,
+          0.4931391179561615,
+          0.4050356149673462,
+          0.48866069316864014
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": {
+        "camera": {
+          "verticalFovRadians": 1.0212266445159912,
+          "nearPlane": 0.10000000149011612,
+          "farPlane": 300.0
+        }
+      }
+    },
+    {
+      "id": "c1000000-0000-4000-8000-000000000002",
+      "name": "Sponza Camera 02",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -10.531103134155273,
+          1.52825129032135,
+          7.35298490524292
+        ],
+        "rotation": [
+          -0.472881019115448,
+          0.5362976789474487,
+          0.524383008480072,
+          -0.4623752236366272
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": {
+        "camera": {
+          "verticalFovRadians": 1.0232303142547607,
+          "nearPlane": 0.10000000149011612,
+          "farPlane": 300.0
+        }
+      }
+    },
+    {
+      "id": "c1000000-0000-4000-8000-000000000003",
+      "name": "Sponza Camera 03",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [
+          -2.7030184268951416,
+          2.1113815307617188,
+          1.3548955917358398
+        ],
+        "rotation": [
+          -0.4256742000579834,
+          0.6016687750816345,
+          0.5517435669898987,
+          -0.39035263657569885
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": {
+        "camera": {
+          "verticalFovRadians": 0.6327614784240723,
+          "nearPlane": 0.10000000149011612,
+          "farPlane": 300.0
+        }
+      }
+    },
+    {
+      "id": "c1000000-0000-4000-8000-000000000004",
+      "name": "Sponza Asset Stack",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": {}
+    },
+    {
+      "id": "c1000000-0000-4000-8000-000000000005",
+      "name": "Main Sponza Architecture",
+      "parent": "c1000000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "main-sponza"
+        }
+      }
+    },
+    {
+      "id": "c1000000-0000-4000-8000-000000000006",
+      "name": "Colorful Curtains Add-on",
+      "parent": "c1000000-0000-4000-8000-000000000004",
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "sponza-colorful-curtains"
+        }
+      }
+    },
+    {
+      "id": "c1000000-0000-4000-8000-000000000007",
+      "name": "GI Directional Sun",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.22592565417289734,
+          0.1868087202310562,
+          0.6092380285263062,
+          0.7368100881576538
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": {
+        "light": {
+          "type": "directional",
+          "castsShadow": true,
+          "atmosphereSunIndex": 0,
+          "sourceAngularRadiusRadians": 0.004590216092765331,
+          "color": [
+            1.0,
+            0.949999988079071,
+            0.8600000143051147
+          ],
+          "intensity": 3.200000047683716,
+          "range": null,
+          "innerConeRadians": 0.0,
+          "outerConeRadians": 0.7853981852531433
+        }
+      }
+    },
+    {
+      "id": "c1000000-0000-4000-8000-000000000008",
+      "name": "Optional Atrium Point",
+      "parent": null,
+      "enabled": false,
+      "transform": {
+        "translation": [
+          0.0,
+          0.0,
+          6.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": {
+        "light": {
+          "type": "point",
+          "castsShadow": false,
+          "atmosphereSunIndex": null,
+          "sourceAngularRadiusRadians": 0.004674999974668026,
+          "color": [
+            1.0,
+            0.5799999833106995,
+            0.30000001192092896
+          ],
+          "intensity": 120.0,
+          "range": 18.0,
+          "innerConeRadians": 0.0,
+          "outerConeRadians": 0.7853981852531433
+        }
+      }
+    },
+    {
+      "id": "c1000000-0000-4000-8000-000000000009",
+      "name": "Earth Sky Atmosphere",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": {
+        "atmosphere": {
+          "bottomRadiusKm": 6360.0,
+          "atmosphereHeightKm": 100.0,
+          "rayleighScatteringPerKm": [
+            0.005801999941468239,
+            0.013558000326156616,
+            0.03310000151395798
+          ],
+          "rayleighScaleHeightKm": 8.0,
+          "mieScatteringPerKm": 0.003996000159531832,
+          "mieExtinctionPerKm": 0.00443999981507659,
+          "mieScaleHeightKm": 1.2000000476837158,
+          "mieAnisotropy": 0.800000011920929,
+          "ozoneAbsorptionPerKm": [
+            0.0006500000017695129,
+            0.0018810000037774444,
+            8.499999967170879e-05
+          ],
+          "ozoneCenterHeightKm": 25.0,
+          "ozoneHalfWidthKm": 15.0,
+          "groundAlbedo": [
+            0.1599999964237213,
+            0.18000000715255737,
+            0.20000000298023224
+          ],
+          "multipleScatteringFactor": 1.0,
+          "aerialPerspectiveStartMeters": 12.0,
+          "aerialPerspectiveDistanceScale": 1.0
+        }
+      }
+    }
+  ]
+}

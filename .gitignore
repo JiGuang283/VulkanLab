@@ -49,6 +49,7 @@ _deps/
 !models/viking_room.obj
 *.glb
 !models/SheenChair.glb
+!models/third_party/kenney_furniture/*.glb
 models/local/
 models/sample/
 models/main_sponza/

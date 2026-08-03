@@ -1,13 +1,8 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "projectId": "vulkan-lab",
   "defaultImportProfile": "desktop_2048",
   "importProfiles": {
-    "desktop_512": {
-      "textureLimit": 512,
-      "textureEncoder": "bc7",
-      "qualityPreset": "development"
-    },
     "desktop_1024": {
       "textureLimit": 1024,
       "textureEncoder": "bc7",
@@ -15,6 +10,11 @@
     },
     "desktop_2048": {
       "textureLimit": 2048,
+      "textureEncoder": "bc7",
+      "qualityPreset": "development"
+    },
+    "desktop_512": {
+      "textureLimit": 512,
       "textureEncoder": "bc7",
       "qualityPreset": "development"
     },
@@ -35,74 +35,445 @@
       "brdfSamples": 1024
     }
   },
-  "environments": [],
-  "scenes": [
+  "defaultEnvironment": null,
+  "models": [
     {
       "id": "viking-room",
       "displayName": "Viking Room",
       "type": "builtin",
-      "builtinFactory": "viking_room",
-      "importProfile": "desktop_2048"
+      "importProfile": "desktop_2048",
+      "optional": false,
+      "builtinFactory": "viking_room"
     },
     {
       "id": "sheen-chair",
       "displayName": "Sheen Chair",
-      "source": "models/SheenChair.glb",
-      "importProfile": "desktop_2048"
+      "type": "gltf",
+      "importProfile": "desktop_2048",
+      "optional": false,
+      "source": "models/SheenChair.glb"
     },
     {
       "id": "a-beautiful-game",
       "displayName": "A Beautiful Game",
-      "source": "models/ABeautifulGame.glb",
+      "type": "gltf",
       "importProfile": "desktop_2048",
-      "optional": true
+      "optional": true,
+      "source": "models/ABeautifulGame.glb"
     },
     {
       "id": "anisotropy-barn-lamp",
       "displayName": "Anisotropy Barn Lamp",
-      "source": "models/AnisotropyBarnLamp.glb",
+      "type": "gltf",
       "importProfile": "desktop_2048",
-      "optional": true
+      "optional": true,
+      "source": "models/AnisotropyBarnLamp.glb"
     },
     {
       "id": "car-concept",
       "displayName": "Car Concept",
-      "source": "models/CarConcept.glb",
+      "type": "gltf",
       "importProfile": "desktop_2048",
-      "optional": true
+      "optional": true,
+      "source": "models/CarConcept.glb"
     },
     {
       "id": "chronograph-watch",
       "displayName": "Chronograph Watch",
-      "source": "models/ChronographWatch.glb",
+      "type": "gltf",
       "importProfile": "desktop_2048",
-      "optional": true
+      "optional": true,
+      "source": "models/ChronographWatch.glb"
     },
     {
       "id": "diffuse-transmission-teacup",
       "displayName": "Diffuse Transmission Teacup",
-      "source": "models/DiffuseTransmissionTeacup.glb",
+      "type": "gltf",
       "importProfile": "desktop_2048",
-      "optional": true
+      "optional": true,
+      "source": "models/DiffuseTransmissionTeacup.glb"
     },
     {
       "id": "pot-of-coals",
       "displayName": "Pot of Coals",
-      "source": "models/PotOfCoals.glb",
+      "type": "gltf",
       "importProfile": "desktop_2048",
-      "optional": true
+      "optional": true,
+      "source": "models/PotOfCoals.glb"
     },
     {
       "id": "main-sponza",
       "displayName": "Main Sponza",
-      "source": "models/main_sponza/NewSponza_Main_glTF_003.gltf",
+      "type": "gltf",
       "importProfile": "desktop_1024",
       "optional": true,
-      "camera": {
-        "position": [0.0, -35.0, 10.0],
-        "yaw": 93.0,
-        "pitch": -2.0
+      "source": "models/main_sponza/NewSponza_Main_glTF_003.gltf",
+      "previewCamera": {
+        "position": [
+          0,
+          -35,
+          10
+        ],
+        "yaw": 93,
+        "pitch": -2
       }
+    },
+    {
+      "id": "kenney-furniture-bathroom-mirror",
+      "displayName": "Kenney Bathroom Mirror",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/bathroomMirror.glb"
+    },
+    {
+      "id": "kenney-furniture-bear",
+      "displayName": "Kenney Teddy Bear",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/bear.glb"
+    },
+    {
+      "id": "kenney-furniture-bed-double",
+      "displayName": "Kenney Double Bed",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/bedDouble.glb"
+    },
+    {
+      "id": "kenney-furniture-bed-single",
+      "displayName": "Kenney Single Bed",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/bedSingle.glb"
+    },
+    {
+      "id": "kenney-furniture-bench-cushion",
+      "displayName": "Kenney Cushioned Bench",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/benchCushion.glb"
+    },
+    {
+      "id": "kenney-furniture-bookcase-open",
+      "displayName": "Kenney Open Bookcase",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/bookcaseOpen.glb"
+    },
+    {
+      "id": "kenney-furniture-books",
+      "displayName": "Kenney Books",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/books.glb"
+    },
+    {
+      "id": "kenney-furniture-cabinet-television",
+      "displayName": "Kenney TV Cabinet",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/cabinetTelevision.glb"
+    },
+    {
+      "id": "kenney-furniture-cardboard-box-closed",
+      "displayName": "Kenney Cardboard Box (Closed)",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/cardboardBoxClosed.glb"
+    },
+    {
+      "id": "kenney-furniture-cardboard-box-open",
+      "displayName": "Kenney Cardboard Box (Open)",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/cardboardBoxOpen.glb"
+    },
+    {
+      "id": "kenney-furniture-chair",
+      "displayName": "Kenney Chair",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/chair.glb"
+    },
+    {
+      "id": "kenney-furniture-chair-desk",
+      "displayName": "Kenney Desk Chair",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/chairDesk.glb"
+    },
+    {
+      "id": "kenney-furniture-chair-modern-frame-cushion",
+      "displayName": "Kenney Modern Chair",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/chairModernFrameCushion.glb"
+    },
+    {
+      "id": "kenney-furniture-coat-rack-standing",
+      "displayName": "Kenney Standing Coat Rack",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/coatRackStanding.glb"
+    },
+    {
+      "id": "kenney-furniture-computer-keyboard",
+      "displayName": "Kenney Keyboard",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/computerKeyboard.glb"
+    },
+    {
+      "id": "kenney-furniture-computer-mouse",
+      "displayName": "Kenney Mouse",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/computerMouse.glb"
+    },
+    {
+      "id": "kenney-furniture-computer-screen",
+      "displayName": "Kenney Monitor",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/computerScreen.glb"
+    },
+    {
+      "id": "kenney-furniture-desk",
+      "displayName": "Kenney Desk",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/desk.glb"
+    },
+    {
+      "id": "kenney-furniture-kitchen-fridge",
+      "displayName": "Kenney Refrigerator",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/kitchenFridge.glb"
+    },
+    {
+      "id": "kenney-furniture-kitchen-microwave",
+      "displayName": "Kenney Microwave",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/kitchenMicrowave.glb"
+    },
+    {
+      "id": "kenney-furniture-kitchen-stove",
+      "displayName": "Kenney Stove",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/kitchenStove.glb"
+    },
+    {
+      "id": "kenney-furniture-lamp-round-floor",
+      "displayName": "Kenney Floor Lamp",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/lampRoundFloor.glb"
+    },
+    {
+      "id": "kenney-furniture-lamp-round-table",
+      "displayName": "Kenney Table Lamp",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/lampRoundTable.glb"
+    },
+    {
+      "id": "kenney-furniture-lamp-square-ceiling",
+      "displayName": "Kenney Ceiling Lamp",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/lampSquareCeiling.glb"
+    },
+    {
+      "id": "kenney-furniture-laptop",
+      "displayName": "Kenney Laptop",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/laptop.glb"
+    },
+    {
+      "id": "kenney-furniture-lounge-chair",
+      "displayName": "Kenney Lounge Chair",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/loungeChair.glb"
+    },
+    {
+      "id": "kenney-furniture-lounge-sofa",
+      "displayName": "Kenney Sofa",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/loungeSofa.glb"
+    },
+    {
+      "id": "kenney-furniture-pillow",
+      "displayName": "Kenney Pillow",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/pillow.glb"
+    },
+    {
+      "id": "kenney-furniture-plant-small1",
+      "displayName": "Kenney Small Plant",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/plantSmall1.glb"
+    },
+    {
+      "id": "kenney-furniture-potted-plant",
+      "displayName": "Kenney Potted Plant",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/pottedPlant.glb"
+    },
+    {
+      "id": "kenney-furniture-radio",
+      "displayName": "Kenney Radio",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/radio.glb"
+    },
+    {
+      "id": "kenney-furniture-rug-rectangle",
+      "displayName": "Kenney Rug",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/rugRectangle.glb"
+    },
+    {
+      "id": "kenney-furniture-side-table",
+      "displayName": "Kenney Side Table",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/sideTable.glb"
+    },
+    {
+      "id": "kenney-furniture-speaker",
+      "displayName": "Kenney Speaker",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/speaker.glb"
+    },
+    {
+      "id": "kenney-furniture-table",
+      "displayName": "Kenney Dining Table",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/table.glb"
+    },
+    {
+      "id": "kenney-furniture-table-coffee",
+      "displayName": "Kenney Coffee Table",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/tableCoffee.glb"
+    },
+    {
+      "id": "kenney-furniture-television-modern",
+      "displayName": "Kenney Television",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/televisionModern.glb"
+    },
+    {
+      "id": "kenney-furniture-toaster",
+      "displayName": "Kenney Toaster",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/toaster.glb"
+    },
+    {
+      "id": "kenney-furniture-trashcan",
+      "displayName": "Kenney Trash Can",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/trashcan.glb"
+    },
+    {
+      "id": "kenney-furniture-washer",
+      "displayName": "Kenney Washer",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/washer.glb"
+    },
+    {
+      "id": "kenney-furniture-table-coffee-glass",
+      "displayName": "Kenney Glass Coffee Table",
+      "type": "gltf",
+      "importProfile": "desktop_512",
+      "optional": false,
+      "source": "models/third_party/kenney_furniture/tableCoffeeGlass.glb"
+    },
+    {
+      "id": "sponza-colorful-curtains",
+      "displayName": "Sponza Colorful Curtains",
+      "type": "gltf",
+      "importProfile": "desktop_1024",
+      "optional": false,
+      "source": "models/pkg_a_curtains/NewSponza_Curtains_glTF.gltf"
     }
-  ]
+  ],
+  "scenes": [
+    {
+      "id": "algorithm-playground",
+      "displayName": "Algorithm Playground",
+      "source": "assets/scenes/algorithm-playground.vkscene.json",
+      "optional": true
+    },
+    {
+      "id": "gi-calibration-lab",
+      "displayName": "GI Calibration Lab",
+      "source": "assets/scenes/gi-calibration-lab.vkscene.json",
+      "optional": true
+    },
+    {
+      "id": "sponza-gi-stress",
+      "displayName": "Sponza GI Stress",
+      "source": "assets/scenes/sponza-gi-stress.vkscene.json",
+      "optional": true
+    }
+  ],
+  "environments": []
 }
