@@ -99,20 +99,6 @@ vec3 integrateAtmosphere(vec3 originKm, vec3 direction, float distanceKm,
         }
     }
 
-    if (hitsGround) {
-        vec3 groundPosition = originKm + direction * endDistance;
-        vec3 groundNormal = normalize(groundPosition -
-                                      atmospherePlanetCenter());
-        float sunCosine = max(dot(groundNormal, sunDirection), 0.0);
-        vec3 directIrradiance = sampleAtmosphereTransmittance(
-            groundPosition, sunDirection) * sunCosine;
-        vec3 indirectRadiance = sampleAtmosphereMultipleScattering(
-            groundPosition, sunDirection) *
-            atmosphere.mieScatteringExtinction.w;
-        vec3 groundRadiance = atmosphere.groundAlbedoDistanceScale.rgb *
-            (directIrradiance / ATM_PI + indirectRadiance);
-        radiance += transmittance * groundRadiance;
-    }
     return max(radiance, vec3(0.0));
 }
 

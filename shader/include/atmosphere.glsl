@@ -74,7 +74,10 @@ vec2 atmosphereDirectionUv(vec3 direction)
 vec3 atmosphereUvDirection(vec2 uv)
 {
     float azimuth = (uv.x - 0.5) * 2.0 * ATM_PI;
-    float elevation = (uv.y - 0.5) * ATM_PI;
+    // The renderer uses a groundless atmosphere background. Fold the lower
+    // hemisphere around the horizon so empty pixels remain atmospheric
+    // instead of exposing the virtual planet as a solid color.
+    float elevation = abs((uv.y - 0.5) * ATM_PI);
     float cosElevation = cos(elevation);
     return vec3(cosElevation * cos(azimuth),
                 cosElevation * sin(azimuth), sin(elevation));
