@@ -189,7 +189,7 @@ Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模�
 
 加载是异步操作。默认客户端拿到 task ID 后通过现有 `load status` 等待 worker KTX2 读取、增量 GPU 上传和 descriptor generation 发布完成；`--no-wait` 只返回初始任务。`load status <task-id>` 与 `load cancel <task-id>` 同时识别 Scene 和 Environment 命名空间。加载失败或取消会保留旧的已发布环境。`environment reload` 要求当前已经选择非 None 环境。
 
-### 阴影、剔除、IBL、Bloom、曝光与 Tone Mapping
+### 阴影、剔除、Surface Data、IBL、Bloom、曝光与 Tone Mapping
 
 ```powershell
 .\VulkanLabCtl.exe render-settings get
@@ -221,11 +221,16 @@ Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模�
   --min-projected-pixels 1 `
   --occlusion on `
   --occlusion-bias 0.0005
+.\VulkanLabCtl.exe render-settings set `
+  --surface-debug motion `
+  --surface-motion-scale 32
 ```
 
 `render-settings set` 支持部分更新，并要求至少提供一个选项。`--shadows`、`--ibl`、`--skybox` 和 `--bloom` 接受 `on/off`，`--tone-mapper` 接受 `aces`、`reinhard` 或 `passthrough`。Receiver bias 范围为 `[0, 0.05]`，constant/slope bias 为 `[0, 10]`，exposure 为 `[-10, 10]` EV，environment intensity 为 `[0, 100]`；Bloom threshold、soft knee 和 intensity 分别为 `[0,20]`、`[0,1]` 和 `[0,5]`。CLI 用 degree 表示 rotation，协议字段 `environmentRotationRadians` 使用弧度；服务端将其规范化到一个完整旋转。
 
 剔除开关同样只修改当前会话。Frustum、Shadow Culling 和受支持设备上的 Hi-Z Occlusion 默认开启；Distance 与 Small Object 默认关闭。`shadowDistance`、`maxDrawDistance`、`minProjectedSizePixels` 和 `occlusionDepthBias` 的协议范围分别为 `[0.1,100000]`、`[0.1,1000000]`、`[0,256]` 和 `[0,0.05]`。`render-settings get` 额外返回 `occlusionAvailable/Active/UnavailableReason`；不支持 compute、sampled depth 或 `R32_SFLOAT` storage 的设备尝试开启时返回 `occlusion_unsupported`。
+
+`--surface-debug` 接受 `none`、`normal`、`roughness`、`motion` 和 `history-validity`。Motion 显示比例由 `--surface-motion-scale` 控制，范围为 `[0.1,1024]`。Surface Data 不可用时启用非 `none` 调试视图会返回 `surface_data_unsupported`；`render-settings get` 和 `render status` 同时报告支持状态、激活状态、history generation、有效 item 数和最近失效原因。
 
 Tone Mapping policy 由 Shader Manifest 决定：两个 PBR-lite 和 `Debug IBL Diffuse/Specular` 可配置，Legacy 与其他 Debug variant 强制 PassThrough。Bloom compatibility 也由 Manifest 决定，目前只有两个 PBR-lite variant 支持；设置会保留，但其他 variant 下 `bloomActive=false`。`render-settings get` 返回 `bloomAvailable`、`bloomActive`、`bloomUnavailableReason` 和四个 Bloom 设置。设备不满足 compute/`RGBA16F` storage image 要求时，尝试开启会返回 `bloom_unsupported`。
 

@@ -104,12 +104,14 @@ Directional Light Inspector 还提供 `Use as Atmosphere Sun` 和太阳角半径
 
 ### Render
 
-Render 使用四个折叠区：
+Render 使用六个折叠区：
 
 - `Common`：Shader variant、Texture Limit、Exposure EV 和 Tone Mapper。
 - `Post Processing`：Bloom 开关、Intensity 和状态；Threshold/Soft Knee 放入默认
   折叠的 Bloom Tuning。
 - `Lighting`：阴影、ambient、场景灯光、fallback Sun、IBL/Skybox，以及 Atmosphere support、active Sun、相机高度和 LUT generation/dirty/update 状态。
+- `Culling`：Camera/Shadow/Distance/Small Object/Hi-Z Occlusion 开关、阈值、CPU/GPU 可见性统计和 indirect buffer 容量。
+- `Surface Data`：Normal、Roughness、Motion、History Validity 调试视图，以及 history generation、有效 item 数、失效原因和 per-frame buffer 容量。
 - `Camera & Clip`：位置、移动速度、near/far clip plane 和 Scene bounds，默认折叠。
 
 Shadow bias 放入默认折叠的 Shadow Tuning；场景灯光数量和逐灯数据放入 Light
