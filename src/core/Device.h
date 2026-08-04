@@ -29,9 +29,16 @@ struct AtmosphereSupport {
     std::string reason;
 };
 
-struct OcclusionCullingSupport {
+struct SurfaceDataSupport {
     bool available = false;
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+    VkFormat normalRoughnessFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    VkFormat motionFormat = VK_FORMAT_R16G16_SFLOAT;
+    std::string reason;
+};
+
+struct OcclusionCullingSupport {
+    bool available = false;
     VkFormat hiZFormat = VK_FORMAT_R32_SFLOAT;
     std::string reason;
 };
@@ -62,6 +69,9 @@ class Device {
     }
     const AtmosphereSupport &atmosphereSupport() const {
         return atmosphereSupport_;
+    }
+    const SurfaceDataSupport &surfaceDataSupport() const {
+        return surfaceDataSupport_;
     }
     const OcclusionCullingSupport &occlusionCullingSupport() const {
         return occlusionCullingSupport_;
@@ -99,6 +109,7 @@ class Device {
     bool environmentIblSupported_ = false;
     ComputeBloomSupport computeBloomSupport_{};
     AtmosphereSupport atmosphereSupport_{};
+    SurfaceDataSupport surfaceDataSupport_{};
     OcclusionCullingSupport occlusionCullingSupport_{};
     VmaAllocator          allocator_ = VK_NULL_HANDLE;
     std::unique_ptr<GpuDebugUtils> debugUtils_;

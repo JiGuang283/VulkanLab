@@ -26,7 +26,7 @@ class Mesh {
     Mesh &operator=(const Mesh &) = delete;
 
     void bind(VkCommandBuffer cmd) const;
-    void draw(VkCommandBuffer cmd) const;
+    void draw(VkCommandBuffer cmd, uint32_t firstInstance = 0) const;
     void drawIndirect(VkCommandBuffer cmd, VkBuffer indirectBuffer,
                       VkDeviceSize offset) const;
 

@@ -171,6 +171,52 @@ void checkAtmosphereUbo(const SpvReflectDescriptorBinding &binding,
                      "AtmosphereGpuParams", path);
 }
 
+void checkSurfaceFrameUbo(const SpvReflectDescriptorBinding &binding,
+                          std::string_view path) {
+    static const std::vector<MemberLayout> members = {
+        {"previousViewProjection",
+         offsetof(vkr::SurfaceFrameUbo, previousViewProjection)},
+        {"viewportSizeInvSize",
+         offsetof(vkr::SurfaceFrameUbo, viewportSizeInvSize)},
+        {"params", offsetof(vkr::SurfaceFrameUbo, params)},
+    };
+    checkBlockLayout(binding.block, sizeof(vkr::SurfaceFrameUbo), members,
+                     "SurfaceFrameUbo", path);
+}
+
+void checkRenderItemHistoryBuffer(const SpvReflectDescriptorBinding &binding,
+                                  std::string_view path) {
+    requireShader(binding.block.member_count == 1,
+                  "RenderItemHistoryBuffer member count mismatch in " +
+                      std::string(path));
+    const SpvReflectBlockVariable &items = binding.block.members[0];
+    requireShader(variableName(items.name) == "items" &&
+                      items.array.dims_count == 1 &&
+                      items.array.dims[0] == SPV_REFLECT_ARRAY_DIM_RUNTIME &&
+                      items.array.stride == sizeof(vkr::GpuRenderItemHistory),
+                  "GpuRenderItemHistory runtime-array mismatch in " +
+                      std::string(path));
+    static const std::vector<MemberLayout> members = {
+        {"previousWorld",
+         offsetof(vkr::GpuRenderItemHistory, previousWorld)},
+        {"params", offsetof(vkr::GpuRenderItemHistory, params)},
+    };
+    requireShader(items.member_count == members.size(),
+                  "GpuRenderItemHistory member count mismatch in " +
+                      std::string(path));
+    for (const auto &[expectedName, expectedOffset] : members) {
+        const auto *member = std::find_if(
+            items.members, items.members + items.member_count,
+            [expectedName](const SpvReflectBlockVariable &candidate) {
+                return candidate.name && candidate.name == expectedName;
+            });
+        requireShader(member != items.members + items.member_count &&
+                          member->offset == expectedOffset,
+                      "GpuRenderItemHistory." + std::string(expectedName) +
+                          " layout mismatch in " + std::string(path));
+    }
+}
+
 void checkSceneLightBuffer(const SpvReflectDescriptorBinding &binding,
                            std::string_view path) {
     requireShader(binding.block.member_count == 1,
@@ -236,8 +282,10 @@ void checkPushConstant(const SpvReflectShaderModule &module,
             {"applyExposure",
              offsetof(vkr::ToneMapPushConstants, applyExposure)},
             {"applyBloom", offsetof(vkr::ToneMapPushConstants, applyBloom)},
-            {"reserved0", offsetof(vkr::ToneMapPushConstants, reserved0)},
-            {"reserved1", offsetof(vkr::ToneMapPushConstants, reserved1)},
+            {"surfaceDebugMode",
+             offsetof(vkr::ToneMapPushConstants, surfaceDebugMode)},
+            {"motionDebugScale",
+             offsetof(vkr::ToneMapPushConstants, motionDebugScale)},
         };
         checkBlockLayout(*blocks[0], sizeof(vkr::ToneMapPushConstants),
                          toneMapMembers, "ToneMapPushConstants", path);
@@ -341,7 +389,7 @@ void checkDescriptors(const ReflectedModule &reflected,
                           reflected.path());
         if (toneMap) {
             requireShader(
-                binding->set == 0 && binding->binding < 2 &&
+                binding->set == 0 && binding->binding < 4 &&
                     binding->descriptor_type ==
                         SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
                     stage == VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -382,6 +430,24 @@ void checkDescriptors(const ReflectedModule &reflected,
                         SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
                     stage == VK_SHADER_STAGE_FRAGMENT_BIT,
                 "material descriptor contract mismatch in " + reflected.path());
+        } else if (contract == vkr::ShaderProgramContract::SurfacePrepass &&
+                   binding->set == 2 && binding->binding == 0) {
+            requireShader(
+                binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER &&
+                    stage == VK_SHADER_STAGE_VERTEX_BIT,
+                "surface frame descriptor contract mismatch in " +
+                    reflected.path());
+            checkSurfaceFrameUbo(*binding, reflected.path());
+        } else if (contract == vkr::ShaderProgramContract::SurfacePrepass &&
+                   binding->set == 2 && binding->binding == 1) {
+            requireShader(
+                binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER &&
+                    stage == VK_SHADER_STAGE_VERTEX_BIT,
+                "surface history descriptor contract mismatch in " +
+                    reflected.path());
+            checkRenderItemHistoryBuffer(*binding, reflected.path());
         } else if (binding->set == 2 && binding->binding < 5) {
             requireShader(
                 binding->descriptor_type ==
@@ -521,6 +587,14 @@ void checkFragmentOutputs(const ReflectedModule &reflected,
                       color->second == SPV_REFLECT_FORMAT_R32G32B32A32_SFLOAT,
                   "fragment color output contract mismatch in " +
                       reflected.path());
+    if (contract == vkr::ShaderProgramContract::SurfacePrepass) {
+        const auto motion = outputs.find({1, 0});
+        requireShader(outputs.size() == 2 && motion != outputs.end() &&
+                          motion->second ==
+                              SPV_REFLECT_FORMAT_R32G32_SFLOAT,
+                      "surface prepass MRT output contract mismatch in " +
+                          reflected.path());
+    }
 }
 
 void testShaderContracts() {

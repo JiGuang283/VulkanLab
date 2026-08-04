@@ -144,6 +144,7 @@ set(VKL_ENGINE_SOURCES
     core/DescriptorAllocator.cpp
     core/Device.cpp
     core/FrameSync.cpp
+    core/GpuBarrier.h
     core/Image.cpp
     core/IncrementalUploadQueue.cpp
     core/Pipeline.cpp
@@ -177,7 +178,7 @@ set(VKL_ENGINE_SOURCES
     render/pass/MainForwardPass.cpp
     render/pass/AtmosphereLutPass.cpp
     render/pass/DirectionalShadowPass.cpp
-    render/pass/VisibilityDepthPass.cpp
+    render/pass/SurfacePrepass.cpp
     render/pass/HiZBuildPass.cpp
     render/pass/OcclusionCullPass.cpp
     render/pass/BloomPass.cpp
@@ -186,6 +187,7 @@ set(VKL_ENGINE_SOURCES
     render/pass/PresentPass.cpp
     scene/BuiltinScenes.cpp
     scene/Camera.cpp
+    scene/BoundsMath.cpp
     scene/Scene.cpp
     scene/AssetRepository.cpp
     scene/ModelGpuBuilder.cpp

@@ -10,6 +10,7 @@
 #include "render/RenderResourceRegistry.h"
 #include "render/RendererShaderPaths.h"
 #include "render/Atmosphere.h"
+#include "render/Visibility.h"
 
 #include <memory>
 #include <array>
@@ -24,13 +25,13 @@ class DescriptorAllocator;
 struct EnvironmentGpuResources;
 class GuiSystem;
 class MainForwardPass;
+class SurfacePrepass;
 class AtmosphereLutPass;
 class ToneMapPass;
 class PresentPass;
 class PipelineCache;
 struct ShaderVariant;
 struct RenderView;
-struct VisibilityFrame;
 
 struct RendererViewportOutput {
     VkExtent2D extent{};
@@ -54,6 +55,20 @@ struct OcclusionCullingStatus {
     uint32_t hiZMipLevels = 0;
     std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> indirectCapacities{};
     uint64_t allocatedBytes = 0;
+    uint32_t latestCandidates = 0;
+    uint32_t latestUncullable = 0;
+    CompletedGpuVisibilityStatistics completed{};
+};
+
+struct SurfaceDataStatus {
+    bool supported = false;
+    bool active = false;
+    std::string unavailableReason;
+    VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+    VkFormat normalRoughnessFormat = VK_FORMAT_UNDEFINED;
+    VkFormat motionFormat = VK_FORMAT_UNDEFINED;
+    std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> historyCapacities{};
+    uint64_t allocatedBytes = 0;
 };
 
 class Renderer {
@@ -67,7 +82,7 @@ class Renderer {
     Renderer &operator=(const Renderer &) = delete;
 
     void renderFrame(const FrameSync::FrameContext &frame,
-                     VisibilityFrame &visibility,
+                     const VisibilityFrame &visibility,
                      PipelineCache &pipelineCache,
                      GuiSystem *gui, const ShaderVariant &shaderVariant,
                      const RenderView &view);
@@ -97,6 +112,7 @@ class Renderer {
     const std::string &bloomUnsupportedReason() const;
     SceneLightBufferStatus sceneLightBufferStatus() const;
     OcclusionCullingStatus occlusionCullingStatus() const;
+    SurfaceDataStatus surfaceDataStatus() const;
     bool atmosphereSupported() const;
     const std::string &atmosphereUnsupportedReason() const;
     AtmosphereRuntimeStatus atmosphereStatus() const;
@@ -162,8 +178,11 @@ class Renderer {
     RenderPipeline pipeline_;
     std::unique_ptr<GpuPassProfiler> gpuPassProfiler_;
     MainForwardPass *mainForwardPass_ = nullptr;
+    SurfacePrepass *surfacePrepass_ = nullptr;
+    bool lastSurfaceDataActive_ = false;
     class OcclusionCullPass *occlusionCullPass_ = nullptr;
     uint32_t lastOcclusionFrameIndex_ = 0;
+    uint32_t lastOcclusionRequested_ = 0;
     AtmosphereLutPass *atmosphereLutPass_ = nullptr;
     AtmosphereRuntimeStatus atmosphereStatus_{};
     ToneMapPass *toneMapPass_ = nullptr;

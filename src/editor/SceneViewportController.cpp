@@ -4,6 +4,7 @@
 #include "EditorWidgets.h"
 #include "SceneEditorSession.h"
 #include "scene/ModelAsset.h"
+#include "scene/BoundsMath.h"
 #include "scene/TransformMath.h"
 
 #include <ImGuizmo.h>
@@ -40,36 +41,6 @@ ImGuizmo::OPERATION imGuizmoOperation(GizmoOperation operation) {
 bool finiteVector(const glm::vec3 &value) {
     return std::isfinite(value.x) && std::isfinite(value.y) &&
            std::isfinite(value.z);
-}
-
-bool intersectBounds(const SceneViewportController::Ray &ray,
-                     const Bounds &bounds, float &distance) {
-    if (!bounds.valid)
-        return false;
-    float nearDistance = 0.0f;
-    float farDistance = std::numeric_limits<float>::max();
-    for (int axis = 0; axis < 3; ++axis) {
-        const float direction = ray.direction[axis];
-        if (std::abs(direction) < 1.0e-8f) {
-            if (ray.origin[axis] < bounds.min[axis] ||
-                ray.origin[axis] > bounds.max[axis]) {
-                return false;
-            }
-            continue;
-        }
-        float first = (bounds.min[axis] - ray.origin[axis]) / direction;
-        float second = (bounds.max[axis] - ray.origin[axis]) / direction;
-        if (first > second)
-            std::swap(first, second);
-        nearDistance = std::max(nearDistance, first);
-        farDistance = std::min(farDistance, second);
-        if (nearDistance > farDistance)
-            return false;
-    }
-    if (farDistance < 0.0f)
-        return false;
-    distance = std::max(nearDistance, 0.0f);
-    return true;
 }
 
 std::optional<ImVec2> projectPoint(const glm::vec3 &point,
@@ -441,7 +412,8 @@ void SceneViewportController::drawOverlay(
             localRay.direction = glm::vec3(
                 inverseWorld * glm::vec4(ray->direction, 0.0f));
             float distance = 0.0f;
-            if (intersectBounds(localRay, asset->localBounds, distance) &&
+            if (intersectRayBounds(localRay.origin, localRay.direction,
+                                   asset->localBounds, distance) &&
                 distance < closest) {
                 closest = distance;
                 hit = entity.id;

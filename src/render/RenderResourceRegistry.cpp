@@ -222,6 +222,19 @@ const Image &RenderResourceRegistry::image(RenderImageHandle handle,
     return *images_[handle.index][index];
 }
 
+const Image &RenderResourceRegistry::previousImage(
+    RenderImageHandle handle, uint32_t frameIndex) const {
+    const RenderImageDesc &desc = description(handle);
+    if (!desc.historyCapable ||
+        desc.multiplicity != RenderResourceMultiplicity::PerFrame) {
+        throw std::logic_error(
+            "render image is not a per-frame history resource");
+    }
+    if (frameCount_ < 2)
+        return image(handle, frameIndex);
+    return image(handle, (frameIndex + frameCount_ - 1u) % frameCount_);
+}
+
 VkImageView RenderResourceRegistry::mipView(RenderImageHandle handle,
                                             uint32_t frameIndex,
                                             uint32_t mipLevel) const {
@@ -393,21 +406,48 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
              VK_IMAGE_USAGE_SAMPLED_BIT,
          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, VK_IMAGE_ASPECT_DEPTH_BIT});
 
-    if (device.occlusionCullingSupport().available) {
-        RenderImageDesc visibilityDepth{};
-        visibilityDepth.name = "Visibility Depth";
-        visibilityDepth.extentPolicy = RenderExtentPolicy::Viewport;
-        visibilityDepth.multiplicity =
+    if (device.surfaceDataSupport().available) {
+        RenderImageDesc surfaceDepth{};
+        surfaceDepth.name = "Surface Depth";
+        surfaceDepth.extentPolicy = RenderExtentPolicy::Viewport;
+        surfaceDepth.multiplicity =
             RenderResourceMultiplicity::PerFrame;
-        visibilityDepth.format =
-            device.occlusionCullingSupport().depthFormat;
-        visibilityDepth.usage =
+        surfaceDepth.format = device.surfaceDataSupport().depthFormat;
+        surfaceDepth.usage =
             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
             VK_IMAGE_USAGE_SAMPLED_BIT;
-        visibilityDepth.aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
-        handles.visibilityDepth =
-            registry.registerImage(std::move(visibilityDepth));
+        surfaceDepth.aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+        surfaceDepth.historyCapable = true;
+        handles.surfaceDepth =
+            registry.registerImage(std::move(surfaceDepth));
 
+        RenderImageDesc normalRoughness{};
+        normalRoughness.name = "Surface Normal Roughness";
+        normalRoughness.extentPolicy = RenderExtentPolicy::Viewport;
+        normalRoughness.multiplicity =
+            RenderResourceMultiplicity::PerFrame;
+        normalRoughness.format =
+            device.surfaceDataSupport().normalRoughnessFormat;
+        normalRoughness.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                                VK_IMAGE_USAGE_SAMPLED_BIT;
+        normalRoughness.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        normalRoughness.historyCapable = true;
+        handles.surfaceNormalRoughness =
+            registry.registerImage(std::move(normalRoughness));
+
+        RenderImageDesc motion{};
+        motion.name = "Surface Motion";
+        motion.extentPolicy = RenderExtentPolicy::Viewport;
+        motion.multiplicity = RenderResourceMultiplicity::PerFrame;
+        motion.format = device.surfaceDataSupport().motionFormat;
+        motion.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                       VK_IMAGE_USAGE_SAMPLED_BIT;
+        motion.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        motion.historyCapable = true;
+        handles.surfaceMotion = registry.registerImage(std::move(motion));
+    }
+
+    if (device.occlusionCullingSupport().available) {
         RenderImageDesc hiZ{};
         hiZ.name = "Visibility HiZ";
         hiZ.extentPolicy = RenderExtentPolicy::Viewport;
@@ -501,14 +541,27 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
     handles.shadowSampler =
         registry.registerSampler(std::move(shadowSampler));
 
-    if (device.occlusionCullingSupport().available) {
+    if (device.surfaceDataSupport().available) {
         RenderSamplerDesc depthSampler{};
-        depthSampler.name = "Visibility Depth Sampler";
+        depthSampler.name = "Surface Depth Sampler";
         depthSampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         depthSampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        handles.visibilityDepthSampler =
+        handles.surfaceDepthSampler =
             registry.registerSampler(std::move(depthSampler));
 
+        RenderSamplerDesc surfaceSampler{};
+        surfaceSampler.name = "Surface Data Sampler";
+        surfaceSampler.magFilter = VK_FILTER_LINEAR;
+        surfaceSampler.minFilter = VK_FILTER_LINEAR;
+        surfaceSampler.addressModeU =
+            VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        surfaceSampler.addressModeV =
+            VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        handles.surfaceDataSampler =
+            registry.registerSampler(std::move(surfaceSampler));
+    }
+
+    if (device.occlusionCullingSupport().available) {
         RenderSamplerDesc hiZSampler{};
         hiZSampler.name = "Visibility HiZ Sampler";
         hiZSampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;

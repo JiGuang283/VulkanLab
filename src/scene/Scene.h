@@ -18,7 +18,7 @@ namespace vkr {
 class Mesh;
 class MaterialInstance;
 class MaterialTemplate;
-class RenderQueue;
+struct RenderItem;
 class Texture;
 
 class Scene final : public IRenderWorld {
@@ -46,7 +46,7 @@ class Scene final : public IRenderWorld {
     bool removeModelInstance(size_t index);
 
     // ---- 渲染提交 ----
-    void collectRenderCommands(RenderQueue &queue) const override;
+    void collectRenderItems(std::vector<RenderItem> &items) const override;
 
     // ---- 每帧 tick（可选） ----
     void setUpdateFn(UpdateFn fn) { updateFn_ = std::move(fn); }

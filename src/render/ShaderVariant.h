@@ -8,6 +8,7 @@ namespace vkr {
 enum class ShaderProgramContract {
     MainForward,
     ShadowDepth,
+    SurfacePrepass,
     Fullscreen,
     Compute,
 };

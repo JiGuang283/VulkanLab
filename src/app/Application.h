@@ -8,7 +8,7 @@
 #include "assets/SceneCatalog.h"
 #include "control/RuntimeCommandDispatcher.h"
 #include "diagnostics/SceneLoadStats.h"
-#include "render/RenderQueue.h"
+#include "render/RenderCommand.h"
 #include "render/Visibility.h"
 #include "render/RenderSettings.h"
 #include "render/RenderView.h"
@@ -130,6 +130,7 @@ class Application final
     void drawAssetsPanel(bool environmentsOnly = false);
     void drawRenderPanel();
     void drawPostProcessingPanel();
+    void drawSurfaceDataPanel();
     void drawCullingPanel();
     void drawLightingPanel();
     void drawCameraPanel();
@@ -265,7 +266,7 @@ class Application final
     bool viewportHovered_ = false;
 #endif
     std::unique_ptr<CaptureService>      captureService_;
-    RenderQueue                          renderQueue_;
+    std::vector<RenderItem>              renderItems_;
     VisibilitySystem                    visibilitySystem_;
     VisibilityFrame                     visibilityFrame_;
     ShaderRegistry                       shaderRegistry_;

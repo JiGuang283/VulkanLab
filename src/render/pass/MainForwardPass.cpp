@@ -13,7 +13,6 @@
 #include "render/PipelineCache.h"
 #include "render/PipelineKey.h"
 #include "render/RenderFrame.h"
-#include "render/RenderQueue.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/ShaderVariant.h"
 #include "render/Visibility.h"
@@ -115,7 +114,7 @@ void MainForwardPass::execute(const RenderFrameContext &frame,
     VKL_PROFILE_ZONE("Record MainForward");
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "MainForward");
     begin(frame.cmd, frame.frameIndex, resources);
-    drawQueue(frame, resources, visibility.camera);
+    drawQueue(frame, resources, visibility);
     vkCmdEndRenderPass(frame.cmd);
 }
 
@@ -148,18 +147,20 @@ void MainForwardPass::begin(VkCommandBuffer cmd, uint32_t frameIndex,
 
 void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                                 const RenderResourceRegistry &resources,
-                                const RenderQueue &queue) {
+                                const VisibilityFrame &visibility) {
     if (!frame.pipelineCache || !frame.shaderVariant)
         return;
 
-    const auto drawCommands = [&](const std::vector<RenderCommand> &commands,
+    const auto drawCommands = [&](const std::vector<RenderItemIndex> &indices,
                                   RenderQueueType queueType) {
         const bool transparent = queueType == RenderQueueType::Transparent;
         ScopedGpuLabel queueLabel(device_->debugUtils(), frame.cmd,
                                   transparent ? "Transparent" : "Opaque");
         Pipeline *boundPipeline = nullptr;
 
-        for (const auto &command : commands) {
+        for (uint32_t drawIndex = 0; drawIndex < indices.size(); ++drawIndex) {
+            const RenderItemIndex itemIndex = indices[drawIndex];
+            const RenderItem &command = visibility.items.at(itemIndex);
             if (!command.mesh || !command.material)
                 continue;
 
@@ -239,28 +240,32 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                                    VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(block), &block);
             command.mesh->bind(frame.cmd);
-            if (!transparent && frame.occlusionActive &&
-                frame.occlusionIndirectBuffer != VK_NULL_HANDLE &&
-                command.occlusionSlot !=
-                    std::numeric_limits<uint32_t>::max()) {
+            const GpuVisibilityDrawStream *stream =
+                frame.visibilityDrawStream;
+            if (!transparent && stream && stream->active &&
+                stream->indirectBuffer != VK_NULL_HANDLE &&
+                stream->frameIndex == frame.frameIndex &&
+                stream->visibilityGeneration == visibility.generation &&
+                drawIndex < stream->candidateCount) {
                 command.mesh->drawIndirect(
-                    frame.cmd, frame.occlusionIndirectBuffer,
-                    static_cast<VkDeviceSize>(command.occlusionSlot) *
+                    frame.cmd, stream->indirectBuffer,
+                    static_cast<VkDeviceSize>(drawIndex) *
                         sizeof(VkDrawIndexedIndirectCommand));
             } else {
-                command.mesh->draw(frame.cmd);
+                command.mesh->draw(frame.cmd, itemIndex);
             }
         }
     };
 
     {
         VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "Opaque");
-        drawCommands(queue.opaque(), RenderQueueType::Opaque);
+        drawCommands(visibility.cameraOpaque, RenderQueueType::Opaque);
     }
     {
         VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd,
                              "Transparent");
-        drawCommands(queue.transparent(), RenderQueueType::Transparent);
+        drawCommands(visibility.cameraTransparent,
+                     RenderQueueType::Transparent);
     }
 }
 

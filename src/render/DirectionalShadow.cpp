@@ -2,6 +2,7 @@
 
 #include "scene/SceneLight.h"
 #include "scene/SceneTypes.h"
+#include "scene/BoundsMath.h"
 
 #include <algorithm>
 #include <array>
@@ -13,22 +14,6 @@
 namespace vkr {
 
 namespace {
-
-std::array<glm::vec3, 8> boundsCorners(const Bounds &bounds) {
-    std::array<glm::vec3, 8> result{};
-    uint32_t index = 0;
-    for (uint32_t z = 0; z < 2; ++z) {
-        for (uint32_t y = 0; y < 2; ++y) {
-            for (uint32_t x = 0; x < 2; ++x) {
-                result[index++] = {
-                    x ? bounds.max.x : bounds.min.x,
-                    y ? bounds.max.y : bounds.min.y,
-                    z ? bounds.max.z : bounds.min.z};
-            }
-        }
-    }
-    return result;
-}
 
 bool buildReceiverCorners(const DirectionalShadowCameraData &camera,
                           std::array<glm::vec3, 8> &corners,

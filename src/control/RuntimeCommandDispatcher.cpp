@@ -156,12 +156,24 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         optionalBoolValue(command, "occlusionCullingEnabled");
     patch.occlusionDepthBias = optionalFiniteFloat(
         command, "occlusionDepthBias", 0.0f, 0.05f);
+    patch.surfaceMotionDebugScale = optionalFiniteFloat(
+        command, "surfaceMotionDebugScale", 0.1f, 1024.0f);
     if (const auto toneMapper = optionalString(command, "toneMapper")) {
         patch.toneMapper = toneMapperFromName(*toneMapper);
         if (!patch.toneMapper) {
             throw RuntimeCommandError(
                 "invalid_params",
                 "Parameter 'toneMapper' must be passthrough, reinhard, or aces.");
+        }
+    }
+    if (const auto debugView =
+            optionalString(command, "surfaceDebugView")) {
+        patch.surfaceDebugView = surfaceDebugViewFromName(*debugView);
+        if (!patch.surfaceDebugView) {
+            throw RuntimeCommandError(
+                "invalid_params",
+                "Parameter 'surfaceDebugView' must be none, normal, "
+                "roughness, motion, or history-validity.");
         }
     }
     if (!patch.shadowsEnabled && !patch.shadowReceiverBias &&
@@ -175,7 +187,8 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         !patch.distanceCullingEnabled && !patch.maxDrawDistance &&
         !patch.smallObjectCullingEnabled &&
         !patch.minProjectedSizePixels && !patch.occlusionCullingEnabled &&
-        !patch.occlusionDepthBias) {
+        !patch.occlusionDepthBias && !patch.surfaceDebugView &&
+        !patch.surfaceMotionDebugScale) {
         throw RuntimeCommandError(
             "invalid_params",
             "render_settings.set requires at least one setting.");

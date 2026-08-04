@@ -13,6 +13,7 @@
 #include "render/Mesh.h"
 #include "render/Texture.h"
 #include "SceneLoadTask.h"
+#include "scene/BoundsMath.h"
 
 #include <algorithm>
 #include <array>
@@ -43,39 +44,6 @@ class UploadPumpStatsScope {
     uint64_t &bytes_;
     Clock::time_point start_;
 };
-
-void includePoint(Bounds &bounds, const glm::vec3 &point) {
-    if (!bounds.valid) {
-        bounds.min = point;
-        bounds.max = point;
-        bounds.center = point;
-        bounds.radius = 0.0f;
-        bounds.valid = true;
-        return;
-    }
-    bounds.min = glm::min(bounds.min, point);
-    bounds.max = glm::max(bounds.max, point);
-    bounds.center = (bounds.min + bounds.max) * 0.5f;
-    bounds.radius = glm::length(bounds.max - bounds.center);
-}
-
-void includeTransformedBounds(Bounds &result, const Bounds &local,
-                              const glm::mat4 &transform) {
-    if (!local.valid)
-        return;
-    for (int x = 0; x < 2; ++x) {
-        for (int y = 0; y < 2; ++y) {
-            for (int z = 0; z < 2; ++z) {
-                const glm::vec3 corner{
-                    x ? local.max.x : local.min.x,
-                    y ? local.max.y : local.min.y,
-                    z ? local.max.z : local.min.z};
-                includePoint(result,
-                             glm::vec3(transform * glm::vec4(corner, 1.0f)));
-            }
-        }
-    }
-}
 
 } // namespace
 

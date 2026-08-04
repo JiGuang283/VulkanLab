@@ -3,7 +3,8 @@
 #include "ModelLight.h"
 #include "render/MaterialInstance.h"
 #include "render/Mesh.h"
-#include "render/RenderQueue.h"
+#include "render/RenderCommand.h"
+#include "scene/BoundsMath.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -11,46 +12,6 @@
 #include <utility>
 
 namespace vkr {
-
-namespace {
-
-void includePoint(Bounds &bounds, const glm::vec3 &point) {
-    if (!bounds.valid) {
-        bounds.min = point;
-        bounds.max = point;
-        bounds.center = point;
-        bounds.radius = 0.0f;
-        bounds.valid = true;
-        return;
-    }
-
-    bounds.min = glm::min(bounds.min, point);
-    bounds.max = glm::max(bounds.max, point);
-    bounds.center = (bounds.min + bounds.max) * 0.5f;
-    bounds.radius = glm::length(bounds.max - bounds.center);
-}
-
-void includeTransformedBounds(Bounds &sceneBounds, const Bounds &localBounds,
-                              const glm::mat4 &transform) {
-    if (!localBounds.valid)
-        return;
-
-    const glm::vec3 minV = localBounds.min;
-    const glm::vec3 maxV = localBounds.max;
-    for (int x = 0; x < 2; ++x) {
-        for (int y = 0; y < 2; ++y) {
-            for (int z = 0; z < 2; ++z) {
-                const glm::vec3 corner{x ? maxV.x : minV.x,
-                                       y ? maxV.y : minV.y,
-                                       z ? maxV.z : minV.z};
-                includePoint(sceneBounds,
-                             glm::vec3(transform * glm::vec4(corner, 1.0f)));
-            }
-        }
-    }
-}
-
-} // namespace
 
 void Scene::addObject(SceneObject obj) {
     objects_.push_back(std::move(obj));
@@ -116,7 +77,7 @@ void Scene::rebuildDerivedState() {
     }
 }
 
-void Scene::collectRenderCommands(RenderQueue &queue) const {
+void Scene::collectRenderItems(std::vector<RenderItem> &items) const {
     uint32_t sourceIndex = 0;
     for (const auto &obj : objects_) {
         const auto *material = obj.material.get();
@@ -127,15 +88,17 @@ void Scene::collectRenderCommands(RenderQueue &queue) const {
         const RenderQueueType queueType = transparent
                                               ? RenderQueueType::Transparent
                                               : RenderQueueType::Opaque;
-        RenderCommand command{};
-        command.mesh = obj.mesh.get();
-        command.material = obj.material.get();
-        command.world = obj.transform;
-        command.queue = queueType;
-        if (command.mesh)
-            command.localBounds = command.mesh->localBounds();
-        command.renderItemId = 0x100000000ull + sourceIndex;
-        queue.add(std::move(command));
+        RenderItem item{};
+        item.mesh = obj.mesh.get();
+        item.material = obj.material.get();
+        item.world = obj.transform;
+        item.queue = queueType;
+        if (item.mesh)
+            item.localBounds = item.mesh->localBounds();
+        item.key.ownerKind = RenderItemOwnerKind::LegacyObject;
+        item.key.fallbackOrdinal = sourceIndex + 1u;
+        item.sourceOrder = sourceIndex;
+        items.push_back(std::move(item));
         ++sourceIndex;
     }
 
@@ -157,19 +120,21 @@ void Scene::collectRenderCommands(RenderQueue &queue) const {
             const bool transparent =
                 params && (params->alphaMode == AlphaMode::Blend ||
                            params->transmissionFactor > 0.0f);
-            RenderCommand command{};
-            command.mesh = primitive.mesh.get();
-            command.material = material;
-            command.world = instance.rootToWorld * primitive.localToAsset;
-            command.queue = transparent ? RenderQueueType::Transparent
-                                        : RenderQueueType::Opaque;
-            if (command.mesh)
-                command.localBounds = command.mesh->localBounds();
-            command.primitiveIndex = primitiveIndex;
-            command.renderItemId =
-                (static_cast<uint64_t>(instanceIndex + 1u) << 32u) |
-                primitiveIndex;
-            queue.add(std::move(command));
+            RenderItem item{};
+            item.mesh = primitive.mesh.get();
+            item.material = material;
+            item.world = instance.rootToWorld * primitive.localToAsset;
+            item.queue = transparent ? RenderQueueType::Transparent
+                                     : RenderQueueType::Opaque;
+            if (item.mesh)
+                item.localBounds = item.mesh->localBounds();
+            item.primitiveIndex = primitiveIndex;
+            item.key.ownerKind = RenderItemOwnerKind::PreviewInstance;
+            item.key.assetGeneration = asset->generation;
+            item.key.primitiveIndex = primitiveIndex;
+            item.key.fallbackOrdinal = instanceIndex + 1u;
+            item.sourceOrder = sourceIndex++;
+            items.push_back(std::move(item));
             ++primitiveIndex;
         }
         ++instanceIndex;

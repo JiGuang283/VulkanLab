@@ -68,6 +68,7 @@ struct RenderImageDesc {
     uint32_t arrayLayers = 1;
     VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
     RenderMipPolicy mipPolicy = RenderMipPolicy::Fixed;
+    bool historyCapable = false;
 };
 
 struct RenderSamplerDesc {
@@ -117,13 +118,16 @@ struct RendererResourceHandles {
     RenderImageHandle mainDepth{};
     RenderImageHandle viewportColor{};
     RenderImageHandle directionalShadowDepth{};
-    RenderImageHandle visibilityDepth{};
+    RenderImageHandle surfaceDepth{};
+    RenderImageHandle surfaceNormalRoughness{};
+    RenderImageHandle surfaceMotion{};
     RenderImageHandle visibilityHiZ{};
     std::array<RenderImageHandle, kBloomPyramidLevelCount> bloomLevels{};
     RenderSamplerHandle hdrSampler{};
     RenderSamplerHandle viewportSampler{};
     RenderSamplerHandle shadowSampler{};
-    RenderSamplerHandle visibilityDepthSampler{};
+    RenderSamplerHandle surfaceDepthSampler{};
+    RenderSamplerHandle surfaceDataSampler{};
     RenderSamplerHandle visibilityHiZSampler{};
     RenderSamplerHandle bloomSampler{};
     RenderImageHandle atmosphereTransmittance{};
@@ -156,6 +160,8 @@ class RenderResourceRegistry {
         return imageDescriptions_;
     }
     const Image &image(RenderImageHandle handle, uint32_t frameIndex) const;
+    const Image &previousImage(RenderImageHandle handle,
+                               uint32_t frameIndex) const;
     VkImageView mipView(RenderImageHandle handle, uint32_t frameIndex,
                         uint32_t mipLevel) const;
     uint32_t mipLevelCount(RenderImageHandle handle) const;

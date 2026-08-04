@@ -25,6 +25,9 @@ class ToneMapPass final : public IRenderPass {
                 RenderImageHandle bloomColor,
                 RenderSamplerHandle bloomSampler,
                 RenderImageHandle viewportColor,
+                RenderImageHandle surfaceNormalRoughness,
+                RenderImageHandle surfaceMotion,
+                RenderSamplerHandle surfaceSampler,
                 DescriptorAllocator &descriptorAllocator,
                 std::string fullscreenVertPath,
                 std::string toneMapFragPath);
@@ -55,6 +58,9 @@ class ToneMapPass final : public IRenderPass {
     RenderImageHandle bloomColor_{};
     RenderSamplerHandle bloomSampler_{};
     RenderImageHandle viewportColor_{};
+    RenderImageHandle surfaceNormalRoughness_{};
+    RenderImageHandle surfaceMotion_{};
+    RenderSamplerHandle surfaceSampler_{};
     DescriptorAllocator *descriptorAllocator_ = nullptr;
     std::string fullscreenVertPath_;
     std::string toneMapFragPath_;

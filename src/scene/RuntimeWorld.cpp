@@ -5,7 +5,8 @@
 #include "TransformMath.h"
 #include "render/MaterialInstance.h"
 #include "render/Mesh.h"
-#include "render/RenderQueue.h"
+#include "render/RenderCommand.h"
+#include "scene/BoundsMath.h"
 
 #include <algorithm>
 #include <cmath>
@@ -15,38 +16,6 @@
 
 namespace vkr {
 namespace {
-
-void includePoint(Bounds &bounds, const glm::vec3 &point) {
-    if (!bounds.valid) {
-        bounds.min = point;
-        bounds.max = point;
-        bounds.center = point;
-        bounds.radius = 0.0f;
-        bounds.valid = true;
-        return;
-    }
-    bounds.min = glm::min(bounds.min, point);
-    bounds.max = glm::max(bounds.max, point);
-    bounds.center = (bounds.min + bounds.max) * 0.5f;
-    bounds.radius = glm::length(bounds.max - bounds.center);
-}
-
-void includeTransformedBounds(Bounds &result, const Bounds &local,
-                              const glm::mat4 &transform) {
-    if (!local.valid)
-        return;
-    for (int x = 0; x < 2; ++x) {
-        for (int y = 0; y < 2; ++y) {
-            for (int z = 0; z < 2; ++z) {
-                const glm::vec3 corner{x ? local.max.x : local.min.x,
-                                       y ? local.max.y : local.min.y,
-                                       z ? local.max.z : local.min.z};
-                includePoint(result,
-                             glm::vec3(transform * glm::vec4(corner, 1.0f)));
-            }
-        }
-    }
-}
 
 bool validAtmosphereTransform(const SceneTransformDocument &transform) {
     const glm::quat rotation = glm::normalize(transform.rotation);
@@ -673,7 +642,7 @@ void RuntimeWorld::update(float, float) {
     rebuildDerivedState();
 }
 
-void RuntimeWorld::collectRenderCommands(RenderQueue &queue) const {
+void RuntimeWorld::collectRenderItems(std::vector<RenderItem> &items) const {
     const_cast<RuntimeWorld *>(this)->rebuildDerivedState();
     for (EntityHandle handle : order_) {
         const Slot *entry = slot(handle);
@@ -692,22 +661,22 @@ void RuntimeWorld::collectRenderCommands(RenderQueue &queue) const {
             const bool transparent =
                 params && (params->alphaMode == AlphaMode::Blend ||
                            params->transmissionFactor > 0.0f);
-            RenderCommand command{};
-            command.mesh = primitive.mesh.get();
-            command.material = material;
-            command.world =
+            RenderItem item{};
+            item.mesh = primitive.mesh.get();
+            item.material = material;
+            item.world =
                 entry->transform.world * primitive.localToAsset;
-            command.queue = transparent ? RenderQueueType::Transparent
-                                        : RenderQueueType::Opaque;
-            if (command.mesh)
-                command.localBounds = command.mesh->localBounds();
-            command.primitiveIndex = primitiveIndex;
-            command.renderItemId =
-                static_cast<uint64_t>(PersistentEntityIdHash{}(entry->id));
-            command.renderItemId ^=
-                static_cast<uint64_t>(primitiveIndex + 1u) *
-                0x9e3779b97f4a7c15ull;
-            queue.add(std::move(command));
+            item.queue = transparent ? RenderQueueType::Transparent
+                                     : RenderQueueType::Opaque;
+            if (item.mesh)
+                item.localBounds = item.mesh->localBounds();
+            item.primitiveIndex = primitiveIndex;
+            item.key.ownerKind = RenderItemOwnerKind::NativeEntity;
+            item.key.entityId = entry->id;
+            item.key.assetGeneration = asset->generation;
+            item.key.primitiveIndex = primitiveIndex;
+            item.sourceOrder = static_cast<uint32_t>(items.size());
+            items.push_back(std::move(item));
             ++primitiveIndex;
         }
     }
@@ -744,6 +713,7 @@ RuntimeWorld::activeCamera(float aspect) const {
     result.position = position;
     result.nearPlane = entry->camera->nearPlane;
     result.farPlane = entry->camera->farPlane;
+    result.entityId = entry->id;
     result.view = glm::lookAt(position, position + forward, up);
     result.projection = glm::perspective(
         entry->camera->verticalFovRadians, std::max(aspect, 0.001f),

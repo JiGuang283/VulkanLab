@@ -10,7 +10,6 @@
 namespace vkr {
 
 class Device;
-class RenderQueue;
 class RenderResourceRegistry;
 class SwapChain;
 struct RenderFrameContext;
@@ -41,7 +40,7 @@ class DirectionalShadowPass final : public IRenderPass {
     void createRenderPass(const RenderResourceRegistry &resources);
     void createFramebuffers(const RenderResourceRegistry &resources);
     void drawCasters(const RenderFrameContext &frame,
-                     const RenderQueue &queue);
+                     const VisibilityFrame &visibility);
 
     Device *device_ = nullptr;
     RenderImageHandle shadowDepth_{};

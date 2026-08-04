@@ -1,10 +1,10 @@
 #include "render/Visibility.h"
 
 #include "diagnostics/Profiling.h"
+#include "render/MaterialInstance.h"
 #include "render/RenderView.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <limits>
 
@@ -12,35 +12,31 @@ namespace vkr {
 
 namespace {
 
-glm::vec4 matrixRow(const glm::mat4 &matrix, uint32_t row) {
-    return {matrix[0][row], matrix[1][row], matrix[2][row], matrix[3][row]};
-}
-
-bool finiteVec3(const glm::vec3 &value) {
-    return std::isfinite(value.x) && std::isfinite(value.y) &&
-           std::isfinite(value.z);
-}
-
-std::array<glm::vec3, 8> boundsCorners(const Bounds &bounds) {
-    std::array<glm::vec3, 8> corners{};
-    uint32_t index = 0;
-    for (uint32_t z = 0; z < 2; ++z) {
-        for (uint32_t y = 0; y < 2; ++y) {
-            for (uint32_t x = 0; x < 2; ++x) {
-                corners[index++] = {
-                    x ? bounds.max.x : bounds.min.x,
-                    y ? bounds.max.y : bounds.min.y,
-                    z ? bounds.max.z : bounds.min.z};
-            }
+bool matrixNearlyEqual(const glm::mat4 &left, const glm::mat4 &right,
+                       float epsilon = 1.0e-5f) {
+    for (uint32_t column = 0; column < 4; ++column) {
+        for (uint32_t row = 0; row < 4; ++row) {
+            if (std::abs(left[column][row] - right[column][row]) > epsilon)
+                return false;
         }
     }
-    return corners;
+    return true;
 }
 
-float distanceSquaredToBounds(const glm::vec3 &point, const Bounds &bounds) {
-    const glm::vec3 closest = glm::clamp(point, bounds.min, bounds.max);
-    const glm::vec3 delta = point - closest;
-    return glm::dot(delta, delta);
+glm::vec3 cameraForward(const glm::mat4 &view) {
+    const glm::mat4 inverseView = glm::inverse(view);
+    const glm::vec3 forward =
+        glm::vec3(inverseView * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f));
+    const float length = glm::length(forward);
+    return std::isfinite(length) && length > 1.0e-6f
+               ? forward / length
+               : glm::vec3(0.0f, 0.0f, -1.0f);
+}
+
+bool isDefaultKey(const RenderItemKey &key) {
+    return key.ownerKind == RenderItemOwnerKind::LegacyObject &&
+           key.entityId.empty() && key.assetGeneration == 0 &&
+           key.primitiveIndex == 0 && key.fallbackOrdinal == 0;
 }
 
 bool intersectsDirectionalShadowVolume(
@@ -59,194 +55,223 @@ bool intersectsDirectionalShadowVolume(
            lightBounds.min.z <= shadow.lightSpaceMax.z;
 }
 
-bool projectedObjectIsSmall(const Bounds &bounds, const glm::mat4 &viewProj,
-                            VkExtent2D viewportExtent, float thresholdPixels) {
-    if (!bounds.valid || viewportExtent.width == 0 ||
-        viewportExtent.height == 0 || thresholdPixels <= 0.0f) {
-        return false;
-    }
-
-    glm::vec2 minPixel(std::numeric_limits<float>::max());
-    glm::vec2 maxPixel(std::numeric_limits<float>::lowest());
-    for (const glm::vec3 &corner : boundsCorners(bounds)) {
-        const glm::vec4 clip = viewProj * glm::vec4(corner, 1.0f);
-        if (!std::isfinite(clip.x) || !std::isfinite(clip.y) ||
-            !std::isfinite(clip.z) || !std::isfinite(clip.w) ||
-            clip.w <= 1.0e-5f || clip.z < 0.0f) {
-            return false;
-        }
-        const glm::vec2 ndc = glm::vec2(clip) / clip.w;
-        const glm::vec2 pixel =
-            (ndc * 0.5f + 0.5f) *
-            glm::vec2(static_cast<float>(viewportExtent.width),
-                      static_cast<float>(viewportExtent.height));
-        minPixel = glm::min(minPixel, pixel);
-        maxPixel = glm::max(maxPixel, pixel);
-    }
-
-    const glm::vec2 viewportSize(viewportExtent.width, viewportExtent.height);
-    minPixel = glm::clamp(minPixel, glm::vec2(0.0f), viewportSize);
-    maxPixel = glm::clamp(maxPixel, glm::vec2(0.0f), viewportSize);
-    const glm::vec2 extent = glm::max(maxPixel - minPixel, glm::vec2(0.0f));
-    return extent.x < thresholdPixels && extent.y < thresholdPixels;
+void sortOpaqueIndices(std::vector<RenderItemIndex> &indices,
+                       const std::vector<RenderItem> &items) {
+    std::stable_sort(indices.begin(), indices.end(),
+                     [&items](RenderItemIndex leftIndex,
+                              RenderItemIndex rightIndex) {
+                         const RenderItem &left = items[leftIndex];
+                         const RenderItem &right = items[rightIndex];
+                         const auto *leftTemplate =
+                             left.material
+                                 ? &left.material->materialTemplate()
+                                 : nullptr;
+                         const auto *rightTemplate =
+                             right.material
+                                 ? &right.material->materialTemplate()
+                                 : nullptr;
+                         if (leftTemplate != rightTemplate)
+                             return leftTemplate < rightTemplate;
+                         if (left.material != right.material)
+                             return left.material < right.material;
+                         if (left.mesh != right.mesh)
+                             return left.mesh < right.mesh;
+                         return left.sourceOrder < right.sourceOrder;
+                     });
 }
 
-RenderItemId fallbackRenderItemId(const RenderCommand &command) {
-    uint64_t value = static_cast<uint64_t>(command.sourceOrder) + 1u;
-    value ^= static_cast<uint64_t>(reinterpret_cast<uintptr_t>(command.mesh));
-    value *= 1099511628211ull;
-    return value;
+void sortTransparentIndices(std::vector<RenderItemIndex> &indices,
+                            const std::vector<RenderItem> &items,
+                            const glm::vec3 &cameraPosition) {
+    std::stable_sort(indices.begin(), indices.end(),
+                     [&items, &cameraPosition](RenderItemIndex leftIndex,
+                                               RenderItemIndex rightIndex) {
+                         const glm::vec3 leftPosition(
+                             items[leftIndex].world[3]);
+                         const glm::vec3 rightPosition(
+                             items[rightIndex].world[3]);
+                         const float leftDistance = glm::dot(
+                             leftPosition - cameraPosition,
+                             leftPosition - cameraPosition);
+                         const float rightDistance = glm::dot(
+                             rightPosition - cameraPosition,
+                             rightPosition - cameraPosition);
+                         return leftDistance > rightDistance;
+                     });
 }
 
 } // namespace
 
-Frustum Frustum::fromVulkanClipMatrix(const glm::mat4 &matrix) {
-    Frustum result{};
-    const glm::vec4 row0 = matrixRow(matrix, 0);
-    const glm::vec4 row1 = matrixRow(matrix, 1);
-    const glm::vec4 row2 = matrixRow(matrix, 2);
-    const glm::vec4 row3 = matrixRow(matrix, 3);
-    result.planes = {row3 + row0, row3 - row0, row3 + row1,
-                     row3 - row1, row2, row3 - row2};
-    for (glm::vec4 &plane : result.planes) {
-        const float length = glm::length(glm::vec3(plane));
-        if (!std::isfinite(length) || length <= 1.0e-7f)
-            return {};
-        plane /= length;
-    }
-    result.valid = true;
-    return result;
-}
-
-bool Frustum::intersects(const Bounds &bounds) const {
-    if (!valid || !bounds.valid)
-        return true;
-    const glm::vec3 center = (bounds.min + bounds.max) * 0.5f;
-    const glm::vec3 extent = glm::max((bounds.max - bounds.min) * 0.5f,
-                                      glm::vec3(0.0f));
-    for (const glm::vec4 &plane : planes) {
-        const glm::vec3 normal(plane);
-        const float radius = glm::dot(glm::abs(normal), extent);
-        if (glm::dot(normal, center) + plane.w + radius < 0.0f)
-            return false;
-    }
-    return true;
-}
-
-Bounds transformBounds(const Bounds &localBounds, const glm::mat4 &world) {
-    Bounds result{};
-    if (!localBounds.valid)
-        return result;
-
-    const glm::vec3 localCenter =
-        (localBounds.min + localBounds.max) * 0.5f;
-    const glm::vec3 localExtent =
-        glm::max((localBounds.max - localBounds.min) * 0.5f,
-                 glm::vec3(0.0f));
-    const glm::vec4 transformedCenter = world * glm::vec4(localCenter, 1.0f);
-    glm::mat3 absoluteLinear(world);
-    for (uint32_t column = 0; column < 3; ++column) {
-        for (uint32_t row = 0; row < 3; ++row)
-            absoluteLinear[column][row] =
-                std::abs(absoluteLinear[column][row]);
-    }
-    const glm::vec3 worldExtent = absoluteLinear * localExtent;
-    const glm::vec3 center(transformedCenter);
-    if (!finiteVec3(center) || !finiteVec3(worldExtent))
-        return result;
-
-    result.min = center - worldExtent;
-    result.max = center + worldExtent;
-    result.center = center;
-    result.radius = glm::length(worldExtent);
-    result.valid = finiteVec3(result.min) && finiteVec3(result.max) &&
-                   std::isfinite(result.radius);
-    return result;
-}
-
-VisibilityFrame VisibilitySystem::build(const RenderQueue &source,
+VisibilityFrame VisibilitySystem::build(std::vector<RenderItem> source,
                                         const RenderView &view,
-                                        VkExtent2D viewportExtent) const {
+                                        VkExtent2D viewportExtent,
+                                        VisibilityBuildInput input) {
     VKL_PROFILE_ZONE("Build Visibility");
     VisibilityFrame result{};
-    const CullingSettings &settings = view.settings.culling;
-    const glm::mat4 cameraViewProj = view.globalUbo.proj * view.globalUbo.view;
-    const Frustum cameraFrustum =
-        Frustum::fromVulkanClipMatrix(cameraViewProj);
-    const glm::vec3 cameraPosition(view.globalUbo.cameraPosWS);
+    result.generation = nextVisibilityGeneration_++;
+    result.items = std::move(source);
 
-    const auto processCamera = [&](const RenderCommand &sourceCommand) {
-        ++result.stats.sourceDraws;
-        RenderCommand command = sourceCommand;
-        command.worldBounds = transformBounds(command.localBounds,
-                                              command.world);
-        if (command.renderItemId == 0)
-            command.renderItemId = fallbackRenderItemId(command);
-        if (!command.worldBounds.valid) {
-            ++result.stats.invalidBounds;
+    const glm::mat4 cameraViewProjection =
+        view.globalUbo.proj * view.globalUbo.view;
+    const glm::vec3 currentCameraPosition(view.globalUbo.cameraPosWS);
+    const glm::vec3 currentCameraForward =
+        cameraForward(view.globalUbo.view);
+
+    std::string invalidationReason;
+    if (!forcedInvalidationReason_.empty())
+        invalidationReason = forcedInvalidationReason_;
+    else if (!committed_)
+        invalidationReason = "initial frame";
+    else if (input.sceneGeneration != previousSceneGeneration_)
+        invalidationReason = "scene generation changed";
+    else if (input.cameraIdentity != previousCameraIdentity_)
+        invalidationReason = "camera identity changed";
+    else if (viewportExtent.width != previousViewportExtent_.width ||
+             viewportExtent.height != previousViewportExtent_.height)
+        invalidationReason = "viewport resized";
+    else if (!matrixNearlyEqual(view.globalUbo.proj, previousProjection_))
+        invalidationReason = "projection changed";
+    else {
+        const float sceneRadius =
+            input.sceneBounds.valid ? input.sceneBounds.radius : 0.0f;
+        const float cutDistance = std::max(1.0f, sceneRadius * 0.25f);
+        if (glm::distance(currentCameraPosition,
+                          previousCameraPosition_) > cutDistance) {
+            invalidationReason = "camera translation cut";
         } else {
-            if (settings.frustumEnabled && cameraFrustum.valid &&
-                !cameraFrustum.intersects(command.worldBounds)) {
-                ++result.stats.frustumCulled;
-                return;
-            }
-            if (settings.distanceEnabled && settings.maxDrawDistance > 0.0f &&
-                distanceSquaredToBounds(cameraPosition, command.worldBounds) >
-                    settings.maxDrawDistance * settings.maxDrawDistance) {
-                ++result.stats.distanceCulled;
-                return;
-            }
-            if (settings.smallObjectEnabled &&
-                projectedObjectIsSmall(command.worldBounds, cameraViewProj,
-                                       viewportExtent,
-                                       settings.minProjectedSizePixels)) {
-                ++result.stats.smallObjectCulled;
-                return;
-            }
+            const float cosine = glm::clamp(
+                glm::dot(currentCameraForward, previousCameraForward_),
+                -1.0f, 1.0f);
+            if (cosine < std::cos(glm::radians(45.0f)))
+                invalidationReason = "camera rotation cut";
         }
-
-        result.camera.add(command);
-        ++result.stats.cameraVisible;
-        if (command.queue == RenderQueueType::Opaque) {
-            ++result.stats.cameraOpaque;
-            result.depthPrepass.add(command);
-        } else {
-            ++result.stats.cameraTransparent;
-        }
-    };
-
-    for (const RenderCommand &command : source.opaque())
-        processCamera(command);
-    for (const RenderCommand &command : source.transparent())
-        processCamera(command);
-
-    for (const RenderCommand &sourceCommand : source.opaque()) {
-        ++result.stats.shadowCandidates;
-        RenderCommand command = sourceCommand;
-        command.worldBounds = transformBounds(command.localBounds,
-                                              command.world);
-        if (settings.shadowCullingEnabled &&
-            view.directionalShadow.enabled && command.worldBounds.valid &&
-            !intersectsDirectionalShadowVolume(
-                command.worldBounds, view.directionalShadow)) {
-            ++result.stats.shadowCulled;
-            continue;
-        }
-        result.shadowCasters.add(command);
-        ++result.stats.shadowVisible;
     }
 
-    result.camera.sortOpaque();
-    result.camera.sortTransparent(cameraPosition);
-    result.shadowCasters.sortOpaque();
-    result.depthPrepass.sortOpaque();
-    uint32_t slot = 0;
-    for (RenderCommand &command : result.camera.mutableOpaque())
-        command.occlusionSlot = slot++;
-    result.stats.depthPrepassDraws =
-        static_cast<uint32_t>(result.depthPrepass.opaque().size());
-    result.stats.occlusionCandidates = slot;
+    const bool globalHistoryValid = invalidationReason.empty();
+    if (!globalHistoryValid) {
+        ++historyGeneration_;
+        lastInvalidationReason_ = invalidationReason;
+    }
+
+    result.history.previousViewProjection =
+        globalHistoryValid ? previousViewProjection_ : cameraViewProjection;
+    result.history.currentViewProjection = cameraViewProjection;
+    result.history.currentProjection = view.globalUbo.proj;
+    result.history.cameraPosition = currentCameraPosition;
+    result.history.cameraForward = currentCameraForward;
+    result.history.viewportExtent = viewportExtent;
+    result.history.sceneGeneration = input.sceneGeneration;
+    result.history.historyGeneration = historyGeneration_;
+    result.history.globalValid = globalHistoryValid;
+    result.history.cameraIdentity = std::move(input.cameraIdentity);
+    result.history.invalidationReason = globalHistoryValid
+                                            ? std::string{}
+                                            : invalidationReason;
+
+    const CullingSettings &settings = view.settings.culling;
+    const Frustum cameraFrustum =
+        Frustum::fromVulkanClipMatrix(cameraViewProjection);
+
+    result.cameraOpaque.reserve(result.items.size());
+    result.cameraTransparent.reserve(result.items.size());
+    result.shadowCasters.reserve(result.items.size());
+
+    for (uint32_t index = 0; index < result.items.size(); ++index) {
+        RenderItem &item = result.items[index];
+        if (item.sourceOrder == std::numeric_limits<uint32_t>::max())
+            item.sourceOrder = index;
+        item.primitiveIndex = item.key.primitiveIndex;
+        if (isDefaultKey(item.key))
+            item.key.fallbackOrdinal = item.sourceOrder + 1u;
+        item.worldBounds = transformBounds(item.localBounds, item.world);
+
+        const auto history = previousWorld_.find(item.key);
+        item.historyValid = globalHistoryValid &&
+                            history != previousWorld_.end();
+        item.previousWorld = item.historyValid ? history->second : item.world;
+        if (item.historyValid)
+            ++result.history.historyValidItems;
+
+        ++result.cpuStats.sourceDraws;
+        bool cameraVisible = true;
+        if (!item.worldBounds.valid) {
+            ++result.cpuStats.invalidBounds;
+        } else if (settings.frustumEnabled && cameraFrustum.valid &&
+                   !cameraFrustum.intersects(item.worldBounds)) {
+            ++result.cpuStats.frustumCulled;
+            cameraVisible = false;
+        } else if (settings.distanceEnabled &&
+                   settings.maxDrawDistance > 0.0f &&
+                   distanceSquaredToBounds(currentCameraPosition,
+                                           item.worldBounds) >
+                       settings.maxDrawDistance *
+                           settings.maxDrawDistance) {
+            ++result.cpuStats.distanceCulled;
+            cameraVisible = false;
+        } else if (settings.smallObjectEnabled &&
+                   projectedBoundsAreSmallerThan(
+                       item.worldBounds, cameraViewProjection,
+                       viewportExtent,
+                       settings.minProjectedSizePixels)) {
+            ++result.cpuStats.smallObjectCulled;
+            cameraVisible = false;
+        }
+
+        if (cameraVisible) {
+            ++result.cpuStats.cameraVisible;
+            if (item.queue == RenderQueueType::Opaque) {
+                result.cameraOpaque.push_back(index);
+                ++result.cpuStats.cameraOpaque;
+            } else {
+                result.cameraTransparent.push_back(index);
+                ++result.cpuStats.cameraTransparent;
+            }
+        }
+
+        if (item.queue != RenderQueueType::Opaque)
+            continue;
+        ++result.cpuStats.shadowCandidates;
+        if (settings.shadowCullingEnabled &&
+            view.directionalShadow.enabled && item.worldBounds.valid &&
+            !intersectsDirectionalShadowVolume(
+                item.worldBounds, view.directionalShadow)) {
+            ++result.cpuStats.shadowCulled;
+            continue;
+        }
+        result.shadowCasters.push_back(index);
+        ++result.cpuStats.shadowVisible;
+    }
+
+    sortOpaqueIndices(result.cameraOpaque, result.items);
+    sortTransparentIndices(result.cameraTransparent, result.items,
+                           currentCameraPosition);
+    sortOpaqueIndices(result.shadowCasters, result.items);
+    result.cpuStats.depthPrepassDraws =
+        static_cast<uint32_t>(result.cameraOpaque.size());
+    result.cpuStats.occlusionCandidates =
+        static_cast<uint32_t>(result.cameraOpaque.size());
     return result;
+}
+
+void VisibilitySystem::commit(const VisibilityFrame &frame) {
+    previousWorld_.clear();
+    previousWorld_.reserve(frame.items.size());
+    for (const RenderItem &item : frame.items)
+        previousWorld_.insert_or_assign(item.key, item.world);
+    previousViewProjection_ = frame.history.currentViewProjection;
+    previousProjection_ = frame.history.currentProjection;
+    previousCameraPosition_ = frame.history.cameraPosition;
+    previousCameraForward_ = frame.history.cameraForward;
+    previousViewportExtent_ = frame.history.viewportExtent;
+    previousSceneGeneration_ = frame.history.sceneGeneration;
+    previousCameraIdentity_ = frame.history.cameraIdentity;
+    forcedInvalidationReason_.clear();
+    committed_ = true;
+}
+
+void VisibilitySystem::invalidate(std::string reason) {
+    forcedInvalidationReason_ = reason.empty() ? "explicit invalidation"
+                                               : std::move(reason);
 }
 
 } // namespace vkr

@@ -80,6 +80,8 @@ ShaderProgramContract parseContract(const std::string &value,
         return ShaderProgramContract::MainForward;
     if (value == "shadow-depth")
         return ShaderProgramContract::ShadowDepth;
+    if (value == "surface-prepass")
+        return ShaderProgramContract::SurfacePrepass;
     if (value == "fullscreen")
         return ShaderProgramContract::Fullscreen;
     if (value == "compute")
@@ -144,6 +146,7 @@ void validateProgramStages(const ShaderProgram &program,
         throw fieldError(field, "graphics programs require a vertex stage");
     switch (program.contract) {
     case ShaderProgramContract::MainForward:
+    case ShaderProgramContract::SurfacePrepass:
     case ShaderProgramContract::Fullscreen:
         if (!hasFragment)
             throw fieldError(field,
@@ -381,6 +384,8 @@ const char *shaderProgramContractName(ShaderProgramContract contract) {
         return "main-forward";
     case ShaderProgramContract::ShadowDepth:
         return "shadow-depth";
+    case ShaderProgramContract::SurfacePrepass:
+        return "surface-prepass";
     case ShaderProgramContract::Fullscreen:
         return "fullscreen";
     case ShaderProgramContract::Compute:

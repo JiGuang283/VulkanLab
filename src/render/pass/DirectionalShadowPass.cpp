@@ -14,7 +14,6 @@
 #include "render/PipelineCache.h"
 #include "render/PipelineKey.h"
 #include "render/RenderFrame.h"
-#include "render/RenderQueue.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/RenderView.h"
 #include "render/Visibility.h"
@@ -91,18 +90,19 @@ void DirectionalShadowPass::execute(const RenderFrameContext &frame,
         ScopedGpuLabel label(device_->debugUtils(), frame.cmd,
                              "ShadowCasters");
         if (frame.view && frame.view->directionalShadow.enabled)
-            drawCasters(frame, visibility.shadowCasters);
+            drawCasters(frame, visibility);
     }
     vkCmdEndRenderPass(frame.cmd);
 }
 
 void DirectionalShadowPass::drawCasters(const RenderFrameContext &frame,
-                                        const RenderQueue &queue) {
+                                        const VisibilityFrame &visibility) {
     if (!frame.pipelineCache || !frame.view)
         return;
 
     Pipeline *boundPipeline = nullptr;
-    for (const RenderCommand &command : queue.opaque()) {
+    for (RenderItemIndex itemIndex : visibility.shadowCasters) {
+        const RenderItem &command = visibility.items.at(itemIndex);
         if (!command.mesh || !command.material)
             continue;
 
@@ -163,7 +163,7 @@ void DirectionalShadowPass::drawCasters(const RenderFrameContext &frame,
         vkCmdPushConstants(frame.cmd, pipeline.layout(), pushStages, 0,
                            sizeof(block), &block);
         command.mesh->bind(frame.cmd);
-        command.mesh->draw(frame.cmd);
+        command.mesh->draw(frame.cmd, itemIndex);
     }
 }
 

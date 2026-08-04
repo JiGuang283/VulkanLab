@@ -86,7 +86,7 @@ void main()
     commands[index].instanceCount = visible ? 1u : 0u;
     commands[index].firstIndex = 0u;
     commands[index].vertexOffset = 0;
-    commands[index].firstInstance = 0u;
+    commands[index].firstInstance = item.draw.z;
     if (visible)
         atomicAdd(visibleCount, 1u);
     else

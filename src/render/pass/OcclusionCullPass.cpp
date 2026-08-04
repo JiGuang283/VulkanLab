@@ -6,6 +6,7 @@
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
 #include "core/GpuDebugUtils.h"
+#include "core/GpuBarrier.h"
 #include "core/Image.h"
 #include "core/VulkanCheck.h"
 #include "diagnostics/Profiling.h"
@@ -70,6 +71,7 @@ struct OcclusionCullPass::FrameStorage {
     uint32_t activeCount = 0;
     uint64_t submittedSerial = 0;
     bool active = false;
+    GpuVisibilityDrawStream stream{};
 };
 
 OcclusionCullPass::OcclusionCullPass(
@@ -117,19 +119,21 @@ void OcclusionCullPass::onViewportResize(
 
 void OcclusionCullPass::prepareFrame(uint32_t frameIndex,
                                      uint64_t frameSerial,
-                                     VisibilityFrame &visibility,
+                                     const VisibilityFrame &visibility,
                                      const RenderView &view) {
     FrameStorage &storage = *frames_.at(frameIndex);
     if (storage.submittedSerial != 0 && storage.counter) {
         storage.counter->invalidate();
         const auto *counter = static_cast<const GpuVisibilityCounter *>(
             storage.counter->mappedData());
-        visibility.stats.gpuOccluded = counter->occluded;
-        visibility.stats.gpuStatsFrameSerial = storage.submittedSerial;
+        completedStatistics_.frameSerial = storage.submittedSerial;
+        completedStatistics_.candidates = storage.activeCount;
+        completedStatistics_.visible = counter->visible;
+        completedStatistics_.occluded = counter->occluded;
     }
 
     const uint32_t requested = static_cast<uint32_t>(
-        visibility.camera.opaque().size());
+        visibility.cameraOpaque.size());
     const uint32_t activeCount =
         std::min(requested, kMaxCandidates);
     ensureCapacity(frameIndex, std::max(activeCount, 1u));
@@ -137,21 +141,18 @@ void OcclusionCullPass::prepareFrame(uint32_t frameIndex,
     storage.active = view.settings.culling.occlusionEnabled &&
                      activeCount > 0;
     storage.submittedSerial = storage.active ? frameSerial : 0;
-    visibility.stats.occlusionCandidates = activeCount;
-    if (!storage.active) {
-        visibility.stats.gpuOccluded = 0;
-        visibility.stats.gpuStatsFrameSerial = 0;
-    }
+    storage.stream.indirectBuffer = storage.indirect
+                                        ? storage.indirect->handle()
+                                        : VK_NULL_HANDLE;
+    storage.stream.candidateCount = activeCount;
+    storage.stream.frameIndex = frameIndex;
+    storage.stream.visibilityGeneration = visibility.generation;
+    storage.stream.active = storage.active;
 
-    auto &commands = visibility.camera.mutableOpaque();
     auto *items = static_cast<GpuCullItem *>(storage.items->mappedData());
-    for (uint32_t index = 0; index < commands.size(); ++index) {
-        RenderCommand &command = commands[index];
-        if (index >= activeCount || !storage.active) {
-            command.occlusionSlot = std::numeric_limits<uint32_t>::max();
-            continue;
-        }
-        command.occlusionSlot = index;
+    for (uint32_t index = 0; index < activeCount; ++index) {
+        const RenderItemIndex itemIndex = visibility.cameraOpaque[index];
+        const RenderItem &command = visibility.items.at(itemIndex);
         const Bounds &bounds = command.worldBounds;
         GpuCullItem item{};
         if (bounds.valid) {
@@ -163,6 +164,7 @@ void OcclusionCullPass::prepareFrame(uint32_t frameIndex,
         }
         item.draw.x = command.mesh ? command.mesh->indexCount() : 0u;
         item.draw.y = bounds.valid ? 0u : 1u;
+        item.draw.z = itemIndex;
         items[index] = item;
     }
 }
@@ -171,7 +173,8 @@ void OcclusionCullPass::execute(const RenderFrameContext &frame,
                                 const RenderResourceRegistry &resources,
                                 const VisibilityFrame &) {
     FrameStorage &storage = *frames_.at(frame.frameIndex);
-    if (!storage.active || storage.activeCount == 0 || !frame.pipelineCache ||
+    if (!frame.features.occlusionRequired || !storage.active ||
+        storage.activeCount == 0 || !frame.pipelineCache ||
         !frame.view) {
         return;
     }
@@ -179,19 +182,12 @@ void OcclusionCullPass::execute(const RenderFrameContext &frame,
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "OcclusionCull");
     vkCmdFillBuffer(frame.cmd, storage.counter->handle(), 0,
                     sizeof(GpuVisibilityCounter), 0);
-    VkBufferMemoryBarrier counterReady{};
-    counterReady.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-    counterReady.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    counterReady.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
-                                 VK_ACCESS_SHADER_WRITE_BIT;
-    counterReady.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    counterReady.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    counterReady.buffer = storage.counter->handle();
-    counterReady.offset = 0;
-    counterReady.size = sizeof(GpuVisibilityCounter);
-    vkCmdPipelineBarrier(frame.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
-                         1, &counterReady, 0, nullptr);
+    cmdBufferBarrier(frame.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                     VK_ACCESS_TRANSFER_WRITE_BIT,
+                     VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                     storage.counter->handle(), 0,
+                     sizeof(GpuVisibilityCounter));
 
     ComputePipelineConfig config{};
     config.debugName = "Pipeline/Visibility/OcclusionCull";
@@ -225,27 +221,20 @@ void OcclusionCullPass::execute(const RenderFrameContext &frame,
                       kWorkgroupSize,
                   1, 1);
 
-    VkBufferMemoryBarrier indirectReady{};
-    indirectReady.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-    indirectReady.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    indirectReady.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
-    indirectReady.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    indirectReady.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    indirectReady.buffer = storage.indirect->handle();
-    indirectReady.offset = 0;
-    indirectReady.size = VK_WHOLE_SIZE;
-    vkCmdPipelineBarrier(frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, 0, nullptr,
-                         1, &indirectReady, 0, nullptr);
+    cmdBufferBarrier(frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                     VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+                     VK_ACCESS_SHADER_WRITE_BIT,
+                     VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
+                     storage.indirect->handle(), 0, VK_WHOLE_SIZE);
 }
 
 bool OcclusionCullPass::active(uint32_t frameIndex) const {
     return frames_.at(frameIndex)->active;
 }
 
-VkBuffer OcclusionCullPass::indirectBuffer(uint32_t frameIndex) const {
-    const FrameStorage &storage = *frames_.at(frameIndex);
-    return storage.indirect ? storage.indirect->handle() : VK_NULL_HANDLE;
+const GpuVisibilityDrawStream &
+OcclusionCullPass::drawStream(uint32_t frameIndex) const {
+    return frames_.at(frameIndex)->stream;
 }
 
 uint32_t OcclusionCullPass::capacity(uint32_t frameIndex) const {

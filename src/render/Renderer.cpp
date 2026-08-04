@@ -19,7 +19,7 @@
 #include "render/ShaderVariant.h"
 #include "render/Texture.h"
 #include "render/pass/DirectionalShadowPass.h"
-#include "render/pass/VisibilityDepthPass.h"
+#include "render/pass/SurfacePrepass.h"
 #include "render/pass/HiZBuildPass.h"
 #include "render/pass/OcclusionCullPass.h"
 #include "render/pass/MainForwardPass.h"
@@ -120,7 +120,7 @@ Renderer::~Renderer() {
 }
 
 void Renderer::renderFrame(const FrameSync::FrameContext &frame,
-                           VisibilityFrame &visibility,
+                           const VisibilityFrame &visibility,
                            PipelineCache &pipelineCache,
                            GuiSystem *gui,
                            const ShaderVariant &shaderVariant,
@@ -155,6 +155,7 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     collectRetiredLightingGenerations();
 
     if (occlusionCullPass_) {
+        lastOcclusionRequested_ = visibility.cpuStats.occlusionCandidates;
         occlusionCullPass_->prepareFrame(
             frame.frameIndex, frameSync_->lastSubmittedSerial() + 1,
             visibility, view);
@@ -187,12 +188,20 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.atmosphereReady =
         atmosphereLutPass_ &&
         atmosphereLutPass_->readyFor(view.atmosphere.staticLutKey);
-    renderFrame.occlusionActive =
-        occlusionCullPass_ && occlusionCullPass_->active(frame.frameIndex);
-    renderFrame.occlusionIndirectBuffer =
+    renderFrame.features.surfaceDataRequired =
+        device_->surfaceDataSupport().available &&
+        (view.settings.culling.occlusionEnabled ||
+         view.settings.surfaceDebugView != SurfaceDebugView::None);
+    renderFrame.features.hiZRequired =
+        device_->occlusionCullingSupport().available &&
+        view.settings.culling.occlusionEnabled;
+    renderFrame.features.occlusionRequired =
+        renderFrame.features.hiZRequired;
+    lastSurfaceDataActive_ = renderFrame.features.surfaceDataRequired;
+    renderFrame.visibilityDrawStream =
         occlusionCullPass_
-            ? occlusionCullPass_->indirectBuffer(frame.frameIndex)
-            : VK_NULL_HANDLE;
+            ? &occlusionCullPass_->drawStream(frame.frameIndex)
+            : nullptr;
 
     gpuPassProfiler_->collect(frame.frameIndex);
     gpuPassProfiler_->beginFrame(frame.cmd, frame.frameIndex,
@@ -768,6 +777,14 @@ OcclusionCullingStatus Renderer::occlusionCullingStatus() const {
         return status;
 
     status.active = occlusionCullPass_->active(lastOcclusionFrameIndex_);
+    const GpuVisibilityDrawStream &stream =
+        occlusionCullPass_->drawStream(lastOcclusionFrameIndex_);
+    status.latestCandidates = stream.candidateCount;
+    status.latestUncullable =
+        lastOcclusionRequested_ > stream.candidateCount
+            ? lastOcclusionRequested_ - stream.candidateCount
+            : 0;
+    status.completed = occlusionCullPass_->completedStatistics();
     if (resourceHandles_.visibilityHiZ.valid()) {
         status.hiZMipLevels =
             renderResources_->mipLevelCount(resourceHandles_.visibilityHiZ);
@@ -777,6 +794,25 @@ OcclusionCullingStatus Renderer::occlusionCullingStatus() const {
             occlusionCullPass_->capacity(frame);
     }
     status.allocatedBytes = occlusionCullPass_->allocatedBytes();
+    return status;
+}
+
+SurfaceDataStatus Renderer::surfaceDataStatus() const {
+    SurfaceDataStatus status{};
+    const SurfaceDataSupport &support = device_->surfaceDataSupport();
+    status.supported = support.available;
+    status.active = support.available && lastSurfaceDataActive_;
+    status.unavailableReason = support.reason;
+    status.depthFormat = support.depthFormat;
+    status.normalRoughnessFormat = support.normalRoughnessFormat;
+    status.motionFormat = support.motionFormat;
+    if (!surfacePrepass_)
+        return status;
+    for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+        status.historyCapacities[frame] =
+            surfacePrepass_->historyCapacity(frame);
+    }
+    status.allocatedBytes = surfacePrepass_->allocatedBytes();
     return status;
 }
 
@@ -797,11 +833,17 @@ void Renderer::createRenderPipeline() {
         globalDescriptorSetLayout_,
         shaderPaths_.shadowVert, shaderPaths_.shadowMaskFrag));
 
+    if (device_->surfaceDataSupport().available) {
+        auto surfacePass = std::make_unique<SurfacePrepass>(
+            *device_, *renderResources_, resourceHandles_,
+            *descriptorAllocator_, globalDescriptorSetLayout_,
+            shaderPaths_.surfacePrepassVert,
+            shaderPaths_.surfacePrepassOpaqueFrag,
+            shaderPaths_.surfacePrepassMaskFrag);
+        surfacePrepass_ = surfacePass.get();
+        pipeline_.addPass(std::move(surfacePass));
+    }
     if (device_->occlusionCullingSupport().available) {
-        pipeline_.addPass(std::make_unique<VisibilityDepthPass>(
-            *device_, *renderResources_, resourceHandles_.visibilityDepth,
-            globalDescriptorSetLayout_, shaderPaths_.visibilityDepthVert,
-            shaderPaths_.visibilityDepthMaskFrag));
         pipeline_.addPass(std::make_unique<HiZBuildPass>(
             *device_, *renderResources_, resourceHandles_,
             *descriptorAllocator_, shaderPaths_.visibilityHiZInitComp,
@@ -836,6 +878,9 @@ void Renderer::createRenderPipeline() {
         *device_, *renderResources_, resourceHandles_.hdrColor,
         resourceHandles_.hdrSampler, resourceHandles_.bloomLevels.front(),
         resourceHandles_.bloomSampler, resourceHandles_.viewportColor,
+        resourceHandles_.surfaceNormalRoughness,
+        resourceHandles_.surfaceMotion,
+        resourceHandles_.surfaceDataSampler,
         *descriptorAllocator_,
         shaderPaths_.fullscreenVert, shaderPaths_.toneMapFrag);
     toneMapPass_ = toneMapPass.get();

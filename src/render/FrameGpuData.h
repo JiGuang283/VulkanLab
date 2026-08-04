@@ -47,6 +47,17 @@ struct alignas(16) AtmosphereGpuParams {
     glm::vec4 reserved;
 };
 
+struct alignas(16) SurfaceFrameUbo {
+    glm::mat4 previousViewProjection{1.0f};
+    glm::vec4 viewportSizeInvSize{0.0f};
+    glm::uvec4 params{0u};
+};
+
+struct alignas(16) GpuRenderItemHistory {
+    glm::mat4 previousWorld{1.0f};
+    glm::uvec4 params{0u};
+};
+
 struct alignas(16) ToneMapPushConstants {
     float exposureEv = 0.0f;
     float bloomIntensity = 0.0f;
@@ -54,8 +65,8 @@ struct alignas(16) ToneMapPushConstants {
     uint32_t encodeGamma = 0;
     uint32_t applyExposure = 0;
     uint32_t applyBloom = 0;
-    uint32_t reserved0 = 0;
-    uint32_t reserved1 = 0;
+    uint32_t surfaceDebugMode = 0;
+    float motionDebugScale = 1.0f;
 };
 
 struct alignas(16) BloomPushConstants {
@@ -74,6 +85,8 @@ static_assert(offsetof(GpuLight, colorIntensity) == 32);
 static_assert(offsetof(GpuLight, params) == 48);
 static_assert(sizeof(GlobalFrameUbo) == 336);
 static_assert(sizeof(AtmosphereGpuParams) == 192);
+static_assert(sizeof(SurfaceFrameUbo) == 96);
+static_assert(sizeof(GpuRenderItemHistory) == 80);
 static_assert(offsetof(AtmosphereGpuParams, planetCenterBottomRadius) == 0);
 static_assert(offsetof(AtmosphereGpuParams, topRadiusDensityHeights) == 16);
 static_assert(offsetof(AtmosphereGpuParams,
@@ -103,6 +116,8 @@ static_assert(offsetof(ToneMapPushConstants, toneMapper) == 8);
 static_assert(offsetof(ToneMapPushConstants, encodeGamma) == 12);
 static_assert(offsetof(ToneMapPushConstants, applyExposure) == 16);
 static_assert(offsetof(ToneMapPushConstants, applyBloom) == 20);
+static_assert(offsetof(ToneMapPushConstants, surfaceDebugMode) == 24);
+static_assert(offsetof(ToneMapPushConstants, motionDebugScale) == 28);
 static_assert(sizeof(BloomPushConstants) == 16);
 
 } // namespace vkr

@@ -7,8 +7,9 @@ namespace vkr {
 struct RendererShaderPaths {
     std::string shadowVert;
     std::string shadowMaskFrag;
-    std::string visibilityDepthVert;
-    std::string visibilityDepthMaskFrag;
+    std::string surfacePrepassVert;
+    std::string surfacePrepassOpaqueFrag;
+    std::string surfacePrepassMaskFrag;
     std::string visibilityHiZInitComp;
     std::string visibilityHiZReduceComp;
     std::string visibilityOcclusionComp;

@@ -9,7 +9,6 @@
 namespace vkr {
 
 class Device;
-class RenderQueue;
 class RenderResourceRegistry;
 class SwapChain;
 struct RenderFrameContext;
@@ -46,7 +45,7 @@ class MainForwardPass final : public IRenderPass {
                const RenderResourceRegistry &resources);
     void drawQueue(const RenderFrameContext &frame,
                    const RenderResourceRegistry &resources,
-                   const RenderQueue &queue);
+                   const VisibilityFrame &visibility);
 
     Device *device_ = nullptr;
     RendererResourceHandles resourceHandles_{};

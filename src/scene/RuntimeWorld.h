@@ -141,7 +141,7 @@ class RuntimeWorld final : public IRenderWorld {
     void setEnvironment(std::optional<SceneEnvironmentDocument> environment);
 
     void update(float dt, float time) override;
-    void collectRenderCommands(RenderQueue &queue) const override;
+    void collectRenderItems(std::vector<RenderItem> &items) const override;
     const Bounds &bounds() const override { return bounds_; }
     const std::vector<SceneLight> &lights() const override { return lights_; }
     const std::vector<std::shared_ptr<MaterialInstance>> &

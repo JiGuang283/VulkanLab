@@ -70,7 +70,9 @@ void printUsage() {
            "[--shadow-distance N] [--distance-culling on|off] "
            "[--max-draw-distance N] [--small-object-culling on|off] "
            "[--min-projected-pixels N] [--occlusion on|off] "
-           "[--occlusion-bias N]\n"
+           "[--occlusion-bias N] "
+           "[--surface-debug none|normal|roughness|motion|history-validity] "
+           "[--surface-motion-scale N]\n"
         << "  VulkanLabCtl [--json] render wait [--stable-frames N] "
            "[--timeout-ms N]\n"
         << "  VulkanLabCtl [--json] capture screenshot <relative.png> "
@@ -178,6 +180,8 @@ ParsedCommand parseCommand(int argc, char **argv) {
     std::optional<std::string> minProjectedPixels;
     std::optional<std::string> occlusionCulling;
     std::optional<std::string> occlusionBias;
+    std::optional<std::string> surfaceDebug;
+    std::optional<std::string> surfaceMotionScale;
     for (int i = 1; i < argc; ++i) {
         const std::string argument = argv[i];
         if (argument == "--pipe") {
@@ -215,7 +219,9 @@ ParsedCommand parseCommand(int argc, char **argv) {
                  argument == "--small-object-culling" ||
                  argument == "--min-projected-pixels" ||
                  argument == "--occlusion" ||
-                 argument == "--occlusion-bias") {
+                 argument == "--occlusion-bias" ||
+                 argument == "--surface-debug" ||
+                 argument == "--surface-motion-scale") {
             if (++i >= argc)
                 throw std::invalid_argument(argument + " requires a value");
             if (argument == "--position")
@@ -272,8 +278,12 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 minProjectedPixels = argv[i];
             else if (argument == "--occlusion")
                 occlusionCulling = argv[i];
-            else
+            else if (argument == "--occlusion-bias")
                 occlusionBias = argv[i];
+            else if (argument == "--surface-debug")
+                surfaceDebug = argv[i];
+            else
+                surfaceMotionScale = argv[i];
         }
         else if (argument == "--no-wait")
             waitForLoad = false;
@@ -513,6 +523,21 @@ ParsedCommand parseCommand(int argc, char **argv) {
         if (occlusionBias) {
             parsed.params["occlusionDepthBias"] =
                 parseFiniteFloat(*occlusionBias, "--occlusion-bias");
+        }
+        if (surfaceDebug) {
+            if (*surfaceDebug != "none" && *surfaceDebug != "normal" &&
+                *surfaceDebug != "roughness" &&
+                *surfaceDebug != "motion" &&
+                *surfaceDebug != "history-validity") {
+                throw std::invalid_argument(
+                    "--surface-debug must be none, normal, roughness, "
+                    "motion, or history-validity");
+            }
+            parsed.params["surfaceDebugView"] = *surfaceDebug;
+        }
+        if (surfaceMotionScale) {
+            parsed.params["surfaceMotionDebugScale"] = parseFiniteFloat(
+                *surfaceMotionScale, "--surface-motion-scale");
         }
         if (parsed.params.empty())
             throw std::invalid_argument(
@@ -823,6 +848,19 @@ void printHuman(const std::string &method, const Json &result) {
                       << culling.value("gpuOccluded", 0u) << "/"
                       << culling.value("occlusionCandidates", 0u) << '\n';
         }
+        if (result.contains("surfaceData")) {
+            const Json &surface = result.at("surfaceData");
+            std::cout << "Surface Data: "
+                      << (surface.value("supported", false) ? "supported"
+                                                            : "unsupported")
+                      << ", active: "
+                      << (surface.value("active", false) ? "yes" : "no")
+                      << ", debug: "
+                      << surface.value("debugView", std::string("none"))
+                      << ", history: "
+                      << surface.value("historyValidItems", 0u) << "/"
+                      << surface.value("itemCount", 0u) << '\n';
+        }
         const Json &gpuTimings = result.at("gpuTimings");
         if (gpuTimings.value("available", false)) {
             std::cout << "GPU frame "
@@ -900,6 +938,16 @@ void printHuman(const std::string &method, const Json &result) {
                   << result.at("maxDrawDistance").get<float>() << "/"
                   << result.at("minProjectedSizePixels").get<float>()
                   << "/" << result.at("occlusionDepthBias").get<float>()
+                  << "\nSurface debug: "
+                  << result.at("surfaceDebugView").get<std::string>()
+                  << ", motion scale: "
+                  << result.at("surfaceMotionDebugScale").get<float>()
+                  << ", available/active: "
+                  << (result.at("surfaceDataAvailable").get<bool>() ? "yes"
+                                                                     : "no")
+                  << "/"
+                  << (result.at("surfaceDataActive").get<bool>() ? "yes"
+                                                                  : "no")
                   << '\n';
         const std::string bloomReason =
             result.value("bloomUnavailableReason", std::string{});
@@ -911,6 +959,11 @@ void printHuman(const std::string &method, const Json &result) {
             std::cout << "Occlusion unavailable: " << occlusionReason
                       << '\n';
         }
+        const std::string surfaceReason =
+            result.value("surfaceDataUnavailableReason", std::string{});
+        if (!surfaceReason.empty())
+            std::cout << "Surface Data unavailable: " << surfaceReason
+                      << '\n';
     } else if (method == "capture.screenshot" ||
                method == "capture.status" ||
                method == "capture.cancel") {

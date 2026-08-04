@@ -5,6 +5,45 @@
 
 namespace vkr {
 
+enum class SurfaceDebugView {
+    None,
+    Normal,
+    Roughness,
+    Motion,
+    HistoryValidity,
+};
+
+inline const char *surfaceDebugViewName(SurfaceDebugView view) {
+    switch (view) {
+    case SurfaceDebugView::None:
+        return "none";
+    case SurfaceDebugView::Normal:
+        return "normal";
+    case SurfaceDebugView::Roughness:
+        return "roughness";
+    case SurfaceDebugView::Motion:
+        return "motion";
+    case SurfaceDebugView::HistoryValidity:
+        return "history-validity";
+    }
+    return "none";
+}
+
+inline std::optional<SurfaceDebugView>
+surfaceDebugViewFromName(std::string_view name) {
+    if (name == "none")
+        return SurfaceDebugView::None;
+    if (name == "normal")
+        return SurfaceDebugView::Normal;
+    if (name == "roughness")
+        return SurfaceDebugView::Roughness;
+    if (name == "motion")
+        return SurfaceDebugView::Motion;
+    if (name == "history-validity")
+        return SurfaceDebugView::HistoryValidity;
+    return std::nullopt;
+}
+
 struct CullingSettings {
     bool  frustumEnabled = true;
     bool  shadowCullingEnabled = true;
@@ -60,6 +99,8 @@ struct RenderSettings {
     bool       skyboxEnabled = false;
     float      environmentIntensity = 1.0f;
     float environmentRotationRadians = 0.0f;
+    SurfaceDebugView surfaceDebugView = SurfaceDebugView::None;
+    float surfaceMotionDebugScale = 32.0f;
     CullingSettings culling{};
 };
 
@@ -78,6 +119,8 @@ struct RenderSettingsPatch {
     std::optional<bool>       skyboxEnabled;
     std::optional<float>      environmentIntensity;
     std::optional<float> environmentRotationRadians;
+    std::optional<SurfaceDebugView> surfaceDebugView;
+    std::optional<float> surfaceMotionDebugScale;
     std::optional<bool>  frustumCullingEnabled;
     std::optional<bool>  shadowCullingEnabled;
     std::optional<float> shadowDistance;
@@ -121,6 +164,10 @@ inline void applyRenderSettingsPatch(RenderSettings &settings,
         settings.environmentRotationRadians =
             *patch.environmentRotationRadians;
     }
+    if (patch.surfaceDebugView)
+        settings.surfaceDebugView = *patch.surfaceDebugView;
+    if (patch.surfaceMotionDebugScale)
+        settings.surfaceMotionDebugScale = *patch.surfaceMotionDebugScale;
     if (patch.frustumCullingEnabled)
         settings.culling.frustumEnabled = *patch.frustumCullingEnabled;
     if (patch.shadowCullingEnabled)

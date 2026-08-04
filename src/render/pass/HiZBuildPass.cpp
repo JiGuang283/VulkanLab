@@ -5,6 +5,7 @@
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
 #include "core/GpuDebugUtils.h"
+#include "core/GpuBarrier.h"
 #include "core/Image.h"
 #include "core/VulkanCheck.h"
 #include "diagnostics/Profiling.h"
@@ -45,7 +46,7 @@ HiZBuildPass::HiZBuildPass(Device &device,
       descriptorAllocator_(&descriptorAllocator),
       initShaderPath_(std::move(initShaderPath)),
       reduceShaderPath_(std::move(reduceShaderPath)) {
-    if (!resourceHandles_.visibilityDepth.valid() ||
+    if (!resourceHandles_.surfaceDepth.valid() ||
         !resourceHandles_.visibilityHiZ.valid()) {
         throw std::invalid_argument("HiZBuildPass requires visibility images");
     }
@@ -63,7 +64,7 @@ HiZBuildPass::~HiZBuildPass() {
 
 std::vector<RenderImageUsage> HiZBuildPass::resourceUsages() const {
     return {
-        {resourceHandles_.visibilityDepth, RenderImageAccess::SampledRead,
+        {resourceHandles_.surfaceDepth, RenderImageAccess::SampledRead,
          VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
          VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
         {resourceHandles_.visibilityHiZ,
@@ -89,8 +90,8 @@ void HiZBuildPass::execute(const RenderFrameContext &frame,
                            const RenderResourceRegistry &resources,
                            const VisibilityFrame &visibility) {
     if (!frame.pipelineCache || !frame.view ||
-        !frame.view->settings.culling.occlusionEnabled ||
-        visibility.stats.occlusionCandidates == 0) {
+        !frame.features.hiZRequired ||
+        visibility.cpuStats.occlusionCandidates == 0) {
         return;
     }
     VKL_PROFILE_ZONE("Record HiZBuild");
@@ -99,29 +100,20 @@ void HiZBuildPass::execute(const RenderFrameContext &frame,
         resources.mipLevelCount(resourceHandles_.visibilityHiZ);
     const Image &hiZ = resources.image(resourceHandles_.visibilityHiZ,
                                        frame.frameIndex);
-    VkImageMemoryBarrier transition{};
-    transition.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    transition.srcAccessMask = initialized_[frame.frameIndex]
-                                   ? VK_ACCESS_SHADER_READ_BIT |
-                                         VK_ACCESS_SHADER_WRITE_BIT
-                                   : 0u;
-    transition.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    transition.oldLayout = initialized_[frame.frameIndex]
-                               ? VK_IMAGE_LAYOUT_GENERAL
-                               : VK_IMAGE_LAYOUT_UNDEFINED;
-    transition.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    transition.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    transition.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    transition.image = hiZ.handle();
-    transition.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    transition.subresourceRange.levelCount = mipCount;
-    transition.subresourceRange.layerCount = 1;
-    vkCmdPipelineBarrier(
+    const VkImageSubresourceRange allMips{
+        VK_IMAGE_ASPECT_COLOR_BIT, 0, mipCount, 0, 1};
+    cmdImageBarrier(
         frame.cmd,
         initialized_[frame.frameIndex] ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
                                        : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
-        &transition);
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        initialized_[frame.frameIndex]
+            ? VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT
+            : 0u,
+        VK_ACCESS_SHADER_WRITE_BIT, hiZ.handle(),
+        initialized_[frame.frameIndex] ? VK_IMAGE_LAYOUT_GENERAL
+                                       : VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_GENERAL, allMips);
     initialized_[frame.frameIndex] = true;
 
     const VkPushConstantRange pushRange{
@@ -154,7 +146,7 @@ void HiZBuildPass::execute(const RenderFrameContext &frame,
             resources.mipExtent(resourceHandles_.visibilityHiZ, mip);
         const VkExtent2D source =
             mip == 0
-                ? resources.extent(resourceHandles_.visibilityDepth)
+                ? resources.extent(resourceHandles_.surfaceDepth)
                 : resources.mipExtent(resourceHandles_.visibilityHiZ,
                                       mip - 1u);
         const HiZPush push{{source.width, source.height,
@@ -165,23 +157,14 @@ void HiZBuildPass::execute(const RenderFrameContext &frame,
         vkCmdDispatch(frame.cmd, dispatchCount(destination.width),
                       dispatchCount(destination.height), 1);
 
-        VkImageMemoryBarrier ready{};
-        ready.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        ready.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        ready.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        ready.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        ready.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        ready.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        ready.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        ready.image = hiZ.handle();
-        ready.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        ready.subresourceRange.baseMipLevel = mip;
-        ready.subresourceRange.levelCount = 1;
-        ready.subresourceRange.layerCount = 1;
-        vkCmdPipelineBarrier(frame.cmd,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
-                             nullptr, 0, nullptr, 1, &ready);
+        const VkImageSubresourceRange writtenMip{
+            VK_IMAGE_ASPECT_COLOR_BIT, mip, 1, 0, 1};
+        cmdImageBarrier(frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_SHADER_WRITE_BIT,
+                        VK_ACCESS_SHADER_READ_BIT, hiZ.handle(),
+                        VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                        writtenMip);
     }
 }
 
@@ -224,9 +207,9 @@ void HiZBuildPass::createDescriptors(
             VkDescriptorImageInfo source{};
             if (mip == 0) {
                 source.sampler = resources.sampler(
-                    resourceHandles_.visibilityDepthSampler);
+                    resourceHandles_.surfaceDepthSampler);
                 source.imageView =
-                    resources.image(resourceHandles_.visibilityDepth, frame)
+                    resources.image(resourceHandles_.surfaceDepth, frame)
                         .imageView();
                 source.imageLayout =
                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;

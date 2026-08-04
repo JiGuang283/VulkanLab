@@ -11,6 +11,13 @@ class PipelineCache;
 class TracyProfiler;
 struct RenderView;
 struct ShaderVariant;
+struct GpuVisibilityDrawStream;
+
+struct FrameRenderFeatures {
+    bool surfaceDataRequired = false;
+    bool hiZRequired = false;
+    bool occlusionRequired = false;
+};
 
 struct RenderFrameContext {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
@@ -32,8 +39,8 @@ struct RenderFrameContext {
     const RenderView *view = nullptr;
     bool environmentReady = false;
     bool atmosphereReady = false;
-    bool occlusionActive = false;
-    VkBuffer occlusionIndirectBuffer = VK_NULL_HANDLE;
+    FrameRenderFeatures features{};
+    const GpuVisibilityDrawStream *visibilityDrawStream = nullptr;
 };
 
 } // namespace vkr

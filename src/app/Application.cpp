@@ -916,10 +916,10 @@ void Application::init() {
     const ShaderProgram &shadowOpaque =
         shaderRegistry_.program("shadow.opaque");
     const ShaderProgram &shadowMask = shaderRegistry_.program("shadow.mask");
-    const ShaderProgram &visibilityDepth =
-        shaderRegistry_.program("visibility.depth-opaque");
-    const ShaderProgram &visibilityDepthMask =
-        shaderRegistry_.program("visibility.depth-mask");
+    const ShaderProgram &surfacePrepassOpaque =
+        shaderRegistry_.program("surface.prepass-opaque");
+    const ShaderProgram &surfacePrepassMask =
+        shaderRegistry_.program("surface.prepass-mask");
     const ShaderProgram &visibilityHiZInit =
         shaderRegistry_.program("visibility.hiz-init");
     const ShaderProgram &visibilityHiZReduce =
@@ -949,8 +949,9 @@ void Application::init() {
         *device_, *swapChain_, *frameSync_, *descriptorAllocator_,
         RendererShaderPaths{
             shadowOpaque.vertSpvPath, shadowMask.fragSpvPath,
-            visibilityDepth.vertSpvPath,
-            visibilityDepthMask.fragSpvPath,
+            surfacePrepassOpaque.vertSpvPath,
+            surfacePrepassOpaque.fragSpvPath,
+            surfacePrepassMask.fragSpvPath,
             visibilityHiZInit.computeSpvPath,
             visibilityHiZReduce.computeSpvPath,
             visibilityOcclusion.computeSpvPath,
@@ -1928,19 +1929,17 @@ void Application::runModelAssetSharingSmoke(
         {duplicate,
          glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f)),
          true});
-    RenderQueue smokeQueue;
-    smokeScene.collectRenderCommands(smokeQueue);
-    if (smokeQueue.drawCount() != asset->primitives.size() * 2) {
+    std::vector<RenderItem> smokeItems;
+    smokeScene.collectRenderItems(smokeItems);
+    if (smokeItems.size() != asset->primitives.size() * 2) {
         throw std::logic_error(
             "ModelAsset sharing smoke failed: unexpected draw count");
     }
-    const auto verifySharedCommands = [](const auto &commands) {
-        if ((commands.size() % 2) != 0)
-            return false;
-        const size_t half = commands.size() / 2;
+    const auto verifySharedItems = [](const auto &items) {
+        const size_t half = items.size() / 2;
         for (size_t i = 0; i < half; ++i) {
-            const RenderCommand &left = commands[i];
-            const RenderCommand &right = commands[i + half];
+            const RenderItem &left = items[i];
+            const RenderItem &right = items[i + half];
             if (left.mesh != right.mesh ||
                 left.material != right.material ||
                 glm::length(glm::vec3(right.world[3] - left.world[3])) <
@@ -1950,8 +1949,7 @@ void Application::runModelAssetSharingSmoke(
         }
         return true;
     };
-    if (!verifySharedCommands(smokeQueue.opaque()) ||
-        !verifySharedCommands(smokeQueue.transparent())) {
+    if (!verifySharedItems(smokeItems)) {
         throw std::logic_error(
             "ModelAsset sharing smoke failed: instances do not share GPU "
             "resources or transforms");
@@ -2045,6 +2043,14 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
             "GPU occlusion culling is unavailable: " +
                 renderer_->occlusionCullingStatus().unavailableReason);
     }
+    if (patch.surfaceDebugView &&
+        *patch.surfaceDebugView != SurfaceDebugView::None && renderer_ &&
+        !renderer_->surfaceDataStatus().supported) {
+        throw RuntimeCommandError(
+            "surface_data_unsupported",
+            "Surface data is unavailable: " +
+                renderer_->surfaceDataStatus().unavailableReason);
+    }
     RenderSettings next = renderSettings_;
     applyRenderSettingsPatch(next, patch);
     next.shadowReceiverBias =
@@ -2064,6 +2070,8 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
     next.environmentRotationRadians =
         std::remainder(next.environmentRotationRadians,
                        glm::two_pi<float>());
+    next.surfaceMotionDebugScale =
+        glm::clamp(next.surfaceMotionDebugScale, 0.1f, 1024.0f);
     next.culling.shadowDistance =
         glm::clamp(next.culling.shadowDistance, 0.1f, 100000.0f);
     next.culling.maxDrawDistance =
@@ -3282,9 +3290,13 @@ ControlJson Application::runtimeRenderStatus() {
         renderer_->atmosphereStatus();
     const OcclusionCullingStatus cullingStatus =
         renderer_->occlusionCullingStatus();
+    const SurfaceDataStatus surfaceStatus = renderer_->surfaceDataStatus();
     ControlJson indirectCapacities = ControlJson::array();
     for (const uint32_t capacity : cullingStatus.indirectCapacities)
         indirectCapacities.push_back(capacity);
+    ControlJson surfaceHistoryCapacities = ControlJson::array();
+    for (const uint32_t capacity : surfaceStatus.historyCapacities)
+        surfaceHistoryCapacities.push_back(capacity);
     ControlJson atmosphereComponent = nullptr;
     if (atmosphereStatus.componentPresent) {
         atmosphereComponent = atmosphereStatus.componentEntity.toString();
@@ -3406,27 +3418,48 @@ ControlJson Application::runtimeRenderStatus() {
          {{"supported", cullingStatus.supported},
           {"active", cullingStatus.active},
           {"unavailableReason", cullingStatus.unavailableReason},
-          {"sourceDraws", visibilityFrame_.stats.sourceDraws},
-          {"invalidBounds", visibilityFrame_.stats.invalidBounds},
-          {"cameraVisible", visibilityFrame_.stats.cameraVisible},
-          {"cameraOpaque", visibilityFrame_.stats.cameraOpaque},
-          {"cameraTransparent", visibilityFrame_.stats.cameraTransparent},
-          {"frustumCulled", visibilityFrame_.stats.frustumCulled},
-          {"distanceCulled", visibilityFrame_.stats.distanceCulled},
+          {"sourceDraws", visibilityFrame_.cpuStats.sourceDraws},
+          {"invalidBounds", visibilityFrame_.cpuStats.invalidBounds},
+          {"cameraVisible", visibilityFrame_.cpuStats.cameraVisible},
+          {"cameraOpaque", visibilityFrame_.cpuStats.cameraOpaque},
+          {"cameraTransparent", visibilityFrame_.cpuStats.cameraTransparent},
+          {"frustumCulled", visibilityFrame_.cpuStats.frustumCulled},
+          {"distanceCulled", visibilityFrame_.cpuStats.distanceCulled},
           {"smallObjectCulled",
-           visibilityFrame_.stats.smallObjectCulled},
-          {"shadowCandidates", visibilityFrame_.stats.shadowCandidates},
-          {"shadowCulled", visibilityFrame_.stats.shadowCulled},
-          {"shadowVisible", visibilityFrame_.stats.shadowVisible},
-          {"depthPrepassDraws", visibilityFrame_.stats.depthPrepassDraws},
+           visibilityFrame_.cpuStats.smallObjectCulled},
+          {"shadowCandidates", visibilityFrame_.cpuStats.shadowCandidates},
+          {"shadowCulled", visibilityFrame_.cpuStats.shadowCulled},
+          {"shadowVisible", visibilityFrame_.cpuStats.shadowVisible},
+          {"depthPrepassDraws", visibilityFrame_.cpuStats.depthPrepassDraws},
           {"occlusionCandidates",
-           visibilityFrame_.stats.occlusionCandidates},
-          {"gpuOccluded", visibilityFrame_.stats.gpuOccluded},
-          {"gpuStatsFrameSerial",
-           visibilityFrame_.stats.gpuStatsFrameSerial},
+           cullingStatus.latestCandidates},
+          {"gpuUncullable", cullingStatus.latestUncullable},
+          {"gpuVisible", cullingStatus.completed.visible},
+          {"gpuOccluded", cullingStatus.completed.occluded},
+          {"gpuStatsFrameSerial", cullingStatus.completed.frameSerial},
+          {"visibilityGeneration", visibilityFrame_.generation},
           {"hiZMipLevels", cullingStatus.hiZMipLevels},
           {"indirectCapacities", std::move(indirectCapacities)},
           {"allocatedBytes", cullingStatus.allocatedBytes}}},
+        {"surfaceData",
+         {{"supported", surfaceStatus.supported},
+          {"active", surfaceStatus.active},
+          {"unavailableReason", surfaceStatus.unavailableReason},
+          {"debugView", surfaceDebugViewName(
+                            renderSettings_.surfaceDebugView)},
+          {"motionDebugScale", renderSettings_.surfaceMotionDebugScale},
+          {"depthFormat", static_cast<int32_t>(surfaceStatus.depthFormat)},
+          {"normalRoughnessFormat",
+           static_cast<int32_t>(surfaceStatus.normalRoughnessFormat)},
+          {"motionFormat", static_cast<int32_t>(surfaceStatus.motionFormat)},
+          {"historyGeneration", visibilityFrame_.history.historyGeneration},
+          {"historyValidItems", visibilityFrame_.history.historyValidItems},
+          {"itemCount", visibilityFrame_.items.size()},
+          {"globalHistoryValid", visibilityFrame_.history.globalValid},
+          {"invalidationReason",
+           visibilityFrame_.history.invalidationReason},
+          {"historyCapacities", std::move(surfaceHistoryCapacities)},
+          {"allocatedBytes", surfaceStatus.allocatedBytes}}},
         {"frameSerial", frameSync_->lastSubmittedSerial()},
         {"completedSubmissionSerial",
          frameSync_->completedSubmissionSerial()},
@@ -3511,6 +3544,15 @@ ControlJson Application::runtimeRenderSettingsGet() {
              renderSettings_.environmentIntensity},
             {"environmentRotationRadians",
              renderSettings_.environmentRotationRadians},
+            {"surfaceDebugView",
+             surfaceDebugViewName(renderSettings_.surfaceDebugView)},
+            {"surfaceMotionDebugScale",
+             renderSettings_.surfaceMotionDebugScale},
+            {"surfaceDataAvailable",
+             renderer_->surfaceDataStatus().supported},
+            {"surfaceDataActive", renderer_->surfaceDataStatus().active},
+            {"surfaceDataUnavailableReason",
+             renderer_->surfaceDataStatus().unavailableReason},
             {"frustumCullingEnabled",
              renderSettings_.culling.frustumEnabled},
             {"shadowCullingEnabled",
@@ -4762,6 +4804,62 @@ void Application::drawPostProcessingPanel() {
     }
 }
 
+void Application::drawSurfaceDataPanel() {
+    const SurfaceDataStatus status = renderer_->surfaceDataStatus();
+    constexpr const char *labels[] = {
+        "None", "Normal", "Roughness", "Motion", "History Validity"};
+    int mode = static_cast<int>(renderSettings_.surfaceDebugView);
+    ImGui::BeginDisabled(!status.supported);
+    if (ImGui::Combo("Debug View", &mode, labels,
+                     static_cast<int>(std::size(labels)))) {
+        RenderSettingsPatch patch;
+        patch.surfaceDebugView = static_cast<SurfaceDebugView>(mode);
+        applyRenderSettings(patch);
+    }
+    ImGui::BeginDisabled(
+        renderSettings_.surfaceDebugView != SurfaceDebugView::Motion);
+    float motionScale = renderSettings_.surfaceMotionDebugScale;
+    if (ImGui::DragFloat("Motion Scale", &motionScale, 0.5f, 0.1f,
+                         1024.0f, "%.1f")) {
+        RenderSettingsPatch patch;
+        patch.surfaceMotionDebugScale = motionScale;
+        applyRenderSettings(patch);
+    }
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+
+    if (status.supported) {
+        editor::statusIndicator(
+            status.active ? "Surface data active" : "Surface data inactive",
+            status.active ? editor::StatusTone::Success
+                          : editor::StatusTone::Neutral);
+        ImGui::Text("History: %u / %u items",
+                    visibilityFrame_.history.historyValidItems,
+                    static_cast<uint32_t>(visibilityFrame_.items.size()));
+        ImGui::TextDisabled("Generation %llu",
+                            static_cast<unsigned long long>(
+                                visibilityFrame_.history.historyGeneration));
+        if (!visibilityFrame_.history.invalidationReason.empty()) {
+            ImGui::TextDisabled("Reset: %s",
+                                visibilityFrame_.history.invalidationReason
+                                    .c_str());
+        }
+        ImGui::TextDisabled("Formats: depth=%d normal=%d motion=%d",
+                            static_cast<int>(status.depthFormat),
+                            static_cast<int>(status.normalRoughnessFormat),
+                            static_cast<int>(status.motionFormat));
+        ImGui::TextDisabled("History buffers: %u / %u (%llu KiB)",
+                            status.historyCapacities[0],
+                            status.historyCapacities[1],
+                            static_cast<unsigned long long>(
+                                status.allocatedBytes / 1024u));
+    } else {
+        editor::statusIndicator("Surface data unavailable",
+                                editor::StatusTone::Warning,
+                                status.unavailableReason.c_str());
+    }
+}
+
 void Application::drawCullingPanel() {
     bool frustumEnabled = renderSettings_.culling.frustumEnabled;
     if (ImGui::Checkbox("Camera Frustum", &frustumEnabled)) {
@@ -4853,7 +4951,7 @@ void Application::drawCullingPanel() {
 
     if (ImGui::TreeNodeEx("Culling Statistics",
                           ImGuiTreeNodeFlags_DefaultOpen)) {
-        const VisibilityStatistics &stats = visibilityFrame_.stats;
+        const VisibilityCpuStatistics &stats = visibilityFrame_.cpuStats;
         ImGui::Text("Source: %u  Visible: %u", stats.sourceDraws,
                     stats.cameraVisible);
         ImGui::Text("Camera culled: %u frustum, %u distance, %u small",
@@ -4866,12 +4964,15 @@ void Application::drawCullingPanel() {
                     stats.shadowVisible, stats.shadowCandidates,
                     stats.shadowCulled);
         ImGui::Text("Depth draws: %u", stats.depthPrepassDraws);
-        ImGui::Text("GPU occluded: %u / %u", stats.gpuOccluded,
-                    stats.occlusionCandidates);
-        if (stats.gpuStatsFrameSerial != 0) {
+        ImGui::Text("GPU occluded: %u / %u",
+                    status.completed.occluded,
+                    status.completed.candidates);
+        if (status.latestUncullable != 0)
+            ImGui::Text("GPU uncullable: %u", status.latestUncullable);
+        if (status.completed.frameSerial != 0) {
             ImGui::TextDisabled("GPU result frame: %llu",
                                 static_cast<unsigned long long>(
-                                    stats.gpuStatsFrameSerial));
+                                    status.completed.frameSerial));
         }
         ImGui::Text("Hi-Z mips: %u", status.hiZMipLevels);
         ImGui::Text("Indirect capacity: %u / %u",
@@ -6947,6 +7048,11 @@ void Application::drawGui() {
             drawPostProcessingPanel();
             ImGui::PopID();
         }
+        if (ImGui::CollapsingHeader("Surface Data")) {
+            ImGui::PushID("SurfaceData");
+            drawSurfaceDataPanel();
+            ImGui::PopID();
+        }
         if (ImGui::CollapsingHeader("Lighting",
                                     ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::PushID("Lighting");
@@ -7306,6 +7412,7 @@ void Application::mainLoop() {
         viewInput.environmentReady = renderer_->environmentReady();
         viewInput.maxSpecularLod =
             renderer_->currentEnvironmentMaxSpecularLod();
+        std::string cameraHistoryIdentity = "editor";
         if (currentScene_) {
             viewInput.sceneBounds = currentScene_->bounds();
             viewInput.sceneLights = &currentScene_->lights();
@@ -7345,6 +7452,11 @@ void Application::mainLoop() {
                     viewInput.cameraPosition = activeCamera->position;
                     viewInput.cameraNearPlane = activeCamera->nearPlane;
                     viewInput.cameraFarPlane = activeCamera->farPlane;
+                    cameraHistoryIdentity = activeCamera->entityId.empty()
+                                                ? "active-camera"
+                                                : "active:" +
+                                                      activeCamera->entityId
+                                                          .toString();
                 }
             }
         }
@@ -7360,48 +7472,51 @@ void Application::mainLoop() {
         }
         lastLightStats_ = renderView.lightStats;
         {
-            VKL_PROFILE_ZONE("RenderQueue Collect");
-            renderQueue_.clear();
+            VKL_PROFILE_ZONE("RenderItem Collect");
+            renderItems_.clear();
             if (currentScene_)
-                currentScene_->collectRenderCommands(renderQueue_);
+                currentScene_->collectRenderItems(renderItems_);
         }
         {
             VKL_PROFILE_ZONE("Visibility Build");
             visibilityFrame_ = visibilitySystem_.build(
-                renderQueue_, renderView, renderer_->viewportExtent());
+                std::move(renderItems_), renderView,
+                renderer_->viewportExtent(),
+                {sceneGeneration_, std::move(cameraHistoryIdentity),
+                 viewInput.sceneBounds});
         }
 
         if constexpr (build::kTracy) {
             profilePlotNumber(
                 "Frame/DrawCount",
-                static_cast<int64_t>(visibilityFrame_.camera.drawCount()));
+                static_cast<int64_t>(visibilityFrame_.cameraDrawCount()));
             profilePlotNumber(
                 "Frame/OpaqueDrawCount",
                 static_cast<int64_t>(
-                    visibilityFrame_.camera.opaque().size()));
+                    visibilityFrame_.cameraOpaque.size()));
             profilePlotNumber(
                 "Frame/TransparentDrawCount",
                 static_cast<int64_t>(
-                    visibilityFrame_.camera.transparent().size()));
+                    visibilityFrame_.cameraTransparent.size()));
             profilePlotNumber(
                 "Visibility/Source",
-                static_cast<int64_t>(visibilityFrame_.stats.sourceDraws));
+                static_cast<int64_t>(visibilityFrame_.cpuStats.sourceDraws));
             profilePlotNumber(
                 "Visibility/CameraVisible",
-                static_cast<int64_t>(visibilityFrame_.stats.cameraVisible));
+                static_cast<int64_t>(visibilityFrame_.cpuStats.cameraVisible));
             profilePlotNumber(
                 "Visibility/FrustumCulled",
-                static_cast<int64_t>(visibilityFrame_.stats.frustumCulled));
+                static_cast<int64_t>(visibilityFrame_.cpuStats.frustumCulled));
             profilePlotNumber(
                 "Visibility/DistanceCulled",
-                static_cast<int64_t>(visibilityFrame_.stats.distanceCulled));
+                static_cast<int64_t>(visibilityFrame_.cpuStats.distanceCulled));
             profilePlotNumber(
                 "Visibility/SmallObjectCulled",
                 static_cast<int64_t>(
-                    visibilityFrame_.stats.smallObjectCulled));
+                    visibilityFrame_.cpuStats.smallObjectCulled));
             profilePlotNumber(
                 "Visibility/ShadowVisible",
-                static_cast<int64_t>(visibilityFrame_.stats.shadowVisible));
+                static_cast<int64_t>(visibilityFrame_.cpuStats.shadowVisible));
             profilePlotNumber(
                 "Frame/GraphicsPipelines",
                 static_cast<int64_t>(pipelineCache_->graphicsPipelineCount()));
@@ -7455,8 +7570,9 @@ void Application::mainLoop() {
             if constexpr (build::kTracy) {
                 profilePlotNumber(
                     "Visibility/GpuOccluded",
-                    static_cast<int64_t>(
-                        visibilityFrame_.stats.gpuOccluded));
+                    static_cast<int64_t>(renderer_
+                                             ->occlusionCullingStatus()
+                                             .completed.occluded));
             }
             if (captureSelection) {
                 VKL_PROFILE_GPU_ZONE(device_->tracyProfiler(), ctx->cmd,
@@ -7466,6 +7582,7 @@ void Application::mainLoop() {
         }
         device_->tracyProfiler().collect(ctx->cmd);
         const uint64_t submissionSerial = frameSync_->endFrame(*ctx);
+        visibilitySystem_.commit(visibilityFrame_);
         ++presentedFrameCount_;
         profileFrameMark();
         if (captureSelection)

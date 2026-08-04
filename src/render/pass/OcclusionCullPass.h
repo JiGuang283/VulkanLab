@@ -2,6 +2,7 @@
 
 #include "IRenderPass.h"
 #include "core/FrameSync.h"
+#include "render/Visibility.h"
 
 #include <array>
 #include <cstdint>
@@ -37,10 +38,13 @@ class OcclusionCullPass final : public IRenderPass {
                  const VisibilityFrame &visibility) override;
 
     void prepareFrame(uint32_t frameIndex, uint64_t frameSerial,
-                      VisibilityFrame &visibility,
+                      const VisibilityFrame &visibility,
                       const RenderView &view);
     bool active(uint32_t frameIndex) const;
-    VkBuffer indirectBuffer(uint32_t frameIndex) const;
+    const GpuVisibilityDrawStream &drawStream(uint32_t frameIndex) const;
+    const CompletedGpuVisibilityStatistics &completedStatistics() const {
+        return completedStatistics_;
+    }
     uint32_t capacity(uint32_t frameIndex) const;
     uint64_t allocatedBytes() const;
 
@@ -61,6 +65,7 @@ class OcclusionCullPass final : public IRenderPass {
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> descriptorSets_{};
     std::array<std::unique_ptr<FrameStorage>, MAX_FRAMES_IN_FLIGHT> frames_{};
     const RenderResourceRegistry *resources_ = nullptr;
+    CompletedGpuVisibilityStatistics completedStatistics_{};
 };
 
 } // namespace vkr

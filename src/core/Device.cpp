@@ -295,10 +295,49 @@ void Device::pickPhysicalDevice() {
             VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
         if ((properties.optimalTilingFeatures & requiredDepth) ==
             requiredDepth) {
-            occlusionCullingSupport_.depthFormat = format;
+            surfaceDataSupport_.depthFormat = format;
             break;
         }
     }
+    const auto supportsSurfaceColor = [&](VkFormat format) {
+        VkFormatProperties properties{};
+        vkGetPhysicalDeviceFormatProperties(physicalDevice_, format,
+                                            &properties);
+        const VkFormatFeatureFlags requiredSurface =
+            VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
+            VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+        if ((properties.optimalTilingFeatures & requiredSurface) !=
+            requiredSurface) {
+            return false;
+        }
+        VkImageFormatProperties imageProperties{};
+        return vkGetPhysicalDeviceImageFormatProperties(
+                   physicalDevice_, format, VK_IMAGE_TYPE_2D,
+                   VK_IMAGE_TILING_OPTIMAL,
+                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                       VK_IMAGE_USAGE_SAMPLED_BIT,
+                   0, &imageProperties) == VK_SUCCESS;
+    };
+    if (surfaceDataSupport_.depthFormat == VK_FORMAT_UNDEFINED) {
+        surfaceDataSupport_.reason =
+            "no sampled depth attachment format is available";
+    } else if (!supportsSurfaceColor(
+                   surfaceDataSupport_.normalRoughnessFormat)) {
+        surfaceDataSupport_.reason =
+            "RGBA16F surface normal attachment is unavailable";
+    } else if (!supportsSurfaceColor(surfaceDataSupport_.motionFormat)) {
+        surfaceDataSupport_.reason =
+            "RG16F surface motion attachment is unavailable";
+    } else {
+        surfaceDataSupport_.available = true;
+    }
+    if (surfaceDataSupport_.available) {
+        VKR_LOG_INFO("Device", "Surface data attachments are supported");
+    } else {
+        VKR_LOG_WARN("Device", "Surface data unavailable: {}",
+                     surfaceDataSupport_.reason);
+    }
+
     VkFormatProperties hiZProperties{};
     vkGetPhysicalDeviceFormatProperties(physicalDevice_,
                                         VK_FORMAT_R32_SFLOAT,
@@ -316,10 +355,8 @@ void Device::pickPhysicalDevice() {
     if (!graphicsQueueSupportsCompute) {
         occlusionCullingSupport_.reason =
             "selected graphics queue does not support compute";
-    } else if (occlusionCullingSupport_.depthFormat ==
-               VK_FORMAT_UNDEFINED) {
-        occlusionCullingSupport_.reason =
-            "no sampled depth attachment format is available";
+    } else if (!surfaceDataSupport_.available) {
+        occlusionCullingSupport_.reason = surfaceDataSupport_.reason;
     } else if ((hiZProperties.optimalTilingFeatures & requiredHiZ) !=
                    requiredHiZ ||
                !hiZImageSupported) {

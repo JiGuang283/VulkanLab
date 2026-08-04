@@ -153,8 +153,8 @@ void Mesh::bind(VkCommandBuffer cmd) const {
     vkCmdBindIndexBuffer(cmd, indexBuffer_->handle(), 0, VK_INDEX_TYPE_UINT32);
 }
 
-void Mesh::draw(VkCommandBuffer cmd) const {
-    vkCmdDrawIndexed(cmd, indexCount_, 1, 0, 0, 0);
+void Mesh::draw(VkCommandBuffer cmd, uint32_t firstInstance) const {
+    vkCmdDrawIndexed(cmd, indexCount_, 1, 0, 0, firstInstance);
 }
 
 void Mesh::drawIndirect(VkCommandBuffer cmd, VkBuffer indirectBuffer,

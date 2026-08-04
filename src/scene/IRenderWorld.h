@@ -12,7 +12,7 @@
 namespace vkr {
 
 class MaterialInstance;
-class RenderQueue;
+struct RenderItem;
 struct SceneLight;
 
 struct RuntimeCameraView {
@@ -21,6 +21,7 @@ struct RuntimeCameraView {
     glm::vec3 position{0.0f};
     float nearPlane = 0.05f;
     float farPlane = 1000.0f;
+    PersistentEntityId entityId{};
 };
 
 struct RenderWorldAmbient {
@@ -45,7 +46,7 @@ class IRenderWorld {
     virtual ~IRenderWorld() = default;
 
     virtual void update(float dt, float time) = 0;
-    virtual void collectRenderCommands(RenderQueue &queue) const = 0;
+    virtual void collectRenderItems(std::vector<RenderItem> &items) const = 0;
     virtual const Bounds &bounds() const = 0;
     virtual const std::vector<SceneLight> &lights() const = 0;
     virtual const std::vector<std::shared_ptr<MaterialInstance>> &
