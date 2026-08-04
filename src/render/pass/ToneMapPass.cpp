@@ -105,7 +105,7 @@ void ToneMapPass::onViewportResize(
 
 void ToneMapPass::execute(const RenderFrameContext &frame,
                           const RenderResourceRegistry &resources,
-                          const RenderQueue &) {
+                          const VisibilityFrame &) {
     VKL_PROFILE_ZONE("Record ToneMap");
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "ToneMap");
     if (!frame.pipelineCache || !frame.view || !frame.shaderVariant)

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <glm/glm.hpp>
+#include <limits>
 #include <unordered_set>
 
 namespace vkr {
@@ -14,6 +15,8 @@ void RenderQueue::clear() {
 }
 
 void RenderQueue::add(RenderCommand command) {
+    if (command.sourceOrder == std::numeric_limits<uint32_t>::max())
+        command.sourceOrder = static_cast<uint32_t>(drawCount());
     switch (command.queue) {
     case RenderQueueType::Opaque:
         opaque_.push_back(command);

@@ -2,8 +2,8 @@
 
 #include "RenderFrame.h"
 #include "GpuPassProfiler.h"
-#include "RenderQueue.h"
 #include "RenderResourceRegistry.h"
+#include "Visibility.h"
 #include "core/GpuDebugUtils.h"
 #include "core/SwapChain.h"
 #include "render/pass/IRenderPass.h"
@@ -61,7 +61,7 @@ std::vector<std::string> RenderPipeline::passNames() const {
 
 void RenderPipeline::execute(const RenderFrameContext &frame,
                              const RenderResourceRegistry &resources,
-                             const RenderQueue &queue,
+                             const VisibilityFrame &visibility,
                              GpuPassProfiler *profiler) {
     for (uint32_t passIndex = 0; passIndex < passes_.size(); ++passIndex) {
         if (profiler)
@@ -69,9 +69,9 @@ void RenderPipeline::execute(const RenderFrameContext &frame,
         auto &pass = passes_[passIndex];
         if (frame.debugUtils) {
             ScopedGpuLabel label(*frame.debugUtils, frame.cmd, pass->name());
-            pass->execute(frame, resources, queue);
+            pass->execute(frame, resources, visibility);
         } else {
-            pass->execute(frame, resources, queue);
+            pass->execute(frame, resources, visibility);
         }
         if (profiler)
             profiler->endPass(frame.cmd, frame.frameIndex, passIndex);

@@ -14,6 +14,7 @@ class RenderQueue;
 class RenderResourceRegistry;
 class SwapChain;
 struct RenderFrameContext;
+struct VisibilityFrame;
 
 class DirectionalShadowPass final : public IRenderPass {
   public:
@@ -34,7 +35,7 @@ class DirectionalShadowPass final : public IRenderPass {
     std::vector<RenderImageUsage> resourceUsages() const override;
     void execute(const RenderFrameContext &frame,
                  const RenderResourceRegistry &resources,
-                 const RenderQueue &queue) override;
+                 const VisibilityFrame &visibility) override;
 
   private:
     void createRenderPass(const RenderResourceRegistry &resources);

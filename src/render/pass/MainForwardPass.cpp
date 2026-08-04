@@ -16,11 +16,13 @@
 #include "render/RenderQueue.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/ShaderVariant.h"
+#include "render/Visibility.h"
 #include "diagnostics/Profiling.h"
 #include "diagnostics/TracyProfiler.h"
 
 #include <array>
 #include <glm/glm.hpp>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -109,11 +111,11 @@ void MainForwardPass::onViewportResize(
 
 void MainForwardPass::execute(const RenderFrameContext &frame,
                               const RenderResourceRegistry &resources,
-                              const RenderQueue &queue) {
+                              const VisibilityFrame &visibility) {
     VKL_PROFILE_ZONE("Record MainForward");
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "MainForward");
     begin(frame.cmd, frame.frameIndex, resources);
-    drawQueue(frame, resources, queue);
+    drawQueue(frame, resources, visibility.camera);
     vkCmdEndRenderPass(frame.cmd);
 }
 
@@ -237,7 +239,17 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                                    VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(block), &block);
             command.mesh->bind(frame.cmd);
-            command.mesh->draw(frame.cmd);
+            if (!transparent && frame.occlusionActive &&
+                frame.occlusionIndirectBuffer != VK_NULL_HANDLE &&
+                command.occlusionSlot !=
+                    std::numeric_limits<uint32_t>::max()) {
+                command.mesh->drawIndirect(
+                    frame.cmd, frame.occlusionIndirectBuffer,
+                    static_cast<VkDeviceSize>(command.occlusionSlot) *
+                        sizeof(VkDrawIndexedIndirectCommand));
+            } else {
+                command.mesh->draw(frame.cmd);
+            }
         }
     };
 

@@ -142,6 +142,7 @@ RenderResourceRegistry::registerImage(RenderImageDesc desc) {
         static_cast<uint32_t>(imageDescriptions_.size())};
     imageDescriptions_.push_back(std::move(desc));
     images_.emplace_back();
+    realizedMipLevels_.push_back(0);
     return handle;
 }
 
@@ -221,6 +222,29 @@ const Image &RenderResourceRegistry::image(RenderImageHandle handle,
     return *images_[handle.index][index];
 }
 
+VkImageView RenderResourceRegistry::mipView(RenderImageHandle handle,
+                                            uint32_t frameIndex,
+                                            uint32_t mipLevel) const {
+    return image(handle, frameIndex).mipView(mipLevel);
+}
+
+uint32_t
+RenderResourceRegistry::mipLevelCount(RenderImageHandle handle) const {
+    if (!valid(handle))
+        throw std::out_of_range("invalid render image handle");
+    return realizedMipLevels_.at(handle.index);
+}
+
+VkExtent2D RenderResourceRegistry::mipExtent(RenderImageHandle handle,
+                                             uint32_t mipLevel) const {
+    if (mipLevel >= mipLevelCount(handle))
+        throw std::out_of_range("render image mip level out of range");
+    VkExtent2D result = extent(handle);
+    result.width = std::max(1u, result.width >> mipLevel);
+    result.height = std::max(1u, result.height >> mipLevel);
+    return result;
+}
+
 VkSampler RenderResourceRegistry::sampler(RenderSamplerHandle handle) const {
     if (!valid(handle))
         throw std::out_of_range("invalid render sampler handle");
@@ -252,6 +276,16 @@ void RenderResourceRegistry::createImageEntry(uint32_t index) {
                                desc.extentDivisor)};
     if (imageExtent.width == 0 || imageExtent.height == 0)
         return;
+    uint32_t mipLevels = desc.mipLevels;
+    if (desc.mipPolicy == RenderMipPolicy::FullChain) {
+        uint32_t dimension = std::max(imageExtent.width, imageExtent.height);
+        mipLevels = 1;
+        while (dimension > 1u) {
+            dimension >>= 1u;
+            ++mipLevels;
+        }
+    }
+    realizedMipLevels_.at(index) = mipLevels;
     const uint32_t count =
         desc.multiplicity == RenderResourceMultiplicity::PerFrame
             ? frameCount_
@@ -268,7 +302,7 @@ void RenderResourceRegistry::createImageEntry(uint32_t index) {
         ImageCreateInfo imageInfo{};
         imageInfo.width = imageExtent.width;
         imageInfo.height = imageExtent.height;
-        imageInfo.mipLevels = desc.mipLevels;
+        imageInfo.mipLevels = mipLevels;
         imageInfo.arrayLayers = desc.arrayLayers;
         imageInfo.samples = desc.samples;
         imageInfo.format = desc.format;
@@ -277,8 +311,12 @@ void RenderResourceRegistry::createImageEntry(uint32_t index) {
         imageInfo.memoryProperties = desc.memoryProperties;
         imageInfo.debugName = debugName;
         image = std::make_unique<Image>(*device_, imageInfo);
-        image->createView(desc.format, desc.aspect, desc.mipLevels,
+        image->createView(desc.format, desc.aspect, mipLevels,
                           desc.viewType, desc.arrayLayers);
+        if (mipLevels > 1) {
+            image->createMipViews(desc.format, desc.aspect, mipLevels,
+                                  desc.viewType, desc.arrayLayers);
+        }
     }
 }
 
@@ -354,6 +392,33 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
              VK_IMAGE_USAGE_SAMPLED_BIT,
          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, VK_IMAGE_ASPECT_DEPTH_BIT});
+
+    if (device.occlusionCullingSupport().available) {
+        RenderImageDesc visibilityDepth{};
+        visibilityDepth.name = "Visibility Depth";
+        visibilityDepth.extentPolicy = RenderExtentPolicy::Viewport;
+        visibilityDepth.multiplicity =
+            RenderResourceMultiplicity::PerFrame;
+        visibilityDepth.format =
+            device.occlusionCullingSupport().depthFormat;
+        visibilityDepth.usage =
+            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+            VK_IMAGE_USAGE_SAMPLED_BIT;
+        visibilityDepth.aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+        handles.visibilityDepth =
+            registry.registerImage(std::move(visibilityDepth));
+
+        RenderImageDesc hiZ{};
+        hiZ.name = "Visibility HiZ";
+        hiZ.extentPolicy = RenderExtentPolicy::Viewport;
+        hiZ.multiplicity = RenderResourceMultiplicity::PerFrame;
+        hiZ.format = device.occlusionCullingSupport().hiZFormat;
+        hiZ.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                    VK_IMAGE_USAGE_STORAGE_BIT;
+        hiZ.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        hiZ.mipPolicy = RenderMipPolicy::FullChain;
+        handles.visibilityHiZ = registry.registerImage(std::move(hiZ));
+    }
 
     if (device.computeBloomSupport().available) {
         for (uint32_t level = 0;
@@ -435,6 +500,24 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
     shadowSampler.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
     handles.shadowSampler =
         registry.registerSampler(std::move(shadowSampler));
+
+    if (device.occlusionCullingSupport().available) {
+        RenderSamplerDesc depthSampler{};
+        depthSampler.name = "Visibility Depth Sampler";
+        depthSampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        depthSampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        handles.visibilityDepthSampler =
+            registry.registerSampler(std::move(depthSampler));
+
+        RenderSamplerDesc hiZSampler{};
+        hiZSampler.name = "Visibility HiZ Sampler";
+        hiZSampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        hiZSampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        hiZSampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        hiZSampler.maxLod = 32.0f;
+        handles.visibilityHiZSampler =
+            registry.registerSampler(std::move(hiZSampler));
+    }
 
     if (device.computeBloomSupport().available) {
         RenderSamplerDesc bloomSampler{};

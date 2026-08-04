@@ -43,6 +43,11 @@ enum class RenderResourceMultiplicity {
     PerFrame,
 };
 
+enum class RenderMipPolicy {
+    Fixed,
+    FullChain,
+};
+
 struct RenderImageDesc {
     std::string name;
     RenderExtentPolicy extentPolicy = RenderExtentPolicy::Viewport;
@@ -62,6 +67,7 @@ struct RenderImageDesc {
     uint32_t extentDivisor = 1;
     uint32_t arrayLayers = 1;
     VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
+    RenderMipPolicy mipPolicy = RenderMipPolicy::Fixed;
 };
 
 struct RenderSamplerDesc {
@@ -111,10 +117,14 @@ struct RendererResourceHandles {
     RenderImageHandle mainDepth{};
     RenderImageHandle viewportColor{};
     RenderImageHandle directionalShadowDepth{};
+    RenderImageHandle visibilityDepth{};
+    RenderImageHandle visibilityHiZ{};
     std::array<RenderImageHandle, kBloomPyramidLevelCount> bloomLevels{};
     RenderSamplerHandle hdrSampler{};
     RenderSamplerHandle viewportSampler{};
     RenderSamplerHandle shadowSampler{};
+    RenderSamplerHandle visibilityDepthSampler{};
+    RenderSamplerHandle visibilityHiZSampler{};
     RenderSamplerHandle bloomSampler{};
     RenderImageHandle atmosphereTransmittance{};
     RenderImageHandle atmosphereMultipleScattering{};
@@ -146,6 +156,11 @@ class RenderResourceRegistry {
         return imageDescriptions_;
     }
     const Image &image(RenderImageHandle handle, uint32_t frameIndex) const;
+    VkImageView mipView(RenderImageHandle handle, uint32_t frameIndex,
+                        uint32_t mipLevel) const;
+    uint32_t mipLevelCount(RenderImageHandle handle) const;
+    VkExtent2D mipExtent(RenderImageHandle handle,
+                         uint32_t mipLevel) const;
     VkSampler sampler(RenderSamplerHandle handle) const;
     VkExtent2D extent(RenderImageHandle handle) const;
     VkExtent2D viewportExtent() const { return viewportExtent_; }
@@ -161,6 +176,7 @@ class RenderResourceRegistry {
     bool realized_ = false;
     std::vector<RenderImageDesc> imageDescriptions_;
     std::vector<std::vector<std::unique_ptr<Image>>> images_;
+    std::vector<uint32_t> realizedMipLevels_;
     std::vector<RenderSamplerDesc> samplerDescriptions_;
     std::vector<VkSampler> samplers_;
 };

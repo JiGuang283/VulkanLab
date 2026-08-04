@@ -157,4 +157,10 @@ void Mesh::draw(VkCommandBuffer cmd) const {
     vkCmdDrawIndexed(cmd, indexCount_, 1, 0, 0, 0);
 }
 
+void Mesh::drawIndirect(VkCommandBuffer cmd, VkBuffer indirectBuffer,
+                        VkDeviceSize offset) const {
+    vkCmdDrawIndexedIndirect(cmd, indirectBuffer, offset, 1,
+                             sizeof(VkDrawIndexedIndirectCommand));
+}
+
 } // namespace vkr

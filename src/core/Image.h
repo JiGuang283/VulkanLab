@@ -1,6 +1,7 @@
 #pragma once
 #include "vk_mem_alloc.h"
 #include <string>
+#include <vector>
 #include <vulkan/vulkan.h>
 
 namespace vkr {
@@ -39,11 +40,19 @@ class Image {
 
     VkImage     handle() const { return image_; }
     VkImageView imageView() const { return view_; }
+    VkImageView mipView(uint32_t mipLevel) const;
+    uint32_t mipViewCount() const {
+        return static_cast<uint32_t>(mipViews_.size());
+    }
 
     void createView(VkFormat format, VkImageAspectFlags aspectFlags,
                     uint32_t mipLevels,
                     VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D,
                     uint32_t arrayLayers = 1);
+    void createMipViews(VkFormat format, VkImageAspectFlags aspectFlags,
+                        uint32_t mipLevels,
+                        VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D,
+                        uint32_t arrayLayers = 1);
 
   private:
     void cleanup();
@@ -52,6 +61,7 @@ class Image {
     VkImage       image_ = VK_NULL_HANDLE;
     VmaAllocation allocation_ = VK_NULL_HANDLE;
     VkImageView   view_ = VK_NULL_HANDLE;
+    std::vector<VkImageView> mipViews_;
     std::string   debugName_;
 };
 

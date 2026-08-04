@@ -8,10 +8,10 @@ namespace vkr {
 
 class IRenderPass;
 class GpuPassProfiler;
-class RenderQueue;
 class RenderResourceRegistry;
 class SwapChain;
 struct RenderFrameContext;
+struct VisibilityFrame;
 
 class RenderPipeline {
   public:
@@ -30,7 +30,8 @@ class RenderPipeline {
     std::vector<std::string> passNames() const;
     void execute(const RenderFrameContext &frame,
                  const RenderResourceRegistry &resources,
-                 const RenderQueue &queue, GpuPassProfiler *profiler);
+                 const VisibilityFrame &visibility,
+                 GpuPassProfiler *profiler);
 
   private:
     std::vector<std::unique_ptr<IRenderPass>> passes_;

@@ -916,6 +916,16 @@ void Application::init() {
     const ShaderProgram &shadowOpaque =
         shaderRegistry_.program("shadow.opaque");
     const ShaderProgram &shadowMask = shaderRegistry_.program("shadow.mask");
+    const ShaderProgram &visibilityDepth =
+        shaderRegistry_.program("visibility.depth-opaque");
+    const ShaderProgram &visibilityDepthMask =
+        shaderRegistry_.program("visibility.depth-mask");
+    const ShaderProgram &visibilityHiZInit =
+        shaderRegistry_.program("visibility.hiz-init");
+    const ShaderProgram &visibilityHiZReduce =
+        shaderRegistry_.program("visibility.hiz-reduce");
+    const ShaderProgram &visibilityOcclusion =
+        shaderRegistry_.program("visibility.occlusion-cull");
     const ShaderProgram &toneMap =
         shaderRegistry_.program("postprocess.tonemap");
     const ShaderProgram &present =
@@ -939,6 +949,11 @@ void Application::init() {
         *device_, *swapChain_, *frameSync_, *descriptorAllocator_,
         RendererShaderPaths{
             shadowOpaque.vertSpvPath, shadowMask.fragSpvPath,
+            visibilityDepth.vertSpvPath,
+            visibilityDepthMask.fragSpvPath,
+            visibilityHiZInit.computeSpvPath,
+            visibilityHiZReduce.computeSpvPath,
+            visibilityOcclusion.computeSpvPath,
             toneMap.vertSpvPath, toneMap.fragSpvPath,
             present.fragSpvPath, skybox.fragSpvPath,
             bloomDownsample.computeSpvPath,
@@ -2023,6 +2038,13 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
             "Compute Bloom is unavailable: " +
                 renderer_->bloomUnsupportedReason());
     }
+    if (patch.occlusionCullingEnabled && *patch.occlusionCullingEnabled &&
+        renderer_ && !renderer_->occlusionCullingStatus().supported) {
+        throw RuntimeCommandError(
+            "occlusion_unsupported",
+            "GPU occlusion culling is unavailable: " +
+                renderer_->occlusionCullingStatus().unavailableReason);
+    }
     RenderSettings next = renderSettings_;
     applyRenderSettingsPatch(next, patch);
     next.shadowReceiverBias =
@@ -2042,6 +2064,14 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
     next.environmentRotationRadians =
         std::remainder(next.environmentRotationRadians,
                        glm::two_pi<float>());
+    next.culling.shadowDistance =
+        glm::clamp(next.culling.shadowDistance, 0.1f, 100000.0f);
+    next.culling.maxDrawDistance =
+        glm::clamp(next.culling.maxDrawDistance, 0.1f, 1000000.0f);
+    next.culling.minProjectedSizePixels = glm::clamp(
+        next.culling.minProjectedSizePixels, 0.0f, 256.0f);
+    next.culling.occlusionDepthBias =
+        glm::clamp(next.culling.occlusionDepthBias, 0.0f, 0.05f);
     renderSettings_ = next;
 }
 
@@ -3250,6 +3280,11 @@ ControlJson Application::runtimeRenderStatus() {
     }
     const AtmosphereRuntimeStatus atmosphereStatus =
         renderer_->atmosphereStatus();
+    const OcclusionCullingStatus cullingStatus =
+        renderer_->occlusionCullingStatus();
+    ControlJson indirectCapacities = ControlJson::array();
+    for (const uint32_t capacity : cullingStatus.indirectCapacities)
+        indirectCapacities.push_back(capacity);
     ControlJson atmosphereComponent = nullptr;
     if (atmosphereStatus.componentPresent) {
         atmosphereComponent = atmosphereStatus.componentEntity.toString();
@@ -3367,6 +3402,31 @@ ControlJson Application::runtimeRenderStatus() {
           {"ignored", lastLightStats_.ignoredLights},
           {"ignoredEntityIds", std::move(ignoredLightEntities)},
           {"shadowCaster", std::move(shadowCaster)}}},
+        {"culling",
+         {{"supported", cullingStatus.supported},
+          {"active", cullingStatus.active},
+          {"unavailableReason", cullingStatus.unavailableReason},
+          {"sourceDraws", visibilityFrame_.stats.sourceDraws},
+          {"invalidBounds", visibilityFrame_.stats.invalidBounds},
+          {"cameraVisible", visibilityFrame_.stats.cameraVisible},
+          {"cameraOpaque", visibilityFrame_.stats.cameraOpaque},
+          {"cameraTransparent", visibilityFrame_.stats.cameraTransparent},
+          {"frustumCulled", visibilityFrame_.stats.frustumCulled},
+          {"distanceCulled", visibilityFrame_.stats.distanceCulled},
+          {"smallObjectCulled",
+           visibilityFrame_.stats.smallObjectCulled},
+          {"shadowCandidates", visibilityFrame_.stats.shadowCandidates},
+          {"shadowCulled", visibilityFrame_.stats.shadowCulled},
+          {"shadowVisible", visibilityFrame_.stats.shadowVisible},
+          {"depthPrepassDraws", visibilityFrame_.stats.depthPrepassDraws},
+          {"occlusionCandidates",
+           visibilityFrame_.stats.occlusionCandidates},
+          {"gpuOccluded", visibilityFrame_.stats.gpuOccluded},
+          {"gpuStatsFrameSerial",
+           visibilityFrame_.stats.gpuStatsFrameSerial},
+          {"hiZMipLevels", cullingStatus.hiZMipLevels},
+          {"indirectCapacities", std::move(indirectCapacities)},
+          {"allocatedBytes", cullingStatus.allocatedBytes}}},
         {"frameSerial", frameSync_->lastSubmittedSerial()},
         {"completedSubmissionSerial",
          frameSync_->completedSubmissionSerial()},
@@ -3423,6 +3483,8 @@ ControlJson Application::runtimeRenderStatus() {
 }
 
 ControlJson Application::runtimeRenderSettingsGet() {
+    const OcclusionCullingStatus cullingStatus =
+        renderer_->occlusionCullingStatus();
     return {{"shadowsEnabled", renderSettings_.shadowsEnabled},
             {"shadowMapSize", kDirectionalShadowMapSize},
             {"shadowReceiverBias", renderSettings_.shadowReceiverBias},
@@ -3449,6 +3511,27 @@ ControlJson Application::runtimeRenderSettingsGet() {
              renderSettings_.environmentIntensity},
             {"environmentRotationRadians",
              renderSettings_.environmentRotationRadians},
+            {"frustumCullingEnabled",
+             renderSettings_.culling.frustumEnabled},
+            {"shadowCullingEnabled",
+             renderSettings_.culling.shadowCullingEnabled},
+            {"shadowDistance", renderSettings_.culling.shadowDistance},
+            {"distanceCullingEnabled",
+             renderSettings_.culling.distanceEnabled},
+            {"maxDrawDistance",
+             renderSettings_.culling.maxDrawDistance},
+            {"smallObjectCullingEnabled",
+             renderSettings_.culling.smallObjectEnabled},
+            {"minProjectedSizePixels",
+             renderSettings_.culling.minProjectedSizePixels},
+            {"occlusionCullingEnabled",
+             renderSettings_.culling.occlusionEnabled},
+            {"occlusionDepthBias",
+             renderSettings_.culling.occlusionDepthBias},
+            {"occlusionAvailable", cullingStatus.supported},
+            {"occlusionActive", cullingStatus.active},
+            {"occlusionUnavailableReason",
+             cullingStatus.unavailableReason},
             {"toneMappingPolicy", "pbr_only"},
             {"bloomPolicy", "pbr_only"}};
 }
@@ -4676,6 +4759,127 @@ void Application::drawPostProcessingPanel() {
             renderer_->bloomUnsupportedReason().c_str());
     } else if (renderSettings_.bloomEnabled && !compatible) {
         ImGui::TextDisabled("Selected Shader does not support Bloom.");
+    }
+}
+
+void Application::drawCullingPanel() {
+    bool frustumEnabled = renderSettings_.culling.frustumEnabled;
+    if (ImGui::Checkbox("Camera Frustum", &frustumEnabled)) {
+        RenderSettingsPatch patch;
+        patch.frustumCullingEnabled = frustumEnabled;
+        applyRenderSettings(patch);
+    }
+
+    bool distanceEnabled = renderSettings_.culling.distanceEnabled;
+    if (ImGui::Checkbox("Max Draw Distance", &distanceEnabled)) {
+        RenderSettingsPatch patch;
+        patch.distanceCullingEnabled = distanceEnabled;
+        applyRenderSettings(patch);
+    }
+    ImGui::BeginDisabled(!renderSettings_.culling.distanceEnabled);
+    float maxDrawDistance = renderSettings_.culling.maxDrawDistance;
+    if (ImGui::DragFloat("Distance", &maxDrawDistance, 1.0f, 0.1f,
+                         1000000.0f, "%.1f")) {
+        RenderSettingsPatch patch;
+        patch.maxDrawDistance = maxDrawDistance;
+        applyRenderSettings(patch);
+    }
+    ImGui::EndDisabled();
+
+    bool smallObjectEnabled = renderSettings_.culling.smallObjectEnabled;
+    if (ImGui::Checkbox("Small Objects", &smallObjectEnabled)) {
+        RenderSettingsPatch patch;
+        patch.smallObjectCullingEnabled = smallObjectEnabled;
+        applyRenderSettings(patch);
+    }
+    ImGui::BeginDisabled(!renderSettings_.culling.smallObjectEnabled);
+    float minimumPixels = renderSettings_.culling.minProjectedSizePixels;
+    if (ImGui::DragFloat("Minimum Size", &minimumPixels, 0.1f, 0.0f,
+                         256.0f, "%.1f px")) {
+        RenderSettingsPatch patch;
+        patch.minProjectedSizePixels = minimumPixels;
+        applyRenderSettings(patch);
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SeparatorText("Shadow Casters");
+    bool shadowCullingEnabled =
+        renderSettings_.culling.shadowCullingEnabled;
+    if (ImGui::Checkbox("Cull Shadow Casters", &shadowCullingEnabled)) {
+        RenderSettingsPatch patch;
+        patch.shadowCullingEnabled = shadowCullingEnabled;
+        applyRenderSettings(patch);
+    }
+    ImGui::BeginDisabled(!renderSettings_.culling.shadowCullingEnabled);
+    float shadowDistance = renderSettings_.culling.shadowDistance;
+    if (ImGui::DragFloat("Shadow Distance", &shadowDistance, 1.0f, 0.1f,
+                         100000.0f, "%.1f")) {
+        RenderSettingsPatch patch;
+        patch.shadowDistance = shadowDistance;
+        applyRenderSettings(patch);
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SeparatorText("GPU Occlusion");
+    const OcclusionCullingStatus status =
+        renderer_->occlusionCullingStatus();
+    ImGui::BeginDisabled(!status.supported);
+    bool occlusionEnabled = renderSettings_.culling.occlusionEnabled;
+    if (ImGui::Checkbox("Hi-Z Occlusion", &occlusionEnabled)) {
+        RenderSettingsPatch patch;
+        patch.occlusionCullingEnabled = occlusionEnabled;
+        applyRenderSettings(patch);
+    }
+    ImGui::BeginDisabled(!renderSettings_.culling.occlusionEnabled);
+    float depthBias = renderSettings_.culling.occlusionDepthBias;
+    if (ImGui::DragFloat("Depth Bias", &depthBias, 0.00005f, 0.0f, 0.05f,
+                         "%.5f")) {
+        RenderSettingsPatch patch;
+        patch.occlusionDepthBias = depthBias;
+        applyRenderSettings(patch);
+    }
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+    if (status.supported) {
+        editor::statusIndicator(
+            status.active ? "Occlusion active" : "Occlusion inactive",
+            status.active ? editor::StatusTone::Success
+                          : editor::StatusTone::Neutral);
+    } else {
+        editor::statusIndicator("Occlusion unavailable",
+                                editor::StatusTone::Warning,
+                                status.unavailableReason.c_str());
+    }
+
+    if (ImGui::TreeNodeEx("Culling Statistics",
+                          ImGuiTreeNodeFlags_DefaultOpen)) {
+        const VisibilityStatistics &stats = visibilityFrame_.stats;
+        ImGui::Text("Source: %u  Visible: %u", stats.sourceDraws,
+                    stats.cameraVisible);
+        ImGui::Text("Camera culled: %u frustum, %u distance, %u small",
+                    stats.frustumCulled, stats.distanceCulled,
+                    stats.smallObjectCulled);
+        ImGui::Text("Camera queues: %u opaque, %u transparent",
+                    stats.cameraOpaque, stats.cameraTransparent);
+        ImGui::Text("Invalid bounds: %u", stats.invalidBounds);
+        ImGui::Text("Shadow: %u / %u visible, %u culled",
+                    stats.shadowVisible, stats.shadowCandidates,
+                    stats.shadowCulled);
+        ImGui::Text("Depth draws: %u", stats.depthPrepassDraws);
+        ImGui::Text("GPU occluded: %u / %u", stats.gpuOccluded,
+                    stats.occlusionCandidates);
+        if (stats.gpuStatsFrameSerial != 0) {
+            ImGui::TextDisabled("GPU result frame: %llu",
+                                static_cast<unsigned long long>(
+                                    stats.gpuStatsFrameSerial));
+        }
+        ImGui::Text("Hi-Z mips: %u", status.hiZMipLevels);
+        ImGui::Text("Indirect capacity: %u / %u",
+                    status.indirectCapacities[0],
+                    status.indirectCapacities[1]);
+        ImGui::Text("Visibility buffers: %.2f KiB",
+                    static_cast<double>(status.allocatedBytes) / 1024.0);
+        ImGui::TreePop();
     }
 }
 
@@ -6749,6 +6953,12 @@ void Application::drawGui() {
             drawLightingPanel();
             ImGui::PopID();
         }
+        if (ImGui::CollapsingHeader("Culling",
+                                    ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::PushID("Culling");
+            drawCullingPanel();
+            ImGui::PopID();
+        }
         if (ImGui::CollapsingHeader("Camera & Clip")) {
             ImGui::PushID("Camera");
             drawCameraPanel();
@@ -7096,7 +7306,6 @@ void Application::mainLoop() {
         viewInput.environmentReady = renderer_->environmentReady();
         viewInput.maxSpecularLod =
             renderer_->currentEnvironmentMaxSpecularLod();
-        glm::vec3 renderCameraPosition = camera_.position();
         if (currentScene_) {
             viewInput.sceneBounds = currentScene_->bounds();
             viewInput.sceneLights = &currentScene_->lights();
@@ -7136,7 +7345,6 @@ void Application::mainLoop() {
                     viewInput.cameraPosition = activeCamera->position;
                     viewInput.cameraNearPlane = activeCamera->nearPlane;
                     viewInput.cameraFarPlane = activeCamera->farPlane;
-                    renderCameraPosition = activeCamera->position;
                 }
             }
         }
@@ -7158,21 +7366,42 @@ void Application::mainLoop() {
                 currentScene_->collectRenderCommands(renderQueue_);
         }
         {
-            VKL_PROFILE_ZONE("RenderQueue Sort");
-            renderQueue_.sortOpaque();
-            renderQueue_.sortTransparent(renderCameraPosition);
+            VKL_PROFILE_ZONE("Visibility Build");
+            visibilityFrame_ = visibilitySystem_.build(
+                renderQueue_, renderView, renderer_->viewportExtent());
         }
 
         if constexpr (build::kTracy) {
             profilePlotNumber(
                 "Frame/DrawCount",
-                static_cast<int64_t>(renderQueue_.drawCount()));
+                static_cast<int64_t>(visibilityFrame_.camera.drawCount()));
             profilePlotNumber(
                 "Frame/OpaqueDrawCount",
-                static_cast<int64_t>(renderQueue_.opaque().size()));
+                static_cast<int64_t>(
+                    visibilityFrame_.camera.opaque().size()));
             profilePlotNumber(
                 "Frame/TransparentDrawCount",
-                static_cast<int64_t>(renderQueue_.transparent().size()));
+                static_cast<int64_t>(
+                    visibilityFrame_.camera.transparent().size()));
+            profilePlotNumber(
+                "Visibility/Source",
+                static_cast<int64_t>(visibilityFrame_.stats.sourceDraws));
+            profilePlotNumber(
+                "Visibility/CameraVisible",
+                static_cast<int64_t>(visibilityFrame_.stats.cameraVisible));
+            profilePlotNumber(
+                "Visibility/FrustumCulled",
+                static_cast<int64_t>(visibilityFrame_.stats.frustumCulled));
+            profilePlotNumber(
+                "Visibility/DistanceCulled",
+                static_cast<int64_t>(visibilityFrame_.stats.distanceCulled));
+            profilePlotNumber(
+                "Visibility/SmallObjectCulled",
+                static_cast<int64_t>(
+                    visibilityFrame_.stats.smallObjectCulled));
+            profilePlotNumber(
+                "Visibility/ShadowVisible",
+                static_cast<int64_t>(visibilityFrame_.stats.shadowVisible));
             profilePlotNumber(
                 "Frame/GraphicsPipelines",
                 static_cast<int64_t>(pipelineCache_->graphicsPipelineCount()));
@@ -7220,9 +7449,15 @@ void Application::mainLoop() {
             ScopedGpuLabel frameLabel(
                 device_->debugUtils(), ctx->cmd,
                 "Frame " + std::to_string(presentedFrameCount_ + 1));
-            renderer_->renderFrame(*ctx, renderQueue_, *pipelineCache_,
+            renderer_->renderFrame(*ctx, visibilityFrame_, *pipelineCache_,
                                    frameGui, currentShaderVariant(),
                                    renderView);
+            if constexpr (build::kTracy) {
+                profilePlotNumber(
+                    "Visibility/GpuOccluded",
+                    static_cast<int64_t>(
+                        visibilityFrame_.stats.gpuOccluded));
+            }
             if (captureSelection) {
                 VKL_PROFILE_GPU_ZONE(device_->tracyProfiler(), ctx->cmd,
                                      "ScreenshotCopy");

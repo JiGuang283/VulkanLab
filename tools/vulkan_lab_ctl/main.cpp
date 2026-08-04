@@ -65,7 +65,12 @@ void printUsage() {
            "[--ibl on|off] [--skybox on|off] "
            "[--environment-intensity N] [--environment-rotation-deg N] "
            "[--bloom on|off] [--bloom-threshold N] "
-           "[--bloom-soft-knee N] [--bloom-intensity N]\n"
+           "[--bloom-soft-knee N] [--bloom-intensity N] "
+           "[--frustum on|off] [--shadow-culling on|off] "
+           "[--shadow-distance N] [--distance-culling on|off] "
+           "[--max-draw-distance N] [--small-object-culling on|off] "
+           "[--min-projected-pixels N] [--occlusion on|off] "
+           "[--occlusion-bias N]\n"
         << "  VulkanLabCtl [--json] render wait [--stable-frames N] "
            "[--timeout-ms N]\n"
         << "  VulkanLabCtl [--json] capture screenshot <relative.png> "
@@ -164,6 +169,15 @@ ParsedCommand parseCommand(int argc, char **argv) {
     std::optional<std::string> bloomThreshold;
     std::optional<std::string> bloomSoftKnee;
     std::optional<std::string> bloomIntensity;
+    std::optional<std::string> frustumCulling;
+    std::optional<std::string> shadowCulling;
+    std::optional<std::string> shadowDistance;
+    std::optional<std::string> distanceCulling;
+    std::optional<std::string> maxDrawDistance;
+    std::optional<std::string> smallObjectCulling;
+    std::optional<std::string> minProjectedPixels;
+    std::optional<std::string> occlusionCulling;
+    std::optional<std::string> occlusionBias;
     for (int i = 1; i < argc; ++i) {
         const std::string argument = argv[i];
         if (argument == "--pipe") {
@@ -192,7 +206,16 @@ ParsedCommand parseCommand(int argc, char **argv) {
                  argument == "--bloom" ||
                  argument == "--bloom-threshold" ||
                  argument == "--bloom-soft-knee" ||
-                 argument == "--bloom-intensity") {
+                 argument == "--bloom-intensity" ||
+                 argument == "--frustum" ||
+                 argument == "--shadow-culling" ||
+                 argument == "--shadow-distance" ||
+                 argument == "--distance-culling" ||
+                 argument == "--max-draw-distance" ||
+                 argument == "--small-object-culling" ||
+                 argument == "--min-projected-pixels" ||
+                 argument == "--occlusion" ||
+                 argument == "--occlusion-bias") {
             if (++i >= argc)
                 throw std::invalid_argument(argument + " requires a value");
             if (argument == "--position")
@@ -231,8 +254,26 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 bloomThreshold = argv[i];
             else if (argument == "--bloom-soft-knee")
                 bloomSoftKnee = argv[i];
-            else
+            else if (argument == "--bloom-intensity")
                 bloomIntensity = argv[i];
+            else if (argument == "--frustum")
+                frustumCulling = argv[i];
+            else if (argument == "--shadow-culling")
+                shadowCulling = argv[i];
+            else if (argument == "--shadow-distance")
+                shadowDistance = argv[i];
+            else if (argument == "--distance-culling")
+                distanceCulling = argv[i];
+            else if (argument == "--max-draw-distance")
+                maxDrawDistance = argv[i];
+            else if (argument == "--small-object-culling")
+                smallObjectCulling = argv[i];
+            else if (argument == "--min-projected-pixels")
+                minProjectedPixels = argv[i];
+            else if (argument == "--occlusion")
+                occlusionCulling = argv[i];
+            else
+                occlusionBias = argv[i];
         }
         else if (argument == "--no-wait")
             waitForLoad = false;
@@ -435,6 +476,43 @@ ParsedCommand parseCommand(int argc, char **argv) {
         if (bloomIntensity) {
             parsed.params["bloomIntensity"] =
                 parseFiniteFloat(*bloomIntensity, "--bloom-intensity");
+        }
+        if (frustumCulling) {
+            parsed.params["frustumCullingEnabled"] =
+                parseOnOff(*frustumCulling, "--frustum");
+        }
+        if (shadowCulling) {
+            parsed.params["shadowCullingEnabled"] =
+                parseOnOff(*shadowCulling, "--shadow-culling");
+        }
+        if (shadowDistance) {
+            parsed.params["shadowDistance"] =
+                parseFiniteFloat(*shadowDistance, "--shadow-distance");
+        }
+        if (distanceCulling) {
+            parsed.params["distanceCullingEnabled"] =
+                parseOnOff(*distanceCulling, "--distance-culling");
+        }
+        if (maxDrawDistance) {
+            parsed.params["maxDrawDistance"] = parseFiniteFloat(
+                *maxDrawDistance, "--max-draw-distance");
+        }
+        if (smallObjectCulling) {
+            parsed.params["smallObjectCullingEnabled"] =
+                parseOnOff(*smallObjectCulling,
+                           "--small-object-culling");
+        }
+        if (minProjectedPixels) {
+            parsed.params["minProjectedSizePixels"] = parseFiniteFloat(
+                *minProjectedPixels, "--min-projected-pixels");
+        }
+        if (occlusionCulling) {
+            parsed.params["occlusionCullingEnabled"] =
+                parseOnOff(*occlusionCulling, "--occlusion");
+        }
+        if (occlusionBias) {
+            parsed.params["occlusionDepthBias"] =
+                parseFiniteFloat(*occlusionBias, "--occlusion-bias");
         }
         if (parsed.params.empty())
             throw std::invalid_argument(
@@ -732,6 +810,19 @@ void printHuman(const std::string &method, const Json &result) {
                   << result.at("rendering").get<bool>()
                   << ", minimized: "
                   << result.at("minimized").get<bool>() << '\n';
+        if (result.contains("culling")) {
+            const Json &culling = result.at("culling");
+            std::cout << "culling visible/source: "
+                      << culling.value("cameraVisible", 0u) << "/"
+                      << culling.value("sourceDraws", 0u)
+                      << ", frustum/distance/small: "
+                      << culling.value("frustumCulled", 0u) << "/"
+                      << culling.value("distanceCulled", 0u) << "/"
+                      << culling.value("smallObjectCulled", 0u)
+                      << ", GPU occluded: "
+                      << culling.value("gpuOccluded", 0u) << "/"
+                      << culling.value("occlusionCandidates", 0u) << '\n';
+        }
         const Json &gpuTimings = result.at("gpuTimings");
         if (gpuTimings.value("available", false)) {
             std::cout << "GPU frame "
@@ -783,11 +874,43 @@ void printHuman(const std::string &method, const Json &result) {
                   << "\nthreshold/knee/intensity: "
                   << result.at("bloomThreshold").get<float>() << "/"
                   << result.at("bloomSoftKnee").get<float>() << "/"
-                  << result.at("bloomIntensity").get<float>() << '\n';
+                  << result.at("bloomIntensity").get<float>()
+                  << "\nCulling frustum/shadow/distance/small/occlusion: "
+                  << (result.at("frustumCullingEnabled").get<bool>()
+                          ? "on"
+                          : "off")
+                  << "/"
+                  << (result.at("shadowCullingEnabled").get<bool>()
+                          ? "on"
+                          : "off")
+                  << "/"
+                  << (result.at("distanceCullingEnabled").get<bool>()
+                          ? "on"
+                          : "off")
+                  << "/"
+                  << (result.at("smallObjectCullingEnabled").get<bool>()
+                          ? "on"
+                          : "off")
+                  << "/"
+                  << (result.at("occlusionCullingEnabled").get<bool>()
+                          ? "on"
+                          : "off")
+                  << "\nshadow/max distance/min pixels/occlusion bias: "
+                  << result.at("shadowDistance").get<float>() << "/"
+                  << result.at("maxDrawDistance").get<float>() << "/"
+                  << result.at("minProjectedSizePixels").get<float>()
+                  << "/" << result.at("occlusionDepthBias").get<float>()
+                  << '\n';
         const std::string bloomReason =
             result.value("bloomUnavailableReason", std::string{});
         if (!bloomReason.empty())
             std::cout << "Bloom unavailable: " << bloomReason << '\n';
+        const std::string occlusionReason =
+            result.value("occlusionUnavailableReason", std::string{});
+        if (!occlusionReason.empty()) {
+            std::cout << "Occlusion unavailable: " << occlusionReason
+                      << '\n';
+        }
     } else if (method == "capture.screenshot" ||
                method == "capture.status" ||
                method == "capture.cancel") {

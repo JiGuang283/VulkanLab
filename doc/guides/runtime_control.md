@@ -1,8 +1,8 @@
 # VulkanLab Runtime Control 使用说明
 
 > Status: Current
-> Last verified: 2026-08-02
-> Verified against: Procedural Sky Atmosphere v1 implementation
+> Last verified: 2026-08-04
+> Verified against: Visibility and Hi-Z occlusion implementation
 
 Runtime Control 通过 Windows Named Pipe 控制已经运行的 VulkanLab。它面向本机开发、诊断和自动化，可以查询状态、加载模型预览或 Native Scene、设置环境、相机、Shader 与渲染参数、等待渲染稳定、异步截图并安全退出程序。`scene.list.entries[]` 同时返回 `kind: "modelPreview"` 和 `kind: "nativeScene"`；Native Scene 条目使用稳定 SceneDocument ID，模型预览继续返回兼容 `sceneId`、`modelId`、Catalog profile ID 和纹理限制。
 
@@ -121,6 +121,7 @@ cd build\windows-msvc-debug\Debug
 - `modelAssetRepository` 的 Ready/Loading/Failed/Retiring 数量、prepare/build/hit/coalesced 计数和各 generation 的 consumer/资源摘要；
 - 当前选择和已发布的 environment，以及环境加载任务；
 - 当前 Scene 的 Directional/Point/Spot 数量、按类型与总计的实际上传数量、256 灯上限、每个 frame slot 的 SSBO capacity/总字节、超限数量与最多 32 个 ignored Entity ID，以及当前 Directional shadow caster；
+- `culling` 的 source/visible 数量、frustum/distance/small-object 计数、shadow candidates/culled、depth draws、GPU occluded、Hi-Z mip 数和 indirect capacity；
 - `atmosphere` 的设备 support、active 状态、component/Sun Entity、Sun buffer index、相机高度、静态 LUT ready/dirty、generation、更新时间和不可用原因；
 - capture queue 计数，以及 Workspace/Viewport 各自的 capture capability；
 - `viewport` 的模式、可见/hover 状态、display extent、render extent 和 resize pending；
@@ -188,7 +189,7 @@ Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模�
 
 加载是异步操作。默认客户端拿到 task ID 后通过现有 `load status` 等待 worker KTX2 读取、增量 GPU 上传和 descriptor generation 发布完成；`--no-wait` 只返回初始任务。`load status <task-id>` 与 `load cancel <task-id>` 同时识别 Scene 和 Environment 命名空间。加载失败或取消会保留旧的已发布环境。`environment reload` 要求当前已经选择非 None 环境。
 
-### 阴影、IBL、Bloom、曝光与 Tone Mapping
+### 阴影、剔除、IBL、Bloom、曝光与 Tone Mapping
 
 ```powershell
 .\VulkanLabCtl.exe render-settings get
@@ -210,13 +211,25 @@ Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模�
   --bloom-threshold 1.0 `
   --bloom-soft-knee 0.5 `
   --bloom-intensity 0.1
+.\VulkanLabCtl.exe render-settings set `
+  --frustum on `
+  --shadow-culling on `
+  --shadow-distance 200 `
+  --distance-culling off `
+  --max-draw-distance 1000 `
+  --small-object-culling off `
+  --min-projected-pixels 1 `
+  --occlusion on `
+  --occlusion-bias 0.0005
 ```
 
 `render-settings set` 支持部分更新，并要求至少提供一个选项。`--shadows`、`--ibl`、`--skybox` 和 `--bloom` 接受 `on/off`，`--tone-mapper` 接受 `aces`、`reinhard` 或 `passthrough`。Receiver bias 范围为 `[0, 0.05]`，constant/slope bias 为 `[0, 10]`，exposure 为 `[-10, 10]` EV，environment intensity 为 `[0, 100]`；Bloom threshold、soft knee 和 intensity 分别为 `[0,20]`、`[0,1]` 和 `[0,5]`。CLI 用 degree 表示 rotation，协议字段 `environmentRotationRadians` 使用弧度；服务端将其规范化到一个完整旋转。
 
+剔除开关同样只修改当前会话。Frustum、Shadow Culling 和受支持设备上的 Hi-Z Occlusion 默认开启；Distance 与 Small Object 默认关闭。`shadowDistance`、`maxDrawDistance`、`minProjectedSizePixels` 和 `occlusionDepthBias` 的协议范围分别为 `[0.1,100000]`、`[0.1,1000000]`、`[0,256]` 和 `[0,0.05]`。`render-settings get` 额外返回 `occlusionAvailable/Active/UnavailableReason`；不支持 compute、sampled depth 或 `R32_SFLOAT` storage 的设备尝试开启时返回 `occlusion_unsupported`。
+
 Tone Mapping policy 由 Shader Manifest 决定：两个 PBR-lite 和 `Debug IBL Diffuse/Specular` 可配置，Legacy 与其他 Debug variant 强制 PassThrough。Bloom compatibility 也由 Manifest 决定，目前只有两个 PBR-lite variant 支持；设置会保留，但其他 variant 下 `bloomActive=false`。`render-settings get` 返回 `bloomAvailable`、`bloomActive`、`bloomUnavailableReason` 和四个 Bloom 设置。设备不满足 compute/`RGBA16F` storage image 要求时，尝试开启会返回 `bloom_unsupported`。
 
-阴影只影响被选中的 Directional shadow caster，但 `Debug Shadow` 可显示最终 visibility。IBL 只在环境已发布且开关开启时替代 PBR 的 constant ambient；Skybox 开关独立。Native Scene 的 Atmosphere 与 Atmosphere Sun 来自只读 SceneDocument/RuntimeWorld，Runtime Control v3 只报告状态，不提供大气参数 mutation。UI 的 `Render -> Pipeline/Post Processing/Lighting` 与 Runtime Control 修改同一个 `RenderSettings` 对象。
+阴影只影响被选中的 Directional shadow caster，但 `Debug Shadow` 可显示最终 visibility。IBL 只在环境已发布且开关开启时替代 PBR 的 constant ambient；Skybox 开关独立。Native Scene 的 Atmosphere 与 Atmosphere Sun 来自只读 SceneDocument/RuntimeWorld，Runtime Control v3 只报告状态，不提供大气参数 mutation。UI 的 `Render -> Common/Post Processing/Lighting/Culling` 与 Runtime Control 修改同一个 `RenderSettings` 对象。
 
 ### 派生资产
 

@@ -138,6 +138,24 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         command, "bloomSoftKnee", 0.0f, 1.0f);
     patch.bloomIntensity = optionalFiniteFloat(
         command, "bloomIntensity", 0.0f, 5.0f);
+    patch.frustumCullingEnabled =
+        optionalBoolValue(command, "frustumCullingEnabled");
+    patch.shadowCullingEnabled =
+        optionalBoolValue(command, "shadowCullingEnabled");
+    patch.shadowDistance = optionalFiniteFloat(
+        command, "shadowDistance", 0.1f, 100000.0f);
+    patch.distanceCullingEnabled =
+        optionalBoolValue(command, "distanceCullingEnabled");
+    patch.maxDrawDistance = optionalFiniteFloat(
+        command, "maxDrawDistance", 0.1f, 1000000.0f);
+    patch.smallObjectCullingEnabled =
+        optionalBoolValue(command, "smallObjectCullingEnabled");
+    patch.minProjectedSizePixels = optionalFiniteFloat(
+        command, "minProjectedSizePixels", 0.0f, 256.0f);
+    patch.occlusionCullingEnabled =
+        optionalBoolValue(command, "occlusionCullingEnabled");
+    patch.occlusionDepthBias = optionalFiniteFloat(
+        command, "occlusionDepthBias", 0.0f, 0.05f);
     if (const auto toneMapper = optionalString(command, "toneMapper")) {
         patch.toneMapper = toneMapperFromName(*toneMapper);
         if (!patch.toneMapper) {
@@ -152,7 +170,12 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         !patch.skyboxEnabled && !patch.environmentIntensity &&
         !patch.environmentRotationRadians && !patch.bloomEnabled &&
         !patch.bloomThreshold && !patch.bloomSoftKnee &&
-        !patch.bloomIntensity) {
+        !patch.bloomIntensity && !patch.frustumCullingEnabled &&
+        !patch.shadowCullingEnabled && !patch.shadowDistance &&
+        !patch.distanceCullingEnabled && !patch.maxDrawDistance &&
+        !patch.smallObjectCullingEnabled &&
+        !patch.minProjectedSizePixels && !patch.occlusionCullingEnabled &&
+        !patch.occlusionDepthBias) {
         throw RuntimeCommandError(
             "invalid_params",
             "render_settings.set requires at least one setting.");

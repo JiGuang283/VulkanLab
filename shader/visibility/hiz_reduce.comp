@@ -1,0 +1,32 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D sourceMip;
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D destinationMip;
+
+layout(push_constant) uniform HiZPush {
+    uvec4 extents;
+} push;
+
+void main()
+{
+    ivec2 destinationPixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sourceSize = ivec2(push.extents.xy);
+    ivec2 destinationSize = ivec2(push.extents.zw);
+    if (any(greaterThanEqual(destinationPixel, destinationSize)))
+        return;
+
+    ivec2 sourceBase = destinationPixel * 2;
+    float maximumDepth = 0.0;
+    for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 2; ++x) {
+            ivec2 sourcePixel = min(sourceBase + ivec2(x, y),
+                                    sourceSize - ivec2(1));
+            maximumDepth = max(maximumDepth,
+                               texelFetch(sourceMip, sourcePixel, 0).r);
+        }
+    }
+    imageStore(destinationMip, destinationPixel,
+               vec4(maximumDepth, 0.0, 0.0, 0.0));
+}

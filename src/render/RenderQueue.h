@@ -19,6 +19,10 @@ class RenderQueue {
     const std::vector<RenderCommand> &transparent() const {
         return transparent_;
     }
+    std::vector<RenderCommand> &mutableOpaque() { return opaque_; }
+    std::vector<RenderCommand> &mutableTransparent() {
+        return transparent_;
+    }
 
     size_t drawCount() const { return opaque_.size() + transparent_.size(); }
     size_t uniqueMaterialCount() const;

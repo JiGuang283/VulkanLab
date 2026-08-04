@@ -29,6 +29,13 @@ struct AtmosphereSupport {
     std::string reason;
 };
 
+struct OcclusionCullingSupport {
+    bool available = false;
+    VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+    VkFormat hiZFormat = VK_FORMAT_R32_SFLOAT;
+    std::string reason;
+};
+
 class Device {
   public:
     Device(VulkanContext &ctx);
@@ -55,6 +62,9 @@ class Device {
     }
     const AtmosphereSupport &atmosphereSupport() const {
         return atmosphereSupport_;
+    }
+    const OcclusionCullingSupport &occlusionCullingSupport() const {
+        return occlusionCullingSupport_;
     }
 
     SwapChainSupportDetails querySwapChainSupport() const;
@@ -89,6 +99,7 @@ class Device {
     bool environmentIblSupported_ = false;
     ComputeBloomSupport computeBloomSupport_{};
     AtmosphereSupport atmosphereSupport_{};
+    OcclusionCullingSupport occlusionCullingSupport_{};
     VmaAllocator          allocator_ = VK_NULL_HANDLE;
     std::unique_ptr<GpuDebugUtils> debugUtils_;
     std::unique_ptr<TracyProfiler> tracyProfiler_;

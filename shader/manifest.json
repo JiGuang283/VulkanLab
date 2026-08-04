@@ -101,6 +101,32 @@
       "fragment": "shadow/depth_mask.frag"
     },
     {
+      "id": "visibility.depth-opaque",
+      "contract": "shadow-depth",
+      "vertex": "visibility/depth.vert"
+    },
+    {
+      "id": "visibility.depth-mask",
+      "contract": "shadow-depth",
+      "vertex": "visibility/depth.vert",
+      "fragment": "shadow/depth_mask.frag"
+    },
+    {
+      "id": "visibility.hiz-init",
+      "contract": "compute",
+      "compute": "visibility/hiz_init.comp"
+    },
+    {
+      "id": "visibility.hiz-reduce",
+      "contract": "compute",
+      "compute": "visibility/hiz_reduce.comp"
+    },
+    {
+      "id": "visibility.occlusion-cull",
+      "contract": "compute",
+      "compute": "visibility/occlusion_cull.comp"
+    },
+    {
       "id": "postprocess.tonemap",
       "contract": "fullscreen",
       "vertex": "postprocess/fullscreen.vert",

@@ -170,12 +170,16 @@ set(VKL_ENGINE_SOURCES
     render/RenderQueue.cpp
     render/RenderResourceRegistry.cpp
     render/RenderView.cpp
+    render/Visibility.cpp
     render/TangentGenerator.cpp
     render/Texture.cpp
     render/TextureData.cpp
     render/pass/MainForwardPass.cpp
     render/pass/AtmosphereLutPass.cpp
     render/pass/DirectionalShadowPass.cpp
+    render/pass/VisibilityDepthPass.cpp
+    render/pass/HiZBuildPass.cpp
+    render/pass/OcclusionCullPass.cpp
     render/pass/BloomPass.cpp
     render/pass/SkyBackgroundPass.cpp
     render/pass/ToneMapPass.cpp

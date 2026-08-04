@@ -67,7 +67,7 @@ void PresentPass::onSwapChainResize(const SwapChain &) {
 
 void PresentPass::execute(const RenderFrameContext &frame,
                           const RenderResourceRegistry &,
-                          const RenderQueue &) {
+                          const VisibilityFrame &) {
     VKL_PROFILE_ZONE("Record Present And UI");
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "Present + UI");
     if (!frame.pipelineCache)

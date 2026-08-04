@@ -33,7 +33,7 @@ class AtmosphereLutPass final : public IRenderPass {
     std::vector<RenderImageUsage> resourceUsages() const override;
     void execute(const RenderFrameContext &frame,
                  const RenderResourceRegistry &resources,
-                 const RenderQueue &queue) override;
+                 const VisibilityFrame &visibility) override;
 
     bool readyFor(uint64_t staticLutKey) const;
     const AtmosphereRuntimeStatus &status() const { return status_; }

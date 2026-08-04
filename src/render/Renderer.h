@@ -28,9 +28,9 @@ class AtmosphereLutPass;
 class ToneMapPass;
 class PresentPass;
 class PipelineCache;
-class RenderQueue;
 struct ShaderVariant;
 struct RenderView;
+struct VisibilityFrame;
 
 struct RendererViewportOutput {
     VkExtent2D extent{};
@@ -47,6 +47,15 @@ struct SceneLightBufferStatus {
     uint64_t allocatedBytes = 0;
 };
 
+struct OcclusionCullingStatus {
+    bool supported = false;
+    bool active = false;
+    std::string unavailableReason;
+    uint32_t hiZMipLevels = 0;
+    std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> indirectCapacities{};
+    uint64_t allocatedBytes = 0;
+};
+
 class Renderer {
   public:
     Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
@@ -58,7 +67,8 @@ class Renderer {
     Renderer &operator=(const Renderer &) = delete;
 
     void renderFrame(const FrameSync::FrameContext &frame,
-                     const RenderQueue &queue, PipelineCache &pipelineCache,
+                     VisibilityFrame &visibility,
+                     PipelineCache &pipelineCache,
                      GuiSystem *gui, const ShaderVariant &shaderVariant,
                      const RenderView &view);
 
@@ -86,6 +96,7 @@ class Renderer {
     bool bloomSupported() const;
     const std::string &bloomUnsupportedReason() const;
     SceneLightBufferStatus sceneLightBufferStatus() const;
+    OcclusionCullingStatus occlusionCullingStatus() const;
     bool atmosphereSupported() const;
     const std::string &atmosphereUnsupportedReason() const;
     AtmosphereRuntimeStatus atmosphereStatus() const;
@@ -151,6 +162,8 @@ class Renderer {
     RenderPipeline pipeline_;
     std::unique_ptr<GpuPassProfiler> gpuPassProfiler_;
     MainForwardPass *mainForwardPass_ = nullptr;
+    class OcclusionCullPass *occlusionCullPass_ = nullptr;
+    uint32_t lastOcclusionFrameIndex_ = 0;
     AtmosphereLutPass *atmosphereLutPass_ = nullptr;
     AtmosphereRuntimeStatus atmosphereStatus_{};
     ToneMapPass *toneMapPass_ = nullptr;

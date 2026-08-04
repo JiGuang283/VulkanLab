@@ -9,6 +9,7 @@
 #include "control/RuntimeCommandDispatcher.h"
 #include "diagnostics/SceneLoadStats.h"
 #include "render/RenderQueue.h"
+#include "render/Visibility.h"
 #include "render/RenderSettings.h"
 #include "render/RenderView.h"
 #include "render/ShaderRegistry.h"
@@ -129,6 +130,7 @@ class Application final
     void drawAssetsPanel(bool environmentsOnly = false);
     void drawRenderPanel();
     void drawPostProcessingPanel();
+    void drawCullingPanel();
     void drawLightingPanel();
     void drawCameraPanel();
     void drawMaterialsPanel();
@@ -264,6 +266,8 @@ class Application final
 #endif
     std::unique_ptr<CaptureService>      captureService_;
     RenderQueue                          renderQueue_;
+    VisibilitySystem                    visibilitySystem_;
+    VisibilityFrame                     visibilityFrame_;
     ShaderRegistry                       shaderRegistry_;
     std::string                          currentShaderVariantId_;
 

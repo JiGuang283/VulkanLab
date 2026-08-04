@@ -127,7 +127,7 @@ void BloomPass::onViewportResize(
 
 void BloomPass::execute(const RenderFrameContext &frame,
                         const RenderResourceRegistry &resources,
-                        const RenderQueue &) {
+                        const VisibilityFrame &) {
     VKL_PROFILE_ZONE("Record Bloom");
     if (!frame.pipelineCache || !frame.view || !frame.shaderVariant)
         return;

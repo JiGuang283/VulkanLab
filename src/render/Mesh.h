@@ -27,6 +27,8 @@ class Mesh {
 
     void bind(VkCommandBuffer cmd) const;
     void draw(VkCommandBuffer cmd) const;
+    void drawIndirect(VkCommandBuffer cmd, VkBuffer indirectBuffer,
+                      VkDeviceSize offset) const;
 
     uint32_t indexCount() const { return indexCount_; }
     const Bounds &localBounds() const { return localBounds_; }

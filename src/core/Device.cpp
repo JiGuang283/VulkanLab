@@ -282,6 +282,58 @@ void Device::pickPhysicalDevice() {
         VKR_LOG_WARN("Device", "Sky Atmosphere unavailable: {}",
                      atmosphereSupport_.reason);
     }
+
+    constexpr VkFormat depthCandidates[] = {
+        VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT,
+        VK_FORMAT_D16_UNORM};
+    for (VkFormat format : depthCandidates) {
+        VkFormatProperties properties{};
+        vkGetPhysicalDeviceFormatProperties(physicalDevice_, format,
+                                            &properties);
+        const VkFormatFeatureFlags requiredDepth =
+            VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT |
+            VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+        if ((properties.optimalTilingFeatures & requiredDepth) ==
+            requiredDepth) {
+            occlusionCullingSupport_.depthFormat = format;
+            break;
+        }
+    }
+    VkFormatProperties hiZProperties{};
+    vkGetPhysicalDeviceFormatProperties(physicalDevice_,
+                                        VK_FORMAT_R32_SFLOAT,
+                                        &hiZProperties);
+    const VkFormatFeatureFlags requiredHiZ =
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+        VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
+    VkImageFormatProperties hiZImageProperties{};
+    const bool hiZImageSupported =
+        vkGetPhysicalDeviceImageFormatProperties(
+            physicalDevice_, VK_FORMAT_R32_SFLOAT, VK_IMAGE_TYPE_2D,
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT, 0,
+            &hiZImageProperties) == VK_SUCCESS;
+    if (!graphicsQueueSupportsCompute) {
+        occlusionCullingSupport_.reason =
+            "selected graphics queue does not support compute";
+    } else if (occlusionCullingSupport_.depthFormat ==
+               VK_FORMAT_UNDEFINED) {
+        occlusionCullingSupport_.reason =
+            "no sampled depth attachment format is available";
+    } else if ((hiZProperties.optimalTilingFeatures & requiredHiZ) !=
+                   requiredHiZ ||
+               !hiZImageSupported) {
+        occlusionCullingSupport_.reason =
+            "R32F sampled storage images are unavailable";
+    } else {
+        occlusionCullingSupport_.available = true;
+    }
+    if (occlusionCullingSupport_.available) {
+        VKR_LOG_INFO("Device", "Hi-Z occlusion culling is supported");
+    } else {
+        VKR_LOG_WARN("Device", "Hi-Z occlusion culling unavailable: {}",
+                     occlusionCullingSupport_.reason);
+    }
 }
 void Device::createLogicalDevice() {
     QueueFamilyIndices indices = findQueueFamilies(physicalDevice_);

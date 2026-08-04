@@ -34,7 +34,7 @@ class BloomPass final : public IRenderPass {
         const RenderResourceRegistry &resources) override;
     void execute(const RenderFrameContext &frame,
                  const RenderResourceRegistry &resources,
-                 const RenderQueue &queue) override;
+                 const VisibilityFrame &visibility) override;
 
   private:
     static constexpr uint32_t kLevelCount =

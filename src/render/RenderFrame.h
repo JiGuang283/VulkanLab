@@ -32,6 +32,8 @@ struct RenderFrameContext {
     const RenderView *view = nullptr;
     bool environmentReady = false;
     bool atmosphereReady = false;
+    bool occlusionActive = false;
+    VkBuffer occlusionIndirectBuffer = VK_NULL_HANDLE;
 };
 
 } // namespace vkr

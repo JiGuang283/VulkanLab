@@ -93,7 +93,7 @@ bool AtmosphereLutPass::readyFor(uint64_t staticLutKey) const {
 
 void AtmosphereLutPass::execute(const RenderFrameContext &frame,
                                 const RenderResourceRegistry &resources,
-                                const RenderQueue &) {
+                                const VisibilityFrame &) {
     VKL_PROFILE_ZONE("Record Atmosphere LUTs");
     status_.componentPresent = frame.view &&
                                frame.view->atmosphere.componentPresent;

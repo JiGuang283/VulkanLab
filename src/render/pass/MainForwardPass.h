@@ -13,6 +13,7 @@ class RenderQueue;
 class RenderResourceRegistry;
 class SwapChain;
 struct RenderFrameContext;
+struct VisibilityFrame;
 
 class MainForwardPass final : public IRenderPass {
   public:
@@ -33,7 +34,7 @@ class MainForwardPass final : public IRenderPass {
         const RenderResourceRegistry &resources) override;
     void execute(const RenderFrameContext &frame,
                  const RenderResourceRegistry &resources,
-                 const RenderQueue &queue) override;
+                 const VisibilityFrame &visibility) override;
 
     VkRenderPass renderPass() const { return renderPass_; }
   private:

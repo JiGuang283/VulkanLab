@@ -1,0 +1,94 @@
+#version 450
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct CullItem {
+    vec4 center;
+    vec4 extent;
+    uvec4 draw;
+};
+
+struct DrawIndexedIndirectCommand {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int vertexOffset;
+    uint firstInstance;
+};
+
+layout(set = 0, binding = 0) uniform sampler2D hiZTexture;
+layout(std430, set = 0, binding = 1) readonly buffer CullItems {
+    CullItem items[];
+};
+layout(std430, set = 0, binding = 2) writeonly buffer IndirectCommands {
+    DrawIndexedIndirectCommand commands[];
+};
+layout(std430, set = 0, binding = 3) buffer VisibilityCounter {
+    uint visibleCount;
+    uint occludedCount;
+    uint reserved0;
+    uint reserved1;
+};
+
+layout(push_constant) uniform OcclusionPush {
+    mat4 viewProjection;
+    vec4 params;
+    uvec4 counts;
+} push;
+
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= push.counts.x)
+        return;
+
+    CullItem item = items[index];
+    vec2 minimumNdc = vec2(1e30);
+    vec2 maximumNdc = vec2(-1e30);
+    float nearestDepth = 1.0;
+    bool conservativeVisible = item.draw.y != 0u;
+    for (uint corner = 0; corner < 8; ++corner) {
+        vec3 signValue = vec3((corner & 1u) != 0u ? 1.0 : -1.0,
+                              (corner & 2u) != 0u ? 1.0 : -1.0,
+                              (corner & 4u) != 0u ? 1.0 : -1.0);
+        vec3 position = item.center.xyz + signValue * item.extent.xyz;
+        vec4 clip = push.viewProjection * vec4(position, 1.0);
+        if (clip.w <= 1e-5 || clip.z < 0.0) {
+            conservativeVisible = true;
+            break;
+        }
+        vec3 ndc = clip.xyz / clip.w;
+        minimumNdc = min(minimumNdc, ndc.xy);
+        maximumNdc = max(maximumNdc, ndc.xy);
+        nearestDepth = min(nearestDepth, ndc.z);
+    }
+
+    vec2 viewportSize = push.params.xy;
+    vec2 minimumPixel = (minimumNdc * 0.5 + 0.5) * viewportSize - vec2(2.0);
+    vec2 maximumPixel = (maximumNdc * 0.5 + 0.5) * viewportSize + vec2(2.0);
+    minimumPixel = clamp(minimumPixel, vec2(0.0), viewportSize - vec2(1.0));
+    maximumPixel = clamp(maximumPixel, vec2(0.0), viewportSize - vec2(1.0));
+    vec2 rectangleExtent = max(maximumPixel - minimumPixel, vec2(1.0));
+    float maximumDimension = max(rectangleExtent.x, rectangleExtent.y);
+    float mip = clamp(ceil(log2(maximumDimension)), 0.0,
+                      float(push.counts.y - 1u));
+    vec2 minimumUv = minimumPixel / viewportSize;
+    vec2 maximumUv = maximumPixel / viewportSize;
+    float maximumDepth = max(
+        max(textureLod(hiZTexture, vec2(minimumUv.x, minimumUv.y), mip).r,
+            textureLod(hiZTexture, vec2(maximumUv.x, minimumUv.y), mip).r),
+        max(textureLod(hiZTexture, vec2(minimumUv.x, maximumUv.y), mip).r,
+            textureLod(hiZTexture, vec2(maximumUv.x, maximumUv.y), mip).r));
+    bool visible = conservativeVisible ||
+                   nearestDepth <= maximumDepth + push.params.z;
+
+    commands[index].indexCount = item.draw.x;
+    commands[index].instanceCount = visible ? 1u : 0u;
+    commands[index].firstIndex = 0u;
+    commands[index].vertexOffset = 0;
+    commands[index].firstInstance = 0u;
+    if (visible)
+        atomicAdd(visibleCount, 1u);
+    else
+        atomicAdd(occludedCount, 1u);
+}

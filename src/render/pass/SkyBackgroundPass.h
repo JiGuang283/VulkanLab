@@ -34,7 +34,7 @@ class SkyBackgroundPass final : public IRenderPass {
         const RenderResourceRegistry &resources) override;
     void execute(const RenderFrameContext &frame,
                  const RenderResourceRegistry &resources,
-                 const RenderQueue &queue) override;
+                 const VisibilityFrame &visibility) override;
 
   private:
     void createRenderPass(const RenderResourceRegistry &resources);

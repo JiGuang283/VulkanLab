@@ -4,12 +4,14 @@
 #include "ModelLight.h"
 #include "TransformMath.h"
 #include "render/MaterialInstance.h"
+#include "render/Mesh.h"
 #include "render/RenderQueue.h"
 
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <unordered_set>
+#include <utility>
 
 namespace vkr {
 namespace {
@@ -682,6 +684,7 @@ void RuntimeWorld::collectRenderCommands(RenderQueue &queue) const {
             entry->model->asset.asset();
         if (!asset)
             continue;
+        uint32_t primitiveIndex = 0;
         for (const ModelPrimitive &primitive : asset->primitives) {
             const MaterialInstance *material = primitive.material.get();
             const MaterialParams *params =
@@ -689,10 +692,23 @@ void RuntimeWorld::collectRenderCommands(RenderQueue &queue) const {
             const bool transparent =
                 params && (params->alphaMode == AlphaMode::Blend ||
                            params->transmissionFactor > 0.0f);
-            queue.add({primitive.mesh.get(), material,
-                       entry->transform.world * primitive.localToAsset,
-                       transparent ? RenderQueueType::Transparent
-                                   : RenderQueueType::Opaque});
+            RenderCommand command{};
+            command.mesh = primitive.mesh.get();
+            command.material = material;
+            command.world =
+                entry->transform.world * primitive.localToAsset;
+            command.queue = transparent ? RenderQueueType::Transparent
+                                        : RenderQueueType::Opaque;
+            if (command.mesh)
+                command.localBounds = command.mesh->localBounds();
+            command.primitiveIndex = primitiveIndex;
+            command.renderItemId =
+                static_cast<uint64_t>(PersistentEntityIdHash{}(entry->id));
+            command.renderItemId ^=
+                static_cast<uint64_t>(primitiveIndex + 1u) *
+                0x9e3779b97f4a7c15ull;
+            queue.add(std::move(command));
+            ++primitiveIndex;
         }
     }
 }

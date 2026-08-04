@@ -1,8 +1,8 @@
 # 渲染流程
 
 > Status: Current
-> Last verified: 2026-08-02
-> Verified against: Procedural Sky Atmosphere v1 implementation
+> Last verified: 2026-08-04
+> Verified against: Visibility and Hi-Z occlusion implementation
 
 ## 帧图与 Pass 顺序
 
@@ -13,6 +13,12 @@ AtmosphereLutPass
         -> transmittance / multiple scattering / sky view / aerial perspective
 DirectionalShadowPass
         -> shadow depth
+VisibilityDepthPass
+        -> single-sample opaque/MASK depth
+HiZBuildPass
+        -> max-depth mip pyramid
+OcclusionCullPass
+        -> per-draw indirect instanceCount
 SkyBackgroundPass
         -> procedural atmosphere / skybox / clear
 MainForwardPass
@@ -25,9 +31,9 @@ PresentPass + ImGui
         -> swapchain / Workspace capture
 ```
 
-`RenderResourceRegistry` 使用稳定的类型化 handle 管理内部 render target 和 sampler。资源描述明确指定 fixed/viewport-relative extent、相对尺寸除数、single/per-frame multiplicity、format、sample count、usage、aspect、array layer 和 view type。当前注册 HDR resolve、可选 HDR MSAA、main depth、2048x2048 directional shadow depth、最多六级 Bloom 图像、LDR Viewport Color，以及四张 Atmosphere LUT 和相关 sampler。每个 per-frame image 按 `MAX_FRAMES_IN_FLIGHT` 分配；HDR 优先使用 `R16G16B16A16_SFLOAT`，不满足 color attachment 与 sampled 要求时回退到 `R32G32B32A32_SFLOAT`。Viewport Color 使用 Swapchain format，以延续既有 sRGB/gamma 行为。HDR sample count 取 color/depth format 和设备能力的交集，Atmosphere、Shadow、Bloom、ToneMap 与 Present 固定为 1x。
+`RenderResourceRegistry` 使用稳定的类型化 handle 管理内部 render target 和 sampler。资源描述明确指定 fixed/viewport-relative extent、相对尺寸除数、single/per-frame multiplicity、format、sample count、usage、aspect、array layer、view type 和 fixed/full mip policy。当前注册 HDR resolve、可选 HDR MSAA、main depth、2048x2048 directional shadow depth、Visibility Depth、`R32_SFLOAT` Hi-Z 完整 mip chain、最多六级 Bloom 图像、LDR Viewport Color，以及四张 Atmosphere LUT 和相关 sampler。每个 per-frame image 按 `MAX_FRAMES_IN_FLIGHT` 分配；HDR 优先使用 `R16G16B16A16_SFLOAT`，不满足 color attachment 与 sampled 要求时回退到 `R32G32B32A32_SFLOAT`。Viewport Color 使用 Swapchain format，以延续既有 sRGB/gamma 行为。HDR sample count 取 color/depth format 和设备能力的交集，Visibility Depth、Atmosphere、Shadow、Bloom、ToneMap 与 Present 固定为 1x。
 
-每个 Pass 通过 `resourceUsages()` 声明 attachment write、attachment read/write、sampled read、storage write/read-write、required/final layout。`RenderPipeline` 在初始化和 resize 后验证 handle、usage flag、sample/aspect、read-before-write 与相邻 layout 契约。Registry 不插入 barrier、不推导 lifetime、不重排 Pass；`RenderPipeline` 仍按 Atmosphere LUT、Shadow、Sky Background、Forward、Bloom、ToneMap、Present 顺序记录到同一个 frame command buffer。Render pass 之间使用 final/initial layout 和 dependency；AtmosphereLutPass 与 BloomPass 自行记录 compute write 到后续 compute/fragment read 的 image barrier。
+每个 Pass 通过 `resourceUsages()` 声明 attachment write、attachment read/write、sampled read、storage write/read-write、required/final layout。`RenderPipeline` 在初始化和 resize 后验证 handle、usage flag、sample/aspect、read-before-write 与相邻 layout 契约。Registry 不插入 barrier、不推导 lifetime、不重排 Pass；`RenderPipeline` 仍按 Atmosphere LUT、Shadow、Visibility Depth、Hi-Z、Occlusion、Sky Background、Forward、Bloom、ToneMap、Present 顺序记录到同一个 frame command buffer。Render pass 之间使用 final/initial layout 和 dependency；compute pass 自行记录 image barrier，以及 Occlusion SSBO write 到 indirect-command read 的 buffer barrier。
 
 Application 每帧只组装 `RenderViewInput`。纯函数 `buildRenderView()` 负责默认 Sun 规则、灯光过滤与分组、稳定阴影 caster、Atmosphere Sun 选择、阴影矩阵和 Atmosphere GPU 参数，输出不可变 `RenderView`。Renderer 将 `GlobalFrameUbo`、variable-length `sceneLights` 和 `AtmosphereGpuParams` 上传到当前 frame slot；Pass 通过 `RenderFrameContext::view` 读取同一份 settings、shadow 和 atmosphere 数据。
 
@@ -47,11 +53,26 @@ SkyBackgroundPass 负责清空 HDR color，并按优先级绘制程序化 Atmosp
 
 `doubleSided=false` 使用 back-face culling；`doubleSided=true` 使用 `VK_CULL_MODE_NONE`。相关 fragment shader 通过 `gl_FrontFacing` 修正背面法线。
 
+## 统一可见性与 Hi-Z 遮挡剔除
+
+`IRenderWorld` 只收集全量 RenderCommand，不感知相机。Application 随后用 `VisibilitySystem` 将 Mesh local bounds 变换为 world AABB，并按固定顺序执行 Vulkan `[0,1]` frustum、相机到 AABB 最近点距离和投影像素尺寸检查，生成 camera、shadow caster 与 depth-prepass 三套队列。bounds 无效、穿过 near plane 或投影不稳定的对象保守可见；Transparent 只参与 CPU 剔除并继续 back-to-front 排序。
+
+GPU 遮挡链路只处理 CPU 可见的 Opaque/MASK：
+
+1. `VisibilityDepthPass` 使用独立的单采样 depth target 绘制遮挡物；MASK 继续执行 BaseColor alpha cutoff，BLEND/transmission 不写入该深度。
+2. `HiZBuildPass` 将 depth 复制到 `R32_SFLOAT` mip 0，并按普通 Z 对每个 2x2 区域取最大深度，构建完整 mip chain。
+3. `OcclusionCullPass` 将每个 world AABB 投影到屏幕，矩形扩张 2 像素，选择可覆盖矩形的保守 mip，并比较对象 nearest depth 与覆盖 texel 的最大深度。
+4. Compute 为每个候选写出完整 `VkDrawIndexedIndirectCommand`，只通过 `instanceCount=0/1` 控制 MainForward 是否执行该 draw。
+
+MainForward 仍在 CPU 侧逐条绑定 Pipeline、Material、Mesh，并逐条调用一次 `vkCmdDrawIndexedIndirect()`；因此 v1 能跳过被遮挡对象的 vertex/fragment 工作，但不会减少 CPU 绑定与 draw 录制成本，也不是 bindless、draw compaction 或完整 GPU-driven rendering。每个 frame slot 持有独立且按 2 的幂增长的 input SSBO、indirect buffer 和 counter；旧 GPU 统计只在该 slot 的正常 frame fence 完成后读取，不增加等待。
+
+设备能力要求 graphics queue 支持 compute、存在可采样的 depth format，并且 `R32_SFLOAT` 支持 sampled/storage image。任一条件不满足时 Renderer 不创建 Visibility Depth、Hi-Z 或 Occlusion pass，MainForward 自动回到直接 draw；CPU camera culling 与 shadow culling 仍然可用。
+
 ## 方向光阴影
 
 `buildRenderView()` 只从 `castsShadow=true` 的有效 Directional 中选择 caster。显式 Light Entity 优先于 imported Directional，并使用 Entity UUID、Model Entity UUID 与 prototype index 组成的稳定 key 排序；被选中的 caster 保证进入 256 灯上限且位于 Directional 分段首位。零强度、零颜色或非有限参数的 Scene light 不上传到 GPU；场景没有实际贡献光照的灯时按兼容规则使用 fallback Sun。没有合格 Directional、无有效 bounds、无有效光方向或关闭 Shadows 时，ShadowPass 仍清除目标，但 Forward shader 不采样阴影贡献。
 
-阴影相机使用场景 AABB 的 8 个角点拟合：light view 看向 bounds center，XY 增加 5% padding、Z 增加 10% padding，并将 XY center 对齐到 shadow texel。投影使用 Vulkan `[0,1]` 深度的正交 ZO 矩阵。
+阴影相机优先拟合相机 near 到 `min(cameraFar, shadowDistance)` 的 receiver frustum slice：light-space XY 增加 5% padding并按 shadow texel snapping，Z 范围继续使用 Scene Bounds 且增加 10% padding，从而保留沿光线方向的离屏 caster。Shadow queue 以最终 light-space volume 对 Opaque/MASK AABB 做相交测试，不使用 camera frustum。无有效 receiver、bounds 或光源时回退原来的全 Scene Bounds 拟合。投影继续使用 Vulkan `[0,1]` 深度的正交 ZO 矩阵。
 
 DirectionalShadowPass 的 caster 规则为：
 
@@ -190,7 +211,7 @@ PBR Forward 按 Directional、Point、Spot 三段遍历 SSBO，Point/Spot 在超
 
 ## GPU Pass 计时
 
-Renderer 持有一个 `GpuPassProfiler` 和 timestamp query pool。每个 frame slot 为 `Atmosphere LUTs`、`DirectionalShadow`、`SkyBackground`、`MainForward`、可选 `Bloom`、`ToneMap` 和 `Present + UI` 分配 begin/end query。总时间从第一个 Pass begin 到最后一个 Pass end 计算。
+Renderer 持有一个 `GpuPassProfiler` 和 timestamp query pool。每个 frame slot 为 `Atmosphere LUTs`、`DirectionalShadow`、`VisibilityDepth`、`HiZBuild`、`OcclusionCull`、`SkyBackground`、`MainForward`、可选 `Bloom`、`ToneMap` 和 `Present + UI` 分配 begin/end query。总时间从第一个 Pass begin 到最后一个 Pass end 计算。
 
 `FrameSync::beginFrame()` 已等待对应 slot 的 fence 后，Profiler 才使用不带 `WAIT_BIT` 的 `vkGetQueryPoolResults()` 读取旧结果，然后在新 command buffer 中 reset 该 slot。计时不会增加 queue/device idle 或额外 fence wait。换算使用设备 `timestampPeriod`，并按 graphics queue 的 `timestampValidBits` 处理计数器回绕；不支持 timestamp 的设备返回 `available=false`，渲染继续运行。结果显示在 `VulkanLab -> Diagnostics -> Performance`，并由 `render.status.gpuTimings` 返回。
 

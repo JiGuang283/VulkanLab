@@ -58,6 +58,7 @@ Image::~Image() {
 Image::Image(Image &&other) noexcept
     : device_(other.device_), image_(other.image_),
       allocation_(other.allocation_), view_(other.view_),
+      mipViews_(std::move(other.mipViews_)),
       debugName_(std::move(other.debugName_)) {
     other.device_ = nullptr;
     other.image_ = VK_NULL_HANDLE;
@@ -72,6 +73,7 @@ Image &Image::operator=(Image &&other) noexcept {
         image_ = other.image_;
         allocation_ = other.allocation_;
         view_ = other.view_;
+        mipViews_ = std::move(other.mipViews_);
         debugName_ = std::move(other.debugName_);
         other.device_ = nullptr;
         other.image_ = VK_NULL_HANDLE;
@@ -108,9 +110,49 @@ void Image::createView(VkFormat format, VkImageAspectFlags aspectFlags,
     }
 }
 
+void Image::createMipViews(VkFormat format,
+                           VkImageAspectFlags aspectFlags,
+                           uint32_t mipLevels, VkImageViewType viewType,
+                           uint32_t arrayLayers) {
+    for (VkImageView mipView : mipViews_)
+        vkDestroyImageView(device_->logicalDevice(), mipView, nullptr);
+    mipViews_.clear();
+    mipViews_.reserve(mipLevels);
+    for (uint32_t mip = 0; mip < mipLevels; ++mip) {
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = image_;
+        viewInfo.viewType = viewType;
+        viewInfo.format = format;
+        viewInfo.subresourceRange.aspectMask = aspectFlags;
+        viewInfo.subresourceRange.baseMipLevel = mip;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.baseArrayLayer = 0;
+        viewInfo.subresourceRange.layerCount = arrayLayers;
+        VkImageView mipView = VK_NULL_HANDLE;
+        VK_CHECK(vkCreateImageView(device_->logicalDevice(), &viewInfo,
+                                   nullptr, &mipView));
+        if (!debugName_.empty()) {
+            device_->debugUtils().setObjectName(
+                VK_OBJECT_TYPE_IMAGE_VIEW, mipView,
+                debugName_ + "/Mip" + std::to_string(mip));
+        }
+        mipViews_.push_back(mipView);
+    }
+}
+
+VkImageView Image::mipView(uint32_t mipLevel) const {
+    if (mipLevel >= mipViews_.size())
+        throw std::out_of_range("image mip view index out of range");
+    return mipViews_[mipLevel];
+}
+
 void Image::cleanup() {
     if (device_) {
         VkDevice d = device_->logicalDevice();
+        for (VkImageView mipView : mipViews_)
+            vkDestroyImageView(d, mipView, nullptr);
+        mipViews_.clear();
         if (view_ != VK_NULL_HANDLE)
             vkDestroyImageView(d, view_, nullptr);
         if (image_ != VK_NULL_HANDLE)

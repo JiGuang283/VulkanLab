@@ -87,7 +87,7 @@ void SkyBackgroundPass::onViewportResize(
 
 void SkyBackgroundPass::execute(const RenderFrameContext &frame,
                          const RenderResourceRegistry &resources,
-                         const RenderQueue &) {
+                         const VisibilityFrame &) {
     VKL_PROFILE_ZONE("Record Sky Background");
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "Sky Background");
     const RenderImageHandle target =

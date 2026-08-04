@@ -117,6 +117,7 @@ void Scene::rebuildDerivedState() {
 }
 
 void Scene::collectRenderCommands(RenderQueue &queue) const {
+    uint32_t sourceIndex = 0;
     for (const auto &obj : objects_) {
         const auto *material = obj.material.get();
         const auto *params = material ? &material->params() : nullptr;
@@ -126,34 +127,52 @@ void Scene::collectRenderCommands(RenderQueue &queue) const {
         const RenderQueueType queueType = transparent
                                               ? RenderQueueType::Transparent
                                               : RenderQueueType::Opaque;
-        queue.add(RenderCommand{
-            obj.mesh.get(),
-            obj.material.get(),
-            obj.transform,
-            queueType,
-        });
+        RenderCommand command{};
+        command.mesh = obj.mesh.get();
+        command.material = obj.material.get();
+        command.world = obj.transform;
+        command.queue = queueType;
+        if (command.mesh)
+            command.localBounds = command.mesh->localBounds();
+        command.renderItemId = 0x100000000ull + sourceIndex;
+        queue.add(std::move(command));
+        ++sourceIndex;
     }
 
+    uint32_t instanceIndex = 0;
     for (const ModelInstance &instance : modelInstances_) {
-        if (!instance.visible)
+        if (!instance.visible) {
+            ++instanceIndex;
             continue;
+        }
         const auto asset = instance.asset.asset();
-        if (!asset)
+        if (!asset) {
+            ++instanceIndex;
             continue;
+        }
+        uint32_t primitiveIndex = 0;
         for (const ModelPrimitive &primitive : asset->primitives) {
             const auto *material = primitive.material.get();
             const auto *params = material ? &material->params() : nullptr;
             const bool transparent =
                 params && (params->alphaMode == AlphaMode::Blend ||
                            params->transmissionFactor > 0.0f);
-            queue.add(RenderCommand{
-                primitive.mesh.get(),
-                material,
-                instance.rootToWorld * primitive.localToAsset,
-                transparent ? RenderQueueType::Transparent
-                            : RenderQueueType::Opaque,
-            });
+            RenderCommand command{};
+            command.mesh = primitive.mesh.get();
+            command.material = material;
+            command.world = instance.rootToWorld * primitive.localToAsset;
+            command.queue = transparent ? RenderQueueType::Transparent
+                                        : RenderQueueType::Opaque;
+            if (command.mesh)
+                command.localBounds = command.mesh->localBounds();
+            command.primitiveIndex = primitiveIndex;
+            command.renderItemId =
+                (static_cast<uint64_t>(instanceIndex + 1u) << 32u) |
+                primitiveIndex;
+            queue.add(std::move(command));
+            ++primitiveIndex;
         }
+        ++instanceIndex;
     }
 }
 

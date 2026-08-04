@@ -7,10 +7,10 @@
 
 namespace vkr {
 
-class RenderQueue;
 class RenderResourceRegistry;
 class SwapChain;
 struct RenderFrameContext;
+struct VisibilityFrame;
 
 class IRenderPass {
   public:
@@ -24,7 +24,7 @@ class IRenderPass {
     virtual void onSwapChainResize(const SwapChain &) {}
     virtual void execute(const RenderFrameContext &frame,
                          const RenderResourceRegistry &resources,
-                         const RenderQueue &queue) = 0;
+                         const VisibilityFrame &visibility) = 0;
 };
 
 } // namespace vkr

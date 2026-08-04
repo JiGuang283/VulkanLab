@@ -13,12 +13,15 @@
 #include "render/GuiSystem.h"
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
-#include "render/RenderQueue.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/RenderView.h"
+#include "render/Visibility.h"
 #include "render/ShaderVariant.h"
 #include "render/Texture.h"
 #include "render/pass/DirectionalShadowPass.h"
+#include "render/pass/VisibilityDepthPass.h"
+#include "render/pass/HiZBuildPass.h"
+#include "render/pass/OcclusionCullPass.h"
 #include "render/pass/MainForwardPass.h"
 #include "render/pass/SkyBackgroundPass.h"
 #include "render/pass/ToneMapPass.h"
@@ -117,7 +120,7 @@ Renderer::~Renderer() {
 }
 
 void Renderer::renderFrame(const FrameSync::FrameContext &frame,
-                           const RenderQueue &queue,
+                           VisibilityFrame &visibility,
                            PipelineCache &pipelineCache,
                            GuiSystem *gui,
                            const ShaderVariant &shaderVariant,
@@ -151,6 +154,13 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
         static_cast<uint32_t>(view.sceneLights.size());
     collectRetiredLightingGenerations();
 
+    if (occlusionCullPass_) {
+        occlusionCullPass_->prepareFrame(
+            frame.frameIndex, frameSync_->lastSubmittedSerial() + 1,
+            visibility, view);
+        lastOcclusionFrameIndex_ = frame.frameIndex;
+    }
+
     RenderFrameContext renderFrame{};
     renderFrame.cmd = frame.cmd;
     renderFrame.frameIndex = frame.frameIndex;
@@ -177,11 +187,17 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.atmosphereReady =
         atmosphereLutPass_ &&
         atmosphereLutPass_->readyFor(view.atmosphere.staticLutKey);
+    renderFrame.occlusionActive =
+        occlusionCullPass_ && occlusionCullPass_->active(frame.frameIndex);
+    renderFrame.occlusionIndirectBuffer =
+        occlusionCullPass_
+            ? occlusionCullPass_->indirectBuffer(frame.frameIndex)
+            : VK_NULL_HANDLE;
 
     gpuPassProfiler_->collect(frame.frameIndex);
     gpuPassProfiler_->beginFrame(frame.cmd, frame.frameIndex,
                                  frameSync_->lastSubmittedSerial() + 1);
-    pipeline_.execute(renderFrame, *renderResources_, queue,
+    pipeline_.execute(renderFrame, *renderResources_, visibility,
                       gpuPassProfiler_.get());
     if (atmosphereLutPass_)
         atmosphereStatus_ = atmosphereLutPass_->status();
@@ -744,6 +760,26 @@ SceneLightBufferStatus Renderer::sceneLightBufferStatus() const {
     return status;
 }
 
+OcclusionCullingStatus Renderer::occlusionCullingStatus() const {
+    OcclusionCullingStatus status{};
+    status.supported = device_->occlusionCullingSupport().available;
+    status.unavailableReason = device_->occlusionCullingSupport().reason;
+    if (!occlusionCullPass_)
+        return status;
+
+    status.active = occlusionCullPass_->active(lastOcclusionFrameIndex_);
+    if (resourceHandles_.visibilityHiZ.valid()) {
+        status.hiZMipLevels =
+            renderResources_->mipLevelCount(resourceHandles_.visibilityHiZ);
+    }
+    for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+        status.indirectCapacities[frame] =
+            occlusionCullPass_->capacity(frame);
+    }
+    status.allocatedBytes = occlusionCullPass_->allocatedBytes();
+    return status;
+}
+
 void Renderer::createRenderPipeline() {
     if (device_->atmosphereSupport().available) {
         auto atmospherePass = std::make_unique<AtmosphereLutPass>(
@@ -760,6 +796,22 @@ void Renderer::createRenderPipeline() {
         *device_, *renderResources_, resourceHandles_.directionalShadowDepth,
         globalDescriptorSetLayout_,
         shaderPaths_.shadowVert, shaderPaths_.shadowMaskFrag));
+
+    if (device_->occlusionCullingSupport().available) {
+        pipeline_.addPass(std::make_unique<VisibilityDepthPass>(
+            *device_, *renderResources_, resourceHandles_.visibilityDepth,
+            globalDescriptorSetLayout_, shaderPaths_.visibilityDepthVert,
+            shaderPaths_.visibilityDepthMaskFrag));
+        pipeline_.addPass(std::make_unique<HiZBuildPass>(
+            *device_, *renderResources_, resourceHandles_,
+            *descriptorAllocator_, shaderPaths_.visibilityHiZInitComp,
+            shaderPaths_.visibilityHiZReduceComp));
+        auto occlusionPass = std::make_unique<OcclusionCullPass>(
+            *device_, *renderResources_, resourceHandles_,
+            *descriptorAllocator_, shaderPaths_.visibilityOcclusionComp);
+        occlusionCullPass_ = occlusionPass.get();
+        pipeline_.addPass(std::move(occlusionPass));
+    }
 
     pipeline_.addPass(std::make_unique<SkyBackgroundPass>(
         *device_, *renderResources_, resourceHandles_,

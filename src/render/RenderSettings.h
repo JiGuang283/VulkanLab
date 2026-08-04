@@ -5,6 +5,18 @@
 
 namespace vkr {
 
+struct CullingSettings {
+    bool  frustumEnabled = true;
+    bool  shadowCullingEnabled = true;
+    float shadowDistance = 200.0f;
+    bool  distanceEnabled = false;
+    float maxDrawDistance = 1000.0f;
+    bool  smallObjectEnabled = false;
+    float minProjectedSizePixels = 1.0f;
+    bool  occlusionEnabled = true;
+    float occlusionDepthBias = 0.0005f;
+};
+
 enum class ToneMapper {
     PassThrough,
     Reinhard,
@@ -48,6 +60,7 @@ struct RenderSettings {
     bool       skyboxEnabled = false;
     float      environmentIntensity = 1.0f;
     float environmentRotationRadians = 0.0f;
+    CullingSettings culling{};
 };
 
 struct RenderSettingsPatch {
@@ -65,6 +78,15 @@ struct RenderSettingsPatch {
     std::optional<bool>       skyboxEnabled;
     std::optional<float>      environmentIntensity;
     std::optional<float> environmentRotationRadians;
+    std::optional<bool>  frustumCullingEnabled;
+    std::optional<bool>  shadowCullingEnabled;
+    std::optional<float> shadowDistance;
+    std::optional<bool>  distanceCullingEnabled;
+    std::optional<float> maxDrawDistance;
+    std::optional<bool>  smallObjectCullingEnabled;
+    std::optional<float> minProjectedSizePixels;
+    std::optional<bool>  occlusionCullingEnabled;
+    std::optional<float> occlusionDepthBias;
 };
 
 inline void applyRenderSettingsPatch(RenderSettings &settings,
@@ -99,6 +121,25 @@ inline void applyRenderSettingsPatch(RenderSettings &settings,
         settings.environmentRotationRadians =
             *patch.environmentRotationRadians;
     }
+    if (patch.frustumCullingEnabled)
+        settings.culling.frustumEnabled = *patch.frustumCullingEnabled;
+    if (patch.shadowCullingEnabled)
+        settings.culling.shadowCullingEnabled = *patch.shadowCullingEnabled;
+    if (patch.shadowDistance)
+        settings.culling.shadowDistance = *patch.shadowDistance;
+    if (patch.distanceCullingEnabled)
+        settings.culling.distanceEnabled = *patch.distanceCullingEnabled;
+    if (patch.maxDrawDistance)
+        settings.culling.maxDrawDistance = *patch.maxDrawDistance;
+    if (patch.smallObjectCullingEnabled)
+        settings.culling.smallObjectEnabled = *patch.smallObjectCullingEnabled;
+    if (patch.minProjectedSizePixels)
+        settings.culling.minProjectedSizePixels =
+            *patch.minProjectedSizePixels;
+    if (patch.occlusionCullingEnabled)
+        settings.culling.occlusionEnabled = *patch.occlusionCullingEnabled;
+    if (patch.occlusionDepthBias)
+        settings.culling.occlusionDepthBias = *patch.occlusionDepthBias;
 }
 
 } // namespace vkr

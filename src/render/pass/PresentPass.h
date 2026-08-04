@@ -40,7 +40,7 @@ class PresentPass final : public IRenderPass {
     void onSwapChainResize(const SwapChain &swapChain) override;
     void execute(const RenderFrameContext &frame,
                  const RenderResourceRegistry &resources,
-                 const RenderQueue &queue) override;
+                 const VisibilityFrame &visibility) override;
 
     VkRenderPass renderPass() const { return renderPass_; }
 

@@ -270,8 +270,12 @@ RenderView buildRenderView(const RenderViewInput &input) {
                    result.lightStats.pointLights,
                    result.lightStats.spotLights,
                    result.lightStats.totalLights);
+    const DirectionalShadowCameraData shadowCamera{
+        input.view, input.projection, input.cameraNearPlane,
+        input.cameraFarPlane, input.settings.culling.shadowDistance};
     result.directionalShadow = buildDirectionalShadowFrameData(
-        input.sceneBounds, shadowLight, input.settings.shadowsEnabled);
+        input.sceneBounds, shadowLight, input.settings.shadowsEnabled,
+        &shadowCamera);
     result.lightStats.shadowCasterActive = result.directionalShadow.enabled;
     result.globalUbo.directionalShadowViewProj =
         result.directionalShadow.lightViewProjection;
