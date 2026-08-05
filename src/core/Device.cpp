@@ -371,6 +371,80 @@ void Device::pickPhysicalDevice() {
         VKR_LOG_WARN("Device", "Hi-Z occlusion culling unavailable: {}",
                      occlusionCullingSupport_.reason);
     }
+
+    const auto supportsSampledStorage = [&](VkFormat format,
+                                            bool linearFilter) {
+        VkFormatProperties properties{};
+        vkGetPhysicalDeviceFormatProperties(physicalDevice_, format,
+                                            &properties);
+        VkFormatFeatureFlags requiredFeatures =
+            VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+            VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
+        if (linearFilter) {
+            requiredFeatures |=
+                VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+        }
+        if ((properties.optimalTilingFeatures & requiredFeatures) !=
+            requiredFeatures) {
+            return false;
+        }
+        VkImageFormatProperties imageProperties{};
+        return vkGetPhysicalDeviceImageFormatProperties(
+                   physicalDevice_, format, VK_IMAGE_TYPE_2D,
+                   VK_IMAGE_TILING_OPTIMAL,
+                   VK_IMAGE_USAGE_SAMPLED_BIT |
+                       VK_IMAGE_USAGE_STORAGE_BIT,
+                   0, &imageProperties) == VK_SUCCESS;
+    };
+
+    if (!graphicsQueueSupportsCompute) {
+        screenSpaceEffectsSupport_.depthPyramidReason =
+            "selected graphics queue does not support compute";
+    } else if (!supportsSampledStorage(VK_FORMAT_R32_SFLOAT, false)) {
+        screenSpaceEffectsSupport_.depthPyramidReason =
+            "R32F sampled storage images are unavailable";
+    } else if (!surfaceDataSupport_.available) {
+        screenSpaceEffectsSupport_.depthPyramidReason =
+            surfaceDataSupport_.reason;
+    } else {
+        screenSpaceEffectsSupport_.depthPyramidAvailable = true;
+    }
+
+    if (!graphicsQueueSupportsCompute) {
+        screenSpaceEffectsSupport_.colorPyramidReason =
+            "selected graphics queue does not support compute";
+    } else if (!features.shaderStorageImageExtendedFormats) {
+        screenSpaceEffectsSupport_.colorPyramidReason =
+            "shaderStorageImageExtendedFormats is unavailable";
+    } else if (!supportsSampledStorage(
+                   VK_FORMAT_R16G16B16A16_SFLOAT, true)) {
+        screenSpaceEffectsSupport_.colorPyramidReason =
+            "RGBA16F sampled, linear-filtered storage images are unavailable";
+    } else {
+        screenSpaceEffectsSupport_.colorPyramidAvailable = true;
+    }
+
+    if (!surfaceDataSupport_.available) {
+        screenSpaceEffectsSupport_.ssaoReason = surfaceDataSupport_.reason;
+    } else if (!graphicsQueueSupportsCompute) {
+        screenSpaceEffectsSupport_.ssaoReason =
+            "selected graphics queue does not support compute";
+    } else if (!features.shaderStorageImageExtendedFormats) {
+        screenSpaceEffectsSupport_.ssaoReason =
+            "shaderStorageImageExtendedFormats is unavailable";
+    } else if (!supportsSampledStorage(VK_FORMAT_R16_SFLOAT, true)) {
+        screenSpaceEffectsSupport_.ssaoReason =
+            "R16F sampled, linear-filtered storage images are unavailable";
+    } else {
+        screenSpaceEffectsSupport_.ssaoAvailable = true;
+    }
+
+    VKR_LOG_INFO(
+        "Device",
+        "Screen-space support: depth pyramid={}, color pyramid={}, SSAO={}",
+        screenSpaceEffectsSupport_.depthPyramidAvailable ? "yes" : "no",
+        screenSpaceEffectsSupport_.colorPyramidAvailable ? "yes" : "no",
+        screenSpaceEffectsSupport_.ssaoAvailable ? "yes" : "no");
 }
 void Device::createLogicalDevice() {
     QueueFamilyIndices indices = findQueueFamilies(physicalDevice_);
@@ -395,7 +469,9 @@ void Device::createLogicalDevice() {
     deviceFeatures.textureCompressionBC =
         textureTranscodeTarget_ == TextureTranscodeTarget::Bc7;
     deviceFeatures.shaderStorageImageExtendedFormats =
-        (computeBloomSupport_.available || atmosphereSupport_.available)
+        (computeBloomSupport_.available || atmosphereSupport_.available ||
+         screenSpaceEffectsSupport_.colorPyramidAvailable ||
+         screenSpaceEffectsSupport_.ssaoAvailable)
             ? VK_TRUE
             : VK_FALSE;
 

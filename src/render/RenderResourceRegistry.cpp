@@ -460,6 +460,52 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
         handles.visibilityHiZ = registry.registerImage(std::move(hiZ));
     }
 
+    const ScreenSpaceEffectsSupport &screenSupport =
+        device.screenSpaceEffectsSupport();
+    if (screenSupport.depthPyramidAvailable) {
+        RenderImageDesc depthPyramid{};
+        depthPyramid.name = "Screen Depth Pyramid";
+        depthPyramid.extentPolicy = RenderExtentPolicy::Viewport;
+        depthPyramid.multiplicity = RenderResourceMultiplicity::PerFrame;
+        depthPyramid.format = screenSupport.depthPyramidFormat;
+        depthPyramid.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                             VK_IMAGE_USAGE_STORAGE_BIT;
+        depthPyramid.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        depthPyramid.mipPolicy = RenderMipPolicy::FullChain;
+        handles.screenDepthPyramid =
+            registry.registerImage(std::move(depthPyramid));
+    }
+    if (screenSupport.colorPyramidAvailable) {
+        RenderImageDesc colorPyramid{};
+        colorPyramid.name = "Scene Color Pyramid";
+        colorPyramid.extentPolicy = RenderExtentPolicy::Viewport;
+        colorPyramid.multiplicity = RenderResourceMultiplicity::PerFrame;
+        colorPyramid.format = screenSupport.colorPyramidFormat;
+        colorPyramid.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                             VK_IMAGE_USAGE_STORAGE_BIT;
+        colorPyramid.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        colorPyramid.mipPolicy = RenderMipPolicy::FullChain;
+        handles.sceneColorPyramid =
+            registry.registerImage(std::move(colorPyramid));
+    }
+    if (screenSupport.ssaoAvailable) {
+        const auto registerSsaoImage = [&](std::string name) {
+            RenderImageDesc desc{};
+            desc.name = std::move(name);
+            desc.extentPolicy = RenderExtentPolicy::Viewport;
+            desc.extentDivisor = 2;
+            desc.multiplicity = RenderResourceMultiplicity::PerFrame;
+            desc.format = screenSupport.ssaoFormat;
+            desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                         VK_IMAGE_USAGE_STORAGE_BIT;
+            desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+            return registry.registerImage(std::move(desc));
+        };
+        handles.ssaoRaw = registerSsaoImage("SSAO Raw");
+        handles.ssaoTemp = registerSsaoImage("SSAO Temp");
+        handles.ssaoFiltered = registerSsaoImage("SSAO Filtered");
+    }
+
     if (device.computeBloomSupport().available) {
         for (uint32_t level = 0;
              level < RendererResourceHandles::kBloomPyramidLevelCount;
@@ -570,6 +616,23 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
         hiZSampler.maxLod = 32.0f;
         handles.visibilityHiZSampler =
             registry.registerSampler(std::move(hiZSampler));
+    }
+
+    if (screenSupport.depthPyramidAvailable ||
+        screenSupport.colorPyramidAvailable) {
+        RenderSamplerDesc pyramidSampler{};
+        pyramidSampler.name = "Screen Pyramid Sampler";
+        pyramidSampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        pyramidSampler.maxLod = 32.0f;
+        handles.screenPyramidSampler =
+            registry.registerSampler(std::move(pyramidSampler));
+    }
+    if (screenSupport.ssaoAvailable) {
+        RenderSamplerDesc ssaoSampler{};
+        ssaoSampler.name = "SSAO Sampler";
+        ssaoSampler.magFilter = VK_FILTER_LINEAR;
+        ssaoSampler.minFilter = VK_FILTER_LINEAR;
+        handles.ssaoSampler = registry.registerSampler(std::move(ssaoSampler));
     }
 
     if (device.computeBloomSupport().available) {

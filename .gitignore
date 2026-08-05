@@ -64,6 +64,11 @@ derived_assets/
 artifacts/
 /external/tools/
 
+# ---------- Local rendering references ----------
+# The index and fetch script are versioned; downloaded third-party source,
+# papers, and documentation snapshots remain local and reproducible.
+/references/rendering_algorithms/downloads/
+
 # ---------- OS files ----------
 .DS_Store
 Thumbs.db

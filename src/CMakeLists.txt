@@ -181,6 +181,8 @@ set(VKL_ENGINE_SOURCES
     render/pass/SurfacePrepass.cpp
     render/pass/HiZBuildPass.cpp
     render/pass/OcclusionCullPass.cpp
+    render/pass/ScreenSpacePyramidPass.cpp
+    render/pass/SsaoPass.cpp
     render/pass/BloomPass.cpp
     render/pass/SkyBackgroundPass.cpp
     render/pass/ToneMapPass.cpp

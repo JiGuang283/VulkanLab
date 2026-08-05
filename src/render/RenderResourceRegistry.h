@@ -122,6 +122,11 @@ struct RendererResourceHandles {
     RenderImageHandle surfaceNormalRoughness{};
     RenderImageHandle surfaceMotion{};
     RenderImageHandle visibilityHiZ{};
+    RenderImageHandle screenDepthPyramid{};
+    RenderImageHandle sceneColorPyramid{};
+    RenderImageHandle ssaoRaw{};
+    RenderImageHandle ssaoTemp{};
+    RenderImageHandle ssaoFiltered{};
     std::array<RenderImageHandle, kBloomPyramidLevelCount> bloomLevels{};
     RenderSamplerHandle hdrSampler{};
     RenderSamplerHandle viewportSampler{};
@@ -129,6 +134,8 @@ struct RendererResourceHandles {
     RenderSamplerHandle surfaceDepthSampler{};
     RenderSamplerHandle surfaceDataSampler{};
     RenderSamplerHandle visibilityHiZSampler{};
+    RenderSamplerHandle screenPyramidSampler{};
+    RenderSamplerHandle ssaoSampler{};
     RenderSamplerHandle bloomSampler{};
     RenderImageHandle atmosphereTransmittance{};
     RenderImageHandle atmosphereMultipleScattering{};

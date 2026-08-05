@@ -13,6 +13,12 @@ struct RendererShaderPaths {
     std::string visibilityHiZInitComp;
     std::string visibilityHiZReduceComp;
     std::string visibilityOcclusionComp;
+    std::string screenDepthInitComp;
+    std::string screenDepthReduceComp;
+    std::string screenColorInitComp;
+    std::string screenColorReduceComp;
+    std::string ssaoTraceComp;
+    std::string ssaoBlurComp;
     std::string fullscreenVert;
     std::string toneMapFrag;
     std::string presentFrag;

@@ -57,6 +57,22 @@ uint32_t surfaceDebugModeValue(SurfaceDebugView view) {
     return 0;
 }
 
+uint32_t screenDebugModeValue(ScreenSpaceDebugView view) {
+    switch (view) {
+    case ScreenSpaceDebugView::None:
+        return 0;
+    case ScreenSpaceDebugView::NearestDepth:
+        return 1;
+    case ScreenSpaceDebugView::SceneColor:
+        return 2;
+    case ScreenSpaceDebugView::SsaoRaw:
+        return 3;
+    case ScreenSpaceDebugView::SsaoFiltered:
+        return 4;
+    }
+    return 0;
+}
+
 } // namespace
 
 ToneMapPass::ToneMapPass(Device &device,
@@ -69,6 +85,12 @@ ToneMapPass::ToneMapPass(Device &device,
                          RenderImageHandle surfaceNormalRoughness,
                          RenderImageHandle surfaceMotion,
                          RenderSamplerHandle surfaceSampler,
+                         RenderImageHandle screenDepthPyramid,
+                         RenderImageHandle sceneColorPyramid,
+                         RenderImageHandle ssaoRaw,
+                         RenderImageHandle ssaoFiltered,
+                         RenderSamplerHandle screenPyramidSampler,
+                         RenderSamplerHandle ssaoSampler,
                          DescriptorAllocator &descriptorAllocator,
                          std::string fullscreenVertPath,
                          std::string toneMapFragPath)
@@ -77,6 +99,11 @@ ToneMapPass::ToneMapPass(Device &device,
       viewportColor_(viewportColor),
       surfaceNormalRoughness_(surfaceNormalRoughness),
       surfaceMotion_(surfaceMotion), surfaceSampler_(surfaceSampler),
+      screenDepthPyramid_(screenDepthPyramid),
+      sceneColorPyramid_(sceneColorPyramid), ssaoRaw_(ssaoRaw),
+      ssaoFiltered_(ssaoFiltered),
+      screenPyramidSampler_(screenPyramidSampler),
+      ssaoSampler_(ssaoSampler),
       descriptorAllocator_(&descriptorAllocator),
       fullscreenVertPath_(std::move(fullscreenVertPath)),
       toneMapFragPath_(std::move(toneMapFragPath)) {
@@ -123,6 +150,26 @@ std::vector<RenderImageUsage> ToneMapPass::resourceUsages() const {
              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
     }
+    if (screenDepthPyramid_.valid()) {
+        usages.push_back(
+            {screenDepthPyramid_, RenderImageAccess::SampledRead,
+             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    }
+    if (sceneColorPyramid_.valid()) {
+        usages.push_back(
+            {sceneColorPyramid_, RenderImageAccess::SampledRead,
+             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    }
+    if (ssaoRaw_.valid()) {
+        usages.push_back({ssaoRaw_, RenderImageAccess::SampledRead,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+        usages.push_back({ssaoFiltered_, RenderImageAccess::SampledRead,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    }
     usages.push_back(
         {viewportColor_, RenderImageAccess::ColorAttachmentWrite,
          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -143,6 +190,7 @@ void ToneMapPass::execute(const RenderFrameContext &frame,
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "ToneMap");
     if (!frame.pipelineCache || !frame.view || !frame.shaderVariant)
         return;
+    updateScreenDescriptors(resources, frame.frameIndex, frame.features);
 
     VkClearValue clear{};
     clear.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
@@ -197,13 +245,31 @@ void ToneMapPass::execute(const RenderFrameContext &frame,
         const bool surfaceDebug =
             frame.view->settings.surfaceDebugView != SurfaceDebugView::None &&
             surfaceNormalRoughness_.valid() && surfaceMotion_.valid();
-        if (!surfaceDebug && frame.shaderVariant->toneMapping ==
-            ShaderToneMappingPolicy::Configurable) {
+        const ScreenSpaceDebugView requestedScreenDebug =
+            frame.view->settings.screenSpaceDebugView;
+        const bool screenDebug =
+            (requestedScreenDebug == ScreenSpaceDebugView::NearestDepth &&
+             screenDepthPyramid_.valid()) ||
+            (requestedScreenDebug == ScreenSpaceDebugView::SceneColor &&
+             sceneColorPyramid_.valid()) ||
+            ((requestedScreenDebug == ScreenSpaceDebugView::SsaoRaw ||
+              requestedScreenDebug ==
+                  ScreenSpaceDebugView::SsaoFiltered) &&
+             ssaoRaw_.valid());
+        const bool sceneColorDebug =
+            screenDebug && requestedScreenDebug ==
+                               ScreenSpaceDebugView::SceneColor;
+        const bool configurableOutput =
+            sceneColorDebug ||
+            (!surfaceDebug && !screenDebug &&
+             frame.shaderVariant->toneMapping ==
+                 ShaderToneMappingPolicy::Configurable);
+        if (configurableOutput) {
             push.exposureEv = frame.view->settings.exposureEv;
             push.toneMapper = toneMapperValue(frame.view->settings.toneMapper);
             push.applyExposure = 1;
         }
-        if (!surfaceDebug && bloomColor_.valid() &&
+        if (!surfaceDebug && !screenDebug && bloomColor_.valid() &&
             frame.view->settings.bloomEnabled &&
             frame.shaderVariant->supportsBloom) {
             push.bloomIntensity = frame.view->settings.bloomIntensity;
@@ -219,6 +285,13 @@ void ToneMapPass::execute(const RenderFrameContext &frame,
                                     : 0u;
         push.motionDebugScale =
             frame.view->settings.surfaceMotionDebugScale;
+        push.screenDebugMode =
+            !surfaceDebug && screenDebug
+                ? screenDebugModeValue(requestedScreenDebug)
+                : 0u;
+        push.screenDebugMip = frame.view->settings.screenSpaceDebugMip;
+        push.cameraNear = frame.view->cameraNearPlane;
+        push.cameraFar = frame.view->cameraFarPlane;
         vkCmdPushConstants(frame.cmd, pipeline.layout(),
                            VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push),
                            &push);
@@ -312,7 +385,7 @@ void ToneMapPass::destroyFramebuffers() {
 
 void ToneMapPass::createDescriptors(
     const RenderResourceRegistry &resources) {
-    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 8> bindings{};
     for (uint32_t bindingIndex = 0; bindingIndex < bindings.size();
          ++bindingIndex) {
         bindings[bindingIndex].binding = bindingIndex;
@@ -334,7 +407,7 @@ void ToneMapPass::createDescriptors(
     for (uint32_t frame = 0; frame < sourceDescriptorSets_.size(); ++frame) {
         sourceDescriptorSets_[frame] = descriptorAllocator_->allocate(
             sourceDescriptorSetLayout_,
-            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4}},
+            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8}},
             "Pass/ToneMap/SourceDescriptorSet/Frame" +
                 std::to_string(frame));
     }
@@ -363,21 +436,13 @@ void ToneMapPass::updateDescriptors(
 
         VkDescriptorImageInfo normalRoughnessInfo = hdrInfo;
         VkDescriptorImageInfo motionInfo = hdrInfo;
-        if (surfaceNormalRoughness_.valid() && surfaceMotion_.valid()) {
-            const VkSampler sampler = resources.sampler(surfaceSampler_);
-            normalRoughnessInfo.sampler = sampler;
-            normalRoughnessInfo.imageView = resources.image(
-                surfaceNormalRoughness_, frameIndex).imageView();
-            normalRoughnessInfo.imageLayout =
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            motionInfo.sampler = sampler;
-            motionInfo.imageView =
-                resources.image(surfaceMotion_, frameIndex).imageView();
-            motionInfo.imageLayout =
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        }
 
-        std::array<VkWriteDescriptorSet, 4> writes{};
+        VkDescriptorImageInfo depthPyramidInfo = hdrInfo;
+        VkDescriptorImageInfo colorPyramidInfo = hdrInfo;
+        VkDescriptorImageInfo rawAoInfo = hdrInfo;
+        VkDescriptorImageInfo filteredAoInfo = hdrInfo;
+
+        std::array<VkWriteDescriptorSet, 8> writes{};
         for (uint32_t bindingIndex = 0; bindingIndex < writes.size();
              ++bindingIndex) {
             writes[bindingIndex].sType =
@@ -393,11 +458,75 @@ void ToneMapPass::updateDescriptors(
         writes[1].pImageInfo = &bloomInfo;
         writes[2].pImageInfo = &normalRoughnessInfo;
         writes[3].pImageInfo = &motionInfo;
+        writes[4].pImageInfo = &depthPyramidInfo;
+        writes[5].pImageInfo = &colorPyramidInfo;
+        writes[6].pImageInfo = &rawAoInfo;
+        writes[7].pImageInfo = &filteredAoInfo;
         vkUpdateDescriptorSets(
             device_->logicalDevice(),
             static_cast<uint32_t>(writes.size()), writes.data(), 0,
             nullptr);
     }
+}
+
+void ToneMapPass::updateScreenDescriptors(
+    const RenderResourceRegistry &resources, uint32_t frameIndex,
+    const FrameRenderFeatures &features) {
+    VkDescriptorImageInfo fallback{};
+    fallback.sampler = resources.sampler(hdrSampler_);
+    fallback.imageView = resources.image(hdrColor_, frameIndex).imageView();
+    fallback.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    std::array<VkDescriptorImageInfo, 6> infos = {
+        fallback, fallback, fallback, fallback, fallback, fallback};
+    if (features.surfaceDataRequired && surfaceNormalRoughness_.valid() &&
+        surfaceMotion_.valid()) {
+        const VkSampler sampler = resources.sampler(surfaceSampler_);
+        infos[0] = {
+            sampler,
+            resources.image(surfaceNormalRoughness_, frameIndex).imageView(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        infos[1] = {
+            sampler, resources.image(surfaceMotion_, frameIndex).imageView(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    }
+    if (features.screenDepthPyramidRequired &&
+        screenDepthPyramid_.valid()) {
+        infos[2] = {
+            resources.sampler(screenPyramidSampler_),
+            resources.image(screenDepthPyramid_, frameIndex).imageView(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    }
+    if (features.sceneColorPyramidRequired &&
+        sceneColorPyramid_.valid()) {
+        infos[3] = {
+            resources.sampler(screenPyramidSampler_),
+            resources.image(sceneColorPyramid_, frameIndex).imageView(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    }
+    if (features.ssaoRequired && ssaoRaw_.valid()) {
+        const VkSampler sampler = resources.sampler(ssaoSampler_);
+        infos[4] = {sampler,
+                    resources.image(ssaoRaw_, frameIndex).imageView(),
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        infos[5] = {sampler,
+                    resources.image(ssaoFiltered_, frameIndex).imageView(),
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    }
+
+    std::array<VkWriteDescriptorSet, 6> writes{};
+    for (uint32_t index = 0; index < writes.size(); ++index) {
+        writes[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[index].dstSet = sourceDescriptorSets_.at(frameIndex);
+        writes[index].dstBinding = index + 2u;
+        writes[index].descriptorType =
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[index].descriptorCount = 1;
+        writes[index].pImageInfo = &infos[index];
+    }
+    vkUpdateDescriptorSets(device_->logicalDevice(),
+                           static_cast<uint32_t>(writes.size()),
+                           writes.data(), 0, nullptr);
 }
 
 } // namespace vkr

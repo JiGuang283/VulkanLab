@@ -79,6 +79,8 @@ struct RenderView {
     RenderViewLightStats lightStats{};
     AtmosphereFrameData atmosphere{};
     AtmosphereGpuParams atmosphereGpuParams{};
+    float cameraNearPlane = 0.05f;
+    float cameraFarPlane = 1000.0f;
 };
 
 bool isEffectiveSceneLight(const SceneLight &light);

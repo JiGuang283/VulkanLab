@@ -1,0 +1,133 @@
+#version 450
+
+#extension GL_GOOGLE_include_directive : require
+#include "include/global_frame.glsl"
+#include "include/screen_temporal.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 1, binding = 0) uniform sampler2D surfaceDepth;
+layout(set = 1, binding = 1) uniform sampler2D surfaceNormalRoughness;
+layout(set = 1, binding = 2) uniform sampler2D unusedSource;
+layout(set = 1, binding = 3, r16f) uniform writeonly image2D destinationAo;
+
+layout(push_constant) uniform SsaoPush {
+    vec4 parameters;
+    uvec4 dimensions;
+} push;
+
+const float GOLDEN_ANGLE = 2.39996323;
+
+vec3 octDecode(vec2 encoded)
+{
+    vec2 value = encoded * 2.0 - 1.0;
+    vec3 normal = vec3(value, 1.0 - abs(value.x) - abs(value.y));
+    if (normal.z < 0.0)
+        normal.xy = (1.0 - abs(normal.yx)) * sign(normal.xy);
+    return normalize(normal);
+}
+
+float pixelHash(ivec2 pixel)
+{
+    uvec2 value = uvec2(pixel);
+    uint hash = value.x * 1597334677u ^ value.y * 3812015801u;
+    hash ^= hash >> 16u;
+    hash *= 2246822519u;
+    hash ^= hash >> 13u;
+    return float(hash & 0x00ffffffu) / float(0x01000000u);
+}
+
+vec3 reconstructWorld(vec2 uv, float depth)
+{
+    vec4 world = ubo.inverseViewProjection *
+                 vec4(uv * 2.0 - 1.0, depth, 1.0);
+    return world.xyz / max(abs(world.w), 1e-6) * sign(world.w);
+}
+
+void nearestSurface(ivec2 halfPixel, out ivec2 fullPixel,
+                    out float depth, out vec3 normalWS)
+{
+    ivec2 fullSize = ivec2(push.dimensions.yz);
+    ivec2 base = halfPixel * 2;
+    depth = 1.0;
+    fullPixel = min(base, fullSize - ivec2(1));
+    for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 2; ++x) {
+            ivec2 candidate = min(base + ivec2(x, y),
+                                  fullSize - ivec2(1));
+            float candidateDepth = texelFetch(surfaceDepth, candidate, 0).r;
+            if (candidateDepth < depth) {
+                depth = candidateDepth;
+                fullPixel = candidate;
+            }
+        }
+    }
+    normalWS = octDecode(texelFetch(surfaceNormalRoughness,
+                                    fullPixel, 0).rg);
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outputSize = imageSize(destinationAo);
+    if (any(greaterThanEqual(pixel, outputSize)))
+        return;
+
+    ivec2 fullPixel;
+    float centerDepth;
+    vec3 normalWS;
+    nearestSurface(pixel, fullPixel, centerDepth, normalWS);
+    if (centerDepth >= 1.0) {
+        imageStore(destinationAo, pixel, vec4(1.0));
+        return;
+    }
+
+    vec2 fullSize = vec2(push.dimensions.yz);
+    vec2 centerUv = (vec2(fullPixel) + 0.5) / fullSize;
+    vec3 centerWS = reconstructWorld(centerUv, centerDepth);
+    vec3 centerVS = (ubo.view * vec4(centerWS, 1.0)).xyz;
+    vec3 normalVS = normalize(mat3(ubo.view) * normalWS);
+
+    float rotation = pixelHash(pixel) * 6.28318530718;
+    vec3 helper = abs(normalVS.z) < 0.999 ? vec3(0.0, 0.0, 1.0)
+                                          : vec3(0.0, 1.0, 0.0);
+    vec3 tangent = normalize(cross(helper, normalVS));
+    vec3 bitangent = cross(normalVS, tangent);
+    mat3 basis = mat3(tangent, bitangent, normalVS);
+
+    float radius = push.parameters.x;
+    float bias = push.parameters.y;
+    float occluded = 0.0;
+    uint sampleCount = max(push.dimensions.x, 1u);
+    for (uint index = 0u; index < 32u; ++index) {
+        if (index >= sampleCount)
+            break;
+        float xi = (float(index) + 0.5) / float(sampleCount);
+        float phi = float(index) * GOLDEN_ANGLE + rotation;
+        float radial = sqrt(xi);
+        vec3 hemisphere = vec3(cos(phi) * radial,
+                               sin(phi) * radial,
+                               sqrt(max(1.0 - xi, 0.0)));
+        float scale = mix(0.15, 1.0, xi * xi);
+        vec3 sampleVS = centerVS + basis * hemisphere * radius * scale;
+        vec4 sampleClip = ubo.proj * vec4(sampleVS, 1.0);
+        if (sampleClip.w <= 1e-6)
+            continue;
+        vec2 sampleUv = sampleClip.xy / sampleClip.w * 0.5 + 0.5;
+        if (!screenUvInBounds(sampleUv))
+            continue;
+        float sceneDepth = texture(surfaceDepth, sampleUv).r;
+        if (sceneDepth >= 1.0)
+            continue;
+        vec3 sceneWS = reconstructWorld(sampleUv, sceneDepth);
+        float sceneViewZ = (ubo.view * vec4(sceneWS, 1.0)).z;
+        float rangeWeight = smoothstep(
+            0.0, 1.0, radius / max(abs(centerVS.z - sceneViewZ), 1e-4));
+        occluded += sceneViewZ >= sampleVS.z + bias ? rangeWeight : 0.0;
+    }
+
+    float visibility = 1.0 - occluded / float(sampleCount);
+    visibility = max(0.0, 1.0 - (1.0 - visibility) * push.parameters.z);
+    visibility = pow(clamp(visibility, 0.0, 1.0), push.parameters.w);
+    imageStore(destinationAo, pixel, vec4(visibility));
+}

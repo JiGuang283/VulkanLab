@@ -72,7 +72,11 @@ void printUsage() {
            "[--min-projected-pixels N] [--occlusion on|off] "
            "[--occlusion-bias N] "
            "[--surface-debug none|normal|roughness|motion|history-validity] "
-           "[--surface-motion-scale N]\n"
+           "[--surface-motion-scale N] [--ao off|ssao] "
+           "[--ssao-quality low|medium|high] [--ssao-radius N] "
+           "[--ssao-bias N] [--ssao-intensity N] [--ssao-power N] "
+           "[--screen-space-debug none|nearest-depth|scene-color|ssao-raw|ssao-filtered] "
+           "[--screen-space-debug-mip N]\n"
         << "  VulkanLabCtl [--json] render wait [--stable-frames N] "
            "[--timeout-ms N]\n"
         << "  VulkanLabCtl [--json] capture screenshot <relative.png> "
@@ -120,6 +124,15 @@ uint32_t parsePositiveUint32(const std::string &value, const char *name) {
     if (consumed != value.size() || parsed == 0 || parsed > UINT32_MAX)
         throw std::invalid_argument(std::string(name) +
                                     " must be in 1..4294967295");
+    return static_cast<uint32_t>(parsed);
+}
+
+uint32_t parseUint32(const std::string &value, const char *name) {
+    size_t consumed = 0;
+    const unsigned long long parsed = std::stoull(value, &consumed);
+    if (consumed != value.size() || parsed > UINT32_MAX)
+        throw std::invalid_argument(std::string(name) +
+                                    " must be an unsigned 32-bit integer");
     return static_cast<uint32_t>(parsed);
 }
 
@@ -182,6 +195,14 @@ ParsedCommand parseCommand(int argc, char **argv) {
     std::optional<std::string> occlusionBias;
     std::optional<std::string> surfaceDebug;
     std::optional<std::string> surfaceMotionScale;
+    std::optional<std::string> ambientOcclusion;
+    std::optional<std::string> ssaoQuality;
+    std::optional<std::string> ssaoRadius;
+    std::optional<std::string> ssaoBias;
+    std::optional<std::string> ssaoIntensity;
+    std::optional<std::string> ssaoPower;
+    std::optional<std::string> screenSpaceDebug;
+    std::optional<std::string> screenSpaceDebugMip;
     for (int i = 1; i < argc; ++i) {
         const std::string argument = argv[i];
         if (argument == "--pipe") {
@@ -220,8 +241,16 @@ ParsedCommand parseCommand(int argc, char **argv) {
                  argument == "--min-projected-pixels" ||
                  argument == "--occlusion" ||
                  argument == "--occlusion-bias" ||
-                 argument == "--surface-debug" ||
-                 argument == "--surface-motion-scale") {
+                  argument == "--surface-debug" ||
+                  argument == "--surface-motion-scale" ||
+                  argument == "--ao" ||
+                  argument == "--ssao-quality" ||
+                  argument == "--ssao-radius" ||
+                  argument == "--ssao-bias" ||
+                  argument == "--ssao-intensity" ||
+                  argument == "--ssao-power" ||
+                  argument == "--screen-space-debug" ||
+                  argument == "--screen-space-debug-mip") {
             if (++i >= argc)
                 throw std::invalid_argument(argument + " requires a value");
             if (argument == "--position")
@@ -282,8 +311,24 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 occlusionBias = argv[i];
             else if (argument == "--surface-debug")
                 surfaceDebug = argv[i];
-            else
+            else if (argument == "--surface-motion-scale")
                 surfaceMotionScale = argv[i];
+            else if (argument == "--ao")
+                ambientOcclusion = argv[i];
+            else if (argument == "--ssao-quality")
+                ssaoQuality = argv[i];
+            else if (argument == "--ssao-radius")
+                ssaoRadius = argv[i];
+            else if (argument == "--ssao-bias")
+                ssaoBias = argv[i];
+            else if (argument == "--ssao-intensity")
+                ssaoIntensity = argv[i];
+            else if (argument == "--ssao-power")
+                ssaoPower = argv[i];
+            else if (argument == "--screen-space-debug")
+                screenSpaceDebug = argv[i];
+            else
+                screenSpaceDebugMip = argv[i];
         }
         else if (argument == "--no-wait")
             waitForLoad = false;
@@ -538,6 +583,50 @@ ParsedCommand parseCommand(int argc, char **argv) {
         if (surfaceMotionScale) {
             parsed.params["surfaceMotionDebugScale"] = parseFiniteFloat(
                 *surfaceMotionScale, "--surface-motion-scale");
+        }
+        if (ambientOcclusion) {
+            if (*ambientOcclusion != "off" &&
+                *ambientOcclusion != "ssao") {
+                throw std::invalid_argument("--ao must be off or ssao");
+            }
+            parsed.params["ambientOcclusionMode"] = *ambientOcclusion;
+        }
+        if (ssaoQuality) {
+            if (*ssaoQuality != "low" && *ssaoQuality != "medium" &&
+                *ssaoQuality != "high") {
+                throw std::invalid_argument(
+                    "--ssao-quality must be low, medium, or high");
+            }
+            parsed.params["ssaoQuality"] = *ssaoQuality;
+        }
+        if (ssaoRadius)
+            parsed.params["ssaoRadius"] =
+                parseFiniteFloat(*ssaoRadius, "--ssao-radius");
+        if (ssaoBias)
+            parsed.params["ssaoBias"] =
+                parseFiniteFloat(*ssaoBias, "--ssao-bias");
+        if (ssaoIntensity)
+            parsed.params["ssaoIntensity"] =
+                parseFiniteFloat(*ssaoIntensity, "--ssao-intensity");
+        if (ssaoPower)
+            parsed.params["ssaoPower"] =
+                parseFiniteFloat(*ssaoPower, "--ssao-power");
+        if (screenSpaceDebug) {
+            if (*screenSpaceDebug != "none" &&
+                *screenSpaceDebug != "nearest-depth" &&
+                *screenSpaceDebug != "scene-color" &&
+                *screenSpaceDebug != "ssao-raw" &&
+                *screenSpaceDebug != "ssao-filtered") {
+                throw std::invalid_argument(
+                    "--screen-space-debug must be none, nearest-depth, "
+                    "scene-color, ssao-raw, or ssao-filtered");
+            }
+            parsed.params["screenSpaceDebugView"] = *screenSpaceDebug;
+        }
+        if (screenSpaceDebugMip) {
+            parsed.params["screenSpaceDebugMip"] =
+                parseUint32(*screenSpaceDebugMip,
+                            "--screen-space-debug-mip");
         }
         if (parsed.params.empty())
             throw std::invalid_argument(
@@ -947,12 +1036,32 @@ void printHuman(const std::string &method, const Json &result) {
                                                                      : "no")
                   << "/"
                   << (result.at("surfaceDataActive").get<bool>() ? "yes"
-                                                                  : "no")
+                                                                   : "no")
+                  << "\nAO: "
+                  << result.at("ambientOcclusionMode").get<std::string>()
+                  << ", active/available: "
+                  << (result.at("ssaoActive").get<bool>() ? "yes" : "no")
+                  << "/"
+                  << (result.at("ssaoAvailable").get<bool>() ? "yes" : "no")
+                  << ", quality/radius/bias/intensity/power: "
+                  << result.at("ssaoQuality").get<std::string>() << "/"
+                  << result.at("ssaoRadius").get<float>() << "/"
+                  << result.at("ssaoBias").get<float>() << "/"
+                  << result.at("ssaoIntensity").get<float>() << "/"
+                  << result.at("ssaoPower").get<float>()
+                  << "\nScreen-space debug: "
+                  << result.at("screenSpaceDebugView").get<std::string>()
+                  << ", mip: "
+                  << result.at("screenSpaceDebugMip").get<uint32_t>()
                   << '\n';
         const std::string bloomReason =
             result.value("bloomUnavailableReason", std::string{});
         if (!bloomReason.empty())
             std::cout << "Bloom unavailable: " << bloomReason << '\n';
+        const std::string ssaoReason =
+            result.value("ssaoUnavailableReason", std::string{});
+        if (!ssaoReason.empty())
+            std::cout << "SSAO unavailable: " << ssaoReason << '\n';
         const std::string occlusionReason =
             result.value("occlusionUnavailableReason", std::string{});
         if (!occlusionReason.empty()) {

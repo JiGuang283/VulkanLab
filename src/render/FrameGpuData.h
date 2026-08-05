@@ -53,6 +53,11 @@ struct alignas(16) SurfaceFrameUbo {
     glm::uvec4 params{0u};
 };
 
+struct alignas(16) ScreenSpaceLightingUbo {
+    glm::vec4 viewportSizeInvSize{0.0f};
+    glm::uvec4 modes{0u};
+};
+
 struct alignas(16) GpuRenderItemHistory {
     glm::mat4 previousWorld{1.0f};
     glm::uvec4 params{0u};
@@ -67,6 +72,10 @@ struct alignas(16) ToneMapPushConstants {
     uint32_t applyBloom = 0;
     uint32_t surfaceDebugMode = 0;
     float motionDebugScale = 1.0f;
+    uint32_t screenDebugMode = 0;
+    uint32_t screenDebugMip = 0;
+    float cameraNear = 0.1f;
+    float cameraFar = 1000.0f;
 };
 
 struct alignas(16) BloomPushConstants {
@@ -86,6 +95,7 @@ static_assert(offsetof(GpuLight, params) == 48);
 static_assert(sizeof(GlobalFrameUbo) == 336);
 static_assert(sizeof(AtmosphereGpuParams) == 192);
 static_assert(sizeof(SurfaceFrameUbo) == 96);
+static_assert(sizeof(ScreenSpaceLightingUbo) == 32);
 static_assert(sizeof(GpuRenderItemHistory) == 80);
 static_assert(offsetof(AtmosphereGpuParams, planetCenterBottomRadius) == 0);
 static_assert(offsetof(AtmosphereGpuParams, topRadiusDensityHeights) == 16);
@@ -109,7 +119,7 @@ static_assert(offsetof(GlobalFrameUbo, lightCounts) == 224);
 static_assert(offsetof(GlobalFrameUbo, directionalShadowViewProj) == 240);
 static_assert(offsetof(GlobalFrameUbo, shadowParams) == 304);
 static_assert(offsetof(GlobalFrameUbo, environmentParams) == 320);
-static_assert(sizeof(ToneMapPushConstants) == 32);
+static_assert(sizeof(ToneMapPushConstants) == 48);
 static_assert(offsetof(ToneMapPushConstants, exposureEv) == 0);
 static_assert(offsetof(ToneMapPushConstants, bloomIntensity) == 4);
 static_assert(offsetof(ToneMapPushConstants, toneMapper) == 8);
@@ -118,6 +128,10 @@ static_assert(offsetof(ToneMapPushConstants, applyExposure) == 16);
 static_assert(offsetof(ToneMapPushConstants, applyBloom) == 20);
 static_assert(offsetof(ToneMapPushConstants, surfaceDebugMode) == 24);
 static_assert(offsetof(ToneMapPushConstants, motionDebugScale) == 28);
+static_assert(offsetof(ToneMapPushConstants, screenDebugMode) == 32);
+static_assert(offsetof(ToneMapPushConstants, screenDebugMip) == 36);
+static_assert(offsetof(ToneMapPushConstants, cameraNear) == 40);
+static_assert(offsetof(ToneMapPushConstants, cameraFar) == 44);
 static_assert(sizeof(BloomPushConstants) == 16);
 
 } // namespace vkr

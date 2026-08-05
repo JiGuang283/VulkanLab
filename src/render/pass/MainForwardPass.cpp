@@ -81,6 +81,12 @@ std::vector<RenderImageUsage> MainForwardPass::resourceUsages() const {
                       RenderImageAccess::SampledRead,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    if (resourceHandles_.ssaoFiltered.valid()) {
+        usages.push_back({resourceHandles_.ssaoFiltered,
+                          RenderImageAccess::SampledRead,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    }
     if (resourceHandles_.hdrMsaaColor.valid()) {
         usages.push_back({resourceHandles_.hdrMsaaColor,
                           RenderImageAccess::ColorAttachmentReadWrite,
@@ -190,9 +196,14 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                 frame.globalDescriptorSetLayout);
             pipelineConfig.descriptorLayouts.push_back(
                 lightingDescriptorSetLayout_);
-            if (frame.shaderVariant->supportsAtmosphere) {
+            if (frame.shaderVariant->supportsAtmosphere ||
+                frame.shaderVariant->supportsScreenSpace) {
                 pipelineConfig.descriptorLayouts.push_back(
                     atmosphereDescriptorSetLayout_);
+            }
+            if (frame.shaderVariant->supportsScreenSpace) {
+                pipelineConfig.descriptorLayouts.push_back(
+                    frame.screenSpaceDescriptorSetLayout);
             }
 
             Pipeline &pipeline = frame.pipelineCache->getOrCreate(
@@ -213,6 +224,12 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                         frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                         pipeline.layout(), 3, 1,
                         &frame.atmosphereDescriptorSet, 0, nullptr);
+                }
+                if (frame.shaderVariant->supportsScreenSpace) {
+                    vkCmdBindDescriptorSets(
+                        frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        pipeline.layout(), 4, 1,
+                        &frame.screenSpaceDescriptorSet, 0, nullptr);
                 }
                 boundPipeline = &pipeline;
             }

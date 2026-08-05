@@ -43,6 +43,18 @@ struct OcclusionCullingSupport {
     std::string reason;
 };
 
+struct ScreenSpaceEffectsSupport {
+    bool depthPyramidAvailable = false;
+    bool colorPyramidAvailable = false;
+    bool ssaoAvailable = false;
+    VkFormat depthPyramidFormat = VK_FORMAT_R32_SFLOAT;
+    VkFormat colorPyramidFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    VkFormat ssaoFormat = VK_FORMAT_R16_SFLOAT;
+    std::string depthPyramidReason;
+    std::string colorPyramidReason;
+    std::string ssaoReason;
+};
+
 class Device {
   public:
     Device(VulkanContext &ctx);
@@ -75,6 +87,9 @@ class Device {
     }
     const OcclusionCullingSupport &occlusionCullingSupport() const {
         return occlusionCullingSupport_;
+    }
+    const ScreenSpaceEffectsSupport &screenSpaceEffectsSupport() const {
+        return screenSpaceEffectsSupport_;
     }
 
     SwapChainSupportDetails querySwapChainSupport() const;
@@ -111,6 +126,7 @@ class Device {
     AtmosphereSupport atmosphereSupport_{};
     SurfaceDataSupport surfaceDataSupport_{};
     OcclusionCullingSupport occlusionCullingSupport_{};
+    ScreenSpaceEffectsSupport screenSpaceEffectsSupport_{};
     VmaAllocator          allocator_ = VK_NULL_HANDLE;
     std::unique_ptr<GpuDebugUtils> debugUtils_;
     std::unique_ptr<TracyProfiler> tracyProfiler_;

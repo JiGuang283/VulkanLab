@@ -17,6 +17,9 @@ struct FrameRenderFeatures {
     bool surfaceDataRequired = false;
     bool hiZRequired = false;
     bool occlusionRequired = false;
+    bool screenDepthPyramidRequired = false;
+    bool sceneColorPyramidRequired = false;
+    bool ssaoRequired = false;
 };
 
 struct RenderFrameContext {
@@ -31,6 +34,8 @@ struct RenderFrameContext {
     VkDescriptorSetLayout lightingDescriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorSet atmosphereDescriptorSet = VK_NULL_HANDLE;
     VkDescriptorSetLayout atmosphereDescriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSet screenSpaceDescriptorSet = VK_NULL_HANDLE;
+    VkDescriptorSetLayout screenSpaceDescriptorSetLayout = VK_NULL_HANDLE;
     PipelineCache  *pipelineCache = nullptr;
     const GpuDebugUtils *debugUtils = nullptr;
     const TracyProfiler *tracyProfiler = nullptr;

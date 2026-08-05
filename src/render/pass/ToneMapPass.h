@@ -16,6 +16,7 @@ class RenderQueue;
 class RenderResourceRegistry;
 class SwapChain;
 struct RenderFrameContext;
+struct FrameRenderFeatures;
 
 class ToneMapPass final : public IRenderPass {
   public:
@@ -28,6 +29,12 @@ class ToneMapPass final : public IRenderPass {
                 RenderImageHandle surfaceNormalRoughness,
                 RenderImageHandle surfaceMotion,
                 RenderSamplerHandle surfaceSampler,
+                RenderImageHandle screenDepthPyramid,
+                RenderImageHandle sceneColorPyramid,
+                RenderImageHandle ssaoRaw,
+                RenderImageHandle ssaoFiltered,
+                RenderSamplerHandle screenPyramidSampler,
+                RenderSamplerHandle ssaoSampler,
                 DescriptorAllocator &descriptorAllocator,
                 std::string fullscreenVertPath,
                 std::string toneMapFragPath);
@@ -51,6 +58,9 @@ class ToneMapPass final : public IRenderPass {
     void destroyFramebuffers();
     void createDescriptors(const RenderResourceRegistry &resources);
     void updateDescriptors(const RenderResourceRegistry &resources);
+    void updateScreenDescriptors(const RenderResourceRegistry &resources,
+                                 uint32_t frameIndex,
+                                 const FrameRenderFeatures &features);
 
     Device *device_ = nullptr;
     RenderImageHandle hdrColor_{};
@@ -61,6 +71,12 @@ class ToneMapPass final : public IRenderPass {
     RenderImageHandle surfaceNormalRoughness_{};
     RenderImageHandle surfaceMotion_{};
     RenderSamplerHandle surfaceSampler_{};
+    RenderImageHandle screenDepthPyramid_{};
+    RenderImageHandle sceneColorPyramid_{};
+    RenderImageHandle ssaoRaw_{};
+    RenderImageHandle ssaoFiltered_{};
+    RenderSamplerHandle screenPyramidSampler_{};
+    RenderSamplerHandle ssaoSampler_{};
     DescriptorAllocator *descriptorAllocator_ = nullptr;
     std::string fullscreenVertPath_;
     std::string toneMapFragPath_;

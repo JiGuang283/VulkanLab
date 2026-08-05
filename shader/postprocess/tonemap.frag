@@ -5,6 +5,10 @@ layout(set = 0, binding = 0) uniform sampler2D hdrColor;
 layout(set = 0, binding = 1) uniform sampler2D bloomColor;
 layout(set = 0, binding = 2) uniform sampler2D surfaceNormalRoughness;
 layout(set = 0, binding = 3) uniform sampler2D surfaceMotion;
+layout(set = 0, binding = 4) uniform sampler2D screenDepthPyramid;
+layout(set = 0, binding = 5) uniform sampler2D sceneColorPyramid;
+layout(set = 0, binding = 6) uniform sampler2D ssaoRaw;
+layout(set = 0, binding = 7) uniform sampler2D ssaoFiltered;
 
 layout(push_constant) uniform ToneMapPushConstants {
     float exposureEv;
@@ -15,6 +19,10 @@ layout(push_constant) uniform ToneMapPushConstants {
     uint applyBloom;
     uint surfaceDebugMode;
     float motionDebugScale;
+    uint screenDebugMode;
+    uint screenDebugMip;
+    float cameraNear;
+    float cameraFar;
 } push;
 
 layout(location = 0) out vec4 outColor;
@@ -39,6 +47,20 @@ vec3 octDecode(vec2 encoded)
     return normalize(normal);
 }
 
+vec3 applyDisplayTransform(vec3 color, bool allowToneMap)
+{
+    color = max(color, vec3(0.0));
+    if (allowToneMap && push.applyExposure != 0u)
+        color *= exp2(push.exposureEv);
+    if (allowToneMap && push.toneMapper == 1u)
+        color = color / (vec3(1.0) + color);
+    else if (allowToneMap && push.toneMapper == 2u)
+        color = acesFitted(color);
+    if (push.encodeGamma != 0u)
+        color = pow(max(color, vec3(0.0)), vec3(1.0 / 2.2));
+    return color;
+}
+
 void main()
 {
     if (push.surfaceDebugMode != 0u) {
@@ -61,18 +83,40 @@ void main()
         return;
     }
 
+    if (push.screenDebugMode != 0u) {
+        vec3 debugColor = vec3(0.0);
+        bool allowToneMap = false;
+        if (push.screenDebugMode == 1u) {
+            int levels = textureQueryLevels(screenDepthPyramid);
+            float mip = float(min(push.screenDebugMip,
+                                  uint(max(levels - 1, 0))));
+            float depth = textureLod(screenDepthPyramid, fragUv, mip).r;
+            float nearPlane = max(push.cameraNear, 1e-4);
+            float farPlane = max(push.cameraFar, nearPlane + 1e-3);
+            float linearDepth = nearPlane * farPlane /
+                max(farPlane - depth * (farPlane - nearPlane), 1e-4);
+            float normalized = log2(max(linearDepth / nearPlane, 1.0)) /
+                max(log2(farPlane / nearPlane), 1e-4);
+            debugColor = vec3(clamp(normalized, 0.0, 1.0));
+        } else if (push.screenDebugMode == 2u) {
+            int levels = textureQueryLevels(sceneColorPyramid);
+            float mip = float(min(push.screenDebugMip,
+                                  uint(max(levels - 1, 0))));
+            debugColor = textureLod(sceneColorPyramid, fragUv, mip).rgb;
+            allowToneMap = true;
+        } else if (push.screenDebugMode == 3u) {
+            debugColor = vec3(texture(ssaoRaw, fragUv).r);
+        } else if (push.screenDebugMode == 4u) {
+            debugColor = vec3(texture(ssaoFiltered, fragUv).r);
+        }
+        outColor = vec4(applyDisplayTransform(debugColor, allowToneMap), 1.0);
+        return;
+    }
+
     vec3 color = max(texture(hdrColor, fragUv).rgb, vec3(0.0));
     if (push.applyBloom != 0u) {
         color += max(texture(bloomColor, fragUv).rgb, vec3(0.0)) *
                  push.bloomIntensity;
     }
-    if (push.applyExposure != 0u)
-        color *= exp2(push.exposureEv);
-    if (push.toneMapper == 1u)
-        color = color / (vec3(1.0) + color);
-    else if (push.toneMapper == 2u)
-        color = acesFitted(color);
-    if (push.encodeGamma != 0u)
-        color = pow(max(color, vec3(0.0)), vec3(1.0 / 2.2));
-    outColor = vec4(color, 1.0);
+    outColor = vec4(applyDisplayTransform(color, true), 1.0);
 }

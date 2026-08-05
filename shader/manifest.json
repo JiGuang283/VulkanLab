@@ -13,7 +13,8 @@
       "vertex": "pbr_lite/forward.vert",
       "fragment": "pbr_lite/forward.frag",
       "sceneLights": true,
-      "atmosphere": true
+      "atmosphere": true,
+      "screenSpace": true
     },
     {
       "id": "forward.pbr-lite-normal-mapped",
@@ -21,7 +22,8 @@
       "vertex": "pbr_lite/forward_normal_mapped.vert",
       "fragment": "pbr_lite/forward_normal_mapped.frag",
       "sceneLights": true,
-      "atmosphere": true
+      "atmosphere": true,
+      "screenSpace": true
     },
     {
       "id": "debug.base-color",
@@ -126,6 +128,36 @@
       "id": "visibility.occlusion-cull",
       "contract": "compute",
       "compute": "visibility/occlusion_cull.comp"
+    },
+    {
+      "id": "screenspace.depth-init",
+      "contract": "compute",
+      "compute": "screenspace/depth_init.comp"
+    },
+    {
+      "id": "screenspace.depth-reduce",
+      "contract": "compute",
+      "compute": "screenspace/depth_reduce.comp"
+    },
+    {
+      "id": "screenspace.color-init",
+      "contract": "compute",
+      "compute": "screenspace/color_init.comp"
+    },
+    {
+      "id": "screenspace.color-reduce",
+      "contract": "compute",
+      "compute": "screenspace/color_reduce.comp"
+    },
+    {
+      "id": "screenspace.ssao-trace",
+      "contract": "compute",
+      "compute": "screenspace/ssao_trace.comp"
+    },
+    {
+      "id": "screenspace.ssao-blur",
+      "contract": "compute",
+      "compute": "screenspace/ssao_blur.comp"
     },
     {
       "id": "postprocess.tonemap",

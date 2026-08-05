@@ -8,6 +8,7 @@
 
 ## Active Plans
 
+- [AO、反射与全局光照算法路线](ao_reflection_gi_plan.md)：基于 Surface Data、Hi-Z、HDR 和 temporal history，分阶段实现 SSAO、TAA、GTAO、SSR、SSGI、Reflection Probe、DDGI 与可选硬件光追路径。
 - [大型场景响应式加载路线图](async_scene_loading_plan.md)：从现有同步加载演进到后台准备、增量 GPU 上传、任务取消和压缩纹理资产管线。
 - [工程结构与构建系统重构计划](engineering_refactor_plan.md)：用 target-based CMake、build-tree Shader、ProjectContext 资源路径和 Application 职责拆分支撑后续工具开发。
 - [开发诊断与自动化工具链计划](development_toolchain_plan.md)：Stage 0-5 已完成，下一未完成阶段是 Windows CI 与质量门禁。

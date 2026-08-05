@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "refreshedAt": "2026-08-05",
+  "code": [
+    {
+      "id": "xegtao",
+      "directory": "xegtao",
+      "url": "https://github.com/GameTechDev/XeGTAO.git",
+      "commit": "a5b1686c7ea37788eeb3576b5be47f7c03db532c",
+      "sparsePaths": ["Source"],
+      "license": "MIT",
+      "purpose": "GTAO, depth prefilter, spatial denoise, and bent-normal reference"
+    },
+    {
+      "id": "taa",
+      "directory": "taa",
+      "url": "https://github.com/GameTechDev/TAA.git",
+      "commit": "39786709cf70a1e0906196c600f6079571a33ceb",
+      "sparsePaths": ["MiniEngine/Core"],
+      "license": "Review upstream LICENSE",
+      "purpose": "Temporal jitter, history resolve, clipping, and sharpening reference"
+    },
+    {
+      "id": "fidelityfx-cacao",
+      "directory": "fidelityfx-cacao",
+      "url": "https://github.com/GPUOpen-Effects/FidelityFX-CACAO.git",
+      "commit": "0ddca95e6714727a252ead345591ca8f2598f261",
+      "sparsePaths": ["docs", "ffx-cacao", "sample/src/VK"],
+      "license": "MIT",
+      "purpose": "Production compute ambient-occlusion comparison and Vulkan integration reference"
+    },
+    {
+      "id": "fidelityfx-sssr",
+      "directory": "fidelityfx-sssr",
+      "url": "https://github.com/GPUOpen-Effects/FidelityFX-SSSR.git",
+      "commit": "34dcacd1feefcfab2855b82e76c7d711f2020a75",
+      "sparsePaths": [
+        "docs",
+        "ffx-dnsr",
+        "ffx-spd",
+        "ffx-sssr",
+        "sample/src/Common",
+        "sample/src/VK"
+      ],
+      "license": "MIT",
+      "purpose": "Hierarchical stochastic SSR, SPD, denoising, and Vulkan integration reference"
+    },
+    {
+      "id": "rtxgi-ddgi",
+      "directory": "rtxgi-ddgi",
+      "url": "https://github.com/NVIDIAGameWorks/RTXGI-DDGI.git",
+      "commit": "f33e496ca31b3f0eec1c4e2cbaa8bb620e337fa6",
+      "sparsePaths": ["docs", "rtxgi-sdk"],
+      "license": "Review upstream License.txt and NVIDIA RTX SDK terms",
+      "purpose": "DDGI probe update, visibility, relocation, classification, and Vulkan RT reference"
+    },
+    {
+      "id": "nrd",
+      "directory": "nrd",
+      "url": "https://github.com/NVIDIA-RTX/NRD.git",
+      "commit": "9a3fe938a7558fd16b6c91a1c0456305cdcd9f16",
+      "sparsePaths": ["Include", "Integration", "Resources", "Shaders", "Source"],
+      "license": "Review upstream LICENSE.txt and CLA.txt",
+      "purpose": "Real-time diffuse, specular, occlusion, and shadow denoising reference"
+    }
+  ],
+  "papers": [
+    {
+      "id": "gtao-2016",
+      "file": "gtao_2016.pdf",
+      "url": "https://iryoku.com/downloads/Practical-Realtime-Strategies-for-Accurate-Indirect-Occlusion.pdf"
+    },
+    {
+      "id": "temporal-supersampling-2014",
+      "file": "temporal_supersampling_2014.pptx",
+      "url": "https://advances.realtimerendering.com/s2014/epic/TemporalAA.pptx"
+    },
+    {
+      "id": "screen-space-ray-tracing-2014",
+      "file": "screen_space_ray_tracing_2014.pdf",
+      "url": "https://jcgt.org/published/0003/04/04/paper-lowres.pdf"
+    },
+    {
+      "id": "screen-space-indirect-lighting-bitmask-2023",
+      "file": "screen_space_indirect_lighting_bitmask_2023.pdf",
+      "url": "https://arxiv.org/pdf/2301.11376"
+    },
+    {
+      "id": "ddgi-irradiance-fields-2019",
+      "file": "ddgi_irradiance_fields_2019.pdf",
+      "url": "https://jcgt.org/published/0008/02/01/paper-lowres.pdf"
+    },
+    {
+      "id": "ddgi-scaling-2021",
+      "file": "ddgi_scaling_2021.pdf",
+      "url": "https://jcgt.org/published/0010/02/01/paper-lowres.pdf"
+    },
+    {
+      "id": "svgf-2017",
+      "file": "svgf_2017.pdf",
+      "url": "https://research.nvidia.com/sites/default/files/pubs/2017-07_Spatiotemporal-Variance-Guided-Filtering%3A/svgf_preprint.pdf"
+    }
+  ],
+  "docs": [
+    {
+      "id": "fidelityfx-sssr-manual",
+      "file": "fidelityfx_sssr_manual.html",
+      "url": "https://gpuopen.com/manuals/fidelityfx_sdk/techniques/stochastic-screen-space-reflections/"
+    },
+    {
+      "id": "fidelityfx-cacao-page",
+      "file": "fidelityfx_cacao.html",
+      "url": "https://gpuopen.com/fidelityfx-cacao/"
+    },
+    {
+      "id": "nrd-readme",
+      "file": "nrd_readme.md",
+      "url": "https://raw.githubusercontent.com/NVIDIA-RTX/NRD/9a3fe938a7558fd16b6c91a1c0456305cdcd9f16/README.md"
+    },
+    {
+      "id": "rtxgi-algorithms",
+      "file": "rtxgi_algorithms.md",
+      "url": "https://raw.githubusercontent.com/NVIDIAGameWorks/RTXGI-DDGI/f33e496ca31b3f0eec1c4e2cbaa8bb620e337fa6/docs/Algorithms.md"
+    }
+  ]
+}

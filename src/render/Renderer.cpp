@@ -22,6 +22,8 @@
 #include "render/pass/SurfacePrepass.h"
 #include "render/pass/HiZBuildPass.h"
 #include "render/pass/OcclusionCullPass.h"
+#include "render/pass/ScreenSpacePyramidPass.h"
+#include "render/pass/SsaoPass.h"
 #include "render/pass/MainForwardPass.h"
 #include "render/pass/SkyBackgroundPass.h"
 #include "render/pass/ToneMapPass.h"
@@ -79,6 +81,10 @@ Renderer::Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
     resourceHandles_ = registerDefaultRendererResources(
         *renderResources_, device, swapChain.imageFormat());
     renderResources_->realize(swapChain.extent());
+    createScreenSpaceUniformBuffers();
+    createScreenSpaceDescriptorSetLayout();
+    createScreenSpaceFallback();
+    createScreenSpaceDescriptorSets();
     initializeAtmosphereImages();
     createLightingDescriptorSetLayout();
     createFallbackEnvironment();
@@ -102,6 +108,13 @@ Renderer::~Renderer() {
         freeLightingGeneration(generation);
     retiredLightingGenerations_.clear();
     fallbackEnvironment_.reset();
+    for (VkDescriptorSet &set : screenSpaceDescriptorSets_) {
+        if (set != VK_NULL_HANDLE)
+            descriptorAllocator_->free(set);
+        set = VK_NULL_HANDLE;
+    }
+    screenSpaceWhiteFallback_.reset();
+    screenSpaceUniformBuffers_.clear();
     for (VkDescriptorSet &set : atmosphereDescriptorSets_) {
         if (set != VK_NULL_HANDLE)
             descriptorAllocator_->free(set);
@@ -115,6 +128,8 @@ Renderer::~Renderer() {
                                  lightingDescriptorSetLayout_, nullptr);
     vkDestroyDescriptorSetLayout(device_->logicalDevice(),
                                  atmosphereDescriptorSetLayout_, nullptr);
+    vkDestroyDescriptorSetLayout(device_->logicalDevice(),
+                                 screenSpaceDescriptorSetLayout_, nullptr);
     vkDestroyDescriptorSetLayout(device_->logicalDevice(),
                                  globalDescriptorSetLayout_, nullptr);
 }
@@ -154,6 +169,33 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
         static_cast<uint32_t>(view.sceneLights.size());
     collectRetiredLightingGenerations();
 
+    const ScreenSpaceEffectsSupport &screenSupport =
+        device_->screenSpaceEffectsSupport();
+    const bool ssaoDebugRequested =
+        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsaoRaw ||
+        view.settings.screenSpaceDebugView ==
+            ScreenSpaceDebugView::SsaoFiltered;
+    const bool ssaoShadingActive =
+        screenSupport.ssaoAvailable && shaderVariant.supportsScreenSpace &&
+        view.settings.ambientOcclusionMode == AmbientOcclusionMode::Ssao;
+    const bool ssaoPassRequired = ssaoShadingActive || ssaoDebugRequested;
+    ScreenSpaceLightingUbo screenUbo{};
+    const VkExtent2D screenExtent = renderResources_->viewportExtent();
+    screenUbo.viewportSizeInvSize =
+        glm::vec4(static_cast<float>(screenExtent.width),
+                  static_cast<float>(screenExtent.height),
+                  1.0f / static_cast<float>(screenExtent.width),
+                  1.0f / static_cast<float>(screenExtent.height));
+    screenUbo.modes =
+        glm::uvec4(view.settings.ambientOcclusionMode ==
+                           AmbientOcclusionMode::Ssao
+                       ? 1u
+                       : 0u,
+                   ssaoShadingActive ? 1u : 0u, 0u, 0u);
+    std::memcpy(screenSpaceUniformBuffers_[frame.frameIndex]->mappedData(),
+                &screenUbo, sizeof(screenUbo));
+    updateScreenSpaceDescriptor(frame.frameIndex, ssaoShadingActive);
+
     if (occlusionCullPass_) {
         lastOcclusionRequested_ = visibility.cpuStats.occlusionCandidates;
         occlusionCullPass_->prepareFrame(
@@ -178,6 +220,10 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
         atmosphereDescriptorSets_.at(frame.frameIndex);
     renderFrame.atmosphereDescriptorSetLayout =
         atmosphereDescriptorSetLayout_;
+    renderFrame.screenSpaceDescriptorSet =
+        screenSpaceDescriptorSets_.at(frame.frameIndex);
+    renderFrame.screenSpaceDescriptorSetLayout =
+        screenSpaceDescriptorSetLayout_;
     renderFrame.pipelineCache = &pipelineCache;
     renderFrame.debugUtils = &device_->debugUtils();
     renderFrame.tracyProfiler = &device_->tracyProfiler();
@@ -191,13 +237,30 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.features.surfaceDataRequired =
         device_->surfaceDataSupport().available &&
         (view.settings.culling.occlusionEnabled ||
-         view.settings.surfaceDebugView != SurfaceDebugView::None);
+         view.settings.surfaceDebugView != SurfaceDebugView::None ||
+         view.settings.screenSpaceDebugView ==
+             ScreenSpaceDebugView::NearestDepth ||
+          screenSupport.ssaoAvailable && ssaoPassRequired);
     renderFrame.features.hiZRequired =
         device_->occlusionCullingSupport().available &&
         view.settings.culling.occlusionEnabled;
     renderFrame.features.occlusionRequired =
         renderFrame.features.hiZRequired;
+    renderFrame.features.screenDepthPyramidRequired =
+        screenSupport.depthPyramidAvailable &&
+        view.settings.screenSpaceDebugView ==
+            ScreenSpaceDebugView::NearestDepth;
+    renderFrame.features.sceneColorPyramidRequired =
+        screenSupport.colorPyramidAvailable &&
+        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SceneColor;
+    renderFrame.features.ssaoRequired =
+        screenSupport.ssaoAvailable && ssaoPassRequired;
     lastSurfaceDataActive_ = renderFrame.features.surfaceDataRequired;
+
+    screenSpaceStatus_.requestedMode = view.settings.ambientOcclusionMode;
+    screenSpaceStatus_.activeMode =
+        ssaoShadingActive ? AmbientOcclusionMode::Ssao
+                          : AmbientOcclusionMode::Off;
     renderFrame.visibilityDrawStream =
         occlusionCullPass_
             ? &occlusionCullPass_->drawStream(frame.frameIndex)
@@ -231,8 +294,12 @@ void Renderer::resizeViewport(VkExtent2D extent) {
     extent.width = std::min(extent.width, maxImageDimension);
     extent.height = std::min(extent.height, maxImageDimension);
 
+    for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
+        updateScreenSpaceDescriptor(frame, false);
     pipeline_.releaseViewportResources();
     renderResources_->recreateViewportDependent(extent);
+    for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
+        updateScreenSpaceDescriptor(frame, false);
     pipeline_.validateResources(*renderResources_);
     pipeline_.onViewportResize(*renderResources_);
 }
@@ -317,7 +384,8 @@ void Renderer::createGlobalDescriptorSetLayout() {
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
     bindings[0].stageFlags =
-        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT |
+        VK_SHADER_STAGE_COMPUTE_BIT;
     bindings[1].binding = 1;
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[1].descriptorCount = 1;
@@ -394,6 +462,109 @@ void Renderer::updateSceneLightDescriptor(uint32_t frameIndex) {
     write.descriptorCount = 1;
     write.pBufferInfo = &bufferInfo;
     vkUpdateDescriptorSets(device_->logicalDevice(), 1, &write, 0, nullptr);
+}
+
+void Renderer::createScreenSpaceUniformBuffers() {
+    screenSpaceUniformBuffers_.resize(MAX_FRAMES_IN_FLIGHT);
+    for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+        screenSpaceUniformBuffers_[frame] = std::make_unique<Buffer>(
+            *device_, sizeof(ScreenSpaceLightingUbo),
+            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            0, "Frame/" + std::to_string(frame) +
+                   "/ScreenSpaceLightingUbo");
+        screenSpaceUniformBuffers_[frame]->map();
+    }
+}
+
+void Renderer::createScreenSpaceDescriptorSetLayout() {
+    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+    bindings[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
+                   VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+    bindings[1] = {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                   VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+    VkDescriptorSetLayoutCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    info.bindingCount = static_cast<uint32_t>(bindings.size());
+    info.pBindings = bindings.data();
+    VK_CHECK(vkCreateDescriptorSetLayout(device_->logicalDevice(), &info,
+                                         nullptr,
+                                         &screenSpaceDescriptorSetLayout_));
+    device_->debugUtils().setObjectName(
+        VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
+        screenSpaceDescriptorSetLayout_,
+        "DescriptorLayout/ScreenSpaceLighting");
+}
+
+void Renderer::createScreenSpaceFallback() {
+    constexpr std::array<uint8_t, 4> white = {255, 255, 255, 255};
+    UploadContext upload(*device_, nullptr, 64 * 1024,
+                         "ScreenSpaceFallback");
+    TextureCreateInfo info{};
+    info.pixels = white.data();
+    info.dataSize = white.size();
+    info.width = 1;
+    info.height = 1;
+    info.generateMipmaps = false;
+    info.format = VK_FORMAT_R8G8B8A8_UNORM;
+    info.wrapU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    info.wrapV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    info.debugName = "ScreenSpace/Fallback/WhiteAO";
+    screenSpaceWhiteFallback_ =
+        std::make_shared<Texture>(*device_, upload, info);
+    upload.finish();
+}
+
+void Renderer::createScreenSpaceDescriptorSets() {
+    for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+        screenSpaceDescriptorSets_[frame] = descriptorAllocator_->allocate(
+            screenSpaceDescriptorSetLayout_,
+            {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
+             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1}},
+            "Frame/" + std::to_string(frame) +
+                "/ScreenSpaceDescriptorSet");
+        updateScreenSpaceDescriptor(frame, false);
+    }
+}
+
+void Renderer::updateScreenSpaceDescriptor(uint32_t frameIndex,
+                                           bool bindSsao) {
+    VkDescriptorBufferInfo bufferInfo{};
+    bufferInfo.buffer = screenSpaceUniformBuffers_.at(frameIndex)->handle();
+    bufferInfo.range = sizeof(ScreenSpaceLightingUbo);
+
+    VkDescriptorImageInfo imageInfo{};
+    if (bindSsao && resourceHandles_.ssaoFiltered.valid()) {
+        imageInfo.sampler =
+            renderResources_->sampler(resourceHandles_.ssaoSampler);
+        imageInfo.imageView =
+            renderResources_
+                ->image(resourceHandles_.ssaoFiltered, frameIndex)
+                .imageView();
+        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    } else {
+        imageInfo.sampler = screenSpaceWhiteFallback_->sampler();
+        imageInfo.imageView = screenSpaceWhiteFallback_->imageView();
+        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
+
+    std::array<VkWriteDescriptorSet, 2> writes{};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = screenSpaceDescriptorSets_.at(frameIndex);
+    writes[0].dstBinding = 0;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[0].descriptorCount = 1;
+    writes[0].pBufferInfo = &bufferInfo;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = screenSpaceDescriptorSets_.at(frameIndex);
+    writes[1].dstBinding = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[1].descriptorCount = 1;
+    writes[1].pImageInfo = &imageInfo;
+    vkUpdateDescriptorSets(device_->logicalDevice(),
+                           static_cast<uint32_t>(writes.size()),
+                           writes.data(), 0, nullptr);
 }
 
 void Renderer::createLightingDescriptorSetLayout() {
@@ -816,6 +987,57 @@ SurfaceDataStatus Renderer::surfaceDataStatus() const {
     return status;
 }
 
+ScreenSpaceEffectsStatus Renderer::screenSpaceEffectsStatus() const {
+    ScreenSpaceEffectsStatus status = screenSpaceStatus_;
+    const ScreenSpaceEffectsSupport &support =
+        device_->screenSpaceEffectsSupport();
+    status.depthPyramidSupported = support.depthPyramidAvailable;
+    status.colorPyramidSupported = support.colorPyramidAvailable;
+    status.ssaoSupported = support.ssaoAvailable;
+    status.depthPyramidUnavailableReason = support.depthPyramidReason;
+    status.colorPyramidUnavailableReason = support.colorPyramidReason;
+    status.ssaoUnavailableReason = support.ssaoReason;
+
+    const auto mipBytes = [&](RenderImageHandle handle,
+                              uint32_t bytesPerPixel) {
+        if (!handle.valid())
+            return uint64_t{0};
+        uint64_t bytes = 0;
+        const uint32_t mipCount = renderResources_->mipLevelCount(handle);
+        for (uint32_t mip = 0; mip < mipCount; ++mip) {
+            const VkExtent2D extent = renderResources_->mipExtent(handle, mip);
+            bytes += static_cast<uint64_t>(extent.width) * extent.height *
+                     bytesPerPixel;
+        }
+        return bytes * MAX_FRAMES_IN_FLIGHT;
+    };
+    if (resourceHandles_.screenDepthPyramid.valid()) {
+        status.depthMipLevels = renderResources_->mipLevelCount(
+            resourceHandles_.screenDepthPyramid);
+        status.depthExtent =
+            renderResources_->extent(resourceHandles_.screenDepthPyramid);
+        status.estimatedMemoryBytes +=
+            mipBytes(resourceHandles_.screenDepthPyramid, 4);
+    }
+    if (resourceHandles_.sceneColorPyramid.valid()) {
+        status.colorMipLevels = renderResources_->mipLevelCount(
+            resourceHandles_.sceneColorPyramid);
+        status.colorExtent =
+            renderResources_->extent(resourceHandles_.sceneColorPyramid);
+        status.estimatedMemoryBytes +=
+            mipBytes(resourceHandles_.sceneColorPyramid, 8);
+    }
+    if (resourceHandles_.ssaoRaw.valid()) {
+        status.ssaoExtent =
+            renderResources_->extent(resourceHandles_.ssaoRaw);
+        const uint64_t imageBytes =
+            static_cast<uint64_t>(status.ssaoExtent.width) *
+            status.ssaoExtent.height * 2u * MAX_FRAMES_IN_FLIGHT;
+        status.estimatedMemoryBytes += imageBytes * 3u;
+    }
+    return status;
+}
+
 void Renderer::createRenderPipeline() {
     if (device_->atmosphereSupport().available) {
         auto atmospherePass = std::make_unique<AtmosphereLutPass>(
@@ -855,6 +1077,26 @@ void Renderer::createRenderPipeline() {
         pipeline_.addPass(std::move(occlusionPass));
     }
 
+    const ScreenSpaceEffectsSupport &screenSupport =
+        device_->screenSpaceEffectsSupport();
+    if (screenSupport.depthPyramidAvailable) {
+        pipeline_.addPass(std::make_unique<ScreenSpacePyramidPass>(
+            *device_, *renderResources_,
+            ScreenSpacePyramidKind::NearestDepth,
+            resourceHandles_.surfaceDepth,
+            resourceHandles_.surfaceDepthSampler,
+            resourceHandles_.screenDepthPyramid,
+            resourceHandles_.screenPyramidSampler, *descriptorAllocator_,
+            shaderPaths_.screenDepthInitComp,
+            shaderPaths_.screenDepthReduceComp));
+    }
+    if (screenSupport.ssaoAvailable) {
+        pipeline_.addPass(std::make_unique<SsaoPass>(
+            *device_, *renderResources_, resourceHandles_,
+            *descriptorAllocator_, globalDescriptorSetLayout_,
+            shaderPaths_.ssaoTraceComp, shaderPaths_.ssaoBlurComp));
+    }
+
     pipeline_.addPass(std::make_unique<SkyBackgroundPass>(
         *device_, *renderResources_, resourceHandles_,
         globalDescriptorSetLayout_, lightingDescriptorSetLayout_,
@@ -866,6 +1108,16 @@ void Renderer::createRenderPipeline() {
         lightingDescriptorSetLayout_, atmosphereDescriptorSetLayout_);
     mainForwardPass_ = mainPass.get();
     pipeline_.addPass(std::move(mainPass));
+
+    if (screenSupport.colorPyramidAvailable) {
+        pipeline_.addPass(std::make_unique<ScreenSpacePyramidPass>(
+            *device_, *renderResources_, ScreenSpacePyramidKind::SceneColor,
+            resourceHandles_.hdrColor, resourceHandles_.hdrSampler,
+            resourceHandles_.sceneColorPyramid,
+            resourceHandles_.screenPyramidSampler, *descriptorAllocator_,
+            shaderPaths_.screenColorInitComp,
+            shaderPaths_.screenColorReduceComp));
+    }
 
     if (device_->computeBloomSupport().available) {
         pipeline_.addPass(std::make_unique<BloomPass>(
@@ -881,6 +1133,12 @@ void Renderer::createRenderPipeline() {
         resourceHandles_.surfaceNormalRoughness,
         resourceHandles_.surfaceMotion,
         resourceHandles_.surfaceDataSampler,
+        resourceHandles_.screenDepthPyramid,
+        resourceHandles_.sceneColorPyramid,
+        resourceHandles_.ssaoRaw,
+        resourceHandles_.ssaoFiltered,
+        resourceHandles_.screenPyramidSampler,
+        resourceHandles_.ssaoSampler,
         *descriptorAllocator_,
         shaderPaths_.fullscreenVert, shaderPaths_.toneMapFrag);
     toneMapPass_ = toneMapPass.get();

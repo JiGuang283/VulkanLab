@@ -1,0 +1,30 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D sourceImage;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D destinationImage;
+
+layout(push_constant) uniform PyramidPush {
+    uvec4 extents;
+} push;
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sourceSize = ivec2(push.extents.xy);
+    ivec2 destinationSize = ivec2(push.extents.zw);
+    if (any(greaterThanEqual(pixel, destinationSize)))
+        return;
+
+    ivec2 sourceBase = pixel * 2;
+    vec4 average = vec4(0.0);
+    for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 2; ++x) {
+            ivec2 samplePixel = min(sourceBase + ivec2(x, y),
+                                    sourceSize - ivec2(1));
+            average += texelFetch(sourceImage, samplePixel, 0);
+        }
+    }
+    imageStore(destinationImage, pixel, average * 0.25);
+}

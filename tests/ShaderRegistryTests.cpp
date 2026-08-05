@@ -161,6 +161,8 @@ void testProjectManifestPreservesPublicVariants() {
                     "project default shader must support Bloom");
     requireRegistry(registry.defaultVariant().supportsAtmosphere,
                     "project default shader must support Atmosphere");
+    requireRegistry(registry.defaultVariant().supportsScreenSpace,
+                    "project default shader must support screen-space effects");
 }
 
 void testRegistryRejectsDuplicateDisplayName() {

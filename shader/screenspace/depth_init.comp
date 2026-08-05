@@ -1,0 +1,20 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D sourceImage;
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D destinationImage;
+
+layout(push_constant) uniform PyramidPush {
+    uvec4 extents;
+} push;
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 destinationSize = ivec2(push.extents.zw);
+    if (any(greaterThanEqual(pixel, destinationSize)))
+        return;
+    float depth = texelFetch(sourceImage, pixel, 0).r;
+    imageStore(destinationImage, pixel, vec4(depth, 0.0, 0.0, 0.0));
+}

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string_view>
 
@@ -12,6 +13,97 @@ enum class SurfaceDebugView {
     Motion,
     HistoryValidity,
 };
+
+enum class AmbientOcclusionMode {
+    Off,
+    Ssao,
+};
+
+inline const char *ambientOcclusionModeName(AmbientOcclusionMode mode) {
+    switch (mode) {
+    case AmbientOcclusionMode::Off:
+        return "off";
+    case AmbientOcclusionMode::Ssao:
+        return "ssao";
+    }
+    return "off";
+}
+
+inline std::optional<AmbientOcclusionMode>
+ambientOcclusionModeFromName(std::string_view name) {
+    if (name == "off")
+        return AmbientOcclusionMode::Off;
+    if (name == "ssao")
+        return AmbientOcclusionMode::Ssao;
+    return std::nullopt;
+}
+
+enum class SsaoQuality {
+    Low,
+    Medium,
+    High,
+};
+
+inline const char *ssaoQualityName(SsaoQuality quality) {
+    switch (quality) {
+    case SsaoQuality::Low:
+        return "low";
+    case SsaoQuality::Medium:
+        return "medium";
+    case SsaoQuality::High:
+        return "high";
+    }
+    return "medium";
+}
+
+inline std::optional<SsaoQuality> ssaoQualityFromName(std::string_view name) {
+    if (name == "low")
+        return SsaoQuality::Low;
+    if (name == "medium")
+        return SsaoQuality::Medium;
+    if (name == "high")
+        return SsaoQuality::High;
+    return std::nullopt;
+}
+
+enum class ScreenSpaceDebugView {
+    None,
+    NearestDepth,
+    SceneColor,
+    SsaoRaw,
+    SsaoFiltered,
+};
+
+inline const char *screenSpaceDebugViewName(ScreenSpaceDebugView view) {
+    switch (view) {
+    case ScreenSpaceDebugView::None:
+        return "none";
+    case ScreenSpaceDebugView::NearestDepth:
+        return "nearest-depth";
+    case ScreenSpaceDebugView::SceneColor:
+        return "scene-color";
+    case ScreenSpaceDebugView::SsaoRaw:
+        return "ssao-raw";
+    case ScreenSpaceDebugView::SsaoFiltered:
+        return "ssao-filtered";
+    }
+    return "none";
+}
+
+inline std::optional<ScreenSpaceDebugView>
+screenSpaceDebugViewFromName(std::string_view name) {
+    if (name == "none")
+        return ScreenSpaceDebugView::None;
+    if (name == "nearest-depth")
+        return ScreenSpaceDebugView::NearestDepth;
+    if (name == "scene-color")
+        return ScreenSpaceDebugView::SceneColor;
+    if (name == "ssao-raw")
+        return ScreenSpaceDebugView::SsaoRaw;
+    if (name == "ssao-filtered")
+        return ScreenSpaceDebugView::SsaoFiltered;
+    return std::nullopt;
+}
 
 inline const char *surfaceDebugViewName(SurfaceDebugView view) {
     switch (view) {
@@ -101,6 +193,14 @@ struct RenderSettings {
     float environmentRotationRadians = 0.0f;
     SurfaceDebugView surfaceDebugView = SurfaceDebugView::None;
     float surfaceMotionDebugScale = 32.0f;
+    AmbientOcclusionMode ambientOcclusionMode = AmbientOcclusionMode::Off;
+    SsaoQuality ssaoQuality = SsaoQuality::Medium;
+    float ssaoRadius = 0.5f;
+    float ssaoBias = 0.025f;
+    float ssaoIntensity = 1.0f;
+    float ssaoPower = 1.5f;
+    ScreenSpaceDebugView screenSpaceDebugView = ScreenSpaceDebugView::None;
+    uint32_t screenSpaceDebugMip = 0;
     CullingSettings culling{};
 };
 
@@ -121,6 +221,14 @@ struct RenderSettingsPatch {
     std::optional<float> environmentRotationRadians;
     std::optional<SurfaceDebugView> surfaceDebugView;
     std::optional<float> surfaceMotionDebugScale;
+    std::optional<AmbientOcclusionMode> ambientOcclusionMode;
+    std::optional<SsaoQuality> ssaoQuality;
+    std::optional<float> ssaoRadius;
+    std::optional<float> ssaoBias;
+    std::optional<float> ssaoIntensity;
+    std::optional<float> ssaoPower;
+    std::optional<ScreenSpaceDebugView> screenSpaceDebugView;
+    std::optional<uint32_t> screenSpaceDebugMip;
     std::optional<bool>  frustumCullingEnabled;
     std::optional<bool>  shadowCullingEnabled;
     std::optional<float> shadowDistance;
@@ -168,6 +276,22 @@ inline void applyRenderSettingsPatch(RenderSettings &settings,
         settings.surfaceDebugView = *patch.surfaceDebugView;
     if (patch.surfaceMotionDebugScale)
         settings.surfaceMotionDebugScale = *patch.surfaceMotionDebugScale;
+    if (patch.ambientOcclusionMode)
+        settings.ambientOcclusionMode = *patch.ambientOcclusionMode;
+    if (patch.ssaoQuality)
+        settings.ssaoQuality = *patch.ssaoQuality;
+    if (patch.ssaoRadius)
+        settings.ssaoRadius = *patch.ssaoRadius;
+    if (patch.ssaoBias)
+        settings.ssaoBias = *patch.ssaoBias;
+    if (patch.ssaoIntensity)
+        settings.ssaoIntensity = *patch.ssaoIntensity;
+    if (patch.ssaoPower)
+        settings.ssaoPower = *patch.ssaoPower;
+    if (patch.screenSpaceDebugView)
+        settings.screenSpaceDebugView = *patch.screenSpaceDebugView;
+    if (patch.screenSpaceDebugMip)
+        settings.screenSpaceDebugMip = *patch.screenSpaceDebugMip;
     if (patch.frustumCullingEnabled)
         settings.culling.frustumEnabled = *patch.frustumCullingEnabled;
     if (patch.shadowCullingEnabled)

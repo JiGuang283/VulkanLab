@@ -6,6 +6,7 @@
 #include "include/material_push.glsl"
 #include "include/ibl.glsl"
 #include "include/atmosphere.glsl"
+#include "include/screen_space_lighting.glsl"
 
 const float PI = 3.14159265359;
 
@@ -250,7 +251,11 @@ void main()
     vec4 mr = texture(metallicRoughnessTexture, fragTexCoord);
     float roughness = clamp(mr.g * push.roughnessAlpha.x, 0.04, 1.0);
     float metallic = clamp(mr.b * push.emissiveMetallic.w, 0.0, 1.0);
-    float occlusion = materialOcclusion();
+    float screenAo =
+        (!isBlendAlphaMode() && transmissionFactor() <= 0.0)
+            ? screenSpaceAmbientOcclusion()
+            : 1.0;
+    float occlusion = materialOcclusion() * screenAo;
     vec3 emissive = texture(emissiveTexture, fragTexCoord).rgb *
                     push.emissiveMetallic.rgb;
 

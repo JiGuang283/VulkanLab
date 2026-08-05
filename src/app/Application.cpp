@@ -926,6 +926,18 @@ void Application::init() {
         shaderRegistry_.program("visibility.hiz-reduce");
     const ShaderProgram &visibilityOcclusion =
         shaderRegistry_.program("visibility.occlusion-cull");
+    const ShaderProgram &screenDepthInit =
+        shaderRegistry_.program("screenspace.depth-init");
+    const ShaderProgram &screenDepthReduce =
+        shaderRegistry_.program("screenspace.depth-reduce");
+    const ShaderProgram &screenColorInit =
+        shaderRegistry_.program("screenspace.color-init");
+    const ShaderProgram &screenColorReduce =
+        shaderRegistry_.program("screenspace.color-reduce");
+    const ShaderProgram &ssaoTrace =
+        shaderRegistry_.program("screenspace.ssao-trace");
+    const ShaderProgram &ssaoBlur =
+        shaderRegistry_.program("screenspace.ssao-blur");
     const ShaderProgram &toneMap =
         shaderRegistry_.program("postprocess.tonemap");
     const ShaderProgram &present =
@@ -955,6 +967,12 @@ void Application::init() {
             visibilityHiZInit.computeSpvPath,
             visibilityHiZReduce.computeSpvPath,
             visibilityOcclusion.computeSpvPath,
+            screenDepthInit.computeSpvPath,
+            screenDepthReduce.computeSpvPath,
+            screenColorInit.computeSpvPath,
+            screenColorReduce.computeSpvPath,
+            ssaoTrace.computeSpvPath,
+            ssaoBlur.computeSpvPath,
             toneMap.vertSpvPath, toneMap.fragSpvPath,
             present.fragSpvPath, skybox.fragSpvPath,
             bloomDownsample.computeSpvPath,
@@ -2051,8 +2069,50 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
             "Surface data is unavailable: " +
                 renderer_->surfaceDataStatus().unavailableReason);
     }
+    if (patch.ambientOcclusionMode &&
+        *patch.ambientOcclusionMode == AmbientOcclusionMode::Ssao &&
+        renderer_ && !renderer_->screenSpaceEffectsStatus().ssaoSupported) {
+        throw RuntimeCommandError(
+            "ssao_unsupported",
+            "SSAO is unavailable: " +
+                renderer_->screenSpaceEffectsStatus().ssaoUnavailableReason);
+    }
+    if (patch.surfaceDebugView && patch.screenSpaceDebugView &&
+        *patch.surfaceDebugView != SurfaceDebugView::None &&
+        *patch.screenSpaceDebugView != ScreenSpaceDebugView::None) {
+        throw RuntimeCommandError(
+            "conflicting_debug_views",
+            "Surface and screen-space debug views cannot be active together.");
+    }
+    if (patch.screenSpaceDebugView && renderer_) {
+        const ScreenSpaceEffectsStatus status =
+            renderer_->screenSpaceEffectsStatus();
+        const ScreenSpaceDebugView view = *patch.screenSpaceDebugView;
+        const bool supported =
+            view == ScreenSpaceDebugView::None ||
+            (view == ScreenSpaceDebugView::NearestDepth &&
+             status.depthPyramidSupported) ||
+            (view == ScreenSpaceDebugView::SceneColor &&
+             status.colorPyramidSupported) ||
+            ((view == ScreenSpaceDebugView::SsaoRaw ||
+              view == ScreenSpaceDebugView::SsaoFiltered) &&
+             status.ssaoSupported);
+        if (!supported) {
+            throw RuntimeCommandError(
+                "screen_space_unsupported",
+                "The requested screen-space debug resource is unavailable.");
+        }
+    }
     RenderSettings next = renderSettings_;
     applyRenderSettingsPatch(next, patch);
+    if (patch.surfaceDebugView &&
+        *patch.surfaceDebugView != SurfaceDebugView::None) {
+        next.screenSpaceDebugView = ScreenSpaceDebugView::None;
+    }
+    if (patch.screenSpaceDebugView &&
+        *patch.screenSpaceDebugView != ScreenSpaceDebugView::None) {
+        next.surfaceDebugView = SurfaceDebugView::None;
+    }
     next.shadowReceiverBias =
         glm::clamp(next.shadowReceiverBias, 0.0f, 0.05f);
     next.shadowConstantBias =
@@ -2072,6 +2132,12 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
                        glm::two_pi<float>());
     next.surfaceMotionDebugScale =
         glm::clamp(next.surfaceMotionDebugScale, 0.1f, 1024.0f);
+    next.ssaoRadius = glm::clamp(next.ssaoRadius, 0.05f, 10.0f);
+    next.ssaoBias = glm::clamp(next.ssaoBias, 0.0f, 0.2f);
+    next.ssaoIntensity = glm::clamp(next.ssaoIntensity, 0.0f, 4.0f);
+    next.ssaoPower = glm::clamp(next.ssaoPower, 0.25f, 4.0f);
+    next.screenSpaceDebugMip =
+        std::min(next.screenSpaceDebugMip, 31u);
     next.culling.shadowDistance =
         glm::clamp(next.culling.shadowDistance, 0.1f, 100000.0f);
     next.culling.maxDrawDistance =
@@ -3291,6 +3357,8 @@ ControlJson Application::runtimeRenderStatus() {
     const OcclusionCullingStatus cullingStatus =
         renderer_->occlusionCullingStatus();
     const SurfaceDataStatus surfaceStatus = renderer_->surfaceDataStatus();
+    const ScreenSpaceEffectsStatus screenSpaceStatus =
+        renderer_->screenSpaceEffectsStatus();
     ControlJson indirectCapacities = ControlJson::array();
     for (const uint32_t capacity : cullingStatus.indirectCapacities)
         indirectCapacities.push_back(capacity);
@@ -3459,7 +3527,39 @@ ControlJson Application::runtimeRenderStatus() {
           {"invalidationReason",
            visibilityFrame_.history.invalidationReason},
           {"historyCapacities", std::move(surfaceHistoryCapacities)},
-          {"allocatedBytes", surfaceStatus.allocatedBytes}}},
+           {"allocatedBytes", surfaceStatus.allocatedBytes}}},
+        {"screenSpace",
+         {{"depthPyramidSupported",
+           screenSpaceStatus.depthPyramidSupported},
+          {"colorPyramidSupported",
+           screenSpaceStatus.colorPyramidSupported},
+          {"ssaoSupported", screenSpaceStatus.ssaoSupported},
+          {"requestedMode", ambientOcclusionModeName(
+                                screenSpaceStatus.requestedMode)},
+          {"activeMode", ambientOcclusionModeName(
+                             screenSpaceStatus.activeMode)},
+          {"debugView", screenSpaceDebugViewName(
+                            renderSettings_.screenSpaceDebugView)},
+          {"debugMip", renderSettings_.screenSpaceDebugMip},
+          {"depthMipLevels", screenSpaceStatus.depthMipLevels},
+          {"colorMipLevels", screenSpaceStatus.colorMipLevels},
+          {"depthExtent",
+           {{"width", screenSpaceStatus.depthExtent.width},
+            {"height", screenSpaceStatus.depthExtent.height}}},
+          {"colorExtent",
+           {{"width", screenSpaceStatus.colorExtent.width},
+            {"height", screenSpaceStatus.colorExtent.height}}},
+          {"ssaoExtent",
+           {{"width", screenSpaceStatus.ssaoExtent.width},
+            {"height", screenSpaceStatus.ssaoExtent.height}}},
+          {"estimatedMemoryBytes",
+           screenSpaceStatus.estimatedMemoryBytes},
+          {"depthPyramidUnavailableReason",
+           screenSpaceStatus.depthPyramidUnavailableReason},
+          {"colorPyramidUnavailableReason",
+           screenSpaceStatus.colorPyramidUnavailableReason},
+          {"ssaoUnavailableReason",
+           screenSpaceStatus.ssaoUnavailableReason}}},
         {"frameSerial", frameSync_->lastSubmittedSerial()},
         {"completedSubmissionSerial",
          frameSync_->completedSubmissionSerial()},
@@ -3518,6 +3618,8 @@ ControlJson Application::runtimeRenderStatus() {
 ControlJson Application::runtimeRenderSettingsGet() {
     const OcclusionCullingStatus cullingStatus =
         renderer_->occlusionCullingStatus();
+    const ScreenSpaceEffectsStatus screenSpaceStatus =
+        renderer_->screenSpaceEffectsStatus();
     return {{"shadowsEnabled", renderSettings_.shadowsEnabled},
             {"shadowMapSize", kDirectionalShadowMapSize},
             {"shadowReceiverBias", renderSettings_.shadowReceiverBias},
@@ -3553,6 +3655,25 @@ ControlJson Application::runtimeRenderSettingsGet() {
             {"surfaceDataActive", renderer_->surfaceDataStatus().active},
             {"surfaceDataUnavailableReason",
              renderer_->surfaceDataStatus().unavailableReason},
+            {"ambientOcclusionMode",
+             ambientOcclusionModeName(
+                 renderSettings_.ambientOcclusionMode)},
+            {"ssaoQuality",
+             ssaoQualityName(renderSettings_.ssaoQuality)},
+            {"ssaoRadius", renderSettings_.ssaoRadius},
+            {"ssaoBias", renderSettings_.ssaoBias},
+            {"ssaoIntensity", renderSettings_.ssaoIntensity},
+            {"ssaoPower", renderSettings_.ssaoPower},
+            {"ssaoAvailable", screenSpaceStatus.ssaoSupported},
+            {"ssaoActive",
+             screenSpaceStatus.activeMode == AmbientOcclusionMode::Ssao},
+            {"ssaoUnavailableReason",
+             screenSpaceStatus.ssaoUnavailableReason},
+            {"screenSpaceDebugView",
+             screenSpaceDebugViewName(
+                 renderSettings_.screenSpaceDebugView)},
+            {"screenSpaceDebugMip",
+             renderSettings_.screenSpaceDebugMip},
             {"frustumCullingEnabled",
              renderSettings_.culling.frustumEnabled},
             {"shadowCullingEnabled",
@@ -4802,6 +4923,140 @@ void Application::drawPostProcessingPanel() {
     } else if (renderSettings_.bloomEnabled && !compatible) {
         ImGui::TextDisabled("Selected Shader does not support Bloom.");
     }
+
+    ImGui::SeparatorText("Ambient Occlusion");
+    const ScreenSpaceEffectsStatus screenStatus =
+        renderer_->screenSpaceEffectsStatus();
+    constexpr const char *aoModeLabels[] = {"Off", "SSAO"};
+    int aoMode = static_cast<int>(renderSettings_.ambientOcclusionMode);
+    ImGui::BeginDisabled(!screenStatus.ssaoSupported);
+    if (ImGui::Combo("Mode##AmbientOcclusion", &aoMode, aoModeLabels,
+                     static_cast<int>(std::size(aoModeLabels)))) {
+        RenderSettingsPatch patch;
+        patch.ambientOcclusionMode =
+            static_cast<AmbientOcclusionMode>(aoMode);
+        applyRenderSettings(patch);
+    }
+    const bool aoRequested =
+        renderSettings_.ambientOcclusionMode == AmbientOcclusionMode::Ssao;
+    const bool aoDebugRequested =
+        renderSettings_.screenSpaceDebugView ==
+            ScreenSpaceDebugView::SsaoRaw ||
+        renderSettings_.screenSpaceDebugView ==
+            ScreenSpaceDebugView::SsaoFiltered;
+    ImGui::BeginDisabled(!aoRequested && !aoDebugRequested);
+    constexpr const char *qualityLabels[] = {"Low (8)", "Medium (16)",
+                                              "High (32)"};
+    int quality = static_cast<int>(renderSettings_.ssaoQuality);
+    if (ImGui::Combo("Quality##SSAO", &quality, qualityLabels,
+                     static_cast<int>(std::size(qualityLabels)))) {
+        RenderSettingsPatch patch;
+        patch.ssaoQuality = static_cast<SsaoQuality>(quality);
+        applyRenderSettings(patch);
+    }
+    float radius = renderSettings_.ssaoRadius;
+    if (ImGui::DragFloat("Radius##SSAO", &radius, 0.01f, 0.05f, 10.0f,
+                         "%.2f")) {
+        RenderSettingsPatch patch;
+        patch.ssaoRadius = radius;
+        applyRenderSettings(patch);
+    }
+    float bias = renderSettings_.ssaoBias;
+    if (ImGui::DragFloat("Bias##SSAO", &bias, 0.001f, 0.0f, 0.2f,
+                         "%.3f")) {
+        RenderSettingsPatch patch;
+        patch.ssaoBias = bias;
+        applyRenderSettings(patch);
+    }
+    float aoIntensity = renderSettings_.ssaoIntensity;
+    if (ImGui::DragFloat("Intensity##SSAO", &aoIntensity, 0.02f, 0.0f,
+                         4.0f, "%.2f")) {
+        RenderSettingsPatch patch;
+        patch.ssaoIntensity = aoIntensity;
+        applyRenderSettings(patch);
+    }
+    float aoPower = renderSettings_.ssaoPower;
+    if (ImGui::DragFloat("Power##SSAO", &aoPower, 0.02f, 0.25f, 4.0f,
+                         "%.2f")) {
+        RenderSettingsPatch patch;
+        patch.ssaoPower = aoPower;
+        applyRenderSettings(patch);
+    }
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+
+    const bool aoActive =
+        screenStatus.activeMode == AmbientOcclusionMode::Ssao;
+    editor::statusIndicator(
+        aoActive ? "SSAO active" : "SSAO inactive",
+        aoActive ? editor::StatusTone::Success
+                 : editor::StatusTone::Neutral,
+        !screenStatus.ssaoSupported
+            ? screenStatus.ssaoUnavailableReason.c_str()
+            : (aoRequested && !currentShaderVariant().supportsScreenSpace
+                   ? "Selected Shader does not consume screen-space AO."
+                   : nullptr));
+
+    ImGui::SeparatorText("Screen-Space Debug");
+    constexpr const char *screenDebugLabels[] = {
+        "None", "Nearest Depth", "Scene Color", "SSAO Raw",
+        "SSAO Filtered"};
+    int screenDebug =
+        static_cast<int>(renderSettings_.screenSpaceDebugView);
+    const char *preview = screenDebugLabels[screenDebug];
+    if (ImGui::BeginCombo("Debug View##ScreenSpace", preview)) {
+        for (int index = 0; index < static_cast<int>(std::size(screenDebugLabels));
+             ++index) {
+            const auto view = static_cast<ScreenSpaceDebugView>(index);
+            const bool supported =
+                view == ScreenSpaceDebugView::None ||
+                (view == ScreenSpaceDebugView::NearestDepth &&
+                 screenStatus.depthPyramidSupported) ||
+                (view == ScreenSpaceDebugView::SceneColor &&
+                 screenStatus.colorPyramidSupported) ||
+                ((view == ScreenSpaceDebugView::SsaoRaw ||
+                  view == ScreenSpaceDebugView::SsaoFiltered) &&
+                 screenStatus.ssaoSupported);
+            ImGui::BeginDisabled(!supported);
+            const bool selected = index == screenDebug;
+            if (ImGui::Selectable(screenDebugLabels[index], selected)) {
+                RenderSettingsPatch patch;
+                patch.screenSpaceDebugView = view;
+                if (view != ScreenSpaceDebugView::None)
+                    patch.surfaceDebugView = SurfaceDebugView::None;
+                applyRenderSettings(patch);
+            }
+            if (selected)
+                ImGui::SetItemDefaultFocus();
+            ImGui::EndDisabled();
+        }
+        ImGui::EndCombo();
+    }
+    uint32_t maximumMip = 0;
+    if (renderSettings_.screenSpaceDebugView ==
+        ScreenSpaceDebugView::NearestDepth) {
+        maximumMip = screenStatus.depthMipLevels > 0
+                         ? screenStatus.depthMipLevels - 1u
+                         : 0u;
+    } else if (renderSettings_.screenSpaceDebugView ==
+               ScreenSpaceDebugView::SceneColor) {
+        maximumMip = screenStatus.colorMipLevels > 0
+                         ? screenStatus.colorMipLevels - 1u
+                         : 0u;
+    }
+    int debugMip = static_cast<int>(std::min(
+        renderSettings_.screenSpaceDebugMip, maximumMip));
+    ImGui::BeginDisabled(maximumMip == 0);
+    if (ImGui::SliderInt("Mip##ScreenSpace", &debugMip, 0,
+                         static_cast<int>(maximumMip))) {
+        RenderSettingsPatch patch;
+        patch.screenSpaceDebugMip = static_cast<uint32_t>(debugMip);
+        applyRenderSettings(patch);
+    }
+    ImGui::EndDisabled();
+    ImGui::TextDisabled("Resources: %.2f MiB",
+                        static_cast<double>(screenStatus.estimatedMemoryBytes) /
+                            (1024.0 * 1024.0));
 }
 
 void Application::drawSurfaceDataPanel() {
@@ -4814,6 +5069,8 @@ void Application::drawSurfaceDataPanel() {
                      static_cast<int>(std::size(labels)))) {
         RenderSettingsPatch patch;
         patch.surfaceDebugView = static_cast<SurfaceDebugView>(mode);
+        if (patch.surfaceDebugView != SurfaceDebugView::None)
+            patch.screenSpaceDebugView = ScreenSpaceDebugView::None;
         applyRenderSettings(patch);
     }
     ImGui::BeginDisabled(

@@ -46,7 +46,7 @@ struct GpuVisibilityDrawStream {
     bool active = false;
 };
 
-struct SurfaceFrameHistoryData {
+struct TemporalFrameHistoryData {
     glm::mat4 previousViewProjection{1.0f};
     glm::mat4 currentViewProjection{1.0f};
     glm::mat4 currentProjection{1.0f};
@@ -68,7 +68,7 @@ struct VisibilityFrame {
     std::vector<RenderItemIndex> cameraTransparent;
     std::vector<RenderItemIndex> shadowCasters;
     VisibilityCpuStatistics cpuStats{};
-    SurfaceFrameHistoryData history{};
+    TemporalFrameHistoryData history{};
 
     size_t cameraDrawCount() const {
         return cameraOpaque.size() + cameraTransparent.size();

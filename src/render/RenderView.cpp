@@ -142,6 +142,8 @@ RenderView buildRenderView(const RenderViewInput &input) {
     VKL_PROFILE_ZONE("Build RenderView");
     RenderView result{};
     result.settings = input.settings;
+    result.cameraNearPlane = input.cameraNearPlane;
+    result.cameraFarPlane = input.cameraFarPlane;
     result.globalUbo.view = input.view;
     result.globalUbo.proj = input.projection;
     result.globalUbo.inverseViewProjection =

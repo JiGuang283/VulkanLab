@@ -8,6 +8,7 @@
 #include "render/FrameGpuData.h"
 #include "render/GpuPassProfiler.h"
 #include "render/RenderResourceRegistry.h"
+#include "render/RenderSettings.h"
 #include "render/RendererShaderPaths.h"
 #include "render/Atmosphere.h"
 #include "render/Visibility.h"
@@ -28,6 +29,7 @@ class MainForwardPass;
 class SurfacePrepass;
 class AtmosphereLutPass;
 class ToneMapPass;
+class Texture;
 class PresentPass;
 class PipelineCache;
 struct ShaderVariant;
@@ -69,6 +71,23 @@ struct SurfaceDataStatus {
     VkFormat motionFormat = VK_FORMAT_UNDEFINED;
     std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> historyCapacities{};
     uint64_t allocatedBytes = 0;
+};
+
+struct ScreenSpaceEffectsStatus {
+    bool depthPyramidSupported = false;
+    bool colorPyramidSupported = false;
+    bool ssaoSupported = false;
+    AmbientOcclusionMode requestedMode = AmbientOcclusionMode::Off;
+    AmbientOcclusionMode activeMode = AmbientOcclusionMode::Off;
+    uint32_t depthMipLevels = 0;
+    uint32_t colorMipLevels = 0;
+    VkExtent2D depthExtent{};
+    VkExtent2D colorExtent{};
+    VkExtent2D ssaoExtent{};
+    uint64_t estimatedMemoryBytes = 0;
+    std::string depthPyramidUnavailableReason;
+    std::string colorPyramidUnavailableReason;
+    std::string ssaoUnavailableReason;
 };
 
 class Renderer {
@@ -113,6 +132,7 @@ class Renderer {
     SceneLightBufferStatus sceneLightBufferStatus() const;
     OcclusionCullingStatus occlusionCullingStatus() const;
     SurfaceDataStatus surfaceDataStatus() const;
+    ScreenSpaceEffectsStatus screenSpaceEffectsStatus() const;
     bool atmosphereSupported() const;
     const std::string &atmosphereUnsupportedReason() const;
     AtmosphereRuntimeStatus atmosphereStatus() const;
@@ -141,6 +161,11 @@ class Renderer {
     void createAtmosphereUniformBuffers();
     void createAtmosphereDescriptorSetLayout();
     void createAtmosphereDescriptorSets();
+    void createScreenSpaceUniformBuffers();
+    void createScreenSpaceDescriptorSetLayout();
+    void createScreenSpaceFallback();
+    void createScreenSpaceDescriptorSets();
+    void updateScreenSpaceDescriptor(uint32_t frameIndex, bool bindSsao);
     void initializeAtmosphereImages();
     void createFallbackEnvironment();
     void createLightingGeneration(
@@ -168,6 +193,11 @@ class Renderer {
     VkDescriptorSetLayout atmosphereDescriptorSetLayout_ = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT>
         atmosphereDescriptorSets_{};
+    std::vector<std::unique_ptr<Buffer>> screenSpaceUniformBuffers_;
+    VkDescriptorSetLayout screenSpaceDescriptorSetLayout_ = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT>
+        screenSpaceDescriptorSets_{};
+    std::shared_ptr<Texture> screenSpaceWhiteFallback_;
     std::shared_ptr<EnvironmentGpuResources> fallbackEnvironment_;
     std::unique_ptr<LightingDescriptorGeneration>
         currentLightingGeneration_;
@@ -180,6 +210,7 @@ class Renderer {
     MainForwardPass *mainForwardPass_ = nullptr;
     SurfacePrepass *surfacePrepass_ = nullptr;
     bool lastSurfaceDataActive_ = false;
+    ScreenSpaceEffectsStatus screenSpaceStatus_{};
     class OcclusionCullPass *occlusionCullPass_ = nullptr;
     uint32_t lastOcclusionFrameIndex_ = 0;
     uint32_t lastOcclusionRequested_ = 0;

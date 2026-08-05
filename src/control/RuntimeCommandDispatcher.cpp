@@ -53,6 +53,20 @@ uint32_t requiredUint32(const RuntimeCommand &command, const char *name) {
     return static_cast<uint32_t>(*value);
 }
 
+std::optional<uint32_t> optionalUint32(const RuntimeCommand &command,
+                                       const char *name,
+                                       uint32_t maximum) {
+    if (!command.params.contains(name))
+        return std::nullopt;
+    const uint32_t value = requiredUint32(command, name);
+    if (value > maximum) {
+        throw RuntimeCommandError(
+            "invalid_params", std::string("Parameter '") + name +
+                                  "' is outside the supported range.");
+    }
+    return value;
+}
+
 uint32_t requiredWindowDimension(const RuntimeCommand &command,
                                  const char *name) {
     const uint32_t value = requiredUint32(command, name);
@@ -158,6 +172,16 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         command, "occlusionDepthBias", 0.0f, 0.05f);
     patch.surfaceMotionDebugScale = optionalFiniteFloat(
         command, "surfaceMotionDebugScale", 0.1f, 1024.0f);
+    patch.ssaoRadius = optionalFiniteFloat(
+        command, "ssaoRadius", 0.05f, 10.0f);
+    patch.ssaoBias = optionalFiniteFloat(
+        command, "ssaoBias", 0.0f, 0.2f);
+    patch.ssaoIntensity = optionalFiniteFloat(
+        command, "ssaoIntensity", 0.0f, 4.0f);
+    patch.ssaoPower = optionalFiniteFloat(
+        command, "ssaoPower", 0.25f, 4.0f);
+    patch.screenSpaceDebugMip =
+        optionalUint32(command, "screenSpaceDebugMip", 31u);
     if (const auto toneMapper = optionalString(command, "toneMapper")) {
         patch.toneMapper = toneMapperFromName(*toneMapper);
         if (!patch.toneMapper) {
@@ -176,6 +200,33 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
                 "roughness, motion, or history-validity.");
         }
     }
+    if (const auto aoMode =
+            optionalString(command, "ambientOcclusionMode")) {
+        patch.ambientOcclusionMode = ambientOcclusionModeFromName(*aoMode);
+        if (!patch.ambientOcclusionMode) {
+            throw RuntimeCommandError(
+                "invalid_params",
+                "Parameter 'ambientOcclusionMode' must be off or ssao.");
+        }
+    }
+    if (const auto quality = optionalString(command, "ssaoQuality")) {
+        patch.ssaoQuality = ssaoQualityFromName(*quality);
+        if (!patch.ssaoQuality) {
+            throw RuntimeCommandError(
+                "invalid_params",
+                "Parameter 'ssaoQuality' must be low, medium, or high.");
+        }
+    }
+    if (const auto debugView =
+            optionalString(command, "screenSpaceDebugView")) {
+        patch.screenSpaceDebugView = screenSpaceDebugViewFromName(*debugView);
+        if (!patch.screenSpaceDebugView) {
+            throw RuntimeCommandError(
+                "invalid_params",
+                "Parameter 'screenSpaceDebugView' must be none, "
+                "nearest-depth, scene-color, ssao-raw, or ssao-filtered.");
+        }
+    }
     if (!patch.shadowsEnabled && !patch.shadowReceiverBias &&
         !patch.shadowConstantBias && !patch.shadowSlopeBias &&
         !patch.exposureEv && !patch.toneMapper && !patch.iblEnabled &&
@@ -188,7 +239,10 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         !patch.smallObjectCullingEnabled &&
         !patch.minProjectedSizePixels && !patch.occlusionCullingEnabled &&
         !patch.occlusionDepthBias && !patch.surfaceDebugView &&
-        !patch.surfaceMotionDebugScale) {
+        !patch.surfaceMotionDebugScale && !patch.ambientOcclusionMode &&
+        !patch.ssaoQuality && !patch.ssaoRadius && !patch.ssaoBias &&
+        !patch.ssaoIntensity && !patch.ssaoPower &&
+        !patch.screenSpaceDebugView && !patch.screenSpaceDebugMip) {
         throw RuntimeCommandError(
             "invalid_params",
             "render_settings.set requires at least one setting.");
