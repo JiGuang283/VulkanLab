@@ -488,6 +488,23 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
         handles.sceneColorPyramid =
             registry.registerImage(std::move(colorPyramid));
     }
+    if (screenSupport.taaAvailable) {
+        const auto registerTaaImage = [&](std::string name,
+                                          bool historyCapable) {
+            RenderImageDesc desc{};
+            desc.name = std::move(name);
+            desc.extentPolicy = RenderExtentPolicy::Viewport;
+            desc.multiplicity = RenderResourceMultiplicity::PerFrame;
+            desc.format = screenSupport.colorPyramidFormat;
+            desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                         VK_IMAGE_USAGE_STORAGE_BIT;
+            desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+            desc.historyCapable = historyCapable;
+            return registry.registerImage(std::move(desc));
+        };
+        handles.taaHistory = registerTaaImage("TAA History", true);
+        handles.taaDebug = registerTaaImage("TAA Debug", false);
+    }
     if (screenSupport.ssaoAvailable) {
         const auto registerSsaoImage = [&](std::string name) {
             RenderImageDesc desc{};
@@ -666,6 +683,13 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
         ssaoSampler.minFilter = VK_FILTER_LINEAR;
         handles.ssaoSampler = registry.registerSampler(std::move(ssaoSampler));
     }
+    if (screenSupport.taaAvailable) {
+        RenderSamplerDesc taaSampler{};
+        taaSampler.name = "TAA History Sampler";
+        taaSampler.magFilter = VK_FILTER_LINEAR;
+        taaSampler.minFilter = VK_FILTER_LINEAR;
+        handles.taaSampler = registry.registerSampler(std::move(taaSampler));
+    }
 
     if (device.computeBloomSupport().available) {
         RenderSamplerDesc bloomSampler{};
@@ -712,6 +736,22 @@ void validateRenderResourceContracts(
             if ((desc.usage & requiredUsage(use.access)) == 0) {
                 throw std::runtime_error(pass.passName + " uses " + desc.name +
                                          " without the required usage flag");
+            }
+
+            if (use.frame == RenderImageFrame::Previous) {
+                if (!desc.historyCapable ||
+                    desc.multiplicity !=
+                        RenderResourceMultiplicity::PerFrame) {
+                    throw std::runtime_error(
+                        pass.passName + " reads previous " + desc.name +
+                        " but the resource is not per-frame history");
+                }
+                if (use.access != RenderImageAccess::SampledRead) {
+                    throw std::runtime_error(
+                        pass.passName + " uses previous " + desc.name +
+                        " with a non-sampled access");
+                }
+                continue;
             }
 
             const bool reads =

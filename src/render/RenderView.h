@@ -26,6 +26,8 @@ struct DefaultSunSettings {
 struct RenderViewInput {
     glm::mat4 view{1.0f};
     glm::mat4 projection{1.0f};
+    glm::vec2 projectionJitterNdc{0.0f};
+    glm::vec2 projectionJitterPixels{0.0f};
     glm::vec3 cameraPosition{0.0f};
     Bounds sceneBounds{};
     const std::vector<SceneLight> *sceneLights = nullptr;
@@ -73,6 +75,10 @@ struct RenderViewLightStats {
 
 struct RenderView {
     GlobalFrameUbo globalUbo{};
+    glm::mat4 stableProjection{1.0f};
+    glm::mat4 stableViewProjection{1.0f};
+    glm::vec2 projectionJitterNdc{0.0f};
+    glm::vec2 projectionJitterPixels{0.0f};
     std::vector<GpuLight> sceneLights;
     DirectionalShadowFrameData directionalShadow{};
     RenderSettings settings{};

@@ -98,11 +98,17 @@ enum class RenderImageAccess {
     StorageReadWrite,
 };
 
+enum class RenderImageFrame {
+    Current,
+    Previous,
+};
+
 struct RenderImageUsage {
     RenderImageHandle image{};
     RenderImageAccess access = RenderImageAccess::SampledRead;
     VkImageLayout requiredLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     VkImageLayout finalLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    RenderImageFrame frame = RenderImageFrame::Current;
 };
 
 struct RenderPassResourceUsage {
@@ -130,6 +136,8 @@ struct RendererResourceHandles {
     RenderImageHandle cacaoDepth{};
     RenderImageHandle cacaoViewNormals{};
     RenderImageHandle cacaoOutput{};
+    RenderImageHandle taaHistory{};
+    RenderImageHandle taaDebug{};
     std::array<RenderImageHandle, kBloomPyramidLevelCount> bloomLevels{};
     RenderSamplerHandle hdrSampler{};
     RenderSamplerHandle viewportSampler{};
@@ -139,6 +147,7 @@ struct RendererResourceHandles {
     RenderSamplerHandle visibilityHiZSampler{};
     RenderSamplerHandle screenPyramidSampler{};
     RenderSamplerHandle ssaoSampler{};
+    RenderSamplerHandle taaSampler{};
     RenderSamplerHandle bloomSampler{};
     RenderImageHandle atmosphereTransmittance{};
     RenderImageHandle atmosphereMultipleScattering{};

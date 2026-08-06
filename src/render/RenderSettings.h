@@ -20,6 +20,25 @@ enum class AmbientOcclusionMode {
     Cacao,
 };
 
+enum class TemporalAntiAliasingMode {
+    Off,
+    Taa,
+};
+
+inline const char *
+temporalAntiAliasingModeName(TemporalAntiAliasingMode mode) {
+    return mode == TemporalAntiAliasingMode::Taa ? "taa" : "off";
+}
+
+inline std::optional<TemporalAntiAliasingMode>
+temporalAntiAliasingModeFromName(std::string_view name) {
+    if (name == "off")
+        return TemporalAntiAliasingMode::Off;
+    if (name == "taa")
+        return TemporalAntiAliasingMode::Taa;
+    return std::nullopt;
+}
+
 inline const char *ambientOcclusionModeName(AmbientOcclusionMode mode) {
     switch (mode) {
     case AmbientOcclusionMode::Off:
@@ -142,6 +161,9 @@ enum class ScreenSpaceDebugView {
     SsaoRaw,
     SsaoFiltered,
     CacaoOutput,
+    TaaHistory,
+    TaaRejection,
+    TaaHistoryWeight,
 };
 
 inline const char *screenSpaceDebugViewName(ScreenSpaceDebugView view) {
@@ -158,6 +180,12 @@ inline const char *screenSpaceDebugViewName(ScreenSpaceDebugView view) {
         return "ssao-filtered";
     case ScreenSpaceDebugView::CacaoOutput:
         return "cacao-output";
+    case ScreenSpaceDebugView::TaaHistory:
+        return "taa-history";
+    case ScreenSpaceDebugView::TaaRejection:
+        return "taa-rejection";
+    case ScreenSpaceDebugView::TaaHistoryWeight:
+        return "taa-history-weight";
     }
     return "none";
 }
@@ -176,6 +204,12 @@ screenSpaceDebugViewFromName(std::string_view name) {
         return ScreenSpaceDebugView::SsaoFiltered;
     if (name == "cacao-output")
         return ScreenSpaceDebugView::CacaoOutput;
+    if (name == "taa-history")
+        return ScreenSpaceDebugView::TaaHistory;
+    if (name == "taa-rejection")
+        return ScreenSpaceDebugView::TaaRejection;
+    if (name == "taa-history-weight")
+        return ScreenSpaceDebugView::TaaHistoryWeight;
     return std::nullopt;
 }
 
@@ -274,6 +308,10 @@ struct RenderSettings {
     float ssaoIntensity = 1.0f;
     float ssaoPower = 1.5f;
     CacaoSettings cacao{};
+    TemporalAntiAliasingMode temporalAntiAliasingMode =
+        TemporalAntiAliasingMode::Off;
+    float taaHistoryWeight = 0.9f;
+    float taaSharpness = 0.1f;
     ScreenSpaceDebugView screenSpaceDebugView = ScreenSpaceDebugView::None;
     uint32_t screenSpaceDebugMip = 0;
     CullingSettings culling{};
@@ -307,6 +345,9 @@ struct RenderSettingsPatch {
     std::optional<float> cacaoRadius;
     std::optional<float> cacaoIntensity;
     std::optional<float> cacaoPower;
+    std::optional<TemporalAntiAliasingMode> temporalAntiAliasingMode;
+    std::optional<float> taaHistoryWeight;
+    std::optional<float> taaSharpness;
     std::optional<ScreenSpaceDebugView> screenSpaceDebugView;
     std::optional<uint32_t> screenSpaceDebugMip;
     std::optional<bool>  frustumCullingEnabled;
@@ -378,6 +419,14 @@ inline void applyRenderSettingsPatch(RenderSettings &settings,
         settings.cacao.intensity = *patch.cacaoIntensity;
     if (patch.cacaoPower)
         settings.cacao.power = *patch.cacaoPower;
+    if (patch.temporalAntiAliasingMode) {
+        settings.temporalAntiAliasingMode =
+            *patch.temporalAntiAliasingMode;
+    }
+    if (patch.taaHistoryWeight)
+        settings.taaHistoryWeight = *patch.taaHistoryWeight;
+    if (patch.taaSharpness)
+        settings.taaSharpness = *patch.taaSharpness;
     if (patch.screenSpaceDebugView)
         settings.screenSpaceDebugView = *patch.screenSpaceDebugView;
     if (patch.screenSpaceDebugMip)

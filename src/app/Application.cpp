@@ -51,6 +51,7 @@
 #include "render/RenderView.h"
 #include "render/Renderer.h"
 #include "render/RendererShaderPaths.h"
+#include "render/TemporalAA.h"
 #include "scene/AssetRepository.h"
 #include "scene/ModelAsset.h"
 #include "scene/ModelInstance.h"
@@ -940,6 +941,8 @@ void Application::init() {
         shaderRegistry_.program("screenspace.ssao-blur");
     const ShaderProgram &cacaoNormalAdapter =
         shaderRegistry_.program("screenspace.cacao-normal-adapter");
+    const ShaderProgram &taaResolve =
+        shaderRegistry_.program("postprocess.taa-resolve");
     const ShaderProgram &toneMap =
         shaderRegistry_.program("postprocess.tonemap");
     const ShaderProgram &present =
@@ -959,32 +962,40 @@ void Application::init() {
         shaderRegistry_.program("atmosphere.aerial-perspective");
     const ShaderProgram &atmosphereSky =
         shaderRegistry_.program("atmosphere.sky");
+    RendererShaderPaths shaderPaths;
+    shaderPaths.shadowVert = shadowOpaque.vertSpvPath;
+    shaderPaths.shadowMaskFrag = shadowMask.fragSpvPath;
+    shaderPaths.surfacePrepassVert = surfacePrepassOpaque.vertSpvPath;
+    shaderPaths.surfacePrepassOpaqueFrag = surfacePrepassOpaque.fragSpvPath;
+    shaderPaths.surfacePrepassMaskFrag = surfacePrepassMask.fragSpvPath;
+    shaderPaths.visibilityHiZInitComp = visibilityHiZInit.computeSpvPath;
+    shaderPaths.visibilityHiZReduceComp = visibilityHiZReduce.computeSpvPath;
+    shaderPaths.visibilityOcclusionComp = visibilityOcclusion.computeSpvPath;
+    shaderPaths.screenDepthInitComp = screenDepthInit.computeSpvPath;
+    shaderPaths.screenDepthReduceComp = screenDepthReduce.computeSpvPath;
+    shaderPaths.screenColorInitComp = screenColorInit.computeSpvPath;
+    shaderPaths.screenColorReduceComp = screenColorReduce.computeSpvPath;
+    shaderPaths.ssaoTraceComp = ssaoTrace.computeSpvPath;
+    shaderPaths.ssaoBlurComp = ssaoBlur.computeSpvPath;
+    shaderPaths.cacaoNormalAdapterComp = cacaoNormalAdapter.computeSpvPath;
+    shaderPaths.taaResolveComp = taaResolve.computeSpvPath;
+    shaderPaths.fullscreenVert = toneMap.vertSpvPath;
+    shaderPaths.toneMapFrag = toneMap.fragSpvPath;
+    shaderPaths.presentFrag = present.fragSpvPath;
+    shaderPaths.skyboxFrag = skybox.fragSpvPath;
+    shaderPaths.bloomDownsampleComp = bloomDownsample.computeSpvPath;
+    shaderPaths.bloomUpsampleComp = bloomUpsample.computeSpvPath;
+    shaderPaths.atmosphereTransmittanceComp =
+        atmosphereTransmittance.computeSpvPath;
+    shaderPaths.atmosphereMultipleScatteringComp =
+        atmosphereMultipleScattering.computeSpvPath;
+    shaderPaths.atmosphereSkyViewComp = atmosphereSkyView.computeSpvPath;
+    shaderPaths.atmosphereAerialPerspectiveComp =
+        atmosphereAerialPerspective.computeSpvPath;
+    shaderPaths.atmosphereSkyFrag = atmosphereSky.fragSpvPath;
     renderer_ = std::make_unique<Renderer>(
         *device_, *swapChain_, *frameSync_, *descriptorAllocator_,
-        RendererShaderPaths{
-            shadowOpaque.vertSpvPath, shadowMask.fragSpvPath,
-            surfacePrepassOpaque.vertSpvPath,
-            surfacePrepassOpaque.fragSpvPath,
-            surfacePrepassMask.fragSpvPath,
-            visibilityHiZInit.computeSpvPath,
-            visibilityHiZReduce.computeSpvPath,
-            visibilityOcclusion.computeSpvPath,
-            screenDepthInit.computeSpvPath,
-            screenDepthReduce.computeSpvPath,
-            screenColorInit.computeSpvPath,
-            screenColorReduce.computeSpvPath,
-            ssaoTrace.computeSpvPath,
-            ssaoBlur.computeSpvPath,
-            cacaoNormalAdapter.computeSpvPath,
-            toneMap.vertSpvPath, toneMap.fragSpvPath,
-            present.fragSpvPath, skybox.fragSpvPath,
-            bloomDownsample.computeSpvPath,
-            bloomUpsample.computeSpvPath,
-            atmosphereTransmittance.computeSpvPath,
-            atmosphereMultipleScattering.computeSpvPath,
-            atmosphereSkyView.computeSpvPath,
-            atmosphereAerialPerspective.computeSpvPath,
-            atmosphereSky.fragSpvPath});
+        std::move(shaderPaths));
 #if VKL_ENABLE_CAPTURE
     if (!projectContext_.cookedPackage) {
         captureService_ = std::make_unique<CaptureService>(
@@ -2088,6 +2099,14 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
             "FidelityFX CACAO is unavailable: " +
                 renderer_->screenSpaceEffectsStatus().cacaoUnavailableReason);
     }
+    if (patch.temporalAntiAliasingMode &&
+        *patch.temporalAntiAliasingMode == TemporalAntiAliasingMode::Taa &&
+        renderer_ && !renderer_->screenSpaceEffectsStatus().taaSupported) {
+        throw RuntimeCommandError(
+            "taa_unsupported",
+            "TAA is unavailable: " +
+                renderer_->screenSpaceEffectsStatus().taaUnavailableReason);
+    }
     if (patch.surfaceDebugView && patch.screenSpaceDebugView &&
         *patch.surfaceDebugView != SurfaceDebugView::None &&
         *patch.screenSpaceDebugView != ScreenSpaceDebugView::None) {
@@ -2109,7 +2128,11 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
               view == ScreenSpaceDebugView::SsaoFiltered) &&
               status.ssaoSupported) ||
             (view == ScreenSpaceDebugView::CacaoOutput &&
-             status.cacaoInitialized);
+             status.cacaoInitialized) ||
+            ((view == ScreenSpaceDebugView::TaaHistory ||
+              view == ScreenSpaceDebugView::TaaRejection ||
+              view == ScreenSpaceDebugView::TaaHistoryWeight) &&
+             status.taaSupported);
         if (!supported) {
             throw RuntimeCommandError(
                 "screen_space_unsupported",
@@ -2152,6 +2175,9 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
     next.cacao.radius = glm::clamp(next.cacao.radius, 0.05f, 10.0f);
     next.cacao.intensity = glm::clamp(next.cacao.intensity, 0.0f, 4.0f);
     next.cacao.power = glm::clamp(next.cacao.power, 0.25f, 4.0f);
+    next.taaHistoryWeight =
+        glm::clamp(next.taaHistoryWeight, 0.0f, 0.99f);
+    next.taaSharpness = glm::clamp(next.taaSharpness, 0.0f, 1.0f);
     next.screenSpaceDebugMip =
         std::min(next.screenSpaceDebugMip, 31u);
     next.culling.shadowDistance =
@@ -3590,9 +3616,22 @@ ControlJson Application::runtimeRenderStatus() {
            {"cacaoResolution",
             cacaoResolutionName(screenSpaceStatus.cacaoResolution)},
            {"cacaoGeneration", screenSpaceStatus.cacaoGeneration},
-           {"cacaoOutputExtent",
+          {"cacaoOutputExtent",
             {{"width", screenSpaceStatus.cacaoOutputExtent.width},
              {"height", screenSpaceStatus.cacaoOutputExtent.height}}},
+          {"taaSupported", screenSpaceStatus.taaSupported},
+          {"taaActive", screenSpaceStatus.taaActive},
+          {"taaHistoryValid", screenSpaceStatus.taaHistoryValid},
+          {"taaHistoryGeneration",
+           screenSpaceStatus.taaHistoryGeneration},
+          {"taaLastFrameSerial", screenSpaceStatus.taaLastFrameSerial},
+          {"taaExtent",
+           {{"width", screenSpaceStatus.taaExtent.width},
+            {"height", screenSpaceStatus.taaExtent.height}}},
+          {"taaJitterPixels",
+           {screenSpaceStatus.taaJitterPixels.x,
+            screenSpaceStatus.taaJitterPixels.y}},
+          {"taaLastResetReason", screenSpaceStatus.taaLastResetReason},
           {"estimatedMemoryBytes",
            screenSpaceStatus.estimatedMemoryBytes},
           {"depthPyramidUnavailableReason",
@@ -3602,7 +3641,9 @@ ControlJson Application::runtimeRenderStatus() {
            {"ssaoUnavailableReason",
             screenSpaceStatus.ssaoUnavailableReason},
            {"cacaoUnavailableReason",
-            screenSpaceStatus.cacaoUnavailableReason}}},
+            screenSpaceStatus.cacaoUnavailableReason},
+           {"taaUnavailableReason",
+            screenSpaceStatus.taaUnavailableReason}}},
         {"frameSerial", frameSync_->lastSubmittedSerial()},
         {"completedSubmissionSerial",
          frameSync_->completedSubmissionSerial()},
@@ -3727,6 +3768,20 @@ ControlJson Application::runtimeRenderSettingsGet() {
              {"cacaoGeneration", screenSpaceStatus.cacaoGeneration},
              {"cacaoUnavailableReason",
               screenSpaceStatus.cacaoUnavailableReason},
+            {"temporalAntiAliasingMode",
+             temporalAntiAliasingModeName(
+                 renderSettings_.temporalAntiAliasingMode)},
+            {"taaHistoryWeight", renderSettings_.taaHistoryWeight},
+            {"taaSharpness", renderSettings_.taaSharpness},
+            {"taaAvailable", screenSpaceStatus.taaSupported},
+            {"taaActive", screenSpaceStatus.taaActive},
+            {"taaHistoryValid", screenSpaceStatus.taaHistoryValid},
+            {"taaHistoryGeneration",
+             screenSpaceStatus.taaHistoryGeneration},
+            {"taaLastResetReason",
+             screenSpaceStatus.taaLastResetReason},
+            {"taaUnavailableReason",
+             screenSpaceStatus.taaUnavailableReason},
             {"screenSpaceDebugView",
              screenSpaceDebugViewName(
                  renderSettings_.screenSpaceDebugView)},
@@ -5137,10 +5192,71 @@ void Application::drawPostProcessingPanel() {
                             screenStatus.cacaoOutputExtent.height);
     }
 
+    ImGui::SeparatorText("Temporal Anti-Aliasing");
+    constexpr const char *taaModeLabels[] = {"Off", "TAA"};
+    int taaMode =
+        static_cast<int>(renderSettings_.temporalAntiAliasingMode);
+    ImGui::BeginDisabled(!screenStatus.taaSupported);
+    if (ImGui::Combo("Mode##TAA", &taaMode, taaModeLabels,
+                     static_cast<int>(std::size(taaModeLabels)))) {
+        RenderSettingsPatch patch;
+        patch.temporalAntiAliasingMode =
+            static_cast<TemporalAntiAliasingMode>(taaMode);
+        applyRenderSettings(patch);
+    }
+    const bool taaRequested =
+        renderSettings_.temporalAntiAliasingMode ==
+        TemporalAntiAliasingMode::Taa;
+    const bool taaDebugRequested =
+        renderSettings_.screenSpaceDebugView ==
+            ScreenSpaceDebugView::TaaHistory ||
+        renderSettings_.screenSpaceDebugView ==
+            ScreenSpaceDebugView::TaaRejection ||
+        renderSettings_.screenSpaceDebugView ==
+            ScreenSpaceDebugView::TaaHistoryWeight;
+    ImGui::BeginDisabled(!taaRequested && !taaDebugRequested);
+    float historyWeight = renderSettings_.taaHistoryWeight;
+    if (ImGui::SliderFloat("History Weight##TAA", &historyWeight, 0.0f,
+                           0.99f, "%.2f")) {
+        RenderSettingsPatch patch;
+        patch.taaHistoryWeight = historyWeight;
+        applyRenderSettings(patch);
+    }
+    float sharpness = renderSettings_.taaSharpness;
+    if (ImGui::SliderFloat("Sharpness##TAA", &sharpness, 0.0f, 1.0f,
+                           "%.2f")) {
+        RenderSettingsPatch patch;
+        patch.taaSharpness = sharpness;
+        applyRenderSettings(patch);
+    }
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+    editor::statusIndicator(
+        screenStatus.taaActive ? "TAA active" : "TAA inactive",
+        screenStatus.taaActive ? editor::StatusTone::Success
+                               : editor::StatusTone::Neutral,
+        !screenStatus.taaSupported
+            ? screenStatus.taaUnavailableReason.c_str()
+            : nullptr);
+    if (screenStatus.taaSupported) {
+        ImGui::TextDisabled(
+            "History: %s, generation %llu, jitter (%.2f, %.2f)",
+            screenStatus.taaHistoryValid ? "valid" : "reset",
+            static_cast<unsigned long long>(
+                screenStatus.taaHistoryGeneration),
+            screenStatus.taaJitterPixels.x,
+            screenStatus.taaJitterPixels.y);
+        if (!screenStatus.taaLastResetReason.empty()) {
+            ImGui::TextDisabled("Reset: %s",
+                                screenStatus.taaLastResetReason.c_str());
+        }
+    }
+
     ImGui::SeparatorText("Screen-Space Debug");
     constexpr const char *screenDebugLabels[] = {
         "None", "Nearest Depth", "Scene Color", "SSAO Raw",
-        "SSAO Filtered", "CACAO Output"};
+        "SSAO Filtered", "CACAO Output", "TAA History",
+        "TAA Rejection", "TAA History Weight"};
     int screenDebug =
         static_cast<int>(renderSettings_.screenSpaceDebugView);
     const char *preview = screenDebugLabels[screenDebug];
@@ -5158,7 +5274,11 @@ void Application::drawPostProcessingPanel() {
                   view == ScreenSpaceDebugView::SsaoFiltered) &&
                   screenStatus.ssaoSupported) ||
                 (view == ScreenSpaceDebugView::CacaoOutput &&
-                 screenStatus.cacaoInitialized);
+                 screenStatus.cacaoInitialized) ||
+                ((view == ScreenSpaceDebugView::TaaHistory ||
+                  view == ScreenSpaceDebugView::TaaRejection ||
+                  view == ScreenSpaceDebugView::TaaHistoryWeight) &&
+                 screenStatus.taaSupported);
             ImGui::BeginDisabled(!supported);
             const bool selected = index == screenDebug;
             if (ImGui::Selectable(screenDebugLabels[index], selected)) {
@@ -7859,6 +7979,14 @@ void Application::mainLoop() {
                 }
             }
         }
+        const bool taaJitterEnabled =
+            device_->screenSpaceEffectsSupport().taaAvailable &&
+            taaPassRequested(viewInput.settings);
+        const TemporalJitter jitter = temporalJitter(
+            presentedFrameCount_, viewInput.viewportExtent,
+            taaJitterEnabled);
+        viewInput.projectionJitterNdc = jitter.ndc;
+        viewInput.projectionJitterPixels = jitter.pixels;
         const RenderView renderView = buildRenderView(viewInput);
         if (renderView.lightStats.ignoredLights !=
             lastLightStats_.ignoredLights) {
@@ -7878,11 +8006,17 @@ void Application::mainLoop() {
         }
         {
             VKL_PROFILE_ZONE("Visibility Build");
+            VisibilityBuildInput visibilityInput{};
+            visibilityInput.sceneGeneration = sceneGeneration_;
+            visibilityInput.cameraIdentity =
+                std::move(cameraHistoryIdentity);
+            visibilityInput.shaderIdentity =
+                currentShaderVariant().id;
+            visibilityInput.sceneBounds = viewInput.sceneBounds;
             visibilityFrame_ = visibilitySystem_.build(
                 std::move(renderItems_), renderView,
                 renderer_->viewportExtent(),
-                {sceneGeneration_, std::move(cameraHistoryIdentity),
-                 viewInput.sceneBounds});
+                std::move(visibilityInput));
         }
 
         if constexpr (build::kTracy) {

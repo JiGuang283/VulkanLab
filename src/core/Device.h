@@ -47,12 +47,14 @@ struct ScreenSpaceEffectsSupport {
     bool depthPyramidAvailable = false;
     bool colorPyramidAvailable = false;
     bool ssaoAvailable = false;
+    bool taaAvailable = false;
     VkFormat depthPyramidFormat = VK_FORMAT_R32_SFLOAT;
     VkFormat colorPyramidFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
     VkFormat ssaoFormat = VK_FORMAT_R16_SFLOAT;
     std::string depthPyramidReason;
     std::string colorPyramidReason;
     std::string ssaoReason;
+    std::string taaReason;
 };
 
 struct CacaoSupport {

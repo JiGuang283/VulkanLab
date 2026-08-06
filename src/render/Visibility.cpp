@@ -113,6 +113,8 @@ VisibilityFrame VisibilitySystem::build(std::vector<RenderItem> source,
 
     const glm::mat4 cameraViewProjection =
         view.globalUbo.proj * view.globalUbo.view;
+    const glm::mat4 stableCameraViewProjection =
+        view.stableViewProjection;
     const glm::vec3 currentCameraPosition(view.globalUbo.cameraPosWS);
     const glm::vec3 currentCameraForward =
         cameraForward(view.globalUbo.view);
@@ -126,10 +128,13 @@ VisibilityFrame VisibilitySystem::build(std::vector<RenderItem> source,
         invalidationReason = "scene generation changed";
     else if (input.cameraIdentity != previousCameraIdentity_)
         invalidationReason = "camera identity changed";
+    else if (input.shaderIdentity != previousShaderIdentity_)
+        invalidationReason = "shader variant changed";
     else if (viewportExtent.width != previousViewportExtent_.width ||
              viewportExtent.height != previousViewportExtent_.height)
         invalidationReason = "viewport resized";
-    else if (!matrixNearlyEqual(view.globalUbo.proj, previousProjection_))
+    else if (!matrixNearlyEqual(view.stableProjection,
+                                previousStableProjection_))
         invalidationReason = "projection changed";
     else {
         const float sceneRadius =
@@ -156,7 +161,11 @@ VisibilityFrame VisibilitySystem::build(std::vector<RenderItem> source,
     result.history.previousViewProjection =
         globalHistoryValid ? previousViewProjection_ : cameraViewProjection;
     result.history.currentViewProjection = cameraViewProjection;
-    result.history.currentProjection = view.globalUbo.proj;
+    result.history.currentStableProjection = view.stableProjection;
+    result.history.currentJitterPixels = view.projectionJitterPixels;
+    result.history.previousJitterPixels =
+        globalHistoryValid ? previousJitterPixels_
+                           : view.projectionJitterPixels;
     result.history.cameraPosition = currentCameraPosition;
     result.history.cameraForward = currentCameraForward;
     result.history.viewportExtent = viewportExtent;
@@ -164,13 +173,14 @@ VisibilityFrame VisibilitySystem::build(std::vector<RenderItem> source,
     result.history.historyGeneration = historyGeneration_;
     result.history.globalValid = globalHistoryValid;
     result.history.cameraIdentity = std::move(input.cameraIdentity);
+    result.history.shaderIdentity = std::move(input.shaderIdentity);
     result.history.invalidationReason = globalHistoryValid
                                             ? std::string{}
                                             : invalidationReason;
 
     const CullingSettings &settings = view.settings.culling;
     const Frustum cameraFrustum =
-        Frustum::fromVulkanClipMatrix(cameraViewProjection);
+        Frustum::fromVulkanClipMatrix(stableCameraViewProjection);
 
     result.cameraOpaque.reserve(result.items.size());
     result.cameraTransparent.reserve(result.items.size());
@@ -210,7 +220,7 @@ VisibilityFrame VisibilitySystem::build(std::vector<RenderItem> source,
             cameraVisible = false;
         } else if (settings.smallObjectEnabled &&
                    projectedBoundsAreSmallerThan(
-                       item.worldBounds, cameraViewProjection,
+                       item.worldBounds, stableCameraViewProjection,
                        viewportExtent,
                        settings.minProjectedSizePixels)) {
             ++result.cpuStats.smallObjectCulled;
@@ -259,12 +269,15 @@ void VisibilitySystem::commit(const VisibilityFrame &frame) {
     for (const RenderItem &item : frame.items)
         previousWorld_.insert_or_assign(item.key, item.world);
     previousViewProjection_ = frame.history.currentViewProjection;
-    previousProjection_ = frame.history.currentProjection;
+    previousStableProjection_ =
+        frame.history.currentStableProjection;
+    previousJitterPixels_ = frame.history.currentJitterPixels;
     previousCameraPosition_ = frame.history.cameraPosition;
     previousCameraForward_ = frame.history.cameraForward;
     previousViewportExtent_ = frame.history.viewportExtent;
     previousSceneGeneration_ = frame.history.sceneGeneration;
     previousCameraIdentity_ = frame.history.cameraIdentity;
+    previousShaderIdentity_ = frame.history.shaderIdentity;
     forcedInvalidationReason_.clear();
     committed_ = true;
 }

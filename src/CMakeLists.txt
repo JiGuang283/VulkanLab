@@ -171,6 +171,7 @@ set(VKL_ENGINE_SOURCES
     render/RenderQueue.cpp
     render/RenderResourceRegistry.cpp
     render/RenderView.cpp
+    render/TemporalAA.cpp
     render/Visibility.cpp
     render/TangentGenerator.cpp
     render/Texture.cpp
@@ -184,6 +185,7 @@ set(VKL_ENGINE_SOURCES
     render/pass/ScreenSpacePyramidPass.cpp
     render/pass/SsaoPass.cpp
     render/pass/CacaoNormalAdapterPass.cpp
+    render/pass/TaaPass.cpp
     render/pass/BloomPass.cpp
     render/pass/SkyBackgroundPass.cpp
     render/pass/ToneMapPass.cpp

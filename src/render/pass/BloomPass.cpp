@@ -88,6 +88,12 @@ std::vector<RenderImageUsage> BloomPass::resourceUsages() const {
         {resourceHandles_.hdrColor, RenderImageAccess::SampledRead,
          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    if (resourceHandles_.taaHistory.valid()) {
+        usages.push_back(
+            {resourceHandles_.taaHistory, RenderImageAccess::SampledRead,
+             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    }
 
     for (uint32_t level = 0; level < kLevelCount; ++level) {
         if (level > 0) {
@@ -139,17 +145,30 @@ void BloomPass::execute(const RenderFrameContext &frame,
         return;
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "Bloom");
 
+    const bool useTaa = frame.features.taaActive &&
+                        resourceHandles_.taaHistory.valid();
+    const RenderImageHandle primarySource =
+        useTaa ? resourceHandles_.taaHistory : resourceHandles_.hdrColor;
+    const RenderSamplerHandle primarySampler =
+        useTaa ? resourceHandles_.taaSampler : resourceHandles_.hdrSampler;
+    updatePrimarySource(resources, frame.frameIndex, primarySource,
+                        primarySampler);
+
     prepareImagesForCompute(frame, resources);
 
-    VkImageMemoryBarrier hdrBarrier = imageBarrier(
-        resources.image(resourceHandles_.hdrColor, frame.frameIndex).handle(),
-        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+    VkImageMemoryBarrier sourceBarrier = imageBarrier(
+        resources.image(primarySource, frame.frameIndex).handle(),
+        useTaa ? VK_ACCESS_SHADER_WRITE_BIT
+               : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        VK_ACCESS_SHADER_READ_BIT,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     vkCmdPipelineBarrier(
-        frame.cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        frame.cmd,
+        useTaa ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+               : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0,
-        nullptr, 0, nullptr, 1, &hdrBarrier);
+        nullptr, 0, nullptr, 1, &sourceBarrier);
 
     const VkPushConstantRange pushRange{
         VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(BloomPushConstants)};
@@ -273,6 +292,22 @@ void BloomPass::execute(const RenderFrameContext &frame,
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
         VK_DEPENDENCY_BY_REGION_BIT, 0, nullptr, 0, nullptr, 1,
         &toneMapBarrier);
+}
+
+void BloomPass::updatePrimarySource(
+    const RenderResourceRegistry &resources, uint32_t frameIndex,
+    RenderImageHandle source, RenderSamplerHandle sampler) {
+    VkDescriptorImageInfo info{
+        resources.sampler(sampler),
+        resources.image(source, frameIndex).imageView(),
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = downsampleSets_[frameIndex][0];
+    write.dstBinding = 0;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.descriptorCount = 1;
+    write.pImageInfo = &info;
+    vkUpdateDescriptorSets(device_->logicalDevice(), 1, &write, 0, nullptr);
 }
 
 void BloomPass::createDescriptorSetLayout() {

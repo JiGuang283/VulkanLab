@@ -1,5 +1,6 @@
 #include "render/RenderView.h"
 #include "diagnostics/Profiling.h"
+#include "render/TemporalAA.h"
 
 #include <algorithm>
 #include <cmath>
@@ -144,10 +145,15 @@ RenderView buildRenderView(const RenderViewInput &input) {
     result.settings = input.settings;
     result.cameraNearPlane = input.cameraNearPlane;
     result.cameraFarPlane = input.cameraFarPlane;
+    result.stableProjection = input.projection;
+    result.stableViewProjection = input.projection * input.view;
+    result.projectionJitterNdc = input.projectionJitterNdc;
+    result.projectionJitterPixels = input.projectionJitterPixels;
     result.globalUbo.view = input.view;
-    result.globalUbo.proj = input.projection;
+    result.globalUbo.proj = applyProjectionJitter(
+        input.projection, input.projectionJitterNdc);
     result.globalUbo.inverseViewProjection =
-        glm::inverse(input.projection * input.view);
+        glm::inverse(result.globalUbo.proj * input.view);
     result.globalUbo.cameraPosWS = glm::vec4(input.cameraPosition, 1.0f);
     result.globalUbo.ambientColorIntensity =
         glm::vec4(glm::max(input.ambientColor, glm::vec3(0.0f)),

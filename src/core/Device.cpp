@@ -441,6 +441,15 @@ void Device::pickPhysicalDevice() {
         screenSpaceEffectsSupport_.ssaoAvailable = true;
     }
 
+    if (!surfaceDataSupport_.available) {
+        screenSpaceEffectsSupport_.taaReason = surfaceDataSupport_.reason;
+    } else if (!screenSpaceEffectsSupport_.colorPyramidAvailable) {
+        screenSpaceEffectsSupport_.taaReason =
+            screenSpaceEffectsSupport_.colorPyramidReason;
+    } else {
+        screenSpaceEffectsSupport_.taaAvailable = true;
+    }
+
     cacaoSupport_.compiled = build::kCacao;
     const auto supportsCacao2D = [&](VkFormat format, uint32_t arrayLayers,
                                      uint32_t mipLevels,
@@ -521,10 +530,12 @@ void Device::pickPhysicalDevice() {
 
     VKR_LOG_INFO(
         "Device",
-        "Screen-space support: depth pyramid={}, color pyramid={}, SSAO={}",
+        "Screen-space support: depth pyramid={}, color pyramid={}, SSAO={}, "
+        "TAA={}",
         screenSpaceEffectsSupport_.depthPyramidAvailable ? "yes" : "no",
         screenSpaceEffectsSupport_.colorPyramidAvailable ? "yes" : "no",
-        screenSpaceEffectsSupport_.ssaoAvailable ? "yes" : "no");
+        screenSpaceEffectsSupport_.ssaoAvailable ? "yes" : "no",
+        screenSpaceEffectsSupport_.taaAvailable ? "yes" : "no");
     if (cacaoSupport_.available) {
         VKR_LOG_INFO("Device", "FidelityFX CACAO FP32 is supported");
     } else if (cacaoSupport_.compiled) {

@@ -30,6 +30,7 @@ class SurfacePrepass;
 class AtmosphereLutPass;
 class ToneMapPass;
 class CacaoPass;
+class TaaPass;
 class Texture;
 class PresentPass;
 class PipelineCache;
@@ -83,6 +84,9 @@ struct ScreenSpaceEffectsStatus {
     bool cacaoInitialized = false;
     bool cacaoFp32 = true;
     bool cacaoInternalMemoryTracked = false;
+    bool taaSupported = false;
+    bool taaActive = false;
+    bool taaHistoryValid = false;
     AmbientOcclusionMode requestedMode = AmbientOcclusionMode::Off;
     AmbientOcclusionMode activeMode = AmbientOcclusionMode::Off;
     uint32_t depthMipLevels = 0;
@@ -93,11 +97,17 @@ struct ScreenSpaceEffectsStatus {
     VkExtent2D cacaoOutputExtent{};
     CacaoResolution cacaoResolution = CacaoResolution::Half;
     uint64_t cacaoGeneration = 0;
+    VkExtent2D taaExtent{};
+    uint64_t taaHistoryGeneration = 0;
+    uint64_t taaLastFrameSerial = 0;
+    glm::vec2 taaJitterPixels{0.0f};
     uint64_t estimatedMemoryBytes = 0;
     std::string depthPyramidUnavailableReason;
     std::string colorPyramidUnavailableReason;
     std::string ssaoUnavailableReason;
     std::string cacaoUnavailableReason;
+    std::string taaUnavailableReason;
+    std::string taaLastResetReason;
 };
 
 class Renderer {
@@ -224,6 +234,7 @@ class Renderer {
     bool lastSurfaceDataActive_ = false;
     ScreenSpaceEffectsStatus screenSpaceStatus_{};
     CacaoPass *cacaoPass_ = nullptr;
+    TaaPass *taaPass_ = nullptr;
     class OcclusionCullPass *occlusionCullPass_ = nullptr;
     uint32_t lastOcclusionFrameIndex_ = 0;
     uint32_t lastOcclusionRequested_ = 0;

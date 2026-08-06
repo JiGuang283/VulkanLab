@@ -34,8 +34,11 @@ class ToneMapPass final : public IRenderPass {
                 RenderImageHandle ssaoRaw,
                 RenderImageHandle ssaoFiltered,
                 RenderImageHandle cacaoOutput,
+                RenderImageHandle taaHistory,
+                RenderImageHandle taaDebug,
                 RenderSamplerHandle screenPyramidSampler,
                 RenderSamplerHandle ssaoSampler,
+                RenderSamplerHandle taaSampler,
                 DescriptorAllocator &descriptorAllocator,
                 std::string fullscreenVertPath,
                 std::string toneMapFragPath);
@@ -77,8 +80,11 @@ class ToneMapPass final : public IRenderPass {
     RenderImageHandle ssaoRaw_{};
     RenderImageHandle ssaoFiltered_{};
     RenderImageHandle cacaoOutput_{};
+    RenderImageHandle taaHistory_{};
+    RenderImageHandle taaDebug_{};
     RenderSamplerHandle screenPyramidSampler_{};
     RenderSamplerHandle ssaoSampler_{};
+    RenderSamplerHandle taaSampler_{};
     DescriptorAllocator *descriptorAllocator_ = nullptr;
     std::string fullscreenVertPath_;
     std::string toneMapFragPath_;

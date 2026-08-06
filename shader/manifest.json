@@ -165,6 +165,11 @@
       "compute": "screenspace/cacao_normal_adapter.comp"
     },
     {
+      "id": "postprocess.taa-resolve",
+      "contract": "compute",
+      "compute": "postprocess/taa_resolve.comp"
+    },
+    {
       "id": "postprocess.tonemap",
       "contract": "fullscreen",
       "vertex": "postprocess/fullscreen.vert",

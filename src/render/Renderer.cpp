@@ -15,6 +15,7 @@
 #include "render/RenderFrame.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/RenderView.h"
+#include "render/TemporalAA.h"
 #include "render/Visibility.h"
 #include "render/ShaderVariant.h"
 #include "render/Texture.h"
@@ -29,6 +30,7 @@
 #include "render/pass/MainForwardPass.h"
 #include "render/pass/SkyBackgroundPass.h"
 #include "render/pass/ToneMapPass.h"
+#include "render/pass/TaaPass.h"
 #include "render/pass/PresentPass.h"
 #include "render/pass/BloomPass.h"
 #include "render/pass/AtmosphereLutPass.h"
@@ -190,6 +192,15 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
         view.settings.ambientOcclusionMode == AmbientOcclusionMode::Cacao;
     const bool cacaoPassRequired =
         cacaoReady && (cacaoShadingActive || cacaoDebugRequested);
+    const bool taaDebugRequested =
+        isTaaDebugView(view.settings.screenSpaceDebugView);
+    const bool taaShadingActive =
+        screenSupport.taaAvailable &&
+        view.settings.temporalAntiAliasingMode ==
+            TemporalAntiAliasingMode::Taa;
+    const bool taaPassRequired =
+        screenSupport.taaAvailable &&
+        (taaShadingActive || taaDebugRequested);
     const AmbientOcclusionMode activeAoMode =
         cacaoShadingActive
             ? AmbientOcclusionMode::Cacao
@@ -222,6 +233,8 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.cmd = frame.cmd;
     renderFrame.frameIndex = frame.frameIndex;
     renderFrame.imageIndex = frame.imageIndex;
+    renderFrame.submissionSerial =
+        frameSync_->lastSubmittedSerial() + 1u;
     renderFrame.viewportExtent = renderResources_->viewportExtent();
     renderFrame.swapchainExtent = swapChain_->extent();
     renderFrame.globalDescriptorSet = globalDescriptorSet(frame.frameIndex);
@@ -255,7 +268,8 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
          view.settings.screenSpaceDebugView ==
              ScreenSpaceDebugView::NearestDepth ||
           (screenSupport.ssaoAvailable && ssaoPassRequired) ||
-          (device_->cacaoSupport().available && cacaoPassRequired));
+          (device_->cacaoSupport().available && cacaoPassRequired) ||
+          taaPassRequired);
     renderFrame.features.hiZRequired =
         device_->occlusionCullingSupport().available &&
         view.settings.culling.occlusionEnabled;
@@ -271,6 +285,8 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.features.ssaoRequired =
         screenSupport.ssaoAvailable && ssaoPassRequired;
     renderFrame.features.cacaoRequired = cacaoPassRequired;
+    renderFrame.features.taaRequired = taaPassRequired;
+    renderFrame.features.taaActive = taaShadingActive;
     lastSurfaceDataActive_ = renderFrame.features.surfaceDataRequired;
 
     screenSpaceStatus_.requestedMode = view.settings.ambientOcclusionMode;
@@ -285,6 +301,15 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
                                  frameSync_->lastSubmittedSerial() + 1);
     pipeline_.execute(renderFrame, *renderResources_, visibility,
                       gpuPassProfiler_.get());
+    if (taaPass_) {
+        const TaaPassStatus &taa = taaPass_->status();
+        screenSpaceStatus_.taaActive = taa.active;
+        screenSpaceStatus_.taaHistoryValid = taa.historyValid;
+        screenSpaceStatus_.taaHistoryGeneration = taa.historyGeneration;
+        screenSpaceStatus_.taaLastFrameSerial = taa.lastFrameSerial;
+        screenSpaceStatus_.taaJitterPixels = taa.jitterPixels;
+        screenSpaceStatus_.taaLastResetReason = taa.lastResetReason;
+    }
     if (atmosphereLutPass_)
         atmosphereStatus_ = atmosphereLutPass_->status();
 }
@@ -1017,9 +1042,11 @@ ScreenSpaceEffectsStatus Renderer::screenSpaceEffectsStatus() const {
     status.depthPyramidSupported = support.depthPyramidAvailable;
     status.colorPyramidSupported = support.colorPyramidAvailable;
     status.ssaoSupported = support.ssaoAvailable;
+    status.taaSupported = support.taaAvailable;
     status.depthPyramidUnavailableReason = support.depthPyramidReason;
     status.colorPyramidUnavailableReason = support.colorPyramidReason;
     status.ssaoUnavailableReason = support.ssaoReason;
+    status.taaUnavailableReason = support.taaReason;
     const CacaoSupport &cacaoSupport = device_->cacaoSupport();
     status.cacaoCompiled = cacaoSupport.compiled;
     status.cacaoSupported = cacaoSupport.available;
@@ -1082,6 +1109,14 @@ ScreenSpaceEffectsStatus Renderer::screenSpaceEffectsStatus() const {
         status.estimatedMemoryBytes += pixels * 4u;
         status.estimatedMemoryBytes += pixels * 4u;
     }
+    if (resourceHandles_.taaHistory.valid()) {
+        status.taaExtent =
+            renderResources_->extent(resourceHandles_.taaHistory);
+        status.estimatedMemoryBytes +=
+            mipBytes(resourceHandles_.taaHistory, 8);
+        status.estimatedMemoryBytes +=
+            mipBytes(resourceHandles_.taaDebug, 8);
+    }
     return status;
 }
 
@@ -1143,6 +1178,7 @@ void Renderer::createRenderPipeline() {
             ScreenSpacePyramidKind::NearestDepth,
             resourceHandles_.surfaceDepth,
             resourceHandles_.surfaceDepthSampler,
+            RenderImageHandle{}, RenderSamplerHandle{},
             resourceHandles_.screenDepthPyramid,
             resourceHandles_.screenPyramidSampler, *descriptorAllocator_,
             shaderPaths_.screenDepthInitComp,
@@ -1178,10 +1214,19 @@ void Renderer::createRenderPipeline() {
     mainForwardPass_ = mainPass.get();
     pipeline_.addPass(std::move(mainPass));
 
+    if (screenSupport.taaAvailable) {
+        auto taaPass = std::make_unique<TaaPass>(
+            *device_, *renderResources_, resourceHandles_,
+            *descriptorAllocator_, shaderPaths_.taaResolveComp);
+        taaPass_ = taaPass.get();
+        pipeline_.addPass(std::move(taaPass));
+    }
+
     if (screenSupport.colorPyramidAvailable) {
         pipeline_.addPass(std::make_unique<ScreenSpacePyramidPass>(
             *device_, *renderResources_, ScreenSpacePyramidKind::SceneColor,
             resourceHandles_.hdrColor, resourceHandles_.hdrSampler,
+            resourceHandles_.taaHistory, resourceHandles_.taaSampler,
             resourceHandles_.sceneColorPyramid,
             resourceHandles_.screenPyramidSampler, *descriptorAllocator_,
             shaderPaths_.screenColorInitComp,
@@ -1207,8 +1252,11 @@ void Renderer::createRenderPipeline() {
         resourceHandles_.ssaoRaw,
         resourceHandles_.ssaoFiltered,
         resourceHandles_.cacaoOutput,
+        resourceHandles_.taaHistory,
+        resourceHandles_.taaDebug,
         resourceHandles_.screenPyramidSampler,
         resourceHandles_.ssaoSampler,
+        resourceHandles_.taaSampler,
         *descriptorAllocator_,
         shaderPaths_.fullscreenVert, shaderPaths_.toneMapFrag);
     toneMapPass_ = toneMapPass.get();

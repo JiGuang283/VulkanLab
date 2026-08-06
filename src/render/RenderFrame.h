@@ -21,12 +21,15 @@ struct FrameRenderFeatures {
     bool sceneColorPyramidRequired = false;
     bool ssaoRequired = false;
     bool cacaoRequired = false;
+    bool taaRequired = false;
+    bool taaActive = false;
 };
 
 struct RenderFrameContext {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     uint32_t        frameIndex = 0;
     uint32_t        imageIndex = 0;
+    uint64_t        submissionSerial = 0;
     VkExtent2D      viewportExtent{};
     VkExtent2D      swapchainExtent{};
     VkDescriptorSet globalDescriptorSet = VK_NULL_HANDLE;

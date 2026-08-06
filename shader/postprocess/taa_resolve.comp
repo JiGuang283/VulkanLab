@@ -1,0 +1,183 @@
+#version 450
+
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(std140, set = 0, binding = 0) uniform TaaFrameBuffer {
+    mat4 currentInverseViewProjection;
+    mat4 previousViewProjection;
+    mat4 previousInverseViewProjection;
+    vec4 viewportSizeInvSize;
+    vec4 jitterCurrentPreviousPixels;
+    vec4 parameters;
+    uvec4 flags;
+} taa;
+
+layout(set = 0, binding = 1) uniform sampler2D currentColor;
+layout(set = 0, binding = 2) uniform sampler2D currentDepth;
+layout(set = 0, binding = 3) uniform sampler2D currentNormalRoughness;
+layout(set = 0, binding = 4) uniform sampler2D currentMotion;
+layout(set = 0, binding = 5) uniform sampler2D previousDepth;
+layout(set = 0, binding = 6) uniform sampler2D previousNormalRoughness;
+layout(set = 0, binding = 7) uniform sampler2D previousHistory;
+layout(set = 0, binding = 8, rgba16f) uniform writeonly image2D resolvedHistory;
+layout(set = 0, binding = 9, rgba16f) uniform writeonly image2D debugOutput;
+
+vec3 octDecode(vec2 encoded)
+{
+    vec2 value = encoded * 2.0 - 1.0;
+    vec3 normal = vec3(value, 1.0 - abs(value.x) - abs(value.y));
+    if (normal.z < 0.0)
+        normal.xy = (1.0 - abs(normal.yx)) * sign(normal.xy);
+    return normalize(normal);
+}
+
+vec3 rgbToYCoCg(vec3 rgb)
+{
+    return vec3(0.25 * rgb.r + 0.5 * rgb.g + 0.25 * rgb.b,
+                0.5 * rgb.r - 0.5 * rgb.b,
+                -0.25 * rgb.r + 0.5 * rgb.g - 0.25 * rgb.b);
+}
+
+vec3 yCoCgToRgb(vec3 value)
+{
+    return vec3(value.x + value.y - value.z,
+                value.x + value.z,
+                value.x - value.y - value.z);
+}
+
+float luminance(vec3 color)
+{
+    return dot(color, vec3(0.2126, 0.7152, 0.0722));
+}
+
+vec3 currentAt(ivec2 pixel, ivec2 size)
+{
+    return texelFetch(currentColor, clamp(pixel, ivec2(0), size - 1), 0).rgb;
+}
+
+void nearestSurfaceMotion(ivec2 pixel, ivec2 size, out float depth,
+                          out vec4 surface, out vec2 motion)
+{
+    depth = 1.0;
+    ivec2 selected = pixel;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            ivec2 candidate = clamp(pixel + ivec2(x, y), ivec2(0), size - 1);
+            float candidateDepth = texelFetch(currentDepth, candidate, 0).r;
+            if (candidateDepth < depth) {
+                depth = candidateDepth;
+                selected = candidate;
+            }
+        }
+    }
+    surface = texelFetch(currentNormalRoughness, selected, 0);
+    motion = texelFetch(currentMotion, selected, 0).xy;
+}
+
+vec2 skyPreviousUv(vec2 uv)
+{
+    vec4 world = taa.currentInverseViewProjection *
+                 vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+    float safeW = abs(world.w) > 1e-6
+                      ? world.w
+                      : (world.w < 0.0 ? -1e-6 : 1e-6);
+    world /= safeW;
+    vec4 previousClip = taa.previousViewProjection * vec4(world.xyz, 1.0);
+    if (previousClip.w <= 1e-6)
+        return vec2(-1.0);
+    return previousClip.xy / previousClip.w * 0.5 + 0.5;
+}
+
+bool uvInBounds(vec2 uv)
+{
+    return all(greaterThanEqual(uv, vec2(0.0))) &&
+           all(lessThanEqual(uv, vec2(1.0)));
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(resolvedHistory);
+    if (any(greaterThanEqual(pixel, size)))
+        return;
+
+    vec2 uv = (vec2(pixel) + 0.5) * taa.viewportSizeInvSize.zw;
+    vec3 current = currentAt(pixel, size);
+    float depth;
+    vec4 surface;
+    vec2 motion;
+    nearestSurfaceMotion(pixel, size, depth, surface, motion);
+
+    bool sky = depth >= 0.999999;
+    vec2 previousUv = sky ? skyPreviousUv(uv) : uv + motion;
+    bool valid = taa.flags.x != 0u && uvInBounds(previousUv);
+    vec4 rawHistory = vec4(current, 1.0);
+
+    if (valid) {
+        float oldDepth = texture(previousDepth, previousUv).r;
+        bool oldSky = oldDepth >= 0.999999;
+        valid = sky == oldSky;
+        if (!sky && valid) {
+            vec4 oldSurface = texture(previousNormalRoughness, previousUv);
+            vec3 currentNormal = octDecode(surface.rg);
+            vec3 oldNormal = octDecode(oldSurface.rg);
+            float motionPixels = length(motion * taa.viewportSizeInvSize.xy);
+            float depthThreshold = 0.0015 + motionPixels * 0.00015;
+            valid = surface.a > 0.5 && oldSurface.a > 0.5 &&
+                    abs(depth - oldDepth) <= depthThreshold &&
+                    dot(currentNormal, oldNormal) >= 0.75;
+        }
+    }
+
+    if (valid)
+        rawHistory = texture(previousHistory, previousUv);
+
+    vec3 moment1 = vec3(0.0);
+    vec3 moment2 = vec3(0.0);
+    vec3 crossAverage = vec3(0.0);
+    int sampleCount = 0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            vec3 sampleColor = currentAt(pixel + ivec2(x, y), size);
+            vec3 sampleYCoCg = rgbToYCoCg(sampleColor);
+            moment1 += sampleYCoCg;
+            moment2 += sampleYCoCg * sampleYCoCg;
+            ++sampleCount;
+            if (abs(x) + abs(y) <= 1)
+                crossAverage += sampleColor;
+        }
+    }
+    vec3 mean = moment1 / float(sampleCount);
+    vec3 sigma = sqrt(max(moment2 / float(sampleCount) - mean * mean,
+                          vec3(0.0)));
+    float motionPixels = length(motion * taa.viewportSizeInvSize.xy);
+    float gamma = mix(0.75, 2.0, exp(-motionPixels * 0.08));
+    vec3 clippedHistory = yCoCgToRgb(clamp(rgbToYCoCg(rawHistory.rgb),
+                                           mean - sigma * gamma,
+                                           mean + sigma * gamma));
+
+    float colorDelta = abs(luminance(current) - luminance(clippedHistory)) /
+                       max(max(luminance(current), luminance(clippedHistory)),
+                           0.1);
+    float motionConfidence = exp(-motionPixels * 0.06);
+    float colorConfidence = 1.0 - clamp(colorDelta, 0.0, 1.0);
+    float historyWeight = valid
+                              ? clamp(taa.parameters.x, 0.0, 0.99) *
+                                    motionConfidence * colorConfidence
+                              : 0.0;
+    // Transparent geometry is absent from SurfacePrepass. Without a reactive
+    // mask, cap temporal reuse conservatively whenever the frame contains it.
+    if (taa.flags.w != 0u)
+        historyWeight = min(historyWeight, 0.5);
+    vec3 resolved = mix(current, clippedHistory, historyWeight);
+    crossAverage *= 0.2;
+    resolved += (current - crossAverage) *
+                clamp(taa.parameters.y, 0.0, 1.0);
+    resolved = max(resolved, vec3(0.0));
+
+    imageStore(resolvedHistory, pixel, vec4(resolved, 1.0));
+    imageStore(debugOutput, pixel,
+               vec4(valid ? 0.0 : 1.0, historyWeight, 0.0, 1.0));
+}

@@ -49,7 +49,9 @@ struct GpuVisibilityDrawStream {
 struct TemporalFrameHistoryData {
     glm::mat4 previousViewProjection{1.0f};
     glm::mat4 currentViewProjection{1.0f};
-    glm::mat4 currentProjection{1.0f};
+    glm::mat4 currentStableProjection{1.0f};
+    glm::vec2 currentJitterPixels{0.0f};
+    glm::vec2 previousJitterPixels{0.0f};
     glm::vec3 cameraPosition{0.0f};
     glm::vec3 cameraForward{0.0f, 0.0f, -1.0f};
     VkExtent2D viewportExtent{};
@@ -58,6 +60,7 @@ struct TemporalFrameHistoryData {
     uint32_t historyValidItems = 0;
     bool globalValid = false;
     std::string cameraIdentity;
+    std::string shaderIdentity;
     std::string invalidationReason;
 };
 
@@ -78,6 +81,7 @@ struct VisibilityFrame {
 struct VisibilityBuildInput {
     uint64_t sceneGeneration = 0;
     std::string cameraIdentity = "editor";
+    std::string shaderIdentity;
     Bounds sceneBounds{};
 };
 
@@ -99,7 +103,8 @@ class VisibilitySystem {
     std::unordered_map<RenderItemKey, glm::mat4, RenderItemKeyHash>
         previousWorld_;
     glm::mat4 previousViewProjection_{1.0f};
-    glm::mat4 previousProjection_{1.0f};
+    glm::mat4 previousStableProjection_{1.0f};
+    glm::vec2 previousJitterPixels_{0.0f};
     glm::vec3 previousCameraPosition_{0.0f};
     glm::vec3 previousCameraForward_{0.0f, 0.0f, -1.0f};
     VkExtent2D previousViewportExtent_{};
@@ -107,6 +112,7 @@ class VisibilitySystem {
     uint64_t historyGeneration_ = 0;
     uint64_t nextVisibilityGeneration_ = 1;
     std::string previousCameraIdentity_;
+    std::string previousShaderIdentity_;
     std::string forcedInvalidationReason_;
     std::string lastInvalidationReason_ = "initial frame";
     bool committed_ = false;

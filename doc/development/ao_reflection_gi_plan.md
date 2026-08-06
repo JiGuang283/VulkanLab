@@ -2,14 +2,14 @@
 
 > Status: Active
 > Last reviewed: 2026-08-06
-> Based on: Stage 0–1 plus optional FidelityFX CACAO comparison integration
+> Based on: Stage 0–2 plus optional FidelityFX CACAO comparison integration
 > Current architecture: [渲染流程](../architecture/rendering.md)
 
 ## Summary
 
 本路线在现有 Forward + Compute 管线上逐步增加环境遮蔽、屏幕空间反射和间接漫反射，并为后续 Reflection Probe、DDGI 和可选硬件光追保留清晰边界。
 
-> Progress: Stage 0（共享屏幕空间基础）、Stage 1（SSAO）及 FidelityFX CACAO comparison backend 已完成；下一阶段为 Stage 2 TAA v1。
+> Progress: Stage 0（共享屏幕空间基础）、Stage 1（SSAO）、FidelityFX CACAO comparison backend 和 Stage 2（TAA v1）已完成；下一阶段为 Stage 3 GTAO。
 
 三个问题必须分开处理：
 
@@ -549,12 +549,20 @@ DDGI 不应作为屏幕空间基础设施完成前的第一个 GI 算法。
 
 完成标准：Algorithm Playground 与 Sponza 墙角出现稳定接触遮蔽，Direct Light 和 Emissive 不被压暗。
 
-### Stage 2：TAA v1
+### Stage 2：TAA v1（已完成）
 
 - Projection jitter。
 - HDR history reproject、clamp、reject 和 resolve。
 - Camera cut、resize、scene publish 和 active camera 切换失效。
 - Editor 提供 Off/TAA 和 history debug。
+
+实际实现使用 8-phase Halton 2/3 jitter，并明确分离 stable projection 与 jittered projection：前者用于 camera/shadow culling 和 history 失效判断，后者只进入渲染、motion 与重投影。每个 frame slot 持有全分辨率 `RGBA16F` history/debug image；Registry 的 previous-frame sampled-read 契约用于表达跨 slot 依赖。
+
+Resolve 使用 nearest-depth motion、depth/normal/history-validity rejection、3x3 YCoCg variance clipping、自适应 motion/luminance history weight 和轻量 sharpening。Sky 使用 previous view-projection 重投影；透明材质当前没有 reactive mask，因此只要帧中存在透明 draw 就保守限制 history weight。Camera cut、viewport resize、scene generation、camera mode、projection、Shader variant 和不连续执行都会重置 history。
+
+TAA 位于完整 MainForward 之后、Scene Color Pyramid/Bloom/ToneMap 之前。激活时后三者直接读取 resolve history，关闭时继续读取原 HDR，不增加全屏复制。Editor、Runtime Control 与 `VulkanLabCtl` 提供 Off/TAA、History Weight、Sharpness，以及 History、Rejection、History Weight 调试视图；GPU profiler、Tracy 和 RenderDoc 使用独立 `TAA` 区域。
+
+实现参考本地 `references/rendering_algorithms/code/taa` 中固定提交 `39786709cf70a1e0906196c600f6079571a33ceb` 的 MIT 代码，以及 UE4 2014 temporal supersampling 资料，用于核对 jitter、reprojection 和 neighborhood clipping 的职责边界。正式实现是项目内 Vulkan/GLSL 重写，不 include、link 或运行参考代码，因此没有新增运行时依赖。
 
 完成标准：静态边缘稳定，移动时无明显长时间拖影；UI 不经过 TAA。
 

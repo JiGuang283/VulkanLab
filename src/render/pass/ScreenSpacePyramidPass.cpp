@@ -38,7 +38,8 @@ struct PyramidPush {
 ScreenSpacePyramidPass::ScreenSpacePyramidPass(
     Device &device, const RenderResourceRegistry &resources,
     ScreenSpacePyramidKind kind, RenderImageHandle source,
-    RenderSamplerHandle sourceSampler, RenderImageHandle pyramid,
+    RenderSamplerHandle sourceSampler, RenderImageHandle alternateSource,
+    RenderSamplerHandle alternateSourceSampler, RenderImageHandle pyramid,
     RenderSamplerHandle pyramidSampler,
     DescriptorAllocator &descriptorAllocator, std::string initShaderPath,
     std::string reduceShaderPath)
@@ -46,7 +47,9 @@ ScreenSpacePyramidPass::ScreenSpacePyramidPass(
       name_(kind == ScreenSpacePyramidKind::NearestDepth
                 ? "ScreenDepthPyramid"
                 : "SceneColorPyramid"),
-      source_(source), sourceSampler_(sourceSampler), pyramid_(pyramid),
+      source_(source), sourceSampler_(sourceSampler),
+      alternateSource_(alternateSource),
+      alternateSourceSampler_(alternateSourceSampler), pyramid_(pyramid),
       pyramidSampler_(pyramidSampler),
       descriptorAllocator_(&descriptorAllocator),
       initShaderPath_(std::move(initShaderPath)),
@@ -74,10 +77,17 @@ ScreenSpacePyramidPass::resourceUsages() const {
         kind_ == ScreenSpacePyramidKind::NearestDepth
             ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
             : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    return {
+    std::vector<RenderImageUsage> usages = {
         {source_, RenderImageAccess::SampledRead, sourceLayout, sourceLayout},
         {pyramid_, RenderImageAccess::StorageWrite, VK_IMAGE_LAYOUT_UNDEFINED,
          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+    if (alternateSource_.valid()) {
+        usages.insert(usages.begin() + 1,
+                      {alternateSource_, RenderImageAccess::SampledRead,
+                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    }
+    return usages;
 }
 
 void ScreenSpacePyramidPass::releaseViewportResources() {
@@ -100,6 +110,11 @@ void ScreenSpacePyramidPass::execute(
             : frame.features.sceneColorPyramidRequired;
     if (!required || !frame.pipelineCache)
         return;
+
+    const bool useAlternateSource =
+        kind_ == ScreenSpacePyramidKind::SceneColor &&
+        frame.features.taaActive && alternateSource_.valid();
+    updateInitialSource(resources, frame.frameIndex, useAlternateSource);
 
     VKL_PROFILE_ZONE("Record ScreenSpacePyramid");
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, name_.c_str());
@@ -149,8 +164,10 @@ void ScreenSpacePyramidPass::execute(
         vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeline.layout(), 0, 1, &set, 0, nullptr);
         const VkExtent2D destination = resources.mipExtent(pyramid_, mip);
+        const RenderImageHandle initialSource =
+            useAlternateSource ? alternateSource_ : source_;
         const VkExtent2D sourceExtent =
-            mip == 0 ? resources.extent(source_)
+            mip == 0 ? resources.extent(initialSource)
                      : resources.mipExtent(pyramid_, mip - 1u);
         const PyramidPush push{{sourceExtent.width, sourceExtent.height,
                                 destination.width, destination.height}};
@@ -179,6 +196,28 @@ void ScreenSpacePyramidPass::execute(
                     VK_ACCESS_SHADER_READ_BIT, pyramid.handle(),
                     VK_IMAGE_LAYOUT_GENERAL,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, allMips);
+}
+
+void ScreenSpacePyramidPass::updateInitialSource(
+    const RenderResourceRegistry &resources, uint32_t frameIndex,
+    bool useAlternateSource) {
+    const RenderImageHandle source =
+        useAlternateSource ? alternateSource_ : source_;
+    const RenderSamplerHandle sampler =
+        useAlternateSource ? alternateSourceSampler_ : sourceSampler_;
+    VkDescriptorImageInfo info{
+        resources.sampler(sampler),
+        resources.image(source, frameIndex).imageView(),
+        kind_ == ScreenSpacePyramidKind::NearestDepth
+            ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+            : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = sets_[frameIndex].front();
+    write.dstBinding = 0;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.descriptorCount = 1;
+    write.pImageInfo = &info;
+    vkUpdateDescriptorSets(device_->logicalDevice(), 1, &write, 0, nullptr);
 }
 
 void ScreenSpacePyramidPass::createDescriptorSetLayout() {

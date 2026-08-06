@@ -42,6 +42,10 @@ class BloomPass final : public IRenderPass {
 
     void createDescriptorSetLayout();
     void createDescriptors(const RenderResourceRegistry &resources);
+    void updatePrimarySource(const RenderResourceRegistry &resources,
+                             uint32_t frameIndex,
+                             RenderImageHandle source,
+                             RenderSamplerHandle sampler);
     void freeDescriptors();
     void initializeImages(const RenderFrameContext &frame,
                           const RenderResourceRegistry &resources);

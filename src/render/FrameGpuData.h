@@ -58,6 +58,16 @@ struct alignas(16) ScreenSpaceLightingUbo {
     glm::uvec4 modes{0u};
 };
 
+struct alignas(16) TaaFrameUbo {
+    glm::mat4 currentInverseViewProjection{1.0f};
+    glm::mat4 previousViewProjection{1.0f};
+    glm::mat4 previousInverseViewProjection{1.0f};
+    glm::vec4 viewportSizeInvSize{0.0f};
+    glm::vec4 jitterCurrentPreviousPixels{0.0f};
+    glm::vec4 parameters{0.0f};
+    glm::uvec4 flags{0u};
+};
+
 struct alignas(16) GpuRenderItemHistory {
     glm::mat4 previousWorld{1.0f};
     glm::uvec4 params{0u};
@@ -96,6 +106,7 @@ static_assert(sizeof(GlobalFrameUbo) == 336);
 static_assert(sizeof(AtmosphereGpuParams) == 192);
 static_assert(sizeof(SurfaceFrameUbo) == 96);
 static_assert(sizeof(ScreenSpaceLightingUbo) == 32);
+static_assert(sizeof(TaaFrameUbo) == 256);
 static_assert(sizeof(GpuRenderItemHistory) == 80);
 static_assert(offsetof(AtmosphereGpuParams, planetCenterBottomRadius) == 0);
 static_assert(offsetof(AtmosphereGpuParams, topRadiusDensityHeights) == 16);

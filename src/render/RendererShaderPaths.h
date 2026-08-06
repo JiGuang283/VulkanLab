@@ -20,6 +20,7 @@ struct RendererShaderPaths {
     std::string ssaoTraceComp;
     std::string ssaoBlurComp;
     std::string cacaoNormalAdapterComp;
+    std::string taaResolveComp;
     std::string fullscreenVert;
     std::string toneMapFrag;
     std::string presentFrag;

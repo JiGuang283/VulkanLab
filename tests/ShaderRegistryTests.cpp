@@ -149,6 +149,8 @@ void testProjectManifestPreservesPublicVariants() {
                         registry.findProgram("shadow.mask") != nullptr &&
                         registry.findProgram("postprocess.tonemap") != nullptr &&
                         registry.findProgram(
+                            "postprocess.taa-resolve") != nullptr &&
+                        registry.findProgram(
                             "postprocess.bloom-downsample") != nullptr &&
                         registry.findProgram(
                             "postprocess.bloom-upsample") != nullptr &&

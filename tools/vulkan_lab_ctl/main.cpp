@@ -78,7 +78,8 @@ void printUsage() {
            "[--cacao-quality lowest|low|medium|high|highest] "
            "[--cacao-resolution native|half] [--cacao-radius N] "
            "[--cacao-intensity N] [--cacao-power N] "
-           "[--screen-space-debug none|nearest-depth|scene-color|ssao-raw|ssao-filtered|cacao-output] "
+           "[--taa off|taa] [--taa-history-weight N] [--taa-sharpness N] "
+           "[--screen-space-debug none|nearest-depth|scene-color|ssao-raw|ssao-filtered|cacao-output|taa-history|taa-rejection|taa-history-weight] "
            "[--screen-space-debug-mip N]\n"
         << "  VulkanLabCtl [--json] render wait [--stable-frames N] "
            "[--timeout-ms N]\n"
@@ -209,6 +210,9 @@ ParsedCommand parseCommand(int argc, char **argv) {
     std::optional<std::string> cacaoRadius;
     std::optional<std::string> cacaoIntensity;
     std::optional<std::string> cacaoPower;
+    std::optional<std::string> temporalAntiAliasing;
+    std::optional<std::string> taaHistoryWeight;
+    std::optional<std::string> taaSharpness;
     std::optional<std::string> screenSpaceDebug;
     std::optional<std::string> screenSpaceDebugMip;
     for (int i = 1; i < argc; ++i) {
@@ -262,6 +266,9 @@ ParsedCommand parseCommand(int argc, char **argv) {
                    argument == "--cacao-radius" ||
                    argument == "--cacao-intensity" ||
                    argument == "--cacao-power" ||
+                  argument == "--taa" ||
+                  argument == "--taa-history-weight" ||
+                  argument == "--taa-sharpness" ||
                   argument == "--screen-space-debug" ||
                   argument == "--screen-space-debug-mip") {
             if (++i >= argc)
@@ -348,6 +355,12 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 cacaoIntensity = argv[i];
             else if (argument == "--cacao-power")
                 cacaoPower = argv[i];
+            else if (argument == "--taa")
+                temporalAntiAliasing = argv[i];
+            else if (argument == "--taa-history-weight")
+                taaHistoryWeight = argv[i];
+            else if (argument == "--taa-sharpness")
+                taaSharpness = argv[i];
             else if (argument == "--screen-space-debug")
                 screenSpaceDebug = argv[i];
             else
@@ -663,16 +676,36 @@ ParsedCommand parseCommand(int argc, char **argv) {
         if (cacaoPower)
             parsed.params["cacaoPower"] =
                 parseFiniteFloat(*cacaoPower, "--cacao-power");
+        if (temporalAntiAliasing) {
+            if (*temporalAntiAliasing != "off" &&
+                *temporalAntiAliasing != "taa") {
+                throw std::invalid_argument("--taa must be off or taa");
+            }
+            parsed.params["temporalAntiAliasingMode"] =
+                *temporalAntiAliasing;
+        }
+        if (taaHistoryWeight) {
+            parsed.params["taaHistoryWeight"] = parseFiniteFloat(
+                *taaHistoryWeight, "--taa-history-weight");
+        }
+        if (taaSharpness) {
+            parsed.params["taaSharpness"] =
+                parseFiniteFloat(*taaSharpness, "--taa-sharpness");
+        }
         if (screenSpaceDebug) {
             if (*screenSpaceDebug != "none" &&
                 *screenSpaceDebug != "nearest-depth" &&
                 *screenSpaceDebug != "scene-color" &&
                 *screenSpaceDebug != "ssao-raw" &&
                 *screenSpaceDebug != "ssao-filtered" &&
-                *screenSpaceDebug != "cacao-output") {
+                *screenSpaceDebug != "cacao-output" &&
+                *screenSpaceDebug != "taa-history" &&
+                *screenSpaceDebug != "taa-rejection" &&
+                *screenSpaceDebug != "taa-history-weight") {
                 throw std::invalid_argument(
                     "--screen-space-debug must be none, nearest-depth, "
-                    "scene-color, ssao-raw, ssao-filtered, or cacao-output");
+                    "scene-color, ssao-raw, ssao-filtered, cacao-output, "
+                    "taa-history, taa-rejection, or taa-history-weight");
             }
             parsed.params["screenSpaceDebugView"] = *screenSpaceDebug;
         }

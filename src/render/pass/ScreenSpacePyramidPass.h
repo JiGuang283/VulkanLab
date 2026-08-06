@@ -26,6 +26,8 @@ class ScreenSpacePyramidPass final : public IRenderPass {
                            ScreenSpacePyramidKind kind,
                            RenderImageHandle source,
                            RenderSamplerHandle sourceSampler,
+                           RenderImageHandle alternateSource,
+                           RenderSamplerHandle alternateSourceSampler,
                            RenderImageHandle pyramid,
                            RenderSamplerHandle pyramidSampler,
                            DescriptorAllocator &descriptorAllocator,
@@ -44,6 +46,9 @@ class ScreenSpacePyramidPass final : public IRenderPass {
   private:
     void createDescriptorSetLayout();
     void createDescriptors(const RenderResourceRegistry &resources);
+    void updateInitialSource(const RenderResourceRegistry &resources,
+                             uint32_t frameIndex,
+                             bool useAlternateSource);
     void freeDescriptors();
 
     Device *device_ = nullptr;
@@ -51,6 +56,8 @@ class ScreenSpacePyramidPass final : public IRenderPass {
     std::string name_;
     RenderImageHandle source_{};
     RenderSamplerHandle sourceSampler_{};
+    RenderImageHandle alternateSource_{};
+    RenderSamplerHandle alternateSourceSampler_{};
     RenderImageHandle pyramid_{};
     RenderSamplerHandle pyramidSampler_{};
     DescriptorAllocator *descriptorAllocator_ = nullptr;

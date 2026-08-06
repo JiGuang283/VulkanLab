@@ -195,6 +195,26 @@ void checkScreenSpaceUbo(const SpvReflectDescriptorBinding &binding,
                      members, "ScreenSpaceLightingUbo", path);
 }
 
+void checkTaaFrameUbo(const SpvReflectDescriptorBinding &binding,
+                      std::string_view path) {
+    static const std::vector<MemberLayout> members = {
+        {"currentInverseViewProjection",
+         offsetof(vkr::TaaFrameUbo, currentInverseViewProjection)},
+        {"previousViewProjection",
+         offsetof(vkr::TaaFrameUbo, previousViewProjection)},
+        {"previousInverseViewProjection",
+         offsetof(vkr::TaaFrameUbo, previousInverseViewProjection)},
+        {"viewportSizeInvSize",
+         offsetof(vkr::TaaFrameUbo, viewportSizeInvSize)},
+        {"jitterCurrentPreviousPixels",
+         offsetof(vkr::TaaFrameUbo, jitterCurrentPreviousPixels)},
+        {"parameters", offsetof(vkr::TaaFrameUbo, parameters)},
+        {"flags", offsetof(vkr::TaaFrameUbo, flags)},
+    };
+    checkBlockLayout(binding.block, sizeof(vkr::TaaFrameUbo), members,
+                     "TaaFrameUbo", path);
+}
+
 void checkRenderItemHistoryBuffer(const SpvReflectDescriptorBinding &binding,
                                   std::string_view path) {
     requireShader(binding.block.member_count == 1,
@@ -275,6 +295,8 @@ void checkPushConstant(const SpvReflectShaderModule &module,
             (contract == vkr::ShaderProgramContract::Compute &&
              (expectsAtmosphere ||
               path.find("screenspace/cacao_normal_adapter") !=
+                  std::string_view::npos ||
+              path.find("postprocess/taa_resolve") !=
                   std::string_view::npos)) ||
             (contract == vkr::ShaderProgramContract::MainForward &&
              module.shader_stage == SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT);
@@ -371,10 +393,13 @@ void checkDescriptors(const ReflectedModule &reflected,
         const bool cacaoAdapter =
             reflected.path().find("screenspace/cacao_normal_adapter") !=
             std::string::npos;
+        const bool taa = reflected.path().find("postprocess/taa_resolve") !=
+                         std::string::npos;
         const uint32_t expectedCount = expectsAtmosphere
                                            ? 6u
                                            : ssao ? 5u
                                            : cacaoAdapter ? 5u
+                                           : taa ? 10u
                                            : occlusion ? 4u
                                                        : 2u;
         requireShader(bindings.size() == expectedCount,
@@ -448,6 +473,29 @@ void checkDescriptors(const ReflectedModule &reflected,
                     checkGlobalUbo(*binding, reflected.path());
                 continue;
             }
+            if (taa) {
+                const bool ubo =
+                    binding->set == 0 && binding->binding == 0 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                const bool source =
+                    binding->set == 0 && binding->binding >= 1 &&
+                    binding->binding <= 7 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                const bool destination =
+                    binding->set == 0 && binding->binding >= 8 &&
+                    binding->binding <= 9 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                requireShader(binding->count == 1 &&
+                                  (ubo || source || destination),
+                              "TAA descriptor contract mismatch in " +
+                                  reflected.path());
+                if (ubo)
+                    checkTaaFrameUbo(*binding, reflected.path());
+                continue;
+            }
             if (occlusion) {
                 const bool source =
                     binding->set == 0 && binding->binding == 0 &&
@@ -500,7 +548,7 @@ void checkDescriptors(const ReflectedModule &reflected,
                           reflected.path());
         if (toneMap) {
             requireShader(
-                binding->set == 0 && binding->binding < 9 &&
+                binding->set == 0 && binding->binding < 11 &&
                     binding->descriptor_type ==
                         SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
                     stage == VK_SHADER_STAGE_FRAGMENT_BIT,

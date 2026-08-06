@@ -186,6 +186,10 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         command, "cacaoIntensity", 0.0f, 4.0f);
     patch.cacaoPower = optionalFiniteFloat(
         command, "cacaoPower", 0.25f, 4.0f);
+    patch.taaHistoryWeight = optionalFiniteFloat(
+        command, "taaHistoryWeight", 0.0f, 0.99f);
+    patch.taaSharpness = optionalFiniteFloat(
+        command, "taaSharpness", 0.0f, 1.0f);
     patch.screenSpaceDebugMip =
         optionalUint32(command, "screenSpaceDebugMip", 31u);
     if (const auto toneMapper = optionalString(command, "toneMapper")) {
@@ -240,6 +244,15 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
                 "Parameter 'cacaoResolution' must be native or half.");
         }
     }
+    if (const auto mode = optionalString(command, "temporalAntiAliasingMode")) {
+        patch.temporalAntiAliasingMode =
+            temporalAntiAliasingModeFromName(*mode);
+        if (!patch.temporalAntiAliasingMode) {
+            throw RuntimeCommandError(
+                "invalid_params",
+                "Parameter 'temporalAntiAliasingMode' must be off or taa.");
+        }
+    }
     if (const auto debugView =
             optionalString(command, "screenSpaceDebugView")) {
         patch.screenSpaceDebugView = screenSpaceDebugViewFromName(*debugView);
@@ -248,7 +261,8 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
                 "invalid_params",
                 "Parameter 'screenSpaceDebugView' must be none, "
                 "nearest-depth, scene-color, ssao-raw, ssao-filtered, or "
-                "cacao-output.");
+                "cacao-output, taa-history, taa-rejection, or "
+                "taa-history-weight.");
         }
     }
     if (!patch.shadowsEnabled && !patch.shadowReceiverBias &&
@@ -268,6 +282,8 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         !patch.ssaoIntensity && !patch.ssaoPower && !patch.cacaoQuality &&
         !patch.cacaoResolution && !patch.cacaoRadius &&
         !patch.cacaoIntensity && !patch.cacaoPower &&
+        !patch.temporalAntiAliasingMode && !patch.taaHistoryWeight &&
+        !patch.taaSharpness &&
         !patch.screenSpaceDebugView && !patch.screenSpaceDebugMip) {
         throw RuntimeCommandError(
             "invalid_params",
