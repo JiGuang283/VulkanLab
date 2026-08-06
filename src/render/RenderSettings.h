@@ -17,6 +17,7 @@ enum class SurfaceDebugView {
 enum class AmbientOcclusionMode {
     Off,
     Ssao,
+    Cacao,
 };
 
 inline const char *ambientOcclusionModeName(AmbientOcclusionMode mode) {
@@ -25,6 +26,8 @@ inline const char *ambientOcclusionModeName(AmbientOcclusionMode mode) {
         return "off";
     case AmbientOcclusionMode::Ssao:
         return "ssao";
+    case AmbientOcclusionMode::Cacao:
+        return "cacao";
     }
     return "off";
 }
@@ -35,8 +38,74 @@ ambientOcclusionModeFromName(std::string_view name) {
         return AmbientOcclusionMode::Off;
     if (name == "ssao")
         return AmbientOcclusionMode::Ssao;
+    if (name == "cacao")
+        return AmbientOcclusionMode::Cacao;
     return std::nullopt;
 }
+
+enum class CacaoQuality {
+    Lowest,
+    Low,
+    Medium,
+    High,
+    Highest,
+};
+
+inline const char *cacaoQualityName(CacaoQuality quality) {
+    switch (quality) {
+    case CacaoQuality::Lowest:
+        return "lowest";
+    case CacaoQuality::Low:
+        return "low";
+    case CacaoQuality::Medium:
+        return "medium";
+    case CacaoQuality::High:
+        return "high";
+    case CacaoQuality::Highest:
+        return "highest";
+    }
+    return "high";
+}
+
+inline std::optional<CacaoQuality> cacaoQualityFromName(std::string_view name) {
+    if (name == "lowest")
+        return CacaoQuality::Lowest;
+    if (name == "low")
+        return CacaoQuality::Low;
+    if (name == "medium")
+        return CacaoQuality::Medium;
+    if (name == "high")
+        return CacaoQuality::High;
+    if (name == "highest")
+        return CacaoQuality::Highest;
+    return std::nullopt;
+}
+
+enum class CacaoResolution {
+    Native,
+    Half,
+};
+
+inline const char *cacaoResolutionName(CacaoResolution resolution) {
+    return resolution == CacaoResolution::Native ? "native" : "half";
+}
+
+inline std::optional<CacaoResolution>
+cacaoResolutionFromName(std::string_view name) {
+    if (name == "native")
+        return CacaoResolution::Native;
+    if (name == "half")
+        return CacaoResolution::Half;
+    return std::nullopt;
+}
+
+struct CacaoSettings {
+    CacaoQuality quality = CacaoQuality::High;
+    CacaoResolution resolution = CacaoResolution::Half;
+    float radius = 1.2f;
+    float intensity = 1.0f;
+    float power = 1.5f;
+};
 
 enum class SsaoQuality {
     Low,
@@ -72,6 +141,7 @@ enum class ScreenSpaceDebugView {
     SceneColor,
     SsaoRaw,
     SsaoFiltered,
+    CacaoOutput,
 };
 
 inline const char *screenSpaceDebugViewName(ScreenSpaceDebugView view) {
@@ -86,6 +156,8 @@ inline const char *screenSpaceDebugViewName(ScreenSpaceDebugView view) {
         return "ssao-raw";
     case ScreenSpaceDebugView::SsaoFiltered:
         return "ssao-filtered";
+    case ScreenSpaceDebugView::CacaoOutput:
+        return "cacao-output";
     }
     return "none";
 }
@@ -102,6 +174,8 @@ screenSpaceDebugViewFromName(std::string_view name) {
         return ScreenSpaceDebugView::SsaoRaw;
     if (name == "ssao-filtered")
         return ScreenSpaceDebugView::SsaoFiltered;
+    if (name == "cacao-output")
+        return ScreenSpaceDebugView::CacaoOutput;
     return std::nullopt;
 }
 
@@ -199,6 +273,7 @@ struct RenderSettings {
     float ssaoBias = 0.025f;
     float ssaoIntensity = 1.0f;
     float ssaoPower = 1.5f;
+    CacaoSettings cacao{};
     ScreenSpaceDebugView screenSpaceDebugView = ScreenSpaceDebugView::None;
     uint32_t screenSpaceDebugMip = 0;
     CullingSettings culling{};
@@ -227,6 +302,11 @@ struct RenderSettingsPatch {
     std::optional<float> ssaoBias;
     std::optional<float> ssaoIntensity;
     std::optional<float> ssaoPower;
+    std::optional<CacaoQuality> cacaoQuality;
+    std::optional<CacaoResolution> cacaoResolution;
+    std::optional<float> cacaoRadius;
+    std::optional<float> cacaoIntensity;
+    std::optional<float> cacaoPower;
     std::optional<ScreenSpaceDebugView> screenSpaceDebugView;
     std::optional<uint32_t> screenSpaceDebugMip;
     std::optional<bool>  frustumCullingEnabled;
@@ -288,6 +368,16 @@ inline void applyRenderSettingsPatch(RenderSettings &settings,
         settings.ssaoIntensity = *patch.ssaoIntensity;
     if (patch.ssaoPower)
         settings.ssaoPower = *patch.ssaoPower;
+    if (patch.cacaoQuality)
+        settings.cacao.quality = *patch.cacaoQuality;
+    if (patch.cacaoResolution)
+        settings.cacao.resolution = *patch.cacaoResolution;
+    if (patch.cacaoRadius)
+        settings.cacao.radius = *patch.cacaoRadius;
+    if (patch.cacaoIntensity)
+        settings.cacao.intensity = *patch.cacaoIntensity;
+    if (patch.cacaoPower)
+        settings.cacao.power = *patch.cacaoPower;
     if (patch.screenSpaceDebugView)
         settings.screenSpaceDebugView = *patch.screenSpaceDebugView;
     if (patch.screenSpaceDebugMip)

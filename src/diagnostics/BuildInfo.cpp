@@ -20,6 +20,7 @@ const BuildInfo &currentBuildInfo() {
                                  build::kGpuDebugUtils,
                                  build::kGpuProfiling,
                                  build::kTracy,
+                                 build::kCacao,
                                  build::kAssetTool,
                                  build::kControlTool,
                                  build::kRenderTest}};

@@ -505,6 +505,38 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
         handles.ssaoTemp = registerSsaoImage("SSAO Temp");
         handles.ssaoFiltered = registerSsaoImage("SSAO Filtered");
     }
+    if (device.cacaoSupport().available) {
+        RenderImageDesc depth{};
+        depth.name = "CACAO Input Depth";
+        depth.extentPolicy = RenderExtentPolicy::Viewport;
+        depth.multiplicity = RenderResourceMultiplicity::PerFrame;
+        depth.format = device.cacaoSupport().depthAdapterFormat;
+        depth.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                      VK_IMAGE_USAGE_STORAGE_BIT;
+        depth.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        handles.cacaoDepth = registry.registerImage(std::move(depth));
+
+        RenderImageDesc normals{};
+        normals.name = "CACAO View Normals";
+        normals.extentPolicy = RenderExtentPolicy::Viewport;
+        normals.multiplicity = RenderResourceMultiplicity::PerFrame;
+        normals.format = device.cacaoSupport().normalAdapterFormat;
+        normals.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                        VK_IMAGE_USAGE_STORAGE_BIT;
+        normals.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        handles.cacaoViewNormals = registry.registerImage(std::move(normals));
+
+        RenderImageDesc output{};
+        output.name = "CACAO Output";
+        output.extentPolicy = RenderExtentPolicy::Viewport;
+        output.multiplicity = RenderResourceMultiplicity::PerFrame;
+        output.format = device.cacaoSupport().outputFormat;
+        output.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                       VK_IMAGE_USAGE_STORAGE_BIT |
+                       VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        output.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        handles.cacaoOutput = registry.registerImage(std::move(output));
+    }
 
     if (device.computeBloomSupport().available) {
         for (uint32_t level = 0;
@@ -627,9 +659,9 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
         handles.screenPyramidSampler =
             registry.registerSampler(std::move(pyramidSampler));
     }
-    if (screenSupport.ssaoAvailable) {
+    if (screenSupport.ssaoAvailable || device.cacaoSupport().available) {
         RenderSamplerDesc ssaoSampler{};
-        ssaoSampler.name = "SSAO Sampler";
+        ssaoSampler.name = "Screen-Space AO Sampler";
         ssaoSampler.magFilter = VK_FILTER_LINEAR;
         ssaoSampler.minFilter = VK_FILTER_LINEAR;
         handles.ssaoSampler = registry.registerSampler(std::move(ssaoSampler));

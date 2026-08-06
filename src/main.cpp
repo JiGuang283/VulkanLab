@@ -86,7 +86,8 @@ void printUsage(std::ostream &out) {
         << (vkr::build::kGpuDebugUtils ? "on" : "off")
         << ", gpu-profiling="
         << (vkr::build::kGpuProfiling ? "on" : "off")
-        << ", tracy=" << (vkr::build::kTracy ? "on" : "off") << "\n";
+        << ", tracy=" << (vkr::build::kTracy ? "on" : "off")
+        << ", cacao=" << (vkr::build::kCacao ? "on" : "off") << "\n";
 }
 
 void printBuildInfoJson(std::ostream &out) {
@@ -108,6 +109,7 @@ void printBuildInfoJson(std::ostream &out) {
           {"gpuDebugUtils", features.gpuDebugUtils},
           {"gpuProfiling", features.gpuProfiling},
           {"tracy", features.tracy},
+          {"cacao", features.cacao},
           {"assetTool", features.assetTool},
           {"controlTool", features.controlTool},
           {"renderTest", features.renderTest}}}};
@@ -273,10 +275,11 @@ int wmain(int argc, wchar_t **argv) {
             "Build",
             "Compiled features: editor-ui={}, runtime-control={}, "
             "capture={}, asset-authoring={}, validation={}, "
-            "gpu-debug-utils={}, gpu-profiling={}, tracy={}",
+            "gpu-debug-utils={}, gpu-profiling={}, tracy={}, cacao={}",
             features.editorUi, features.runtimeControl, features.capture,
             features.assetAuthoring, features.validation,
-            features.gpuDebugUtils, features.gpuProfiling, features.tracy);
+            features.gpuDebugUtils, features.gpuProfiling, features.tracy,
+            features.cacao);
         // 按需覆写默认配置，例如：
         // config.windowWidth  = 1280;
         // config.windowHeight = 720;

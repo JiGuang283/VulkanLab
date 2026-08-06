@@ -127,6 +127,9 @@ struct RendererResourceHandles {
     RenderImageHandle ssaoRaw{};
     RenderImageHandle ssaoTemp{};
     RenderImageHandle ssaoFiltered{};
+    RenderImageHandle cacaoDepth{};
+    RenderImageHandle cacaoViewNormals{};
+    RenderImageHandle cacaoOutput{};
     std::array<RenderImageHandle, kBloomPyramidLevelCount> bloomLevels{};
     RenderSamplerHandle hdrSampler{};
     RenderSamplerHandle viewportSampler{};

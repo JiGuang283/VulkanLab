@@ -265,11 +265,12 @@ RuntimePackageBuildInfo inspectRuntimeBuild(
         build.gpuDebugUtils = features.at("gpuDebugUtils").get<bool>();
         build.gpuProfiling = features.at("gpuProfiling").get<bool>();
         build.tracy = features.at("tracy").get<bool>();
+        build.cacao = features.value("cacao", false);
         if (build.configuration != "Release")
             throw std::runtime_error("runtime build must be Release");
         if (build.editorUi || build.runtimeControl || build.capture ||
             build.assetAuthoring || build.validation || build.gpuDebugUtils ||
-            build.gpuProfiling || build.tracy) {
+            build.gpuProfiling || build.tracy || build.cacao) {
             throw std::runtime_error(
                 "runtime build contains development-only features; use the "
                 "windows-msvc-runtime preset");

@@ -273,7 +273,9 @@ void checkPushConstant(const SpvReflectShaderModule &module,
         const bool allowed =
             contract == vkr::ShaderProgramContract::Fullscreen ||
             (contract == vkr::ShaderProgramContract::Compute &&
-             expectsAtmosphere) ||
+             (expectsAtmosphere ||
+              path.find("screenspace/cacao_normal_adapter") !=
+                  std::string_view::npos)) ||
             (contract == vkr::ShaderProgramContract::MainForward &&
              module.shader_stage == SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT);
         requireShader(allowed,
@@ -366,10 +368,15 @@ void checkDescriptors(const ReflectedModule &reflected,
         const bool occlusion =
             reflected.path().find("visibility/occlusion_cull") !=
             std::string::npos;
+        const bool cacaoAdapter =
+            reflected.path().find("screenspace/cacao_normal_adapter") !=
+            std::string::npos;
         const uint32_t expectedCount = expectsAtmosphere
                                            ? 6u
                                            : ssao ? 5u
-                                                  : occlusion ? 4u : 2u;
+                                           : cacaoAdapter ? 5u
+                                           : occlusion ? 4u
+                                                       : 2u;
         requireShader(bindings.size() == expectedCount,
                       "compute descriptor count mismatch in " +
                           reflected.path());
@@ -414,6 +421,29 @@ void checkDescriptors(const ReflectedModule &reflected,
                                   (globalUbo || source || destination),
                               "SSAO compute descriptor contract mismatch in " +
                                   reflected.path());
+                if (globalUbo)
+                    checkGlobalUbo(*binding, reflected.path());
+                continue;
+            }
+            if (cacaoAdapter) {
+                const bool globalUbo =
+                    binding->set == 0 && binding->binding == 0 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                const bool source =
+                    binding->set == 1 && binding->binding < 2 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                const bool destination =
+                    binding->set == 1 && binding->binding >= 2 &&
+                    binding->binding <= 3 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                requireShader(
+                    binding->count == 1 &&
+                        (globalUbo || source || destination),
+                    "CACAO adapter descriptor contract mismatch in " +
+                        reflected.path());
                 if (globalUbo)
                     checkGlobalUbo(*binding, reflected.path());
                 continue;
@@ -470,7 +500,7 @@ void checkDescriptors(const ReflectedModule &reflected,
                           reflected.path());
         if (toneMap) {
             requireShader(
-                binding->set == 0 && binding->binding < 8 &&
+                binding->set == 0 && binding->binding < 9 &&
                     binding->descriptor_type ==
                         SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
                     stage == VK_SHADER_STAGE_FRAGMENT_BIT,

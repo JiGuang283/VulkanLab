@@ -423,7 +423,8 @@ Json toJson(const RuntimePackageManifest &manifest) {
               {"validation", manifest.runtimeBuild.validation},
               {"gpuDebugUtils", manifest.runtimeBuild.gpuDebugUtils},
               {"gpuProfiling", manifest.runtimeBuild.gpuProfiling},
-              {"tracy", manifest.runtimeBuild.tracy}}}};
+              {"tracy", manifest.runtimeBuild.tracy},
+              {"cacao", manifest.runtimeBuild.cacao}}}};
     } else {
         root["profileId"] = manifest.profileId;
     }
@@ -474,7 +475,7 @@ void validateManifest(const RuntimePackageManifest &manifest) {
                 "runtime package was not built from a Release runtime");
         if (build.editorUi || build.runtimeControl || build.capture ||
             build.assetAuthoring || build.validation || build.gpuDebugUtils ||
-            build.gpuProfiling || build.tracy) {
+            build.gpuProfiling || build.tracy || build.cacao) {
             throw std::runtime_error(
                 "runtime package contains development-only compiled features");
         }
@@ -568,6 +569,7 @@ bool loadRuntimePackageManifest(const std::filesystem::path &path,
             loaded.runtimeBuild.gpuProfiling =
                 features.at("gpuProfiling").get<bool>();
             loaded.runtimeBuild.tracy = features.at("tracy").get<bool>();
+            loaded.runtimeBuild.cacao = features.value("cacao", false);
         } else {
             loaded.profileId = root.at("profileId").get<std::string>();
             loaded.defaultImportProfile = loaded.profileId;

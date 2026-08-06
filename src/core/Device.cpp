@@ -4,6 +4,8 @@
 #include "VulkanCheck.h"
 #include "diagnostics/TracyProfiler.h"
 
+#include <BuildFeatures.h>
+
 #include <set>
 #include <string>
 #include <vector>
@@ -439,12 +441,96 @@ void Device::pickPhysicalDevice() {
         screenSpaceEffectsSupport_.ssaoAvailable = true;
     }
 
+    cacaoSupport_.compiled = build::kCacao;
+    const auto supportsCacao2D = [&](VkFormat format, uint32_t arrayLayers,
+                                     uint32_t mipLevels,
+                                     bool requireLinearFilter = false) {
+        VkFormatProperties properties{};
+        vkGetPhysicalDeviceFormatProperties(physicalDevice_, format,
+                                            &properties);
+        constexpr VkFormatFeatureFlags requiredFeatures =
+            VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+            VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
+        const VkFormatFeatureFlags required =
+            requiredFeatures |
+            (requireLinearFilter
+                 ? VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT
+                 : 0u);
+        if ((properties.optimalTilingFeatures & required) != required) {
+            return false;
+        }
+        VkImageFormatProperties imageProperties{};
+        if (vkGetPhysicalDeviceImageFormatProperties(
+                physicalDevice_, format, VK_IMAGE_TYPE_2D,
+                VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
+                0, &imageProperties) != VK_SUCCESS) {
+            return false;
+        }
+        return imageProperties.maxArrayLayers >= arrayLayers &&
+               imageProperties.maxMipLevels >= mipLevels;
+    };
+    const auto supportsCacaoCounter = [&]() {
+        VkFormatProperties properties{};
+        vkGetPhysicalDeviceFormatProperties(physicalDevice_,
+                                            VK_FORMAT_R32_UINT,
+                                            &properties);
+        constexpr VkFormatFeatureFlags requiredFeatures =
+            VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+            VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+            VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+        if ((properties.optimalTilingFeatures & requiredFeatures) !=
+            requiredFeatures) {
+            return false;
+        }
+        VkImageFormatProperties imageProperties{};
+        return vkGetPhysicalDeviceImageFormatProperties(
+                   physicalDevice_, VK_FORMAT_R32_UINT,
+                   VK_IMAGE_TYPE_1D, VK_IMAGE_TILING_OPTIMAL,
+                   VK_IMAGE_USAGE_SAMPLED_BIT |
+                       VK_IMAGE_USAGE_STORAGE_BIT |
+                       VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                   0, &imageProperties) == VK_SUCCESS;
+    };
+    if (!cacaoSupport_.compiled) {
+        cacaoSupport_.reason = "CACAO was not compiled into this build";
+    } else if (!graphicsQueueSupportsCompute) {
+        cacaoSupport_.reason =
+            "selected graphics queue does not support compute";
+    } else if (!surfaceDataSupport_.available) {
+        cacaoSupport_.reason = surfaceDataSupport_.reason;
+    } else if (!features.shaderStorageImageExtendedFormats) {
+        cacaoSupport_.reason =
+            "shaderStorageImageExtendedFormats is unavailable";
+    } else if (!features.shaderImageGatherExtended) {
+        cacaoSupport_.reason =
+            "shaderImageGatherExtended is unavailable";
+    } else if (!supportsCacao2D(VK_FORMAT_R16_SFLOAT, 4, 4) ||
+               !supportsCacao2D(VK_FORMAT_R8G8B8A8_SNORM, 4, 1) ||
+               !supportsCacao2D(VK_FORMAT_R8G8_UNORM, 4, 1) ||
+               !supportsCacao2D(VK_FORMAT_R8_UNORM, 1, 1) ||
+               !supportsCacao2D(cacaoSupport_.depthAdapterFormat, 1, 1) ||
+               !supportsCacao2D(cacaoSupport_.normalAdapterFormat, 1, 1) ||
+               !supportsCacao2D(cacaoSupport_.outputFormat, 1, 1, true) ||
+               !supportsCacaoCounter()) {
+        cacaoSupport_.reason =
+            "required CACAO sampled/storage image formats are unavailable";
+    } else {
+        cacaoSupport_.available = true;
+    }
+
     VKR_LOG_INFO(
         "Device",
         "Screen-space support: depth pyramid={}, color pyramid={}, SSAO={}",
         screenSpaceEffectsSupport_.depthPyramidAvailable ? "yes" : "no",
         screenSpaceEffectsSupport_.colorPyramidAvailable ? "yes" : "no",
         screenSpaceEffectsSupport_.ssaoAvailable ? "yes" : "no");
+    if (cacaoSupport_.available) {
+        VKR_LOG_INFO("Device", "FidelityFX CACAO FP32 is supported");
+    } else if (cacaoSupport_.compiled) {
+        VKR_LOG_WARN("Device", "FidelityFX CACAO unavailable: {}",
+                     cacaoSupport_.reason);
+    }
 }
 void Device::createLogicalDevice() {
     QueueFamilyIndices indices = findQueueFamilies(physicalDevice_);
@@ -471,9 +557,12 @@ void Device::createLogicalDevice() {
     deviceFeatures.shaderStorageImageExtendedFormats =
         (computeBloomSupport_.available || atmosphereSupport_.available ||
          screenSpaceEffectsSupport_.colorPyramidAvailable ||
-         screenSpaceEffectsSupport_.ssaoAvailable)
+         screenSpaceEffectsSupport_.ssaoAvailable ||
+         cacaoSupport_.available)
             ? VK_TRUE
             : VK_FALSE;
+    deviceFeatures.shaderImageGatherExtended =
+        cacaoSupport_.available ? VK_TRUE : VK_FALSE;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

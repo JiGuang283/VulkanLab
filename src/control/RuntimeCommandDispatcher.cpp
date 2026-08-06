@@ -180,6 +180,12 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         command, "ssaoIntensity", 0.0f, 4.0f);
     patch.ssaoPower = optionalFiniteFloat(
         command, "ssaoPower", 0.25f, 4.0f);
+    patch.cacaoRadius = optionalFiniteFloat(
+        command, "cacaoRadius", 0.05f, 10.0f);
+    patch.cacaoIntensity = optionalFiniteFloat(
+        command, "cacaoIntensity", 0.0f, 4.0f);
+    patch.cacaoPower = optionalFiniteFloat(
+        command, "cacaoPower", 0.25f, 4.0f);
     patch.screenSpaceDebugMip =
         optionalUint32(command, "screenSpaceDebugMip", 31u);
     if (const auto toneMapper = optionalString(command, "toneMapper")) {
@@ -206,7 +212,7 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         if (!patch.ambientOcclusionMode) {
             throw RuntimeCommandError(
                 "invalid_params",
-                "Parameter 'ambientOcclusionMode' must be off or ssao.");
+                "Parameter 'ambientOcclusionMode' must be off, ssao, or cacao.");
         }
     }
     if (const auto quality = optionalString(command, "ssaoQuality")) {
@@ -217,6 +223,23 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
                 "Parameter 'ssaoQuality' must be low, medium, or high.");
         }
     }
+    if (const auto quality = optionalString(command, "cacaoQuality")) {
+        patch.cacaoQuality = cacaoQualityFromName(*quality);
+        if (!patch.cacaoQuality) {
+            throw RuntimeCommandError(
+                "invalid_params",
+                "Parameter 'cacaoQuality' must be lowest, low, medium, high, "
+                "or highest.");
+        }
+    }
+    if (const auto resolution = optionalString(command, "cacaoResolution")) {
+        patch.cacaoResolution = cacaoResolutionFromName(*resolution);
+        if (!patch.cacaoResolution) {
+            throw RuntimeCommandError(
+                "invalid_params",
+                "Parameter 'cacaoResolution' must be native or half.");
+        }
+    }
     if (const auto debugView =
             optionalString(command, "screenSpaceDebugView")) {
         patch.screenSpaceDebugView = screenSpaceDebugViewFromName(*debugView);
@@ -224,7 +247,8 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
             throw RuntimeCommandError(
                 "invalid_params",
                 "Parameter 'screenSpaceDebugView' must be none, "
-                "nearest-depth, scene-color, ssao-raw, or ssao-filtered.");
+                "nearest-depth, scene-color, ssao-raw, ssao-filtered, or "
+                "cacao-output.");
         }
     }
     if (!patch.shadowsEnabled && !patch.shadowReceiverBias &&
@@ -241,7 +265,9 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         !patch.occlusionDepthBias && !patch.surfaceDebugView &&
         !patch.surfaceMotionDebugScale && !patch.ambientOcclusionMode &&
         !patch.ssaoQuality && !patch.ssaoRadius && !patch.ssaoBias &&
-        !patch.ssaoIntensity && !patch.ssaoPower &&
+        !patch.ssaoIntensity && !patch.ssaoPower && !patch.cacaoQuality &&
+        !patch.cacaoResolution && !patch.cacaoRadius &&
+        !patch.cacaoIntensity && !patch.cacaoPower &&
         !patch.screenSpaceDebugView && !patch.screenSpaceDebugMip) {
         throw RuntimeCommandError(
             "invalid_params",

@@ -13,3 +13,6 @@
 [submodule "external/ImGuizmo"]
 	path = external/ImGuizmo
 	url = https://github.com/CedricGuillemet/ImGuizmo.git
+[submodule "external/FidelityFX-CACAO"]
+	path = external/FidelityFX-CACAO
+	url = https://github.com/GPUOpen-Effects/FidelityFX-CACAO.git

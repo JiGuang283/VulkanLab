@@ -160,6 +160,11 @@
       "compute": "screenspace/ssao_blur.comp"
     },
     {
+      "id": "screenspace.cacao-normal-adapter",
+      "contract": "compute",
+      "compute": "screenspace/cacao_normal_adapter.comp"
+    },
+    {
       "id": "postprocess.tonemap",
       "contract": "fullscreen",
       "vertex": "postprocess/fullscreen.vert",

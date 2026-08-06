@@ -20,6 +20,7 @@ struct FrameRenderFeatures {
     bool screenDepthPyramidRequired = false;
     bool sceneColorPyramidRequired = false;
     bool ssaoRequired = false;
+    bool cacaoRequired = false;
 };
 
 struct RenderFrameContext {

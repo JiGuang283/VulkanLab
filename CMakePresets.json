@@ -23,6 +23,7 @@
         "VKL_ENABLE_GPU_DEBUG_UTILS": "ON",
         "VKL_ENABLE_GPU_PROFILING": "ON",
         "VKL_ENABLE_TRACY": "OFF",
+        "VKL_ENABLE_CACAO": "OFF",
         "VKL_BUILD_ASSET_TOOL": "ON",
         "VKL_BUILD_CONTROL_TOOL": "ON",
         "VKL_BUILD_RENDER_TEST": "ON"
@@ -45,6 +46,7 @@
         "VKL_ENABLE_GPU_DEBUG_UTILS": "ON",
         "VKL_ENABLE_GPU_PROFILING": "ON",
         "VKL_ENABLE_TRACY": "OFF",
+        "VKL_ENABLE_CACAO": "OFF",
         "VKL_BUILD_ASSET_TOOL": "ON",
         "VKL_BUILD_CONTROL_TOOL": "ON",
         "VKL_BUILD_RENDER_TEST": "ON"
@@ -67,9 +69,20 @@
         "VKL_ENABLE_GPU_DEBUG_UTILS": "ON",
         "VKL_ENABLE_GPU_PROFILING": "ON",
         "VKL_ENABLE_TRACY": "OFF",
+        "VKL_ENABLE_CACAO": "OFF",
         "VKL_BUILD_ASSET_TOOL": "ON",
         "VKL_BUILD_CONTROL_TOOL": "OFF",
         "VKL_BUILD_RENDER_TEST": "OFF"
+      }
+    },
+    {
+      "name": "windows-msvc-ao-compare",
+      "displayName": "Windows MSVC AO Comparison",
+      "inherits": "windows-msvc-dev-fast",
+      "binaryDir": "${sourceDir}/build/windows-msvc-ao-compare",
+      "cacheVariables": {
+        "VKL_ENABLE_CACAO": "ON",
+        "VKL_BUILD_CONTROL_TOOL": "ON"
       }
     },
     {
@@ -79,6 +92,7 @@
       "binaryDir": "${sourceDir}/build/windows-msvc-tracy",
       "cacheVariables": {
         "VKL_ENABLE_TRACY": "ON",
+        "VKL_ENABLE_CACAO": "OFF",
         "VKL_BUILD_CONTROL_TOOL": "ON"
       }
     },
@@ -99,6 +113,7 @@
         "VKL_ENABLE_GPU_DEBUG_UTILS": "OFF",
         "VKL_ENABLE_GPU_PROFILING": "OFF",
         "VKL_ENABLE_TRACY": "OFF",
+        "VKL_ENABLE_CACAO": "OFF",
         "VKL_BUILD_ASSET_TOOL": "OFF",
         "VKL_BUILD_CONTROL_TOOL": "OFF",
         "VKL_BUILD_RENDER_TEST": "OFF"
@@ -122,6 +137,16 @@
       "configuration": "Debug",
       "targets": [
         "VulkanLab"
+      ]
+    },
+    {
+      "name": "windows-msvc-ao-compare",
+      "configurePreset": "windows-msvc-ao-compare",
+      "configuration": "Debug",
+      "targets": [
+        "VulkanLab",
+        "VulkanLabCtl",
+        "VulkanLabAssetTool"
       ]
     },
     {

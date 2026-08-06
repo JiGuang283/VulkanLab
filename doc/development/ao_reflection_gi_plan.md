@@ -1,15 +1,15 @@
 # AO、反射与全局光照算法路线
 
 > Status: Active
-> Last reviewed: 2026-08-05
-> Based on: `817a280` (`master`)
+> Last reviewed: 2026-08-06
+> Based on: Stage 0–1 plus optional FidelityFX CACAO comparison integration
 > Current architecture: [渲染流程](../architecture/rendering.md)
 
 ## Summary
 
 本路线在现有 Forward + Compute 管线上逐步增加环境遮蔽、屏幕空间反射和间接漫反射，并为后续 Reflection Probe、DDGI 和可选硬件光追保留清晰边界。
 
-> Progress: Stage 0（共享屏幕空间基础）与 Stage 1（SSAO）已于 2026-08-05 完成；下一阶段为 Stage 2 TAA v1。
+> Progress: Stage 0（共享屏幕空间基础）、Stage 1（SSAO）及 FidelityFX CACAO comparison backend 已完成；下一阶段为 Stage 2 TAA v1。
 
 三个问题必须分开处理：
 
@@ -265,7 +265,7 @@ powershell -ExecutionPolicy Bypass -File `
 | 路线阶段 | 主要参考 | 使用目的 | 默认采用方式 |
 |---|---|---|---|
 | Stage 0：共享基础（完成） | `code/taa`、FidelityFX SSSR manual | History、depth/color pyramid、资源和 Pass contract | 参考接口与数据流，在项目内实现 |
-| Stage 1：SSAO（完成） | `code/fidelityfx-cacao` | Compute AO 分辨率、边缘保持滤波和 Vulkan 集成对照 | 作为质量/性能对照，不把 CACAO 冒充 SSAO/GTAO |
+| Stage 1：SSAO + CACAO 对比（完成） | `code/fidelityfx-cacao` | Compute AO 分辨率、边缘保持滤波和 Vulkan 集成对照 | SSAO 为项目内 baseline；固定上游 CACAO v1.2 作为可选 comparison backend |
 | Stage 2：TAA | `code/taa`、`temporal_supersampling_2014.pptx` | Jitter、history resolve、clipping、ghosting 处理 | 按现有 Motion/History ABI 重写 |
 | Stage 3：GTAO | `code/xegtao`、`gtao_2016.pdf` | Horizon search、depth prefilter、denoise、multiple-bounce AO | 移植算法思想到 Vulkan/GLSL，不直接接入 DirectX wrapper |
 | Stage 4：SSR | `screen_space_ray_tracing_2014.pdf`、`code/fidelityfx-sssr`、SSSR manual | Perspective-correct DDA、hierarchical trace、SPD 和 denoise | 先实现本项目 contract，再评估集成 FidelityFX SSSR |
@@ -280,8 +280,10 @@ powershell -ExecutionPolicy Bypass -File `
 - TAA 与 SSSR 参考只用于约束 history、nearest depth 和 scene color 的资源职责；当前没有复制其 temporal resolve、SPD 或 ray tracing 实现。
 - Screen Depth 与 Visibility Hi-Z 保持为两套资源，分别使用普通 Z 的 min 与 max 归约，避免为节省资源混用相反语义。
 - Scene Color Pyramid 当前在完整 MainForward 后生成，仅用于 Debug；SSR 阶段会在拆分 Opaque/Transparent 后调整生产位置。
-- SSAO 是项目内 GLSL 实现，不链接 FidelityFX CACAO。它采用最近 2x2 surface、8/16/32 个稳定半球样本，以及两次 5-tap depth/normal bilateral blur。
-- CACAO 仅用于比较半分辨率工作流、边缘保持滤波和参数范围；本实现没有 CACAO 的 adaptive quality、importance map、normal unpack 适配或专用 upsample。
+- SSAO 仍是项目内 GLSL baseline，采用最近 2x2 surface、8/16/32 个稳定半球样本，以及两次 5-tap depth/normal bilateral blur。
+- `VKL_ENABLE_CACAO=ON` 时链接固定提交的 FidelityFX CACAO v1.2。它保留上游 adaptive quality、importance map、edge-aware blur 与 upsample；VulkanLab 只实现资源、normal/depth adapter、Pass 和控制适配，不把 CACAO 命名成 SSAO 或 GTAO。
+- CACAO Vulkan backend要求输入 depth/normal 为 `SHADER_READ_ONLY_OPTIMAL`，与项目 Surface Depth 的 depth-stencil layout 不同。因此 comparison preset 使用独立的 full-resolution `R32F` depth adapter 与 `RGBA8_UNORM` view-normal adapter，不修改共享 Surface ABI。
+- 每个 frame slot 使用独立 CACAO context；Native/Half 重配置先等待现有 frame fences，再用候选 contexts 事务替换，不调用 `vkDeviceWaitIdle()`。普通开发与 Runtime preset 保持 `VKL_ENABLE_CACAO=OFF`，不编译或链接 SDK。
 - Stage 1 不做逐帧 kernel 旋转与 temporal accumulation，避免在 TAA 完成前引入闪烁和独立历史链路。
 
 ### 参考与直接集成边界
@@ -542,6 +544,8 @@ DDGI 不应作为屏幕空间基础设施完成前的第一个 GI 算法。
 - Editor 提供 Off/SSAO、参数和 Raw/Filtered debug。
 
 实际实现还提供 Nearest Depth 与 Scene Color 指定 mip 调试、功能级 capability fallback、固定 `set=4` ScreenSpace ABI，以及 Runtime Control/CLI 状态查询。关闭效果时不 dispatch SSAO；非 PBR variant 仅在显式 AO Debug 时执行。
+
+可选 CACAO comparison backend 复用同一个 `set=4` AO output contract，Editor 与 Runtime Control 可在 Off/SSAO/CACAO 间即时切换，并提供 Quality、Native/Half、Radius、Intensity、Power 和 `CACAO Output` 调试视图。它只在 `windows-msvc-ao-compare` 中启用；普通配置继续使用内置 SSAO 且没有 FidelityFX 链接依赖。
 
 完成标准：Algorithm Playground 与 Sponza 墙角出现稳定接触遮蔽，Direct Light 和 Emissive 不被压暗。
 

@@ -55,6 +55,16 @@ struct ScreenSpaceEffectsSupport {
     std::string ssaoReason;
 };
 
+struct CacaoSupport {
+    bool compiled = false;
+    bool available = false;
+    bool fp32 = true;
+    VkFormat depthAdapterFormat = VK_FORMAT_R32_SFLOAT;
+    VkFormat normalAdapterFormat = VK_FORMAT_R8G8B8A8_UNORM;
+    VkFormat outputFormat = VK_FORMAT_R32_SFLOAT;
+    std::string reason;
+};
+
 class Device {
   public:
     Device(VulkanContext &ctx);
@@ -91,6 +101,7 @@ class Device {
     const ScreenSpaceEffectsSupport &screenSpaceEffectsSupport() const {
         return screenSpaceEffectsSupport_;
     }
+    const CacaoSupport &cacaoSupport() const { return cacaoSupport_; }
 
     SwapChainSupportDetails querySwapChainSupport() const;
 
@@ -127,6 +138,7 @@ class Device {
     SurfaceDataSupport surfaceDataSupport_{};
     OcclusionCullingSupport occlusionCullingSupport_{};
     ScreenSpaceEffectsSupport screenSpaceEffectsSupport_{};
+    CacaoSupport cacaoSupport_{};
     VmaAllocator          allocator_ = VK_NULL_HANDLE;
     std::unique_ptr<GpuDebugUtils> debugUtils_;
     std::unique_ptr<TracyProfiler> tracyProfiler_;

@@ -25,6 +25,7 @@ struct RuntimePackageBuildInfo {
     bool gpuDebugUtils = false;
     bool gpuProfiling = false;
     bool tracy = false;
+    bool cacao = false;
 };
 
 struct RuntimePackageManifest {

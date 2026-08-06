@@ -29,6 +29,7 @@ class MainForwardPass;
 class SurfacePrepass;
 class AtmosphereLutPass;
 class ToneMapPass;
+class CacaoPass;
 class Texture;
 class PresentPass;
 class PipelineCache;
@@ -77,6 +78,11 @@ struct ScreenSpaceEffectsStatus {
     bool depthPyramidSupported = false;
     bool colorPyramidSupported = false;
     bool ssaoSupported = false;
+    bool cacaoCompiled = false;
+    bool cacaoSupported = false;
+    bool cacaoInitialized = false;
+    bool cacaoFp32 = true;
+    bool cacaoInternalMemoryTracked = false;
     AmbientOcclusionMode requestedMode = AmbientOcclusionMode::Off;
     AmbientOcclusionMode activeMode = AmbientOcclusionMode::Off;
     uint32_t depthMipLevels = 0;
@@ -84,10 +90,14 @@ struct ScreenSpaceEffectsStatus {
     VkExtent2D depthExtent{};
     VkExtent2D colorExtent{};
     VkExtent2D ssaoExtent{};
+    VkExtent2D cacaoOutputExtent{};
+    CacaoResolution cacaoResolution = CacaoResolution::Half;
+    uint64_t cacaoGeneration = 0;
     uint64_t estimatedMemoryBytes = 0;
     std::string depthPyramidUnavailableReason;
     std::string colorPyramidUnavailableReason;
     std::string ssaoUnavailableReason;
+    std::string cacaoUnavailableReason;
 };
 
 class Renderer {
@@ -133,6 +143,7 @@ class Renderer {
     OcclusionCullingStatus occlusionCullingStatus() const;
     SurfaceDataStatus surfaceDataStatus() const;
     ScreenSpaceEffectsStatus screenSpaceEffectsStatus() const;
+    bool reconfigureCacao(CacaoResolution resolution, std::string &error);
     bool atmosphereSupported() const;
     const std::string &atmosphereUnsupportedReason() const;
     AtmosphereRuntimeStatus atmosphereStatus() const;
@@ -165,7 +176,8 @@ class Renderer {
     void createScreenSpaceDescriptorSetLayout();
     void createScreenSpaceFallback();
     void createScreenSpaceDescriptorSets();
-    void updateScreenSpaceDescriptor(uint32_t frameIndex, bool bindSsao);
+    void updateScreenSpaceDescriptor(uint32_t frameIndex,
+                                     AmbientOcclusionMode mode);
     void initializeAtmosphereImages();
     void createFallbackEnvironment();
     void createLightingGeneration(
@@ -211,6 +223,7 @@ class Renderer {
     SurfacePrepass *surfacePrepass_ = nullptr;
     bool lastSurfaceDataActive_ = false;
     ScreenSpaceEffectsStatus screenSpaceStatus_{};
+    CacaoPass *cacaoPass_ = nullptr;
     class OcclusionCullPass *occlusionCullPass_ = nullptr;
     uint32_t lastOcclusionFrameIndex_ = 0;
     uint32_t lastOcclusionRequested_ = 0;

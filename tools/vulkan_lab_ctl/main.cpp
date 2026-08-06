@@ -72,10 +72,13 @@ void printUsage() {
            "[--min-projected-pixels N] [--occlusion on|off] "
            "[--occlusion-bias N] "
            "[--surface-debug none|normal|roughness|motion|history-validity] "
-           "[--surface-motion-scale N] [--ao off|ssao] "
+           "[--surface-motion-scale N] [--ao off|ssao|cacao] "
            "[--ssao-quality low|medium|high] [--ssao-radius N] "
            "[--ssao-bias N] [--ssao-intensity N] [--ssao-power N] "
-           "[--screen-space-debug none|nearest-depth|scene-color|ssao-raw|ssao-filtered] "
+           "[--cacao-quality lowest|low|medium|high|highest] "
+           "[--cacao-resolution native|half] [--cacao-radius N] "
+           "[--cacao-intensity N] [--cacao-power N] "
+           "[--screen-space-debug none|nearest-depth|scene-color|ssao-raw|ssao-filtered|cacao-output] "
            "[--screen-space-debug-mip N]\n"
         << "  VulkanLabCtl [--json] render wait [--stable-frames N] "
            "[--timeout-ms N]\n"
@@ -201,6 +204,11 @@ ParsedCommand parseCommand(int argc, char **argv) {
     std::optional<std::string> ssaoBias;
     std::optional<std::string> ssaoIntensity;
     std::optional<std::string> ssaoPower;
+    std::optional<std::string> cacaoQuality;
+    std::optional<std::string> cacaoResolution;
+    std::optional<std::string> cacaoRadius;
+    std::optional<std::string> cacaoIntensity;
+    std::optional<std::string> cacaoPower;
     std::optional<std::string> screenSpaceDebug;
     std::optional<std::string> screenSpaceDebugMip;
     for (int i = 1; i < argc; ++i) {
@@ -247,8 +255,13 @@ ParsedCommand parseCommand(int argc, char **argv) {
                   argument == "--ssao-quality" ||
                   argument == "--ssao-radius" ||
                   argument == "--ssao-bias" ||
-                  argument == "--ssao-intensity" ||
-                  argument == "--ssao-power" ||
+                   argument == "--ssao-intensity" ||
+                   argument == "--ssao-power" ||
+                   argument == "--cacao-quality" ||
+                   argument == "--cacao-resolution" ||
+                   argument == "--cacao-radius" ||
+                   argument == "--cacao-intensity" ||
+                   argument == "--cacao-power" ||
                   argument == "--screen-space-debug" ||
                   argument == "--screen-space-debug-mip") {
             if (++i >= argc)
@@ -325,6 +338,16 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 ssaoIntensity = argv[i];
             else if (argument == "--ssao-power")
                 ssaoPower = argv[i];
+            else if (argument == "--cacao-quality")
+                cacaoQuality = argv[i];
+            else if (argument == "--cacao-resolution")
+                cacaoResolution = argv[i];
+            else if (argument == "--cacao-radius")
+                cacaoRadius = argv[i];
+            else if (argument == "--cacao-intensity")
+                cacaoIntensity = argv[i];
+            else if (argument == "--cacao-power")
+                cacaoPower = argv[i];
             else if (argument == "--screen-space-debug")
                 screenSpaceDebug = argv[i];
             else
@@ -586,8 +609,10 @@ ParsedCommand parseCommand(int argc, char **argv) {
         }
         if (ambientOcclusion) {
             if (*ambientOcclusion != "off" &&
-                *ambientOcclusion != "ssao") {
-                throw std::invalid_argument("--ao must be off or ssao");
+                *ambientOcclusion != "ssao" &&
+                *ambientOcclusion != "cacao") {
+                throw std::invalid_argument(
+                    "--ao must be off, ssao, or cacao");
             }
             parsed.params["ambientOcclusionMode"] = *ambientOcclusion;
         }
@@ -611,15 +636,43 @@ ParsedCommand parseCommand(int argc, char **argv) {
         if (ssaoPower)
             parsed.params["ssaoPower"] =
                 parseFiniteFloat(*ssaoPower, "--ssao-power");
+        if (cacaoQuality) {
+            if (*cacaoQuality != "lowest" && *cacaoQuality != "low" &&
+                *cacaoQuality != "medium" && *cacaoQuality != "high" &&
+                *cacaoQuality != "highest") {
+                throw std::invalid_argument(
+                    "--cacao-quality must be lowest, low, medium, high, or "
+                    "highest");
+            }
+            parsed.params["cacaoQuality"] = *cacaoQuality;
+        }
+        if (cacaoResolution) {
+            if (*cacaoResolution != "native" &&
+                *cacaoResolution != "half") {
+                throw std::invalid_argument(
+                    "--cacao-resolution must be native or half");
+            }
+            parsed.params["cacaoResolution"] = *cacaoResolution;
+        }
+        if (cacaoRadius)
+            parsed.params["cacaoRadius"] =
+                parseFiniteFloat(*cacaoRadius, "--cacao-radius");
+        if (cacaoIntensity)
+            parsed.params["cacaoIntensity"] =
+                parseFiniteFloat(*cacaoIntensity, "--cacao-intensity");
+        if (cacaoPower)
+            parsed.params["cacaoPower"] =
+                parseFiniteFloat(*cacaoPower, "--cacao-power");
         if (screenSpaceDebug) {
             if (*screenSpaceDebug != "none" &&
                 *screenSpaceDebug != "nearest-depth" &&
                 *screenSpaceDebug != "scene-color" &&
                 *screenSpaceDebug != "ssao-raw" &&
-                *screenSpaceDebug != "ssao-filtered") {
+                *screenSpaceDebug != "ssao-filtered" &&
+                *screenSpaceDebug != "cacao-output") {
                 throw std::invalid_argument(
                     "--screen-space-debug must be none, nearest-depth, "
-                    "scene-color, ssao-raw, or ssao-filtered");
+                    "scene-color, ssao-raw, ssao-filtered, or cacao-output");
             }
             parsed.params["screenSpaceDebugView"] = *screenSpaceDebug;
         }
@@ -1048,7 +1101,17 @@ void printHuman(const std::string &method, const Json &result) {
                   << result.at("ssaoRadius").get<float>() << "/"
                   << result.at("ssaoBias").get<float>() << "/"
                   << result.at("ssaoIntensity").get<float>() << "/"
-                  << result.at("ssaoPower").get<float>()
+                   << result.at("ssaoPower").get<float>()
+                   << "\nCACAO active/available: "
+                   << (result.at("cacaoActive").get<bool>() ? "yes" : "no")
+                   << "/"
+                   << (result.at("cacaoAvailable").get<bool>() ? "yes" : "no")
+                   << ", quality/resolution/radius/intensity/power: "
+                   << result.at("cacaoQuality").get<std::string>() << "/"
+                   << result.at("cacaoResolution").get<std::string>() << "/"
+                   << result.at("cacaoRadius").get<float>() << "/"
+                   << result.at("cacaoIntensity").get<float>() << "/"
+                   << result.at("cacaoPower").get<float>()
                   << "\nScreen-space debug: "
                   << result.at("screenSpaceDebugView").get<std::string>()
                   << ", mip: "
@@ -1062,6 +1125,10 @@ void printHuman(const std::string &method, const Json &result) {
             result.value("ssaoUnavailableReason", std::string{});
         if (!ssaoReason.empty())
             std::cout << "SSAO unavailable: " << ssaoReason << '\n';
+        const std::string cacaoReason =
+            result.value("cacaoUnavailableReason", std::string{});
+        if (!cacaoReason.empty())
+            std::cout << "CACAO unavailable: " << cacaoReason << '\n';
         const std::string occlusionReason =
             result.value("occlusionUnavailableReason", std::string{});
         if (!occlusionReason.empty()) {

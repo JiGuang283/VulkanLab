@@ -24,6 +24,8 @@
 #include "render/pass/OcclusionCullPass.h"
 #include "render/pass/ScreenSpacePyramidPass.h"
 #include "render/pass/SsaoPass.h"
+#include "render/pass/CacaoNormalAdapterPass.h"
+#include "render/pass/CacaoPass.h"
 #include "render/pass/MainForwardPass.h"
 #include "render/pass/SkyBackgroundPass.h"
 #include "render/pass/ToneMapPass.h"
@@ -175,10 +177,24 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
         view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsaoRaw ||
         view.settings.screenSpaceDebugView ==
             ScreenSpaceDebugView::SsaoFiltered;
+    const bool cacaoDebugRequested =
+        view.settings.screenSpaceDebugView ==
+        ScreenSpaceDebugView::CacaoOutput;
     const bool ssaoShadingActive =
         screenSupport.ssaoAvailable && shaderVariant.supportsScreenSpace &&
         view.settings.ambientOcclusionMode == AmbientOcclusionMode::Ssao;
     const bool ssaoPassRequired = ssaoShadingActive || ssaoDebugRequested;
+    const bool cacaoReady = cacaoPass_ && cacaoPass_->status().initialized;
+    const bool cacaoShadingActive =
+        cacaoReady && shaderVariant.supportsScreenSpace &&
+        view.settings.ambientOcclusionMode == AmbientOcclusionMode::Cacao;
+    const bool cacaoPassRequired =
+        cacaoReady && (cacaoShadingActive || cacaoDebugRequested);
+    const AmbientOcclusionMode activeAoMode =
+        cacaoShadingActive
+            ? AmbientOcclusionMode::Cacao
+            : (ssaoShadingActive ? AmbientOcclusionMode::Ssao
+                                 : AmbientOcclusionMode::Off);
     ScreenSpaceLightingUbo screenUbo{};
     const VkExtent2D screenExtent = renderResources_->viewportExtent();
     screenUbo.viewportSizeInvSize =
@@ -187,14 +203,12 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
                   1.0f / static_cast<float>(screenExtent.width),
                   1.0f / static_cast<float>(screenExtent.height));
     screenUbo.modes =
-        glm::uvec4(view.settings.ambientOcclusionMode ==
-                           AmbientOcclusionMode::Ssao
-                       ? 1u
-                       : 0u,
-                   ssaoShadingActive ? 1u : 0u, 0u, 0u);
+        glm::uvec4(static_cast<uint32_t>(view.settings.ambientOcclusionMode),
+                   activeAoMode != AmbientOcclusionMode::Off ? 1u : 0u,
+                   0u, 0u);
     std::memcpy(screenSpaceUniformBuffers_[frame.frameIndex]->mappedData(),
                 &screenUbo, sizeof(screenUbo));
-    updateScreenSpaceDescriptor(frame.frameIndex, ssaoShadingActive);
+    updateScreenSpaceDescriptor(frame.frameIndex, activeAoMode);
 
     if (occlusionCullPass_) {
         lastOcclusionRequested_ = visibility.cpuStats.occlusionCandidates;
@@ -240,7 +254,8 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
          view.settings.surfaceDebugView != SurfaceDebugView::None ||
          view.settings.screenSpaceDebugView ==
              ScreenSpaceDebugView::NearestDepth ||
-          screenSupport.ssaoAvailable && ssaoPassRequired);
+          (screenSupport.ssaoAvailable && ssaoPassRequired) ||
+          (device_->cacaoSupport().available && cacaoPassRequired));
     renderFrame.features.hiZRequired =
         device_->occlusionCullingSupport().available &&
         view.settings.culling.occlusionEnabled;
@@ -255,12 +270,11 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
         view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SceneColor;
     renderFrame.features.ssaoRequired =
         screenSupport.ssaoAvailable && ssaoPassRequired;
+    renderFrame.features.cacaoRequired = cacaoPassRequired;
     lastSurfaceDataActive_ = renderFrame.features.surfaceDataRequired;
 
     screenSpaceStatus_.requestedMode = view.settings.ambientOcclusionMode;
-    screenSpaceStatus_.activeMode =
-        ssaoShadingActive ? AmbientOcclusionMode::Ssao
-                          : AmbientOcclusionMode::Off;
+    screenSpaceStatus_.activeMode = activeAoMode;
     renderFrame.visibilityDrawStream =
         occlusionCullPass_
             ? &occlusionCullPass_->drawStream(frame.frameIndex)
@@ -295,11 +309,11 @@ void Renderer::resizeViewport(VkExtent2D extent) {
     extent.height = std::min(extent.height, maxImageDimension);
 
     for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
-        updateScreenSpaceDescriptor(frame, false);
+        updateScreenSpaceDescriptor(frame, AmbientOcclusionMode::Off);
     pipeline_.releaseViewportResources();
     renderResources_->recreateViewportDependent(extent);
     for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
-        updateScreenSpaceDescriptor(frame, false);
+        updateScreenSpaceDescriptor(frame, AmbientOcclusionMode::Off);
     pipeline_.validateResources(*renderResources_);
     pipeline_.onViewportResize(*renderResources_);
 }
@@ -524,23 +538,32 @@ void Renderer::createScreenSpaceDescriptorSets() {
              {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1}},
             "Frame/" + std::to_string(frame) +
                 "/ScreenSpaceDescriptorSet");
-        updateScreenSpaceDescriptor(frame, false);
+        updateScreenSpaceDescriptor(frame, AmbientOcclusionMode::Off);
     }
 }
 
 void Renderer::updateScreenSpaceDescriptor(uint32_t frameIndex,
-                                           bool bindSsao) {
+                                           AmbientOcclusionMode mode) {
     VkDescriptorBufferInfo bufferInfo{};
     bufferInfo.buffer = screenSpaceUniformBuffers_.at(frameIndex)->handle();
     bufferInfo.range = sizeof(ScreenSpaceLightingUbo);
 
     VkDescriptorImageInfo imageInfo{};
-    if (bindSsao && resourceHandles_.ssaoFiltered.valid()) {
+    if (mode == AmbientOcclusionMode::Ssao &&
+        resourceHandles_.ssaoFiltered.valid()) {
         imageInfo.sampler =
             renderResources_->sampler(resourceHandles_.ssaoSampler);
         imageInfo.imageView =
             renderResources_
                 ->image(resourceHandles_.ssaoFiltered, frameIndex)
+                .imageView();
+        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    } else if (mode == AmbientOcclusionMode::Cacao &&
+               resourceHandles_.cacaoOutput.valid()) {
+        imageInfo.sampler =
+            renderResources_->sampler(resourceHandles_.ssaoSampler);
+        imageInfo.imageView =
+            renderResources_->image(resourceHandles_.cacaoOutput, frameIndex)
                 .imageView();
         imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     } else {
@@ -997,6 +1020,21 @@ ScreenSpaceEffectsStatus Renderer::screenSpaceEffectsStatus() const {
     status.depthPyramidUnavailableReason = support.depthPyramidReason;
     status.colorPyramidUnavailableReason = support.colorPyramidReason;
     status.ssaoUnavailableReason = support.ssaoReason;
+    const CacaoSupport &cacaoSupport = device_->cacaoSupport();
+    status.cacaoCompiled = cacaoSupport.compiled;
+    status.cacaoSupported = cacaoSupport.available;
+    status.cacaoFp32 = cacaoSupport.fp32;
+    status.cacaoUnavailableReason = cacaoSupport.reason;
+    if (cacaoPass_) {
+        const CacaoRuntimeStatus &cacao = cacaoPass_->status();
+        status.cacaoInitialized = cacao.initialized;
+        status.cacaoInternalMemoryTracked = cacao.internalMemoryTracked;
+        status.cacaoOutputExtent = cacao.outputExtent;
+        status.cacaoResolution = cacao.resolution;
+        status.cacaoGeneration = cacao.generation;
+        if (!cacao.unavailableReason.empty())
+            status.cacaoUnavailableReason = cacao.unavailableReason;
+    }
 
     const auto mipBytes = [&](RenderImageHandle handle,
                               uint32_t bytesPerPixel) {
@@ -1035,7 +1073,27 @@ ScreenSpaceEffectsStatus Renderer::screenSpaceEffectsStatus() const {
             status.ssaoExtent.height * 2u * MAX_FRAMES_IN_FLIGHT;
         status.estimatedMemoryBytes += imageBytes * 3u;
     }
+    if (resourceHandles_.cacaoDepth.valid()) {
+        const VkExtent2D extent =
+            renderResources_->extent(resourceHandles_.cacaoDepth);
+        const uint64_t pixels = static_cast<uint64_t>(extent.width) *
+                                extent.height * MAX_FRAMES_IN_FLIGHT;
+        status.estimatedMemoryBytes += pixels * 4u;
+        status.estimatedMemoryBytes += pixels * 4u;
+        status.estimatedMemoryBytes += pixels * 4u;
+    }
     return status;
+}
+
+bool Renderer::reconfigureCacao(CacaoResolution resolution,
+                                std::string &error) {
+    if (!cacaoPass_) {
+        error = device_->cacaoSupport().reason.empty()
+                    ? "CACAO is unavailable"
+                    : device_->cacaoSupport().reason;
+        return false;
+    }
+    return cacaoPass_->reconfigure(*renderResources_, resolution, error);
 }
 
 void Renderer::createRenderPipeline() {
@@ -1096,6 +1154,17 @@ void Renderer::createRenderPipeline() {
             *descriptorAllocator_, globalDescriptorSetLayout_,
             shaderPaths_.ssaoTraceComp, shaderPaths_.ssaoBlurComp));
     }
+    if (device_->cacaoSupport().available) {
+        pipeline_.addPass(std::make_unique<CacaoNormalAdapterPass>(
+            *device_, *renderResources_, resourceHandles_,
+            *descriptorAllocator_, globalDescriptorSetLayout_,
+            shaderPaths_.cacaoNormalAdapterComp));
+        auto cacaoPass = std::make_unique<CacaoPass>(
+            *device_, *renderResources_, resourceHandles_,
+            CacaoResolution::Half);
+        cacaoPass_ = cacaoPass.get();
+        pipeline_.addPass(std::move(cacaoPass));
+    }
 
     pipeline_.addPass(std::make_unique<SkyBackgroundPass>(
         *device_, *renderResources_, resourceHandles_,
@@ -1137,6 +1206,7 @@ void Renderer::createRenderPipeline() {
         resourceHandles_.sceneColorPyramid,
         resourceHandles_.ssaoRaw,
         resourceHandles_.ssaoFiltered,
+        resourceHandles_.cacaoOutput,
         resourceHandles_.screenPyramidSampler,
         resourceHandles_.ssaoSampler,
         *descriptorAllocator_,

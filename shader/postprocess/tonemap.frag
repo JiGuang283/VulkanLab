@@ -9,6 +9,7 @@ layout(set = 0, binding = 4) uniform sampler2D screenDepthPyramid;
 layout(set = 0, binding = 5) uniform sampler2D sceneColorPyramid;
 layout(set = 0, binding = 6) uniform sampler2D ssaoRaw;
 layout(set = 0, binding = 7) uniform sampler2D ssaoFiltered;
+layout(set = 0, binding = 8) uniform sampler2D cacaoOutput;
 
 layout(push_constant) uniform ToneMapPushConstants {
     float exposureEv;
@@ -108,6 +109,8 @@ void main()
             debugColor = vec3(texture(ssaoRaw, fragUv).r);
         } else if (push.screenDebugMode == 4u) {
             debugColor = vec3(texture(ssaoFiltered, fragUv).r);
+        } else if (push.screenDebugMode == 5u) {
+            debugColor = vec3(texture(cacaoOutput, fragUv).r);
         }
         outColor = vec4(applyDisplayTransform(debugColor, allowToneMap), 1.0);
         return;

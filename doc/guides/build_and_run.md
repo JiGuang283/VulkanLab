@@ -1,8 +1,8 @@
 # 构建与运行
 
 > Status: Current
-> Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 7 implementation
+> Last verified: 2026-08-06
+> Verified against: optional FidelityFX CACAO comparison integration
 
 ## 环境要求
 
@@ -11,7 +11,7 @@
 - CMake 3.22 或更高版本。
 - Vulkan SDK。CMake 需要能找到 Vulkan、`glslc`、`spirv-val` 和 SDK 中的 GLM 头文件。
 - 仓库内 `external/` 依赖完整，尤其是 `glfw/lib-vc2022`、ImGui、stb、VMA 和 glTF 头文件。
-- 运行时使用 KTX-Software v4.4.2，AssetTool 使用 DirectXTex `may2026` 离线压缩 BC7，shader contract tests 使用固定提交的 SPIRV-Reflect，Tracy 专用构建使用 v0.13.1；Editor 使用固定提交 `5ab7676` 的 ImGuizmo。它们都是 submodule。首次克隆或更新后必须递归初始化：
+- 运行时使用 KTX-Software v4.4.2，AssetTool 使用 DirectXTex `may2026` 离线压缩 BC7，shader contract tests 使用固定提交的 SPIRV-Reflect，Tracy 专用构建使用 v0.13.1；Editor 使用固定提交 `5ab7676` 的 ImGuizmo，AO comparison 构建使用 FidelityFX CACAO v1.2。它们都是 submodule。首次克隆或更新后必须递归初始化：
 
 ```powershell
 git submodule update --init --recursive
@@ -21,13 +21,14 @@ git submodule update --init --recursive
 
 ## 构建配置
 
-Windows MSVC 提供五个 configure/build preset：
+Windows MSVC 提供六个主要 configure/build preset：
 
 | Preset | 配置 | 用途 | 主要产物 |
 |---|---|---|---|
 | `windows-msvc-debug` | Debug，全功能，`BUILD_TESTING=ON` | 完整开发与诊断 | VulkanLab、AssetTool、Ctl、RenderTest 和测试目标 |
 | `windows-msvc-release` | Release，全功能，`BUILD_TESTING=ON` | 完整 Release 验证与 Cook 输入 | 与 Debug 相同的功能和工具 |
 | `windows-msvc-dev-fast` | Debug，全运行时功能，`BUILD_TESTING=OFF` | 日常快速迭代 | VulkanLab 和 AssetTool |
+| `windows-msvc-ao-compare` | Debug，基于 dev-fast，CACAO ON | SSAO/CACAO 质量与性能对比 | VulkanLab、AssetTool 和 Ctl |
 | `windows-msvc-tracy` | Debug，全运行时功能，Tracy ON，`BUILD_TESTING=OFF` | CPU/Vulkan GPU 深度性能分析 | VulkanLab、AssetTool 和 Ctl |
 | `windows-msvc-runtime` | Release，开发基础设施全部关闭 | 精简运行时 | 仅 VulkanLab |
 
@@ -47,6 +48,13 @@ cmake --build --preset windows-msvc-tracy
 
 Profiler 安装、连接和 capture 工作流见 [Tracy 性能分析](tracy_profiling.md)。
 
+需要比较内置 SSAO 与 FidelityFX CACAO 时使用专用配置。该配置额外要求 Vulkan SDK 中的 `dxc`，并会生成、验证上游 CACAO SPIR-V：
+
+```powershell
+cmake --preset windows-msvc-ao-compare
+cmake --build --preset windows-msvc-ao-compare
+```
+
 构建精简运行时：
 
 ```powershell
@@ -58,7 +66,7 @@ cmake --build --preset windows-msvc-runtime
 
 ## 编译期功能开关
 
-除 `VKL_ENABLE_TRACY` 默认为 `OFF` 外，现有模块和工具选项默认均为 `ON`，可在自定义 CMake 配置中独立设置：
+除 `VKL_ENABLE_TRACY` 与 `VKL_ENABLE_CACAO` 默认为 `OFF` 外，现有模块和工具选项默认均为 `ON`，可在自定义 CMake 配置中独立设置：
 
 | Option | 控制内容 |
 |---|---|
@@ -70,6 +78,7 @@ cmake --build --preset windows-msvc-runtime
 | `VKL_ENABLE_GPU_DEBUG_UTILS` | Vulkan 对象命名和 GPU command labels |
 | `VKL_ENABLE_GPU_PROFILING` | 每 Pass timestamp query |
 | `VKL_ENABLE_TRACY` | Tracy CPU 与 Vulkan GPU 统一时间线；仅建议专用开发配置启用 |
+| `VKL_ENABLE_CACAO` | 固定版本 FidelityFX CACAO comparison backend；只建议 AO 对比配置启用 |
 | `VKL_BUILD_ASSET_TOOL` | `VulkanLabAssetTool.exe` |
 | `VKL_BUILD_CONTROL_TOOL` | `VulkanLabCtl.exe` |
 | `VKL_BUILD_RENDER_TEST` | `VulkanLabRenderTest.exe` |
@@ -83,6 +92,7 @@ cmake --build --preset windows-msvc-runtime
 - 关闭 AssetTool 会同时关闭 DirectXTex、KTX CLI 与 KTX1，只保留渲染器读取 KTX2 所需的 `ktx_read`。
 - `BUILD_TESTING=OFF` 时不构建 SPIRV-Reflect。
 - Tracy 与现有 GPU timestamp profiler 相互独立；`VKL_ENABLE_TRACY=OFF` 时不配置 Tracy submodule，也不链接 TracyClient。
+- `VKL_ENABLE_CACAO=OFF` 时不生成上游 shader、不编译或链接 CACAO SDK；内置 SSAO 与 Screen-Space ABI 保持可用。
 
 CMake 通过 `configure_file()` 生成 `BuildFeatures.h`。宏仅用于程序入口、模块装配和真实/空实现选择，不用于控制 IBL、Shadow 或任何 GPU ABI。`VulkanLab.exe --help`、启动日志、BuildInfo 和 Runtime Control 的 `system.info.build.features` 都会报告实际编译能力。
 

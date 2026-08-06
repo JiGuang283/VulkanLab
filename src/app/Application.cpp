@@ -938,6 +938,8 @@ void Application::init() {
         shaderRegistry_.program("screenspace.ssao-trace");
     const ShaderProgram &ssaoBlur =
         shaderRegistry_.program("screenspace.ssao-blur");
+    const ShaderProgram &cacaoNormalAdapter =
+        shaderRegistry_.program("screenspace.cacao-normal-adapter");
     const ShaderProgram &toneMap =
         shaderRegistry_.program("postprocess.tonemap");
     const ShaderProgram &present =
@@ -973,6 +975,7 @@ void Application::init() {
             screenColorReduce.computeSpvPath,
             ssaoTrace.computeSpvPath,
             ssaoBlur.computeSpvPath,
+            cacaoNormalAdapter.computeSpvPath,
             toneMap.vertSpvPath, toneMap.fragSpvPath,
             present.fragSpvPath, skybox.fragSpvPath,
             bloomDownsample.computeSpvPath,
@@ -2077,6 +2080,14 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
             "SSAO is unavailable: " +
                 renderer_->screenSpaceEffectsStatus().ssaoUnavailableReason);
     }
+    if (patch.ambientOcclusionMode &&
+        *patch.ambientOcclusionMode == AmbientOcclusionMode::Cacao &&
+        renderer_ && !renderer_->screenSpaceEffectsStatus().cacaoInitialized) {
+        throw RuntimeCommandError(
+            "cacao_unsupported",
+            "FidelityFX CACAO is unavailable: " +
+                renderer_->screenSpaceEffectsStatus().cacaoUnavailableReason);
+    }
     if (patch.surfaceDebugView && patch.screenSpaceDebugView &&
         *patch.surfaceDebugView != SurfaceDebugView::None &&
         *patch.screenSpaceDebugView != ScreenSpaceDebugView::None) {
@@ -2096,7 +2107,9 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
              status.colorPyramidSupported) ||
             ((view == ScreenSpaceDebugView::SsaoRaw ||
               view == ScreenSpaceDebugView::SsaoFiltered) &&
-             status.ssaoSupported);
+              status.ssaoSupported) ||
+            (view == ScreenSpaceDebugView::CacaoOutput &&
+             status.cacaoInitialized);
         if (!supported) {
             throw RuntimeCommandError(
                 "screen_space_unsupported",
@@ -2136,6 +2149,9 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
     next.ssaoBias = glm::clamp(next.ssaoBias, 0.0f, 0.2f);
     next.ssaoIntensity = glm::clamp(next.ssaoIntensity, 0.0f, 4.0f);
     next.ssaoPower = glm::clamp(next.ssaoPower, 0.25f, 4.0f);
+    next.cacao.radius = glm::clamp(next.cacao.radius, 0.05f, 10.0f);
+    next.cacao.intensity = glm::clamp(next.cacao.intensity, 0.0f, 4.0f);
+    next.cacao.power = glm::clamp(next.cacao.power, 0.25f, 4.0f);
     next.screenSpaceDebugMip =
         std::min(next.screenSpaceDebugMip, 31u);
     next.culling.shadowDistance =
@@ -2146,6 +2162,18 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
         next.culling.minProjectedSizePixels, 0.0f, 256.0f);
     next.culling.occlusionDepthBias =
         glm::clamp(next.culling.occlusionDepthBias, 0.0f, 0.05f);
+    if (renderer_ && frameSync_ &&
+        next.cacao.resolution != renderSettings_.cacao.resolution &&
+        renderer_->screenSpaceEffectsStatus().cacaoInitialized) {
+        frameSync_->waitForAllFrames();
+        std::string error;
+        if (!renderer_->reconfigureCacao(next.cacao.resolution, error)) {
+            throw RuntimeCommandError(
+                "cacao_reconfigure_failed",
+                error.empty() ? "Failed to reconfigure FidelityFX CACAO."
+                              : error);
+        }
+    }
     renderSettings_ = next;
 }
 
@@ -2678,6 +2706,7 @@ ControlJson Application::runtimeSystemInfo() {
             {"gpuDebugUtils", build.features.gpuDebugUtils},
             {"gpuProfiling", build.features.gpuProfiling},
             {"tracy", build.features.tracy},
+            {"cacao", build.features.cacao},
             {"assetTool", build.features.assetTool},
             {"controlTool", build.features.controlTool},
             {"renderTest", build.features.renderTest}}}}},
@@ -3549,17 +3578,31 @@ ControlJson Application::runtimeRenderStatus() {
           {"colorExtent",
            {{"width", screenSpaceStatus.colorExtent.width},
             {"height", screenSpaceStatus.colorExtent.height}}},
-          {"ssaoExtent",
-           {{"width", screenSpaceStatus.ssaoExtent.width},
-            {"height", screenSpaceStatus.ssaoExtent.height}}},
+           {"ssaoExtent",
+            {{"width", screenSpaceStatus.ssaoExtent.width},
+             {"height", screenSpaceStatus.ssaoExtent.height}}},
+           {"cacaoCompiled", screenSpaceStatus.cacaoCompiled},
+           {"cacaoSupported", screenSpaceStatus.cacaoSupported},
+           {"cacaoInitialized", screenSpaceStatus.cacaoInitialized},
+           {"cacaoFp32", screenSpaceStatus.cacaoFp32},
+           {"cacaoInternalMemoryTracked",
+            screenSpaceStatus.cacaoInternalMemoryTracked},
+           {"cacaoResolution",
+            cacaoResolutionName(screenSpaceStatus.cacaoResolution)},
+           {"cacaoGeneration", screenSpaceStatus.cacaoGeneration},
+           {"cacaoOutputExtent",
+            {{"width", screenSpaceStatus.cacaoOutputExtent.width},
+             {"height", screenSpaceStatus.cacaoOutputExtent.height}}},
           {"estimatedMemoryBytes",
            screenSpaceStatus.estimatedMemoryBytes},
           {"depthPyramidUnavailableReason",
            screenSpaceStatus.depthPyramidUnavailableReason},
           {"colorPyramidUnavailableReason",
            screenSpaceStatus.colorPyramidUnavailableReason},
-          {"ssaoUnavailableReason",
-           screenSpaceStatus.ssaoUnavailableReason}}},
+           {"ssaoUnavailableReason",
+            screenSpaceStatus.ssaoUnavailableReason},
+           {"cacaoUnavailableReason",
+            screenSpaceStatus.cacaoUnavailableReason}}},
         {"frameSerial", frameSync_->lastSubmittedSerial()},
         {"completedSubmissionSerial",
          frameSync_->completedSubmissionSerial()},
@@ -3667,8 +3710,23 @@ ControlJson Application::runtimeRenderSettingsGet() {
             {"ssaoAvailable", screenSpaceStatus.ssaoSupported},
             {"ssaoActive",
              screenSpaceStatus.activeMode == AmbientOcclusionMode::Ssao},
-            {"ssaoUnavailableReason",
-             screenSpaceStatus.ssaoUnavailableReason},
+             {"ssaoUnavailableReason",
+              screenSpaceStatus.ssaoUnavailableReason},
+             {"cacaoQuality",
+              cacaoQualityName(renderSettings_.cacao.quality)},
+             {"cacaoResolution",
+              cacaoResolutionName(renderSettings_.cacao.resolution)},
+             {"cacaoRadius", renderSettings_.cacao.radius},
+             {"cacaoIntensity", renderSettings_.cacao.intensity},
+             {"cacaoPower", renderSettings_.cacao.power},
+             {"cacaoCompiled", screenSpaceStatus.cacaoCompiled},
+             {"cacaoAvailable", screenSpaceStatus.cacaoInitialized},
+             {"cacaoActive",
+              screenSpaceStatus.activeMode == AmbientOcclusionMode::Cacao},
+             {"cacaoFp32", screenSpaceStatus.cacaoFp32},
+             {"cacaoGeneration", screenSpaceStatus.cacaoGeneration},
+             {"cacaoUnavailableReason",
+              screenSpaceStatus.cacaoUnavailableReason},
             {"screenSpaceDebugView",
              screenSpaceDebugViewName(
                  renderSettings_.screenSpaceDebugView)},
@@ -4927,24 +4985,38 @@ void Application::drawPostProcessingPanel() {
     ImGui::SeparatorText("Ambient Occlusion");
     const ScreenSpaceEffectsStatus screenStatus =
         renderer_->screenSpaceEffectsStatus();
-    constexpr const char *aoModeLabels[] = {"Off", "SSAO"};
+    constexpr const char *aoModeLabels[] = {"Off", "SSAO", "CACAO"};
     int aoMode = static_cast<int>(renderSettings_.ambientOcclusionMode);
-    ImGui::BeginDisabled(!screenStatus.ssaoSupported);
-    if (ImGui::Combo("Mode##AmbientOcclusion", &aoMode, aoModeLabels,
-                     static_cast<int>(std::size(aoModeLabels)))) {
-        RenderSettingsPatch patch;
-        patch.ambientOcclusionMode =
-            static_cast<AmbientOcclusionMode>(aoMode);
-        applyRenderSettings(patch);
+    if (ImGui::BeginCombo("Mode##AmbientOcclusion", aoModeLabels[aoMode])) {
+        for (int index = 0; index < static_cast<int>(std::size(aoModeLabels));
+             ++index) {
+            const auto mode = static_cast<AmbientOcclusionMode>(index);
+            const bool supported =
+                mode == AmbientOcclusionMode::Off ||
+                (mode == AmbientOcclusionMode::Ssao &&
+                 screenStatus.ssaoSupported) ||
+                (mode == AmbientOcclusionMode::Cacao &&
+                 screenStatus.cacaoInitialized);
+            ImGui::BeginDisabled(!supported);
+            if (ImGui::Selectable(aoModeLabels[index], index == aoMode)) {
+                RenderSettingsPatch patch;
+                patch.ambientOcclusionMode = mode;
+                applyRenderSettings(patch);
+            }
+            if (index == aoMode)
+                ImGui::SetItemDefaultFocus();
+            ImGui::EndDisabled();
+        }
+        ImGui::EndCombo();
     }
-    const bool aoRequested =
+    const bool ssaoRequested =
         renderSettings_.ambientOcclusionMode == AmbientOcclusionMode::Ssao;
-    const bool aoDebugRequested =
+    const bool ssaoDebugRequested =
         renderSettings_.screenSpaceDebugView ==
             ScreenSpaceDebugView::SsaoRaw ||
         renderSettings_.screenSpaceDebugView ==
             ScreenSpaceDebugView::SsaoFiltered;
-    ImGui::BeginDisabled(!aoRequested && !aoDebugRequested);
+    ImGui::BeginDisabled(!ssaoRequested && !ssaoDebugRequested);
     constexpr const char *qualityLabels[] = {"Low (8)", "Medium (16)",
                                               "High (32)"};
     int quality = static_cast<int>(renderSettings_.ssaoQuality);
@@ -4983,24 +5055,92 @@ void Application::drawPostProcessingPanel() {
         applyRenderSettings(patch);
     }
     ImGui::EndDisabled();
-    ImGui::EndDisabled();
 
-    const bool aoActive =
+    const bool ssaoActive =
         screenStatus.activeMode == AmbientOcclusionMode::Ssao;
     editor::statusIndicator(
-        aoActive ? "SSAO active" : "SSAO inactive",
-        aoActive ? editor::StatusTone::Success
-                 : editor::StatusTone::Neutral,
+        ssaoActive ? "SSAO active" : "SSAO inactive",
+        ssaoActive ? editor::StatusTone::Success
+                   : editor::StatusTone::Neutral,
         !screenStatus.ssaoSupported
             ? screenStatus.ssaoUnavailableReason.c_str()
-            : (aoRequested && !currentShaderVariant().supportsScreenSpace
+            : (ssaoRequested && !currentShaderVariant().supportsScreenSpace
                    ? "Selected Shader does not consume screen-space AO."
                    : nullptr));
+
+    const bool cacaoRequested =
+        renderSettings_.ambientOcclusionMode == AmbientOcclusionMode::Cacao;
+    const bool cacaoDebugRequested =
+        renderSettings_.screenSpaceDebugView ==
+        ScreenSpaceDebugView::CacaoOutput;
+    ImGui::BeginDisabled(!screenStatus.cacaoInitialized ||
+                         (!cacaoRequested && !cacaoDebugRequested));
+    constexpr const char *cacaoQualityLabels[] = {
+        "Lowest", "Low", "Medium", "High", "Highest"};
+    int cacaoQuality = static_cast<int>(renderSettings_.cacao.quality);
+    if (ImGui::Combo("Quality##CACAO", &cacaoQuality, cacaoQualityLabels,
+                     static_cast<int>(std::size(cacaoQualityLabels)))) {
+        RenderSettingsPatch patch;
+        patch.cacaoQuality = static_cast<CacaoQuality>(cacaoQuality);
+        applyRenderSettings(patch);
+    }
+    constexpr const char *cacaoResolutionLabels[] = {"Native", "Half"};
+    int cacaoResolution = static_cast<int>(renderSettings_.cacao.resolution);
+    if (ImGui::Combo("Resolution##CACAO", &cacaoResolution,
+                     cacaoResolutionLabels,
+                     static_cast<int>(std::size(cacaoResolutionLabels)))) {
+        RenderSettingsPatch patch;
+        patch.cacaoResolution =
+            static_cast<CacaoResolution>(cacaoResolution);
+        applyRenderSettings(patch);
+    }
+    float cacaoRadius = renderSettings_.cacao.radius;
+    if (ImGui::DragFloat("Radius##CACAO", &cacaoRadius, 0.01f, 0.05f,
+                         10.0f, "%.2f")) {
+        RenderSettingsPatch patch;
+        patch.cacaoRadius = cacaoRadius;
+        applyRenderSettings(patch);
+    }
+    float cacaoIntensity = renderSettings_.cacao.intensity;
+    if (ImGui::DragFloat("Intensity##CACAO", &cacaoIntensity, 0.02f, 0.0f,
+                         4.0f, "%.2f")) {
+        RenderSettingsPatch patch;
+        patch.cacaoIntensity = cacaoIntensity;
+        applyRenderSettings(patch);
+    }
+    float cacaoPower = renderSettings_.cacao.power;
+    if (ImGui::DragFloat("Power##CACAO", &cacaoPower, 0.02f, 0.25f, 4.0f,
+                         "%.2f")) {
+        RenderSettingsPatch patch;
+        patch.cacaoPower = cacaoPower;
+        applyRenderSettings(patch);
+    }
+    ImGui::EndDisabled();
+
+    const bool cacaoActive =
+        screenStatus.activeMode == AmbientOcclusionMode::Cacao;
+    editor::statusIndicator(
+        cacaoActive ? "CACAO active" : "CACAO inactive",
+        cacaoActive ? editor::StatusTone::Success
+                    : editor::StatusTone::Neutral,
+        !screenStatus.cacaoInitialized
+            ? screenStatus.cacaoUnavailableReason.c_str()
+            : (cacaoRequested && !currentShaderVariant().supportsScreenSpace
+                   ? "Selected Shader does not consume screen-space AO."
+                   : nullptr));
+    if (screenStatus.cacaoInitialized) {
+        ImGui::TextDisabled("CACAO: %s, generation %llu, %ux%u",
+                            screenStatus.cacaoFp32 ? "FP32" : "FP16",
+                            static_cast<unsigned long long>(
+                                screenStatus.cacaoGeneration),
+                            screenStatus.cacaoOutputExtent.width,
+                            screenStatus.cacaoOutputExtent.height);
+    }
 
     ImGui::SeparatorText("Screen-Space Debug");
     constexpr const char *screenDebugLabels[] = {
         "None", "Nearest Depth", "Scene Color", "SSAO Raw",
-        "SSAO Filtered"};
+        "SSAO Filtered", "CACAO Output"};
     int screenDebug =
         static_cast<int>(renderSettings_.screenSpaceDebugView);
     const char *preview = screenDebugLabels[screenDebug];
@@ -5016,7 +5156,9 @@ void Application::drawPostProcessingPanel() {
                  screenStatus.colorPyramidSupported) ||
                 ((view == ScreenSpaceDebugView::SsaoRaw ||
                   view == ScreenSpaceDebugView::SsaoFiltered) &&
-                 screenStatus.ssaoSupported);
+                  screenStatus.ssaoSupported) ||
+                (view == ScreenSpaceDebugView::CacaoOutput &&
+                 screenStatus.cacaoInitialized);
             ImGui::BeginDisabled(!supported);
             const bool selected = index == screenDebug;
             if (ImGui::Selectable(screenDebugLabels[index], selected)) {

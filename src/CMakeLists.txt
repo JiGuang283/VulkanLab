@@ -183,6 +183,7 @@ set(VKL_ENGINE_SOURCES
     render/pass/OcclusionCullPass.cpp
     render/pass/ScreenSpacePyramidPass.cpp
     render/pass/SsaoPass.cpp
+    render/pass/CacaoNormalAdapterPass.cpp
     render/pass/BloomPass.cpp
     render/pass/SkyBackgroundPass.cpp
     render/pass/ToneMapPass.cpp
@@ -205,6 +206,12 @@ set(VKL_ENGINE_SOURCES
     window/InputManager.cpp
     window/Window.cpp
 )
+
+if(VKL_ENABLE_CACAO)
+    list(APPEND VKL_ENGINE_SOURCES render/pass/CacaoPass.cpp)
+else()
+    list(APPEND VKL_ENGINE_SOURCES render/pass/CacaoPassDisabled.cpp)
+endif()
 
 if(VKL_ENABLE_GPU_DEBUG_UTILS)
     list(APPEND VKL_ENGINE_SOURCES core/GpuDebugUtils.cpp)
@@ -269,6 +276,7 @@ target_link_libraries(vkl_engine
         vkl_scene_data
         vkl_glm
         vkl_vma_headers
+        vkl_cacao
         vkl_tracy
         Vulkan::Vulkan
     PRIVATE
@@ -310,6 +318,19 @@ if(VKL_ENABLE_EDITOR_UI)
     target_link_libraries(VulkanLab PRIVATE vkl_imgui)
 endif()
 add_dependencies(VulkanLab VulkanLabShaders)
+
+if(VKL_ENABLE_CACAO)
+    add_custom_command(TARGET VulkanLab POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:VulkanLab>/licenses/FidelityFX-CACAO"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/external/FidelityFX-CACAO/license.txt"
+            "$<TARGET_FILE_DIR:VulkanLab>/licenses/FidelityFX-CACAO/license.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/external/FidelityFX-CACAO/NOTICES.txt"
+            "$<TARGET_FILE_DIR:VulkanLab>/licenses/FidelityFX-CACAO/NOTICES.txt"
+    )
+endif()
 
 # Developer builds locate source assets through vulkanlab_project.json. Only
 # the locator belongs beside the executable; cooked packages stage their own

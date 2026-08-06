@@ -33,6 +33,7 @@ class ToneMapPass final : public IRenderPass {
                 RenderImageHandle sceneColorPyramid,
                 RenderImageHandle ssaoRaw,
                 RenderImageHandle ssaoFiltered,
+                RenderImageHandle cacaoOutput,
                 RenderSamplerHandle screenPyramidSampler,
                 RenderSamplerHandle ssaoSampler,
                 DescriptorAllocator &descriptorAllocator,
@@ -75,6 +76,7 @@ class ToneMapPass final : public IRenderPass {
     RenderImageHandle sceneColorPyramid_{};
     RenderImageHandle ssaoRaw_{};
     RenderImageHandle ssaoFiltered_{};
+    RenderImageHandle cacaoOutput_{};
     RenderSamplerHandle screenPyramidSampler_{};
     RenderSamplerHandle ssaoSampler_{};
     DescriptorAllocator *descriptorAllocator_ = nullptr;
