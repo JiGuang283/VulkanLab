@@ -55,6 +55,10 @@ models/sample/
 models/main_sponza/
 models/pkg_a_curtains/
 
+# Environment source images are imported locally and baked into derived KTX2
+# assets. Keep large HDR sources out of the repository by default.
+assets/environments/**/*.hdr
+
 # ---------- Runtime / scratch ----------
 *.log
 tem/
