@@ -1,0 +1,191 @@
+#version 450
+
+#extension GL_GOOGLE_include_directive : require
+#include "include/global_frame.glsl"
+#include "include/screen_temporal.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 1, binding = 0) uniform sampler2D surfaceDepth;
+layout(set = 1, binding = 1) uniform sampler2D surfaceNormalRoughness;
+layout(set = 1, binding = 2) uniform sampler2D nearestDepthPyramid;
+layout(set = 1, binding = 3, r16f) uniform writeonly image2D destinationAo;
+
+layout(push_constant) uniform GtaoTracePush {
+    vec4 parameters; // radius, falloff start, intensity, power
+    uvec4 dimensions; // slices, steps, full width, full height
+    vec4 sampling; // max depth mip, temporal phase, reserved, reserved
+} push;
+
+const float PI = 3.14159265359;
+const float HALF_PI = 1.57079632679;
+
+vec3 octDecode(vec2 encoded)
+{
+    vec2 value = encoded * 2.0 - 1.0;
+    vec3 normal = vec3(value, 1.0 - abs(value.x) - abs(value.y));
+    if (normal.z < 0.0)
+        normal.xy = (1.0 - abs(normal.yx)) * sign(normal.xy);
+    return normalize(normal);
+}
+
+float pixelHash(ivec2 pixel)
+{
+    uvec2 value = uvec2(pixel);
+    uint hash = value.x * 1597334677u ^ value.y * 3812015801u;
+    hash ^= hash >> 16u;
+    hash *= 2246822519u;
+    hash ^= hash >> 13u;
+    return float(hash & 0x00ffffffu) / float(0x01000000u);
+}
+
+vec3 reconstructWorld(vec2 uv, float depth)
+{
+    vec4 world = ubo.inverseViewProjection *
+                 vec4(uv * 2.0 - 1.0, depth, 1.0);
+    float divisor = abs(world.w) > 1e-6 ? world.w :
+                    (world.w < 0.0 ? -1e-6 : 1e-6);
+    return world.xyz / divisor;
+}
+
+void nearestSurface(ivec2 halfPixel, out ivec2 fullPixel,
+                    out float depth, out vec3 normalWS)
+{
+    ivec2 fullSize = ivec2(push.dimensions.zw);
+    ivec2 base = halfPixel * 2;
+    depth = 1.0;
+    fullPixel = min(base, fullSize - ivec2(1));
+    for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 2; ++x) {
+            ivec2 candidate = min(base + ivec2(x, y),
+                                  fullSize - ivec2(1));
+            float candidateDepth = texelFetch(surfaceDepth, candidate, 0).r;
+            if (candidateDepth < depth) {
+                depth = candidateDepth;
+                fullPixel = candidate;
+            }
+        }
+    }
+    normalWS = octDecode(texelFetch(surfaceNormalRoughness,
+                                    fullPixel, 0).rg);
+}
+
+float sampleHorizon(vec2 uv, vec3 centerVS, vec3 viewDirection,
+                    float lowHorizon, float mipLevel,
+                    float radius, float falloffStart)
+{
+    if (!screenUvInBounds(uv))
+        return lowHorizon;
+    float depth = textureLod(nearestDepthPyramid, uv, mipLevel).r;
+    if (depth >= 1.0)
+        return lowHorizon;
+    vec3 sampleVS = (ubo.view * vec4(reconstructWorld(uv, depth), 1.0)).xyz;
+    vec3 delta = sampleVS - centerVS;
+    float distanceToSample = length(delta);
+    if (distanceToSample <= 1e-4 || distanceToSample >= radius)
+        return lowHorizon;
+    float falloffRange = max(radius - falloffStart, 1e-4);
+    float weight = 1.0 - clamp((distanceToSample - falloffStart) /
+                               falloffRange, 0.0, 1.0);
+    float horizon = dot(delta / distanceToSample, viewDirection);
+    return mix(lowHorizon, horizon, weight);
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outputSize = imageSize(destinationAo);
+    if (any(greaterThanEqual(pixel, outputSize)))
+        return;
+
+    ivec2 fullPixel;
+    float centerDepth;
+    vec3 normalWS;
+    nearestSurface(pixel, fullPixel, centerDepth, normalWS);
+    if (centerDepth >= 1.0) {
+        imageStore(destinationAo, pixel, vec4(1.0));
+        return;
+    }
+
+    vec2 fullSize = vec2(push.dimensions.zw);
+    vec2 centerUv = (vec2(fullPixel) + 0.5) / fullSize;
+    vec3 centerVS = (ubo.view *
+                     vec4(reconstructWorld(centerUv, centerDepth), 1.0)).xyz;
+    vec3 normalVS = normalize(mat3(ubo.view) * normalWS);
+    vec3 viewDirection = normalize(-centerVS);
+    if (dot(normalVS, viewDirection) <= 1e-4) {
+        imageStore(destinationAo, pixel, vec4(1.0));
+        return;
+    }
+
+    float effectRadius = max(push.parameters.x, 0.001);
+    float falloffStart = effectRadius * clamp(push.parameters.y, 0.0, 0.999);
+    float pixelsPerMeter = abs(ubo.proj[1][1]) * 0.5 * fullSize.y /
+                           max(-centerVS.z, 1e-3);
+    float screenRadius = clamp(effectRadius * pixelsPerMeter, 1.0, 512.0);
+    uint sliceCount = max(push.dimensions.x, 1u);
+    uint stepCount = max(push.dimensions.y, 1u);
+    float noise = fract(pixelHash(pixel) + push.sampling.y * 0.61803398875);
+    float visibility = 0.0;
+
+    for (uint slice = 0u; slice < 4u; ++slice) {
+        if (slice >= sliceCount)
+            break;
+        float phi = (float(slice) + noise) / float(sliceCount) * PI;
+        vec2 omega = vec2(cos(phi), -sin(phi));
+        vec3 direction = vec3(cos(phi), sin(phi), 0.0);
+        vec3 orthoDirection = direction -
+                              dot(direction, viewDirection) * viewDirection;
+        float orthoLength = length(orthoDirection);
+        if (orthoLength <= 1e-5) {
+            visibility += 1.0;
+            continue;
+        }
+        vec3 axis = normalize(cross(orthoDirection, viewDirection));
+        vec3 projectedNormal = normalVS - axis * dot(normalVS, axis);
+        float projectedLength = max(length(projectedNormal), 1e-4);
+        projectedNormal /= projectedLength;
+        float signNormal = sign(dot(orthoDirection, projectedNormal));
+        float cosNormal = clamp(dot(projectedNormal, viewDirection), 0.0, 1.0);
+        float normalAngle = signNormal * acos(cosNormal);
+        float low0 = cos(normalAngle + HALF_PI);
+        float low1 = cos(normalAngle - HALF_PI);
+        float horizon0 = low0;
+        float horizon1 = low1;
+
+        for (uint step = 0u; step < 6u; ++step) {
+            if (step >= stepCount)
+                break;
+            float sequence = fract(float(slice + step * stepCount) *
+                                   0.61803398875 + noise);
+            float sampleScale = (float(step) + 0.5 + sequence * 0.5) /
+                                float(stepCount);
+            sampleScale = sampleScale * sampleScale;
+            vec2 offsetPixels = omega * max(sampleScale * screenRadius, 1.3);
+            float mip = clamp(log2(max(length(offsetPixels), 1.0)) - 1.0,
+                              0.0, push.sampling.x);
+            vec2 offsetUv = round(offsetPixels) / fullSize;
+            horizon0 = max(horizon0,
+                           sampleHorizon(centerUv + offsetUv, centerVS,
+                                         viewDirection, low0, mip,
+                                         effectRadius, falloffStart));
+            horizon1 = max(horizon1,
+                           sampleHorizon(centerUv - offsetUv, centerVS,
+                                         viewDirection, low1, mip,
+                                         effectRadius, falloffStart));
+        }
+
+        float h0 = -acos(clamp(horizon1, -1.0, 1.0));
+        float h1 = acos(clamp(horizon0, -1.0, 1.0));
+        float iarc0 = (cosNormal + 2.0 * h0 * sin(normalAngle) -
+                       cos(2.0 * h0 - normalAngle)) * 0.25;
+        float iarc1 = (cosNormal + 2.0 * h1 * sin(normalAngle) -
+                       cos(2.0 * h1 - normalAngle)) * 0.25;
+        visibility += mix(projectedLength, 1.0, 0.05) * (iarc0 + iarc1);
+    }
+
+    visibility = clamp(visibility / float(sliceCount), 0.0, 1.0);
+    visibility = max(0.0, 1.0 - (1.0 - visibility) * push.parameters.z);
+    visibility = pow(clamp(visibility, 0.0, 1.0), push.parameters.w);
+    imageStore(destinationAo, pixel, vec4(visibility));
+}

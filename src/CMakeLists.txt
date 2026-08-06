@@ -184,6 +184,7 @@ set(VKL_ENGINE_SOURCES
     render/pass/OcclusionCullPass.cpp
     render/pass/ScreenSpacePyramidPass.cpp
     render/pass/SsaoPass.cpp
+    render/pass/GtaoPass.cpp
     render/pass/CacaoNormalAdapterPass.cpp
     render/pass/TaaPass.cpp
     render/pass/BloomPass.cpp

@@ -165,6 +165,16 @@
       "compute": "screenspace/cacao_normal_adapter.comp"
     },
     {
+      "id": "screenspace.gtao-trace",
+      "contract": "compute",
+      "compute": "screenspace/gtao_trace.comp"
+    },
+    {
+      "id": "screenspace.gtao-temporal",
+      "contract": "compute",
+      "compute": "screenspace/gtao_temporal.comp"
+    },
+    {
       "id": "postprocess.taa-resolve",
       "contract": "compute",
       "compute": "postprocess/taa_resolve.comp"

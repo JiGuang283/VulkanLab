@@ -12,6 +12,10 @@ layout(set = 0, binding = 7) uniform sampler2D ssaoFiltered;
 layout(set = 0, binding = 8) uniform sampler2D cacaoOutput;
 layout(set = 0, binding = 9) uniform sampler2D taaHistory;
 layout(set = 0, binding = 10) uniform sampler2D taaDebug;
+layout(set = 0, binding = 11) uniform sampler2D gtaoRaw;
+layout(set = 0, binding = 12) uniform sampler2D gtaoHistory;
+layout(set = 0, binding = 13) uniform sampler2D gtaoFiltered;
+layout(set = 0, binding = 14) uniform sampler2D gtaoDebug;
 
 layout(push_constant) uniform ToneMapPushConstants {
     float exposureEv;
@@ -114,11 +118,20 @@ void main()
         } else if (push.screenDebugMode == 5u) {
             debugColor = vec3(texture(cacaoOutput, fragUv).r);
         } else if (push.screenDebugMode == 6u) {
+            debugColor = vec3(texture(gtaoRaw, fragUv).r);
+        } else if (push.screenDebugMode == 7u) {
+            debugColor = vec3(texture(gtaoHistory, fragUv).r);
+        } else if (push.screenDebugMode == 8u) {
+            debugColor = vec3(texture(gtaoFiltered, fragUv).r);
+        } else if (push.screenDebugMode == 9u ||
+                   push.screenDebugMode == 10u) {
+            debugColor = vec3(texture(gtaoDebug, fragUv).r);
+        } else if (push.screenDebugMode == 11u) {
             debugColor = texture(taaHistory, fragUv).rgb;
             allowToneMap = true;
-        } else if (push.screenDebugMode == 7u) {
+        } else if (push.screenDebugMode == 12u) {
             debugColor = vec3(texture(taaDebug, fragUv).r);
-        } else if (push.screenDebugMode == 8u) {
+        } else if (push.screenDebugMode == 13u) {
             debugColor = vec3(texture(taaDebug, fragUv).g);
         }
         outColor = vec4(applyDisplayTransform(debugColor, allowToneMap), 1.0);

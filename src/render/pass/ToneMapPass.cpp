@@ -71,12 +71,22 @@ uint32_t screenDebugModeValue(ScreenSpaceDebugView view) {
         return 4;
     case ScreenSpaceDebugView::CacaoOutput:
         return 5;
-    case ScreenSpaceDebugView::TaaHistory:
+    case ScreenSpaceDebugView::GtaoRaw:
         return 6;
-    case ScreenSpaceDebugView::TaaRejection:
+    case ScreenSpaceDebugView::GtaoTemporal:
         return 7;
-    case ScreenSpaceDebugView::TaaHistoryWeight:
+    case ScreenSpaceDebugView::GtaoFiltered:
         return 8;
+    case ScreenSpaceDebugView::GtaoRejection:
+        return 9;
+    case ScreenSpaceDebugView::GtaoHistoryWeight:
+        return 10;
+    case ScreenSpaceDebugView::TaaHistory:
+        return 11;
+    case ScreenSpaceDebugView::TaaRejection:
+        return 12;
+    case ScreenSpaceDebugView::TaaHistoryWeight:
+        return 13;
     }
     return 0;
 }
@@ -98,6 +108,10 @@ ToneMapPass::ToneMapPass(Device &device,
                          RenderImageHandle ssaoRaw,
                          RenderImageHandle ssaoFiltered,
                          RenderImageHandle cacaoOutput,
+                         RenderImageHandle gtaoRaw,
+                         RenderImageHandle gtaoHistory,
+                         RenderImageHandle gtaoFiltered,
+                         RenderImageHandle gtaoDebug,
                          RenderImageHandle taaHistory,
                          RenderImageHandle taaDebug,
                          RenderSamplerHandle screenPyramidSampler,
@@ -114,6 +128,8 @@ ToneMapPass::ToneMapPass(Device &device,
       screenDepthPyramid_(screenDepthPyramid),
       sceneColorPyramid_(sceneColorPyramid), ssaoRaw_(ssaoRaw),
       ssaoFiltered_(ssaoFiltered), cacaoOutput_(cacaoOutput),
+      gtaoRaw_(gtaoRaw), gtaoHistory_(gtaoHistory),
+      gtaoFiltered_(gtaoFiltered), gtaoDebug_(gtaoDebug),
       taaHistory_(taaHistory), taaDebug_(taaDebug),
       screenPyramidSampler_(screenPyramidSampler),
       ssaoSampler_(ssaoSampler), taaSampler_(taaSampler),
@@ -187,6 +203,14 @@ std::vector<RenderImageUsage> ToneMapPass::resourceUsages() const {
         usages.push_back({cacaoOutput_, RenderImageAccess::SampledRead,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    }
+    if (gtaoRaw_.valid()) {
+        for (RenderImageHandle handle :
+             {gtaoRaw_, gtaoHistory_, gtaoFiltered_, gtaoDebug_}) {
+            usages.push_back({handle, RenderImageAccess::SampledRead,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+        }
     }
     if (taaHistory_.valid()) {
         usages.push_back({taaHistory_, RenderImageAccess::SampledRead,
@@ -284,6 +308,13 @@ void ToneMapPass::execute(const RenderFrameContext &frame,
               ssaoRaw_.valid()) ||
             (requestedScreenDebug == ScreenSpaceDebugView::CacaoOutput &&
              cacaoOutput_.valid() && frame.features.cacaoRequired) ||
+            ((requestedScreenDebug == ScreenSpaceDebugView::GtaoRaw ||
+              requestedScreenDebug == ScreenSpaceDebugView::GtaoTemporal ||
+              requestedScreenDebug == ScreenSpaceDebugView::GtaoFiltered ||
+              requestedScreenDebug == ScreenSpaceDebugView::GtaoRejection ||
+              requestedScreenDebug ==
+                  ScreenSpaceDebugView::GtaoHistoryWeight) &&
+             gtaoRaw_.valid() && frame.features.gtaoRequired) ||
             ((requestedScreenDebug == ScreenSpaceDebugView::TaaHistory ||
               requestedScreenDebug == ScreenSpaceDebugView::TaaRejection ||
               requestedScreenDebug ==
@@ -419,7 +450,7 @@ void ToneMapPass::destroyFramebuffers() {
 
 void ToneMapPass::createDescriptors(
     const RenderResourceRegistry &resources) {
-    std::array<VkDescriptorSetLayoutBinding, 11> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 15> bindings{};
     for (uint32_t bindingIndex = 0; bindingIndex < bindings.size();
          ++bindingIndex) {
         bindings[bindingIndex].binding = bindingIndex;
@@ -441,7 +472,7 @@ void ToneMapPass::createDescriptors(
     for (uint32_t frame = 0; frame < sourceDescriptorSets_.size(); ++frame) {
         sourceDescriptorSets_[frame] = descriptorAllocator_->allocate(
             sourceDescriptorSetLayout_,
-            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 11}},
+            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 15}},
             "Pass/ToneMap/SourceDescriptorSet/Frame" +
                 std::to_string(frame));
     }
@@ -476,8 +507,12 @@ void ToneMapPass::updateDescriptors(
         VkDescriptorImageInfo rawAoInfo = hdrInfo;
         VkDescriptorImageInfo filteredAoInfo = hdrInfo;
         VkDescriptorImageInfo cacaoAoInfo = hdrInfo;
+        VkDescriptorImageInfo gtaoRawInfo = hdrInfo;
+        VkDescriptorImageInfo gtaoHistoryInfo = hdrInfo;
+        VkDescriptorImageInfo gtaoFilteredInfo = hdrInfo;
+        VkDescriptorImageInfo gtaoDebugInfo = hdrInfo;
 
-        std::array<VkWriteDescriptorSet, 11> writes{};
+        std::array<VkWriteDescriptorSet, 15> writes{};
         for (uint32_t bindingIndex = 0; bindingIndex < writes.size();
              ++bindingIndex) {
             writes[bindingIndex].sType =
@@ -500,6 +535,10 @@ void ToneMapPass::updateDescriptors(
         writes[8].pImageInfo = &cacaoAoInfo;
         writes[9].pImageInfo = &hdrInfo;
         writes[10].pImageInfo = &hdrInfo;
+        writes[11].pImageInfo = &gtaoRawInfo;
+        writes[12].pImageInfo = &gtaoHistoryInfo;
+        writes[13].pImageInfo = &gtaoFilteredInfo;
+        writes[14].pImageInfo = &gtaoDebugInfo;
         vkUpdateDescriptorSets(
             device_->logicalDevice(),
             static_cast<uint32_t>(writes.size()), writes.data(), 0,
@@ -521,9 +560,8 @@ void ToneMapPass::updateScreenDescriptors(
                    resources.image(taaHistory_, frameIndex).imageView(),
                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     }
-    std::array<VkDescriptorImageInfo, 9> infos = {
-        fallback, fallback, fallback, fallback, fallback,
-        fallback, fallback, fallback, fallback};
+    std::array<VkDescriptorImageInfo, 13> infos{};
+    infos.fill(fallback);
     if (features.surfaceDataRequired && surfaceNormalRoughness_.valid() &&
         surfaceMotion_.valid()) {
         const VkSampler sampler = resources.sampler(surfaceSampler_);
@@ -573,6 +611,20 @@ void ToneMapPass::updateScreenDescriptors(
             sampler, resources.image(taaDebug_, frameIndex).imageView(),
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     }
+    if (features.gtaoRequired && gtaoRaw_.valid()) {
+        const VkSampler sampler = resources.sampler(ssaoSampler_);
+        infos[9] = {sampler, resources.image(gtaoRaw_, frameIndex).imageView(),
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        infos[10] = {
+            sampler, resources.image(gtaoHistory_, frameIndex).imageView(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        infos[11] = {
+            sampler, resources.image(gtaoFiltered_, frameIndex).imageView(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        infos[12] = {
+            sampler, resources.image(gtaoDebug_, frameIndex).imageView(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    }
 
     VkWriteDescriptorSet primaryWrite{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     primaryWrite.dstSet = sourceDescriptorSets_.at(frameIndex);
@@ -583,7 +635,7 @@ void ToneMapPass::updateScreenDescriptors(
     vkUpdateDescriptorSets(device_->logicalDevice(), 1, &primaryWrite, 0,
                            nullptr);
 
-    std::array<VkWriteDescriptorSet, 9> writes{};
+    std::array<VkWriteDescriptorSet, 13> writes{};
     for (uint32_t index = 0; index < writes.size(); ++index) {
         writes[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[index].dstSet = sourceDescriptorSets_.at(frameIndex);

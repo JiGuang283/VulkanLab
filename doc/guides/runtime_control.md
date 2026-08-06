@@ -242,6 +242,14 @@ Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模�
   --screen-space-debug cacao-output `
   --screen-space-debug-mip 0
 .\VulkanLabCtl.exe render-settings set `
+  --ao gtao `
+  --gtao-quality medium `
+  --gtao-radius 1.0 `
+  --gtao-falloff 0.85 `
+  --gtao-intensity 1.0 `
+  --gtao-power 1.5 `
+  --gtao-temporal-weight 0.9
+.\VulkanLabCtl.exe render-settings set `
   --taa taa `
   --taa-history-weight 0.9 `
   --taa-sharpness 0.1
@@ -255,13 +263,13 @@ Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模�
 
 `--surface-debug` 接受 `none`、`normal`、`roughness`、`motion` 和 `history-validity`。Motion 显示比例由 `--surface-motion-scale` 控制，范围为 `[0.1,1024]`。Surface Data 不可用时启用非 `none` 调试视图会返回 `surface_data_unsupported`；`render-settings get` 和 `render status` 同时报告支持状态、激活状态、history generation、有效 item 数和最近失效原因。
 
-`--ao` 接受 `off/ssao/cacao`。SSAO quality 接受 `low/medium/high`，分别对应 8、16 和 32 个样本；radius、bias、intensity 和 power 的范围分别为 `[0.05,10]`、`[0,0.2]`、`[0,4]` 和 `[0.25,4]`。CACAO 只在 `windows-msvc-ao-compare` 中可用，quality 接受 `lowest/low/medium/high/highest`，resolution 接受 `native/half`，radius、intensity 和 power 分别使用 `[0.05,10]`、`[0,4]` 和 `[0.25,4]`。切换 resolution 会等待现有 frame fences 后事务重建 CACAO contexts，不调用 device idle。
+`--ao` 接受 `off/ssao/cacao/gtao`。SSAO quality 接受 `low/medium/high`，分别对应 8、16 和 32 个样本；radius、bias、intensity 和 power 的范围分别为 `[0.05,10]`、`[0,0.2]`、`[0,4]` 和 `[0.25,4]`。CACAO 只在 `windows-msvc-ao-compare` 中可用，quality 接受 `lowest/low/medium/high/highest`，resolution 接受 `native/half`，radius、intensity 和 power 分别使用 `[0.05,10]`、`[0,4]` 和 `[0.25,4]`。切换 resolution 会等待现有 frame fences 后事务重建 CACAO contexts，不调用 device idle。GTAO quality 接受 `low/medium/high`，radius、falloff、intensity、power 和 temporal weight 范围分别为 `[0.05,10]`、`[0,0.99]`、`[0,4]`、`[0.25,4]` 和 `[0,0.99]`。
 
 只有两个 PBR variant 会把当前 active AO 乘入间接光；Legacy、Debug、透明与 transmission 材质保持原行为。`--taa` 接受 `off/taa`，history weight 与 sharpness 范围分别为 `[0,0.99]` 和 `[0,1]`。TAA 默认关闭，发生 camera cut、resize、scene/shader/camera mode 切换或执行序列不连续时自动重置 history。
 
-`--screen-space-debug` 接受 `none`、`nearest-depth`、`scene-color`、`ssao-raw`、`ssao-filtered`、`cacao-output`、`taa-history`、`taa-rejection` 和 `taa-history-weight`，mip 范围为 `[0,31]` 并在 shader 中限制到实际 mip。Surface 与 Screen-Space Debug 互斥；同一 patch 同时请求两个非 `none` 模式时返回 `conflicting_debug_views`，分开切换时新模式会关闭旧模式。
+`--screen-space-debug` 接受 `none`、`nearest-depth`、`scene-color`、`ssao-raw`、`ssao-filtered`、`cacao-output`、`gtao-raw`、`gtao-temporal`、`gtao-filtered`、`gtao-rejection`、`gtao-history-weight`、`taa-history`、`taa-rejection` 和 `taa-history-weight`，mip 范围为 `[0,31]` 并在 shader 中限制到实际 mip。Surface 与 Screen-Space Debug 互斥；同一 patch 同时请求两个非 `none` 模式时返回 `conflicting_debug_views`，分开切换时新模式会关闭旧模式。
 
-`render.status.screenSpace` 返回 depth/color pyramid、SSAO、CACAO 与 TAA 的支持状态、requested/active 状态、Debug View、资源 extent、mip 数、history generation/validity、最近 reset 原因、CACAO generation/precision 和估算显存。SSAO/CACAO/TAA 不支持时尝试启用分别返回 `ssao_unsupported`、`cacao_unsupported` 或 `taa_unsupported`；请求不可用的调试资源时返回 `screen_space_unsupported`。
+`render.status.screenSpace` 返回 depth/color pyramid、SSAO、CACAO、GTAO 与 TAA 的支持状态、requested/active 状态、Debug View、资源 extent、mip 数、history generation/validity、最近 reset 原因、CACAO generation/precision 和估算显存。SSAO/CACAO/GTAO/TAA 不支持时尝试启用分别返回 `ssao_unsupported`、`cacao_unsupported`、`gtao_unsupported` 或 `taa_unsupported`；请求不可用的调试资源时返回 `screen_space_unsupported`。
 
 Tone Mapping policy 由 Shader Manifest 决定：两个 PBR-lite 和 `Debug IBL Diffuse/Specular` 可配置，Legacy 与其他 Debug variant 强制 PassThrough。Bloom compatibility 也由 Manifest 决定，目前只有两个 PBR-lite variant 支持；设置会保留，但其他 variant 下 `bloomActive=false`。`render-settings get` 返回 `bloomAvailable`、`bloomActive`、`bloomUnavailableReason` 和四个 Bloom 设置。设备不满足 compute/`RGBA16F` storage image 要求时，尝试开启会返回 `bloom_unsupported`。
 

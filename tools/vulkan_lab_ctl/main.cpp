@@ -72,14 +72,17 @@ void printUsage() {
            "[--min-projected-pixels N] [--occlusion on|off] "
            "[--occlusion-bias N] "
            "[--surface-debug none|normal|roughness|motion|history-validity] "
-           "[--surface-motion-scale N] [--ao off|ssao|cacao] "
+           "[--surface-motion-scale N] [--ao off|ssao|cacao|gtao] "
            "[--ssao-quality low|medium|high] [--ssao-radius N] "
            "[--ssao-bias N] [--ssao-intensity N] [--ssao-power N] "
            "[--cacao-quality lowest|low|medium|high|highest] "
            "[--cacao-resolution native|half] [--cacao-radius N] "
            "[--cacao-intensity N] [--cacao-power N] "
+           "[--gtao-quality low|medium|high] [--gtao-radius N] "
+           "[--gtao-falloff N] [--gtao-intensity N] [--gtao-power N] "
+           "[--gtao-temporal-weight N] "
            "[--taa off|taa] [--taa-history-weight N] [--taa-sharpness N] "
-           "[--screen-space-debug none|nearest-depth|scene-color|ssao-raw|ssao-filtered|cacao-output|taa-history|taa-rejection|taa-history-weight] "
+           "[--screen-space-debug none|nearest-depth|scene-color|ssao-raw|ssao-filtered|cacao-output|gtao-raw|gtao-temporal|gtao-filtered|gtao-rejection|gtao-history-weight|taa-history|taa-rejection|taa-history-weight] "
            "[--screen-space-debug-mip N]\n"
         << "  VulkanLabCtl [--json] render wait [--stable-frames N] "
            "[--timeout-ms N]\n"
@@ -210,6 +213,12 @@ ParsedCommand parseCommand(int argc, char **argv) {
     std::optional<std::string> cacaoRadius;
     std::optional<std::string> cacaoIntensity;
     std::optional<std::string> cacaoPower;
+    std::optional<std::string> gtaoQuality;
+    std::optional<std::string> gtaoRadius;
+    std::optional<std::string> gtaoFalloff;
+    std::optional<std::string> gtaoIntensity;
+    std::optional<std::string> gtaoPower;
+    std::optional<std::string> gtaoTemporalWeight;
     std::optional<std::string> temporalAntiAliasing;
     std::optional<std::string> taaHistoryWeight;
     std::optional<std::string> taaSharpness;
@@ -266,6 +275,12 @@ ParsedCommand parseCommand(int argc, char **argv) {
                    argument == "--cacao-radius" ||
                    argument == "--cacao-intensity" ||
                    argument == "--cacao-power" ||
+                   argument == "--gtao-quality" ||
+                   argument == "--gtao-radius" ||
+                   argument == "--gtao-falloff" ||
+                   argument == "--gtao-intensity" ||
+                   argument == "--gtao-power" ||
+                   argument == "--gtao-temporal-weight" ||
                   argument == "--taa" ||
                   argument == "--taa-history-weight" ||
                   argument == "--taa-sharpness" ||
@@ -355,6 +370,18 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 cacaoIntensity = argv[i];
             else if (argument == "--cacao-power")
                 cacaoPower = argv[i];
+            else if (argument == "--gtao-quality")
+                gtaoQuality = argv[i];
+            else if (argument == "--gtao-radius")
+                gtaoRadius = argv[i];
+            else if (argument == "--gtao-falloff")
+                gtaoFalloff = argv[i];
+            else if (argument == "--gtao-intensity")
+                gtaoIntensity = argv[i];
+            else if (argument == "--gtao-power")
+                gtaoPower = argv[i];
+            else if (argument == "--gtao-temporal-weight")
+                gtaoTemporalWeight = argv[i];
             else if (argument == "--taa")
                 temporalAntiAliasing = argv[i];
             else if (argument == "--taa-history-weight")
@@ -623,9 +650,10 @@ ParsedCommand parseCommand(int argc, char **argv) {
         if (ambientOcclusion) {
             if (*ambientOcclusion != "off" &&
                 *ambientOcclusion != "ssao" &&
-                *ambientOcclusion != "cacao") {
+                *ambientOcclusion != "cacao" &&
+                *ambientOcclusion != "gtao") {
                 throw std::invalid_argument(
-                    "--ao must be off, ssao, or cacao");
+                    "--ao must be off, ssao, cacao, or gtao");
             }
             parsed.params["ambientOcclusionMode"] = *ambientOcclusion;
         }
@@ -676,6 +704,29 @@ ParsedCommand parseCommand(int argc, char **argv) {
         if (cacaoPower)
             parsed.params["cacaoPower"] =
                 parseFiniteFloat(*cacaoPower, "--cacao-power");
+        if (gtaoQuality) {
+            if (*gtaoQuality != "low" && *gtaoQuality != "medium" &&
+                *gtaoQuality != "high") {
+                throw std::invalid_argument(
+                    "--gtao-quality must be low, medium, or high");
+            }
+            parsed.params["gtaoQuality"] = *gtaoQuality;
+        }
+        if (gtaoRadius)
+            parsed.params["gtaoRadius"] =
+                parseFiniteFloat(*gtaoRadius, "--gtao-radius");
+        if (gtaoFalloff)
+            parsed.params["gtaoFalloff"] =
+                parseFiniteFloat(*gtaoFalloff, "--gtao-falloff");
+        if (gtaoIntensity)
+            parsed.params["gtaoIntensity"] =
+                parseFiniteFloat(*gtaoIntensity, "--gtao-intensity");
+        if (gtaoPower)
+            parsed.params["gtaoPower"] =
+                parseFiniteFloat(*gtaoPower, "--gtao-power");
+        if (gtaoTemporalWeight)
+            parsed.params["gtaoTemporalWeight"] = parseFiniteFloat(
+                *gtaoTemporalWeight, "--gtao-temporal-weight");
         if (temporalAntiAliasing) {
             if (*temporalAntiAliasing != "off" &&
                 *temporalAntiAliasing != "taa") {
@@ -699,13 +750,20 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 *screenSpaceDebug != "ssao-raw" &&
                 *screenSpaceDebug != "ssao-filtered" &&
                 *screenSpaceDebug != "cacao-output" &&
+                *screenSpaceDebug != "gtao-raw" &&
+                *screenSpaceDebug != "gtao-temporal" &&
+                *screenSpaceDebug != "gtao-filtered" &&
+                *screenSpaceDebug != "gtao-rejection" &&
+                *screenSpaceDebug != "gtao-history-weight" &&
                 *screenSpaceDebug != "taa-history" &&
                 *screenSpaceDebug != "taa-rejection" &&
                 *screenSpaceDebug != "taa-history-weight") {
                 throw std::invalid_argument(
                     "--screen-space-debug must be none, nearest-depth, "
                     "scene-color, ssao-raw, ssao-filtered, cacao-output, "
-                    "taa-history, taa-rejection, or taa-history-weight");
+                    "gtao-raw, gtao-temporal, gtao-filtered, gtao-rejection, "
+                    "gtao-history-weight, taa-history, taa-rejection, or "
+                    "taa-history-weight");
             }
             parsed.params["screenSpaceDebugView"] = *screenSpaceDebug;
         }
@@ -1145,6 +1203,20 @@ void printHuman(const std::string &method, const Json &result) {
                    << result.at("cacaoRadius").get<float>() << "/"
                    << result.at("cacaoIntensity").get<float>() << "/"
                    << result.at("cacaoPower").get<float>()
+                  << "\nGTAO active/available/history: "
+                  << (result.at("gtaoActive").get<bool>() ? "yes" : "no")
+                  << "/"
+                  << (result.at("gtaoAvailable").get<bool>() ? "yes" : "no")
+                  << "/"
+                  << (result.at("gtaoHistoryValid").get<bool>() ? "valid"
+                                                                  : "reset")
+                  << ", quality/radius/falloff/intensity/power/history: "
+                  << result.at("gtaoQuality").get<std::string>() << "/"
+                  << result.at("gtaoRadius").get<float>() << "/"
+                  << result.at("gtaoFalloff").get<float>() << "/"
+                  << result.at("gtaoIntensity").get<float>() << "/"
+                  << result.at("gtaoPower").get<float>() << "/"
+                  << result.at("gtaoTemporalWeight").get<float>()
                   << "\nScreen-space debug: "
                   << result.at("screenSpaceDebugView").get<std::string>()
                   << ", mip: "
@@ -1162,6 +1234,10 @@ void printHuman(const std::string &method, const Json &result) {
             result.value("cacaoUnavailableReason", std::string{});
         if (!cacaoReason.empty())
             std::cout << "CACAO unavailable: " << cacaoReason << '\n';
+        const std::string gtaoReason =
+            result.value("gtaoUnavailableReason", std::string{});
+        if (!gtaoReason.empty())
+            std::cout << "GTAO unavailable: " << gtaoReason << '\n';
         const std::string occlusionReason =
             result.value("occlusionUnavailableReason", std::string{});
         if (!occlusionReason.empty()) {

@@ -941,6 +941,10 @@ void Application::init() {
         shaderRegistry_.program("screenspace.ssao-blur");
     const ShaderProgram &cacaoNormalAdapter =
         shaderRegistry_.program("screenspace.cacao-normal-adapter");
+    const ShaderProgram &gtaoTrace =
+        shaderRegistry_.program("screenspace.gtao-trace");
+    const ShaderProgram &gtaoTemporal =
+        shaderRegistry_.program("screenspace.gtao-temporal");
     const ShaderProgram &taaResolve =
         shaderRegistry_.program("postprocess.taa-resolve");
     const ShaderProgram &toneMap =
@@ -978,6 +982,8 @@ void Application::init() {
     shaderPaths.ssaoTraceComp = ssaoTrace.computeSpvPath;
     shaderPaths.ssaoBlurComp = ssaoBlur.computeSpvPath;
     shaderPaths.cacaoNormalAdapterComp = cacaoNormalAdapter.computeSpvPath;
+    shaderPaths.gtaoTraceComp = gtaoTrace.computeSpvPath;
+    shaderPaths.gtaoTemporalComp = gtaoTemporal.computeSpvPath;
     shaderPaths.taaResolveComp = taaResolve.computeSpvPath;
     shaderPaths.fullscreenVert = toneMap.vertSpvPath;
     shaderPaths.toneMapFrag = toneMap.fragSpvPath;
@@ -2099,6 +2105,14 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
             "FidelityFX CACAO is unavailable: " +
                 renderer_->screenSpaceEffectsStatus().cacaoUnavailableReason);
     }
+    if (patch.ambientOcclusionMode &&
+        *patch.ambientOcclusionMode == AmbientOcclusionMode::Gtao && renderer_ &&
+        !renderer_->screenSpaceEffectsStatus().gtaoSupported) {
+        throw RuntimeCommandError(
+            "gtao_unsupported",
+            "GTAO is unavailable: " +
+                renderer_->screenSpaceEffectsStatus().gtaoUnavailableReason);
+    }
     if (patch.temporalAntiAliasingMode &&
         *patch.temporalAntiAliasingMode == TemporalAntiAliasingMode::Taa &&
         renderer_ && !renderer_->screenSpaceEffectsStatus().taaSupported) {
@@ -2129,6 +2143,12 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
               status.ssaoSupported) ||
             (view == ScreenSpaceDebugView::CacaoOutput &&
              status.cacaoInitialized) ||
+            ((view == ScreenSpaceDebugView::GtaoRaw ||
+              view == ScreenSpaceDebugView::GtaoTemporal ||
+              view == ScreenSpaceDebugView::GtaoFiltered ||
+              view == ScreenSpaceDebugView::GtaoRejection ||
+              view == ScreenSpaceDebugView::GtaoHistoryWeight) &&
+             status.gtaoSupported) ||
             ((view == ScreenSpaceDebugView::TaaHistory ||
               view == ScreenSpaceDebugView::TaaRejection ||
               view == ScreenSpaceDebugView::TaaHistoryWeight) &&
@@ -2175,6 +2195,12 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
     next.cacao.radius = glm::clamp(next.cacao.radius, 0.05f, 10.0f);
     next.cacao.intensity = glm::clamp(next.cacao.intensity, 0.0f, 4.0f);
     next.cacao.power = glm::clamp(next.cacao.power, 0.25f, 4.0f);
+    next.gtao.radius = glm::clamp(next.gtao.radius, 0.05f, 10.0f);
+    next.gtao.falloff = glm::clamp(next.gtao.falloff, 0.0f, 0.99f);
+    next.gtao.intensity = glm::clamp(next.gtao.intensity, 0.0f, 4.0f);
+    next.gtao.power = glm::clamp(next.gtao.power, 0.25f, 4.0f);
+    next.gtao.temporalWeight =
+        glm::clamp(next.gtao.temporalWeight, 0.0f, 0.99f);
     next.taaHistoryWeight =
         glm::clamp(next.taaHistoryWeight, 0.0f, 0.99f);
     next.taaSharpness = glm::clamp(next.taaSharpness, 0.0f, 1.0f);
@@ -3616,9 +3642,19 @@ ControlJson Application::runtimeRenderStatus() {
            {"cacaoResolution",
             cacaoResolutionName(screenSpaceStatus.cacaoResolution)},
            {"cacaoGeneration", screenSpaceStatus.cacaoGeneration},
-          {"cacaoOutputExtent",
+           {"cacaoOutputExtent",
             {{"width", screenSpaceStatus.cacaoOutputExtent.width},
-             {"height", screenSpaceStatus.cacaoOutputExtent.height}}},
+              {"height", screenSpaceStatus.cacaoOutputExtent.height}}},
+           {"gtaoSupported", screenSpaceStatus.gtaoSupported},
+           {"gtaoActive", screenSpaceStatus.gtaoActive},
+           {"gtaoHistoryValid", screenSpaceStatus.gtaoHistoryValid},
+           {"gtaoHistoryGeneration",
+            screenSpaceStatus.gtaoHistoryGeneration},
+           {"gtaoLastFrameSerial", screenSpaceStatus.gtaoLastFrameSerial},
+           {"gtaoExtent",
+            {{"width", screenSpaceStatus.gtaoExtent.width},
+             {"height", screenSpaceStatus.gtaoExtent.height}}},
+           {"gtaoLastResetReason", screenSpaceStatus.gtaoLastResetReason},
           {"taaSupported", screenSpaceStatus.taaSupported},
           {"taaActive", screenSpaceStatus.taaActive},
           {"taaHistoryValid", screenSpaceStatus.taaHistoryValid},
@@ -3642,6 +3678,8 @@ ControlJson Application::runtimeRenderStatus() {
             screenSpaceStatus.ssaoUnavailableReason},
            {"cacaoUnavailableReason",
             screenSpaceStatus.cacaoUnavailableReason},
+           {"gtaoUnavailableReason",
+            screenSpaceStatus.gtaoUnavailableReason},
            {"taaUnavailableReason",
             screenSpaceStatus.taaUnavailableReason}}},
         {"frameSerial", frameSync_->lastSubmittedSerial()},
@@ -3766,8 +3804,24 @@ ControlJson Application::runtimeRenderSettingsGet() {
               screenSpaceStatus.activeMode == AmbientOcclusionMode::Cacao},
              {"cacaoFp32", screenSpaceStatus.cacaoFp32},
              {"cacaoGeneration", screenSpaceStatus.cacaoGeneration},
-             {"cacaoUnavailableReason",
-              screenSpaceStatus.cacaoUnavailableReason},
+              {"cacaoUnavailableReason",
+               screenSpaceStatus.cacaoUnavailableReason},
+             {"gtaoQuality",
+              gtaoQualityName(renderSettings_.gtao.quality)},
+             {"gtaoRadius", renderSettings_.gtao.radius},
+             {"gtaoFalloff", renderSettings_.gtao.falloff},
+             {"gtaoIntensity", renderSettings_.gtao.intensity},
+             {"gtaoPower", renderSettings_.gtao.power},
+             {"gtaoTemporalWeight", renderSettings_.gtao.temporalWeight},
+             {"gtaoAvailable", screenSpaceStatus.gtaoSupported},
+             {"gtaoActive", screenSpaceStatus.gtaoActive},
+             {"gtaoHistoryValid", screenSpaceStatus.gtaoHistoryValid},
+             {"gtaoHistoryGeneration",
+              screenSpaceStatus.gtaoHistoryGeneration},
+             {"gtaoLastResetReason",
+              screenSpaceStatus.gtaoLastResetReason},
+             {"gtaoUnavailableReason",
+              screenSpaceStatus.gtaoUnavailableReason},
             {"temporalAntiAliasingMode",
              temporalAntiAliasingModeName(
                  renderSettings_.temporalAntiAliasingMode)},
@@ -5040,7 +5094,7 @@ void Application::drawPostProcessingPanel() {
     ImGui::SeparatorText("Ambient Occlusion");
     const ScreenSpaceEffectsStatus screenStatus =
         renderer_->screenSpaceEffectsStatus();
-    constexpr const char *aoModeLabels[] = {"Off", "SSAO", "CACAO"};
+    constexpr const char *aoModeLabels[] = {"Off", "SSAO", "CACAO", "GTAO"};
     int aoMode = static_cast<int>(renderSettings_.ambientOcclusionMode);
     if (ImGui::BeginCombo("Mode##AmbientOcclusion", aoModeLabels[aoMode])) {
         for (int index = 0; index < static_cast<int>(std::size(aoModeLabels));
@@ -5051,7 +5105,9 @@ void Application::drawPostProcessingPanel() {
                 (mode == AmbientOcclusionMode::Ssao &&
                  screenStatus.ssaoSupported) ||
                 (mode == AmbientOcclusionMode::Cacao &&
-                 screenStatus.cacaoInitialized);
+                  screenStatus.cacaoInitialized) ||
+                 (mode == AmbientOcclusionMode::Gtao &&
+                  screenStatus.gtaoSupported);
             ImGui::BeginDisabled(!supported);
             if (ImGui::Selectable(aoModeLabels[index], index == aoMode)) {
                 RenderSettingsPatch patch;
@@ -5192,6 +5248,89 @@ void Application::drawPostProcessingPanel() {
                             screenStatus.cacaoOutputExtent.height);
     }
 
+    const bool gtaoRequested =
+        renderSettings_.ambientOcclusionMode == AmbientOcclusionMode::Gtao;
+    const bool gtaoDebugRequested =
+        renderSettings_.screenSpaceDebugView == ScreenSpaceDebugView::GtaoRaw ||
+        renderSettings_.screenSpaceDebugView ==
+            ScreenSpaceDebugView::GtaoTemporal ||
+        renderSettings_.screenSpaceDebugView ==
+            ScreenSpaceDebugView::GtaoFiltered ||
+        renderSettings_.screenSpaceDebugView ==
+            ScreenSpaceDebugView::GtaoRejection ||
+        renderSettings_.screenSpaceDebugView ==
+            ScreenSpaceDebugView::GtaoHistoryWeight;
+    ImGui::BeginDisabled(!screenStatus.gtaoSupported ||
+                         (!gtaoRequested && !gtaoDebugRequested));
+    constexpr const char *gtaoQualityLabels[] = {
+        "Low (2x2)", "Medium (3x4)", "High (4x6)"};
+    int gtaoQuality = static_cast<int>(renderSettings_.gtao.quality);
+    if (ImGui::Combo("Quality##GTAO", &gtaoQuality, gtaoQualityLabels,
+                     static_cast<int>(std::size(gtaoQualityLabels)))) {
+        RenderSettingsPatch patch;
+        patch.gtaoQuality = static_cast<GtaoQuality>(gtaoQuality);
+        applyRenderSettings(patch);
+    }
+    float gtaoRadius = renderSettings_.gtao.radius;
+    if (ImGui::DragFloat("Radius##GTAO", &gtaoRadius, 0.01f, 0.05f, 10.0f,
+                         "%.2f")) {
+        RenderSettingsPatch patch;
+        patch.gtaoRadius = gtaoRadius;
+        applyRenderSettings(patch);
+    }
+    float gtaoFalloff = renderSettings_.gtao.falloff;
+    if (ImGui::SliderFloat("Falloff##GTAO", &gtaoFalloff, 0.0f, 0.99f,
+                           "%.2f")) {
+        RenderSettingsPatch patch;
+        patch.gtaoFalloff = gtaoFalloff;
+        applyRenderSettings(patch);
+    }
+    float gtaoIntensity = renderSettings_.gtao.intensity;
+    if (ImGui::DragFloat("Intensity##GTAO", &gtaoIntensity, 0.02f, 0.0f,
+                         4.0f, "%.2f")) {
+        RenderSettingsPatch patch;
+        patch.gtaoIntensity = gtaoIntensity;
+        applyRenderSettings(patch);
+    }
+    float gtaoPower = renderSettings_.gtao.power;
+    if (ImGui::DragFloat("Power##GTAO", &gtaoPower, 0.02f, 0.25f, 4.0f,
+                         "%.2f")) {
+        RenderSettingsPatch patch;
+        patch.gtaoPower = gtaoPower;
+        applyRenderSettings(patch);
+    }
+    float gtaoTemporalWeight = renderSettings_.gtao.temporalWeight;
+    if (ImGui::SliderFloat("History Weight##GTAO", &gtaoTemporalWeight,
+                           0.0f, 0.99f, "%.2f")) {
+        RenderSettingsPatch patch;
+        patch.gtaoTemporalWeight = gtaoTemporalWeight;
+        applyRenderSettings(patch);
+    }
+    ImGui::EndDisabled();
+
+    editor::statusIndicator(
+        screenStatus.gtaoActive ? "GTAO active" : "GTAO inactive",
+        screenStatus.gtaoActive ? editor::StatusTone::Success
+                                : editor::StatusTone::Neutral,
+        !screenStatus.gtaoSupported
+            ? screenStatus.gtaoUnavailableReason.c_str()
+            : (gtaoRequested && !currentShaderVariant().supportsScreenSpace
+                   ? "Selected Shader does not consume screen-space AO."
+                   : nullptr));
+    if (screenStatus.gtaoSupported &&
+        (gtaoRequested || gtaoDebugRequested)) {
+        ImGui::TextDisabled("History: %s, generation %llu, %ux%u",
+                            screenStatus.gtaoHistoryValid ? "valid" : "reset",
+                            static_cast<unsigned long long>(
+                                screenStatus.gtaoHistoryGeneration),
+                            screenStatus.gtaoExtent.width,
+                            screenStatus.gtaoExtent.height);
+        if (!screenStatus.gtaoLastResetReason.empty()) {
+            ImGui::TextDisabled("Reset: %s",
+                                screenStatus.gtaoLastResetReason.c_str());
+        }
+    }
+
     ImGui::SeparatorText("Temporal Anti-Aliasing");
     constexpr const char *taaModeLabels[] = {"Off", "TAA"};
     int taaMode =
@@ -5255,8 +5394,9 @@ void Application::drawPostProcessingPanel() {
     ImGui::SeparatorText("Screen-Space Debug");
     constexpr const char *screenDebugLabels[] = {
         "None", "Nearest Depth", "Scene Color", "SSAO Raw",
-        "SSAO Filtered", "CACAO Output", "TAA History",
-        "TAA Rejection", "TAA History Weight"};
+        "SSAO Filtered", "CACAO Output", "GTAO Raw", "GTAO Temporal",
+        "GTAO Filtered", "GTAO Rejection", "GTAO History Weight",
+        "TAA History", "TAA Rejection", "TAA History Weight"};
     int screenDebug =
         static_cast<int>(renderSettings_.screenSpaceDebugView);
     const char *preview = screenDebugLabels[screenDebug];
@@ -5274,7 +5414,13 @@ void Application::drawPostProcessingPanel() {
                   view == ScreenSpaceDebugView::SsaoFiltered) &&
                   screenStatus.ssaoSupported) ||
                 (view == ScreenSpaceDebugView::CacaoOutput &&
-                 screenStatus.cacaoInitialized) ||
+                  screenStatus.cacaoInitialized) ||
+                ((view == ScreenSpaceDebugView::GtaoRaw ||
+                  view == ScreenSpaceDebugView::GtaoTemporal ||
+                  view == ScreenSpaceDebugView::GtaoFiltered ||
+                  view == ScreenSpaceDebugView::GtaoRejection ||
+                  view == ScreenSpaceDebugView::GtaoHistoryWeight) &&
+                 screenStatus.gtaoSupported) ||
                 ((view == ScreenSpaceDebugView::TaaHistory ||
                   view == ScreenSpaceDebugView::TaaRejection ||
                   view == ScreenSpaceDebugView::TaaHistoryWeight) &&

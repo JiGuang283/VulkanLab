@@ -441,6 +441,16 @@ void Device::pickPhysicalDevice() {
         screenSpaceEffectsSupport_.ssaoAvailable = true;
     }
 
+    if (!screenSpaceEffectsSupport_.ssaoAvailable) {
+        screenSpaceEffectsSupport_.gtaoReason =
+            screenSpaceEffectsSupport_.ssaoReason;
+    } else if (!screenSpaceEffectsSupport_.depthPyramidAvailable) {
+        screenSpaceEffectsSupport_.gtaoReason =
+            screenSpaceEffectsSupport_.depthPyramidReason;
+    } else {
+        screenSpaceEffectsSupport_.gtaoAvailable = true;
+    }
+
     if (!surfaceDataSupport_.available) {
         screenSpaceEffectsSupport_.taaReason = surfaceDataSupport_.reason;
     } else if (!screenSpaceEffectsSupport_.colorPyramidAvailable) {

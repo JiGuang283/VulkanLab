@@ -34,6 +34,10 @@ class ToneMapPass final : public IRenderPass {
                 RenderImageHandle ssaoRaw,
                 RenderImageHandle ssaoFiltered,
                 RenderImageHandle cacaoOutput,
+                RenderImageHandle gtaoRaw,
+                RenderImageHandle gtaoHistory,
+                RenderImageHandle gtaoFiltered,
+                RenderImageHandle gtaoDebug,
                 RenderImageHandle taaHistory,
                 RenderImageHandle taaDebug,
                 RenderSamplerHandle screenPyramidSampler,
@@ -80,6 +84,10 @@ class ToneMapPass final : public IRenderPass {
     RenderImageHandle ssaoRaw_{};
     RenderImageHandle ssaoFiltered_{};
     RenderImageHandle cacaoOutput_{};
+    RenderImageHandle gtaoRaw_{};
+    RenderImageHandle gtaoHistory_{};
+    RenderImageHandle gtaoFiltered_{};
+    RenderImageHandle gtaoDebug_{};
     RenderImageHandle taaHistory_{};
     RenderImageHandle taaDebug_{};
     RenderSamplerHandle screenPyramidSampler_{};

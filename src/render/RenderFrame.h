@@ -21,6 +21,7 @@ struct FrameRenderFeatures {
     bool sceneColorPyramidRequired = false;
     bool ssaoRequired = false;
     bool cacaoRequired = false;
+    bool gtaoRequired = false;
     bool taaRequired = false;
     bool taaActive = false;
 };

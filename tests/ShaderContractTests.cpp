@@ -356,6 +356,18 @@ void checkPushConstant(const SpvReflectShaderModule &module,
                 {"parameters", 0}, {"dimensions", 16}};
             checkBlockLayout(*blocks[0], 32, members, "SsaoPushConstants",
                              path);
+        } else if (path.find("screenspace/gtao_trace") !=
+                   std::string_view::npos) {
+            static const std::vector<MemberLayout> members = {
+                {"parameters", 0}, {"dimensions", 16}, {"sampling", 32}};
+            checkBlockLayout(*blocks[0], 48, members,
+                             "GtaoTracePushConstants", path);
+        } else if (path.find("screenspace/gtao_temporal") !=
+                   std::string_view::npos) {
+            static const std::vector<MemberLayout> members = {
+                {"parameters", 0}, {"dimensions", 16}};
+            checkBlockLayout(*blocks[0], 32, members,
+                             "GtaoTemporalPushConstants", path);
         } else {
             static const std::vector<MemberLayout> members = {{"extents", 0}};
             checkBlockLayout(*blocks[0], 16, members,
@@ -395,11 +407,19 @@ void checkDescriptors(const ReflectedModule &reflected,
             std::string::npos;
         const bool taa = reflected.path().find("postprocess/taa_resolve") !=
                          std::string::npos;
+        const bool gtaoTrace =
+            reflected.path().find("screenspace/gtao_trace") !=
+            std::string::npos;
+        const bool gtaoTemporal =
+            reflected.path().find("screenspace/gtao_temporal") !=
+            std::string::npos;
         const uint32_t expectedCount = expectsAtmosphere
                                            ? 6u
                                            : ssao ? 5u
-                                           : cacaoAdapter ? 5u
-                                           : taa ? 10u
+                                            : cacaoAdapter ? 5u
+                                            : gtaoTrace ? 5u
+                                            : gtaoTemporal ? 9u
+                                            : taa ? 10u
                                            : occlusion ? 4u
                                                        : 2u;
         requireShader(bindings.size() == expectedCount,
@@ -471,6 +491,43 @@ void checkDescriptors(const ReflectedModule &reflected,
                         reflected.path());
                 if (globalUbo)
                     checkGlobalUbo(*binding, reflected.path());
+                continue;
+            }
+            if (gtaoTrace) {
+                const bool globalUbo =
+                    binding->set == 0 && binding->binding == 0 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                const bool source =
+                    binding->set == 1 && binding->binding < 3 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                const bool destination =
+                    binding->set == 1 && binding->binding == 3 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                requireShader(binding->count == 1 &&
+                                  (globalUbo || source || destination),
+                              "GTAO trace descriptor contract mismatch in " +
+                                  reflected.path());
+                if (globalUbo)
+                    checkGlobalUbo(*binding, reflected.path());
+                continue;
+            }
+            if (gtaoTemporal) {
+                const bool source =
+                    binding->set == 0 && binding->binding <= 6 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                const bool destination =
+                    binding->set == 0 && binding->binding >= 7 &&
+                    binding->binding <= 8 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                requireShader(binding->count == 1 &&
+                                  (source || destination),
+                              "GTAO temporal descriptor contract mismatch in " +
+                                  reflected.path());
                 continue;
             }
             if (taa) {
@@ -548,7 +605,7 @@ void checkDescriptors(const ReflectedModule &reflected,
                           reflected.path());
         if (toneMap) {
             requireShader(
-                binding->set == 0 && binding->binding < 11 &&
+                binding->set == 0 && binding->binding < 15 &&
                     binding->descriptor_type ==
                         SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
                     stage == VK_SHADER_STAGE_FRAGMENT_BIT,

@@ -47,6 +47,7 @@ struct ScreenSpaceEffectsSupport {
     bool depthPyramidAvailable = false;
     bool colorPyramidAvailable = false;
     bool ssaoAvailable = false;
+    bool gtaoAvailable = false;
     bool taaAvailable = false;
     VkFormat depthPyramidFormat = VK_FORMAT_R32_SFLOAT;
     VkFormat colorPyramidFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -54,6 +55,7 @@ struct ScreenSpaceEffectsSupport {
     std::string depthPyramidReason;
     std::string colorPyramidReason;
     std::string ssaoReason;
+    std::string gtaoReason;
     std::string taaReason;
 };
 

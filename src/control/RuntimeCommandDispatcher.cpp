@@ -186,6 +186,16 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         command, "cacaoIntensity", 0.0f, 4.0f);
     patch.cacaoPower = optionalFiniteFloat(
         command, "cacaoPower", 0.25f, 4.0f);
+    patch.gtaoRadius = optionalFiniteFloat(
+        command, "gtaoRadius", 0.05f, 10.0f);
+    patch.gtaoFalloff = optionalFiniteFloat(
+        command, "gtaoFalloff", 0.0f, 0.99f);
+    patch.gtaoIntensity = optionalFiniteFloat(
+        command, "gtaoIntensity", 0.0f, 4.0f);
+    patch.gtaoPower = optionalFiniteFloat(
+        command, "gtaoPower", 0.25f, 4.0f);
+    patch.gtaoTemporalWeight = optionalFiniteFloat(
+        command, "gtaoTemporalWeight", 0.0f, 0.99f);
     patch.taaHistoryWeight = optionalFiniteFloat(
         command, "taaHistoryWeight", 0.0f, 0.99f);
     patch.taaSharpness = optionalFiniteFloat(
@@ -216,7 +226,7 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         if (!patch.ambientOcclusionMode) {
             throw RuntimeCommandError(
                 "invalid_params",
-                "Parameter 'ambientOcclusionMode' must be off, ssao, or cacao.");
+                "Parameter 'ambientOcclusionMode' must be off, ssao, cacao, or gtao.");
         }
     }
     if (const auto quality = optionalString(command, "ssaoQuality")) {
@@ -244,6 +254,14 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
                 "Parameter 'cacaoResolution' must be native or half.");
         }
     }
+    if (const auto quality = optionalString(command, "gtaoQuality")) {
+        patch.gtaoQuality = gtaoQualityFromName(*quality);
+        if (!patch.gtaoQuality) {
+            throw RuntimeCommandError(
+                "invalid_params",
+                "Parameter 'gtaoQuality' must be low, medium, or high.");
+        }
+    }
     if (const auto mode = optionalString(command, "temporalAntiAliasingMode")) {
         patch.temporalAntiAliasingMode =
             temporalAntiAliasingModeFromName(*mode);
@@ -261,8 +279,9 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
                 "invalid_params",
                 "Parameter 'screenSpaceDebugView' must be none, "
                 "nearest-depth, scene-color, ssao-raw, ssao-filtered, or "
-                "cacao-output, taa-history, taa-rejection, or "
-                "taa-history-weight.");
+                "cacao-output, gtao-raw, gtao-temporal, gtao-filtered, "
+                "gtao-rejection, gtao-history-weight, taa-history, "
+                "taa-rejection, or taa-history-weight.");
         }
     }
     if (!patch.shadowsEnabled && !patch.shadowReceiverBias &&
@@ -282,6 +301,9 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         !patch.ssaoIntensity && !patch.ssaoPower && !patch.cacaoQuality &&
         !patch.cacaoResolution && !patch.cacaoRadius &&
         !patch.cacaoIntensity && !patch.cacaoPower &&
+        !patch.gtaoQuality && !patch.gtaoRadius && !patch.gtaoFalloff &&
+        !patch.gtaoIntensity && !patch.gtaoPower &&
+        !patch.gtaoTemporalWeight &&
         !patch.temporalAntiAliasingMode && !patch.taaHistoryWeight &&
         !patch.taaSharpness &&
         !patch.screenSpaceDebugView && !patch.screenSpaceDebugMip) {

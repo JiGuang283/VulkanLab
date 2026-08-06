@@ -27,6 +27,7 @@
 #include "render/pass/SsaoPass.h"
 #include "render/pass/CacaoNormalAdapterPass.h"
 #include "render/pass/CacaoPass.h"
+#include "render/pass/GtaoPass.h"
 #include "render/pass/MainForwardPass.h"
 #include "render/pass/SkyBackgroundPass.h"
 #include "render/pass/ToneMapPass.h"
@@ -182,6 +183,16 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     const bool cacaoDebugRequested =
         view.settings.screenSpaceDebugView ==
         ScreenSpaceDebugView::CacaoOutput;
+    const bool gtaoDebugRequested =
+        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::GtaoRaw ||
+        view.settings.screenSpaceDebugView ==
+            ScreenSpaceDebugView::GtaoTemporal ||
+        view.settings.screenSpaceDebugView ==
+            ScreenSpaceDebugView::GtaoFiltered ||
+        view.settings.screenSpaceDebugView ==
+            ScreenSpaceDebugView::GtaoRejection ||
+        view.settings.screenSpaceDebugView ==
+            ScreenSpaceDebugView::GtaoHistoryWeight;
     const bool ssaoShadingActive =
         screenSupport.ssaoAvailable && shaderVariant.supportsScreenSpace &&
         view.settings.ambientOcclusionMode == AmbientOcclusionMode::Ssao;
@@ -192,6 +203,12 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
         view.settings.ambientOcclusionMode == AmbientOcclusionMode::Cacao;
     const bool cacaoPassRequired =
         cacaoReady && (cacaoShadingActive || cacaoDebugRequested);
+    const bool gtaoShadingActive =
+        screenSupport.gtaoAvailable && shaderVariant.supportsScreenSpace &&
+        view.settings.ambientOcclusionMode == AmbientOcclusionMode::Gtao;
+    const bool gtaoPassRequired =
+        screenSupport.gtaoAvailable &&
+        (gtaoShadingActive || gtaoDebugRequested);
     const bool taaDebugRequested =
         isTaaDebugView(view.settings.screenSpaceDebugView);
     const bool taaShadingActive =
@@ -202,10 +219,12 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
         screenSupport.taaAvailable &&
         (taaShadingActive || taaDebugRequested);
     const AmbientOcclusionMode activeAoMode =
-        cacaoShadingActive
-            ? AmbientOcclusionMode::Cacao
-            : (ssaoShadingActive ? AmbientOcclusionMode::Ssao
-                                 : AmbientOcclusionMode::Off);
+        gtaoShadingActive
+            ? AmbientOcclusionMode::Gtao
+            : (cacaoShadingActive
+                   ? AmbientOcclusionMode::Cacao
+                   : (ssaoShadingActive ? AmbientOcclusionMode::Ssao
+                                        : AmbientOcclusionMode::Off));
     ScreenSpaceLightingUbo screenUbo{};
     const VkExtent2D screenExtent = renderResources_->viewportExtent();
     screenUbo.viewportSizeInvSize =
@@ -269,6 +288,7 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
              ScreenSpaceDebugView::NearestDepth ||
           (screenSupport.ssaoAvailable && ssaoPassRequired) ||
           (device_->cacaoSupport().available && cacaoPassRequired) ||
+          gtaoPassRequired ||
           taaPassRequired);
     renderFrame.features.hiZRequired =
         device_->occlusionCullingSupport().available &&
@@ -277,14 +297,16 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
         renderFrame.features.hiZRequired;
     renderFrame.features.screenDepthPyramidRequired =
         screenSupport.depthPyramidAvailable &&
-        view.settings.screenSpaceDebugView ==
-            ScreenSpaceDebugView::NearestDepth;
+        (view.settings.screenSpaceDebugView ==
+             ScreenSpaceDebugView::NearestDepth ||
+         gtaoPassRequired);
     renderFrame.features.sceneColorPyramidRequired =
         screenSupport.colorPyramidAvailable &&
         view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SceneColor;
     renderFrame.features.ssaoRequired =
         screenSupport.ssaoAvailable && ssaoPassRequired;
     renderFrame.features.cacaoRequired = cacaoPassRequired;
+    renderFrame.features.gtaoRequired = gtaoPassRequired;
     renderFrame.features.taaRequired = taaPassRequired;
     renderFrame.features.taaActive = taaShadingActive;
     lastSurfaceDataActive_ = renderFrame.features.surfaceDataRequired;
@@ -309,6 +331,16 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
         screenSpaceStatus_.taaLastFrameSerial = taa.lastFrameSerial;
         screenSpaceStatus_.taaJitterPixels = taa.jitterPixels;
         screenSpaceStatus_.taaLastResetReason = taa.lastResetReason;
+    }
+    if (gtaoPass_) {
+        const GtaoPassStatus &gtao = gtaoPass_->status();
+        screenSpaceStatus_.gtaoActive =
+            activeAoMode == AmbientOcclusionMode::Gtao;
+        screenSpaceStatus_.gtaoHistoryValid = gtao.historyValid;
+        screenSpaceStatus_.gtaoExtent = gtao.extent;
+        screenSpaceStatus_.gtaoHistoryGeneration = gtao.historyGeneration;
+        screenSpaceStatus_.gtaoLastFrameSerial = gtao.lastFrameSerial;
+        screenSpaceStatus_.gtaoLastResetReason = gtao.lastResetReason;
     }
     if (atmosphereLutPass_)
         atmosphereStatus_ = atmosphereLutPass_->status();
@@ -589,6 +621,14 @@ void Renderer::updateScreenSpaceDescriptor(uint32_t frameIndex,
             renderResources_->sampler(resourceHandles_.ssaoSampler);
         imageInfo.imageView =
             renderResources_->image(resourceHandles_.cacaoOutput, frameIndex)
+                .imageView();
+        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    } else if (mode == AmbientOcclusionMode::Gtao &&
+               resourceHandles_.gtaoFiltered.valid()) {
+        imageInfo.sampler =
+            renderResources_->sampler(resourceHandles_.ssaoSampler);
+        imageInfo.imageView =
+            renderResources_->image(resourceHandles_.gtaoFiltered, frameIndex)
                 .imageView();
         imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     } else {
@@ -1042,10 +1082,12 @@ ScreenSpaceEffectsStatus Renderer::screenSpaceEffectsStatus() const {
     status.depthPyramidSupported = support.depthPyramidAvailable;
     status.colorPyramidSupported = support.colorPyramidAvailable;
     status.ssaoSupported = support.ssaoAvailable;
+    status.gtaoSupported = support.gtaoAvailable;
     status.taaSupported = support.taaAvailable;
     status.depthPyramidUnavailableReason = support.depthPyramidReason;
     status.colorPyramidUnavailableReason = support.colorPyramidReason;
     status.ssaoUnavailableReason = support.ssaoReason;
+    status.gtaoUnavailableReason = support.gtaoReason;
     status.taaUnavailableReason = support.taaReason;
     const CacaoSupport &cacaoSupport = device_->cacaoSupport();
     status.cacaoCompiled = cacaoSupport.compiled;
@@ -1108,6 +1150,14 @@ ScreenSpaceEffectsStatus Renderer::screenSpaceEffectsStatus() const {
         status.estimatedMemoryBytes += pixels * 4u;
         status.estimatedMemoryBytes += pixels * 4u;
         status.estimatedMemoryBytes += pixels * 4u;
+    }
+    if (resourceHandles_.gtaoRaw.valid()) {
+        status.gtaoExtent =
+            renderResources_->extent(resourceHandles_.gtaoRaw);
+        const uint64_t imageBytes =
+            static_cast<uint64_t>(status.gtaoExtent.width) *
+            status.gtaoExtent.height * 2u * MAX_FRAMES_IN_FLIGHT;
+        status.estimatedMemoryBytes += imageBytes * 5u;
     }
     if (resourceHandles_.taaHistory.valid()) {
         status.taaExtent =
@@ -1190,6 +1240,15 @@ void Renderer::createRenderPipeline() {
             *descriptorAllocator_, globalDescriptorSetLayout_,
             shaderPaths_.ssaoTraceComp, shaderPaths_.ssaoBlurComp));
     }
+    if (screenSupport.gtaoAvailable) {
+        auto gtaoPass = std::make_unique<GtaoPass>(
+            *device_, *renderResources_, resourceHandles_,
+            *descriptorAllocator_, globalDescriptorSetLayout_,
+            shaderPaths_.gtaoTraceComp, shaderPaths_.gtaoTemporalComp,
+            shaderPaths_.ssaoBlurComp);
+        gtaoPass_ = gtaoPass.get();
+        pipeline_.addPass(std::move(gtaoPass));
+    }
     if (device_->cacaoSupport().available) {
         pipeline_.addPass(std::make_unique<CacaoNormalAdapterPass>(
             *device_, *renderResources_, resourceHandles_,
@@ -1252,6 +1311,10 @@ void Renderer::createRenderPipeline() {
         resourceHandles_.ssaoRaw,
         resourceHandles_.ssaoFiltered,
         resourceHandles_.cacaoOutput,
+        resourceHandles_.gtaoRaw,
+        resourceHandles_.gtaoHistory,
+        resourceHandles_.gtaoFiltered,
+        resourceHandles_.gtaoDebug,
         resourceHandles_.taaHistory,
         resourceHandles_.taaDebug,
         resourceHandles_.screenPyramidSampler,

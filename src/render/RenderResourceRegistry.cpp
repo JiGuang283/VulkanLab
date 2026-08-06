@@ -522,6 +522,27 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
         handles.ssaoTemp = registerSsaoImage("SSAO Temp");
         handles.ssaoFiltered = registerSsaoImage("SSAO Filtered");
     }
+    if (screenSupport.gtaoAvailable) {
+        const auto registerGtaoImage = [&](std::string name,
+                                           bool historyCapable = false) {
+            RenderImageDesc desc{};
+            desc.name = std::move(name);
+            desc.extentPolicy = RenderExtentPolicy::Viewport;
+            desc.multiplicity = RenderResourceMultiplicity::PerFrame;
+            desc.format = screenSupport.ssaoFormat;
+            desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                         VK_IMAGE_USAGE_STORAGE_BIT;
+            desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+            desc.extentDivisor = 2;
+            desc.historyCapable = historyCapable;
+            return registry.registerImage(std::move(desc));
+        };
+        handles.gtaoRaw = registerGtaoImage("GTAO Raw");
+        handles.gtaoHistory = registerGtaoImage("GTAO History", true);
+        handles.gtaoTemp = registerGtaoImage("GTAO Temp");
+        handles.gtaoFiltered = registerGtaoImage("GTAO Filtered");
+        handles.gtaoDebug = registerGtaoImage("GTAO Debug");
+    }
     if (device.cacaoSupport().available) {
         RenderImageDesc depth{};
         depth.name = "CACAO Input Depth";

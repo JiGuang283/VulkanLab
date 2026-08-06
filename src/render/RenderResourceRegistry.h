@@ -136,6 +136,11 @@ struct RendererResourceHandles {
     RenderImageHandle cacaoDepth{};
     RenderImageHandle cacaoViewNormals{};
     RenderImageHandle cacaoOutput{};
+    RenderImageHandle gtaoRaw{};
+    RenderImageHandle gtaoHistory{};
+    RenderImageHandle gtaoTemp{};
+    RenderImageHandle gtaoFiltered{};
+    RenderImageHandle gtaoDebug{};
     RenderImageHandle taaHistory{};
     RenderImageHandle taaDebug{};
     std::array<RenderImageHandle, kBloomPyramidLevelCount> bloomLevels{};

@@ -2,14 +2,14 @@
 
 > Status: Active
 > Last reviewed: 2026-08-06
-> Based on: Stage 0–2 plus optional FidelityFX CACAO comparison integration
+> Based on: Stage 0–3 plus optional FidelityFX CACAO comparison integration
 > Current architecture: [渲染流程](../architecture/rendering.md)
 
 ## Summary
 
 本路线在现有 Forward + Compute 管线上逐步增加环境遮蔽、屏幕空间反射和间接漫反射，并为后续 Reflection Probe、DDGI 和可选硬件光追保留清晰边界。
 
-> Progress: Stage 0（共享屏幕空间基础）、Stage 1（SSAO）、FidelityFX CACAO comparison backend 和 Stage 2（TAA v1）已完成；下一阶段为 Stage 3 GTAO。
+> Progress: Stage 0（共享屏幕空间基础）、Stage 1（SSAO）、FidelityFX CACAO comparison backend、Stage 2（TAA v1）和 Stage 3（GTAO v1）已完成；下一阶段为 Stage 4 SSR。
 
 三个问题必须分开处理：
 
@@ -566,12 +566,18 @@ TAA 位于完整 MainForward 之后、Scene Color Pyramid/Bloom/ToneMap 之前�
 
 完成标准：静态边缘稳定，移动时无明显长时间拖影；UI 不经过 TAA。
 
-### Stage 3：GTAO
+### Stage 3：GTAO（已完成）
 
 - Horizon search。
 - 复用 AO output contract 与 bilateral filter。
 - 接入 temporal accumulation。
 - Editor 提供 Off/SSAO/GTAO。
+
+实际实现为项目内 Vulkan/GLSL 重写：半分辨率 trace 沿 2/3/4 个切片执行 2/4/6 步 horizon search，并复用 nearest-depth Screen Pyramid 选择保守 LOD。Trace 结果通过独立的 GTAO history 做 motion reprojection、depth/normal rejection、3x3 neighborhood clamp 和可调 history weight，再复用 SSAO 的两次 5-tap bilateral blur 输出统一 AO contract。
+
+GTAO history 独立于 TAA，响应 frame-level camera cut、viewport resize、scene generation、camera mode、projection、Shader variant、设置签名和执行序列中断。Editor、Runtime Control 与 `VulkanLabCtl` 提供 Quality、Radius、Falloff、Intensity、Power、History Weight，以及 Raw、Temporal、Filtered、Rejection 和 History Weight 调试视图。GPU profiler、Tracy 和 RenderDoc 使用独立 `GTAO` 区域。
+
+实现参考本地 `references/rendering_algorithms/downloads/code/xegtao` 固定提交 `a5b1686c7ea37788eeb3576b5be47f7c03db532c` 和 `gtao_2016.pdf`。参考代码采用 MIT 许可证，仅用于核对 horizon integral、采样分布和 temporal/denoise 职责；正式实现不 include、link 或运行 XeGTAO，并暂不移植其 Hilbert LUT、fp16 path、depth prefilter 和 multiple-bounce approximation。
 
 完成标准：GTAO 在大尺度遮蔽和视角变化下优于 SSAO，切换模式不重建场景或材质。
 

@@ -18,6 +18,7 @@ enum class AmbientOcclusionMode {
     Off,
     Ssao,
     Cacao,
+    Gtao,
 };
 
 enum class TemporalAntiAliasingMode {
@@ -47,6 +48,8 @@ inline const char *ambientOcclusionModeName(AmbientOcclusionMode mode) {
         return "ssao";
     case AmbientOcclusionMode::Cacao:
         return "cacao";
+    case AmbientOcclusionMode::Gtao:
+        return "gtao";
     }
     return "off";
 }
@@ -59,8 +62,47 @@ ambientOcclusionModeFromName(std::string_view name) {
         return AmbientOcclusionMode::Ssao;
     if (name == "cacao")
         return AmbientOcclusionMode::Cacao;
+    if (name == "gtao")
+        return AmbientOcclusionMode::Gtao;
     return std::nullopt;
 }
+
+enum class GtaoQuality {
+    Low,
+    Medium,
+    High,
+};
+
+inline const char *gtaoQualityName(GtaoQuality quality) {
+    switch (quality) {
+    case GtaoQuality::Low:
+        return "low";
+    case GtaoQuality::Medium:
+        return "medium";
+    case GtaoQuality::High:
+        return "high";
+    }
+    return "medium";
+}
+
+inline std::optional<GtaoQuality> gtaoQualityFromName(std::string_view name) {
+    if (name == "low")
+        return GtaoQuality::Low;
+    if (name == "medium")
+        return GtaoQuality::Medium;
+    if (name == "high")
+        return GtaoQuality::High;
+    return std::nullopt;
+}
+
+struct GtaoSettings {
+    GtaoQuality quality = GtaoQuality::Medium;
+    float radius = 1.0f;
+    float falloff = 0.85f;
+    float intensity = 1.0f;
+    float power = 1.5f;
+    float temporalWeight = 0.9f;
+};
 
 enum class CacaoQuality {
     Lowest,
@@ -161,6 +203,11 @@ enum class ScreenSpaceDebugView {
     SsaoRaw,
     SsaoFiltered,
     CacaoOutput,
+    GtaoRaw,
+    GtaoTemporal,
+    GtaoFiltered,
+    GtaoRejection,
+    GtaoHistoryWeight,
     TaaHistory,
     TaaRejection,
     TaaHistoryWeight,
@@ -180,6 +227,16 @@ inline const char *screenSpaceDebugViewName(ScreenSpaceDebugView view) {
         return "ssao-filtered";
     case ScreenSpaceDebugView::CacaoOutput:
         return "cacao-output";
+    case ScreenSpaceDebugView::GtaoRaw:
+        return "gtao-raw";
+    case ScreenSpaceDebugView::GtaoTemporal:
+        return "gtao-temporal";
+    case ScreenSpaceDebugView::GtaoFiltered:
+        return "gtao-filtered";
+    case ScreenSpaceDebugView::GtaoRejection:
+        return "gtao-rejection";
+    case ScreenSpaceDebugView::GtaoHistoryWeight:
+        return "gtao-history-weight";
     case ScreenSpaceDebugView::TaaHistory:
         return "taa-history";
     case ScreenSpaceDebugView::TaaRejection:
@@ -204,6 +261,16 @@ screenSpaceDebugViewFromName(std::string_view name) {
         return ScreenSpaceDebugView::SsaoFiltered;
     if (name == "cacao-output")
         return ScreenSpaceDebugView::CacaoOutput;
+    if (name == "gtao-raw")
+        return ScreenSpaceDebugView::GtaoRaw;
+    if (name == "gtao-temporal")
+        return ScreenSpaceDebugView::GtaoTemporal;
+    if (name == "gtao-filtered")
+        return ScreenSpaceDebugView::GtaoFiltered;
+    if (name == "gtao-rejection")
+        return ScreenSpaceDebugView::GtaoRejection;
+    if (name == "gtao-history-weight")
+        return ScreenSpaceDebugView::GtaoHistoryWeight;
     if (name == "taa-history")
         return ScreenSpaceDebugView::TaaHistory;
     if (name == "taa-rejection")
@@ -308,6 +375,7 @@ struct RenderSettings {
     float ssaoIntensity = 1.0f;
     float ssaoPower = 1.5f;
     CacaoSettings cacao{};
+    GtaoSettings gtao{};
     TemporalAntiAliasingMode temporalAntiAliasingMode =
         TemporalAntiAliasingMode::Off;
     float taaHistoryWeight = 0.9f;
@@ -345,6 +413,12 @@ struct RenderSettingsPatch {
     std::optional<float> cacaoRadius;
     std::optional<float> cacaoIntensity;
     std::optional<float> cacaoPower;
+    std::optional<GtaoQuality> gtaoQuality;
+    std::optional<float> gtaoRadius;
+    std::optional<float> gtaoFalloff;
+    std::optional<float> gtaoIntensity;
+    std::optional<float> gtaoPower;
+    std::optional<float> gtaoTemporalWeight;
     std::optional<TemporalAntiAliasingMode> temporalAntiAliasingMode;
     std::optional<float> taaHistoryWeight;
     std::optional<float> taaSharpness;
@@ -419,6 +493,18 @@ inline void applyRenderSettingsPatch(RenderSettings &settings,
         settings.cacao.intensity = *patch.cacaoIntensity;
     if (patch.cacaoPower)
         settings.cacao.power = *patch.cacaoPower;
+    if (patch.gtaoQuality)
+        settings.gtao.quality = *patch.gtaoQuality;
+    if (patch.gtaoRadius)
+        settings.gtao.radius = *patch.gtaoRadius;
+    if (patch.gtaoFalloff)
+        settings.gtao.falloff = *patch.gtaoFalloff;
+    if (patch.gtaoIntensity)
+        settings.gtao.intensity = *patch.gtaoIntensity;
+    if (patch.gtaoPower)
+        settings.gtao.power = *patch.gtaoPower;
+    if (patch.gtaoTemporalWeight)
+        settings.gtao.temporalWeight = *patch.gtaoTemporalWeight;
     if (patch.temporalAntiAliasingMode) {
         settings.temporalAntiAliasingMode =
             *patch.temporalAntiAliasingMode;
