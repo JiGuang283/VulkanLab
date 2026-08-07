@@ -5,6 +5,7 @@
 #include "core/Image.h"
 #include "core/VulkanCheck.h"
 #include "render/DirectionalShadow.h"
+#include "render/FrameGpuData.h"
 
 #include <algorithm>
 #include <array>
@@ -751,6 +752,33 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
         RenderResourceMultiplicity::PerFrame, 32,
         VK_IMAGE_VIEW_TYPE_2D_ARRAY);
 
+    const bool ddgiSupported = device.ddgiSupport().available;
+    const auto registerDdgiImage =
+        [&](std::string name, VkExtent2D extent, VkFormat format,
+            VkFormat fallbackFormat) {
+            RenderImageDesc desc{};
+            desc.name = std::move(name);
+            desc.extentPolicy = RenderExtentPolicy::Fixed;
+            desc.fixedExtent = ddgiSupported ? extent : VkExtent2D{1, 1};
+            desc.multiplicity = RenderResourceMultiplicity::Single;
+            desc.format = ddgiSupported ? format : fallbackFormat;
+            desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                         VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                         (ddgiSupported ? VK_IMAGE_USAGE_STORAGE_BIT : 0u);
+            desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+            desc.externallyInitialized = true;
+            desc.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            desc.arrayLayers = ddgiSupported ? kMaxDdgiProbes : 1u;
+            desc.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+            return registry.registerImage(std::move(desc));
+        };
+    handles.ddgiIrradiance = registerDdgiImage(
+        "DDGI/Irradiance", {8, 8}, device.ddgiSupport().irradianceFormat,
+        VK_FORMAT_R8G8B8A8_UNORM);
+    handles.ddgiDistance = registerDdgiImage(
+        "DDGI/DistanceMoments", {16, 16},
+        device.ddgiSupport().distanceFormat, VK_FORMAT_R8G8_UNORM);
+
     RenderSamplerDesc hdrSampler{};
     hdrSampler.name = "HDR Sampler";
     handles.hdrSampler = registry.registerSampler(std::move(hdrSampler));
@@ -867,6 +895,16 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
     atmosphereSampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     handles.atmosphereSampler =
         registry.registerSampler(std::move(atmosphereSampler));
+    RenderSamplerDesc ddgiSampler{};
+    ddgiSampler.name = "DDGI Probe Sampler";
+    ddgiSampler.magFilter = ddgiSupported ? VK_FILTER_LINEAR
+                                          : VK_FILTER_NEAREST;
+    ddgiSampler.minFilter = ddgiSupported ? VK_FILTER_LINEAR
+                                          : VK_FILTER_NEAREST;
+    ddgiSampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ddgiSampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ddgiSampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    handles.ddgiSampler = registry.registerSampler(std::move(ddgiSampler));
     return handles;
 }
 

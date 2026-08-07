@@ -96,7 +96,7 @@ GTAO             -> 参考 XeGTAO 后移植为 Vulkan/GLSL
 SSR              -> 先固定本项目 contract，再决定是否接入 FidelityFX SSSR
 SSGI             -> 已完成项目内 v1；参考 visibility bitmask 与 SVGF 论文，不直接依赖参考代码
 Reflection Probe -> 已完成项目内 v1；复用 KTX2/Environment 管线，不直接依赖外部实现
-DDGI             -> 参考 RTXGI，等 Vulkan RT 基础完成后决定依赖方式
+DDGI             -> 已完成项目内 Vulkan Ray Query v1；参考 Hillaire 论文和 RTXGI 的算法结构，不链接或分发 RTXGI
 RT Denoising     -> 优先评估 NRD，不从零开发生产级 denoiser
 ```
 

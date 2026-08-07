@@ -35,9 +35,13 @@ class GtaoPass;
 class SsrPass;
 class SsgiPass;
 class TaaPass;
+class DdgiPass;
+struct DdgiRuntimeStatus;
 class Texture;
 class PresentPass;
 class PipelineCache;
+class RayTracingScene;
+struct RayTracingSceneStatus;
 struct ShaderVariant;
 struct RenderView;
 
@@ -200,6 +204,7 @@ class Renderer {
     const std::string &bloomUnsupportedReason() const;
     SceneLightBufferStatus sceneLightBufferStatus() const;
     ReflectionProbeRuntimeStatus reflectionProbeStatus() const;
+    const RayTracingSceneStatus &rayTracingSceneStatus() const;
     OcclusionCullingStatus occlusionCullingStatus() const;
     SurfaceDataStatus surfaceDataStatus() const;
     ScreenSpaceEffectsStatus screenSpaceEffectsStatus() const;
@@ -207,6 +212,7 @@ class Renderer {
     bool atmosphereSupported() const;
     const std::string &atmosphereUnsupportedReason() const;
     AtmosphereRuntimeStatus atmosphereStatus() const;
+    DdgiRuntimeStatus ddgiStatus() const;
 
     // ---- per-frame UBO 访问器 ----
   private:
@@ -285,6 +291,7 @@ class Renderer {
         currentLightingGeneration_;
     std::deque<LightingDescriptorGeneration> retiredLightingGenerations_;
     ReflectionProbeRuntimeStatus reflectionProbeStatus_{};
+    std::unique_ptr<RayTracingScene> rayTracingScene_;
     uint64_t nextLightingDescriptorGeneration_ = 1;
     std::unique_ptr<RenderResourceRegistry> renderResources_;
     RendererResourceHandles resourceHandles_{};
@@ -300,6 +307,7 @@ class Renderer {
     SsrPass *ssrPass_ = nullptr;
     SsgiPass *ssgiPass_ = nullptr;
     TaaPass *taaPass_ = nullptr;
+    DdgiPass *ddgiPass_ = nullptr;
     class OcclusionCullPass *occlusionCullPass_ = nullptr;
     uint32_t lastOcclusionFrameIndex_ = 0;
     uint32_t lastOcclusionRequested_ = 0;

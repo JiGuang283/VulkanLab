@@ -139,6 +139,7 @@ if(VKL_CONTROL_REQUIRED)
 endif()
 
 set(VKL_ENGINE_SOURCES
+    core/AccelerationStructure.cpp
     core/Buffer.cpp
     core/ComputePipeline.cpp
     core/DescriptorAllocator.cpp
@@ -171,6 +172,8 @@ set(VKL_ENGINE_SOURCES
     render/RenderQueue.cpp
     render/RenderResourceRegistry.cpp
     render/RenderView.cpp
+    render/RayTracingScene.cpp
+    render/pass/DdgiPass.cpp
     render/TemporalAA.cpp
     render/Visibility.cpp
     render/TangentGenerator.cpp

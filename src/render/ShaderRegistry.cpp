@@ -194,7 +194,8 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
             rejectUnknownFields(
                 item, field,
                 {"id", "contract", "vertex", "fragment", "compute",
-                 "sceneLights", "atmosphere", "screenSpace"});
+                 "sceneLights", "atmosphere", "screenSpace", "ddgi",
+                 "targetEnv"});
 
             ShaderProgram program;
             program.id = requiredString(item, "id", field);
@@ -209,6 +210,15 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
             program.usesSceneLights = item.value("sceneLights", false);
             program.usesAtmosphere = item.value("atmosphere", false);
             program.usesScreenSpace = item.value("screenSpace", false);
+            program.usesDdgi = item.value("ddgi", false);
+
+            const std::string targetEnv =
+                optionalString(item, "targetEnv", field);
+            if (!targetEnv.empty() && targetEnv != "vulkan1.0" &&
+                targetEnv != "vulkan1.2") {
+                throw fieldError(field + ".targetEnv",
+                                 "expected vulkan1.0 or vulkan1.2");
+            }
 
             const std::string vertex = optionalString(item, "vertex", field);
             const std::string fragment =
@@ -244,6 +254,12 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
                 throw fieldError(field + ".screenSpace",
                                  "only main-forward programs may consume "
                                  "screen-space lighting resources");
+            }
+            if (program.usesDdgi &&
+                program.contract != ShaderProgramContract::MainForward) {
+                throw fieldError(field + ".ddgi",
+                                 "only main-forward programs may consume "
+                                 "DDGI resources");
             }
             program.vertSpvPath = resolveSpirvPath(
                 shaderRoot, program.vertexSourcePath, field + ".vertex");
@@ -299,6 +315,7 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
             variant.supportsBloom = item.value("bloom", false);
             variant.supportsAtmosphere = program.usesAtmosphere;
             variant.supportsScreenSpace = program.usesScreenSpace;
+            variant.supportsDdgi = program.usesDdgi;
             variant.isDefault = item.at("default").get<bool>();
             variant.order = item.at("order").get<int32_t>();
             variant.vertSpvPath = program.vertSpvPath;

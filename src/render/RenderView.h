@@ -44,6 +44,8 @@ struct RenderViewInput {
     VkExtent2D viewportExtent{};
     std::optional<RenderWorldAtmosphere> atmosphere;
     bool atmosphereSupported = false;
+    std::optional<RenderWorldDdgiVolume> ddgiProbeVolume;
+    bool ddgiSupported = false;
 };
 
 struct AtmosphereFrameData {
@@ -88,6 +90,16 @@ struct RenderViewReflectionProbeStats {
     std::vector<PersistentEntityId> ignoredEntityIds;
 };
 
+struct DdgiFrameData {
+    bool componentPresent = false;
+    bool active = false;
+    PersistentEntityId componentEntity;
+    glm::mat4 localToWorld{1.0f};
+    glm::mat4 worldToLocal{1.0f};
+    DdgiProbeVolumeComponentDocument parameters{};
+    uint32_t probeCount = 0;
+};
+
 struct RenderView {
     GlobalFrameUbo globalUbo{};
     glm::mat4 stableProjection{1.0f};
@@ -102,6 +114,7 @@ struct RenderView {
     RenderViewReflectionProbeStats reflectionProbeStats{};
     AtmosphereFrameData atmosphere{};
     AtmosphereGpuParams atmosphereGpuParams{};
+    DdgiFrameData ddgi{};
     float cameraNearPlane = 0.05f;
     float cameraFarPlane = 1000.0f;
 };

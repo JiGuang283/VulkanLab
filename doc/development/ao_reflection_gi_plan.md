@@ -9,7 +9,7 @@
 
 本路线在现有 Forward + Compute 管线上逐步增加环境遮蔽、屏幕空间反射和间接漫反射，并为后续 Reflection Probe、DDGI 和可选硬件光追保留清晰边界。
 
-> Progress: Stage 0（共享屏幕空间基础）、Stage 1（SSAO）、FidelityFX CACAO comparison backend、Stage 2（TAA v1）、Stage 3（GTAO v1）、Stage 4（SSR v1）、Stage 5（SSGI v1）和 Stage 6（Local Reflection Probes）已完成；下一阶段为 Stage 7 DDGI。
+> Progress: Stage 0（共享屏幕空间基础）、Stage 1（SSAO）、FidelityFX CACAO comparison backend、Stage 2（TAA v1）、Stage 3（GTAO v1）、Stage 4（SSR v1）、Stage 5（SSGI v1）、Stage 6（Local Reflection Probes）和 Stage 7（DDGI v1）已完成；Stage 8 暂缓。
 
 三个问题必须分开处理：
 
@@ -648,9 +648,17 @@ Editor、Runtime Control 与 `VulkanLabCtl` 提供 Ambient or IBL/SSGI、Low/Med
 
 ### Stage 7：DDGI
 
-- Probe Volume、更新预算、visibility、relocation/classification。
-- 与 SSGI 的 near/far-field 混合。
-- Editor 可视化 Probe 状态与更新成本。
+- 已实现项目内可选 Vulkan Ray Query DDGI，不链接 RTXGI。设备能力不足时只禁用 DDGI，其他 Forward、SSGI、IBL 和 Local Reflection Probe 路径保持可用。
+- SceneDocument schema v5 提供单个 `DdgiProbeVolume` component；默认 `8x4x8`、2 m spacing、128 rays/probe、每帧更新 32 probes，最大 2048 probes。Editor 支持创建、参数编辑、Undo/Redo、网格位置叠加，以及 Irradiance、Distance 和 Classification 调试视图。
+- Mesh 在支持 Ray Query 的设备上创建 BLAS；Renderer 为当前 frame slot 从可见世界构建 TLAS 和 material-constant metadata。BLEND/transmission 不进入 TLAS，MASK v1 作为实体三角形处理。
+- `DdgiPass` 在 graphics queue 上依次执行 Ray Query trace 和 probe atlas update。单一持久化 `RGBA16F 8x8x2048` irradiance array、`RG16F 16x16x2048` distance-moments array 和 probe-state SSBO 保存跨帧结果；volume transform、布局、scene generation 或 relocation/classification 策略变化会重置历史。
+- Hit shading 使用几何法线、材质常量、Scene Light SSBO、emissive 和 ambient；v1 不执行贴图采样、shadow query 或二次反弹。Probe update 使用 hysteresis，并提供 backface classification 与受限 relocation。
+- PBR 的 diffuse baseline 现在按 `SSGI confidence -> DDGI -> IBL/ambient` 替换：`DDGI` 提供屏幕外低频基线，`SSGI + DDGI` 用 SSGI confidence 覆盖近场细节。Direct、specular、AO 和 emissive 的既有语义不变。
+- DDGI 默认关闭。UI 和 Runtime Control 支持 `ambient-or-ibl`、`ssgi`、`ddgi`、`ssgi-ddgi`，并报告 requested/supported/active、TLAS instance、更新 cursor、generation/reset、GPU timing 和显存估算。
+
+实现参考 Hillaire 等人的 DDGI irradiance/distance moments、probe visibility、relocation/classification 思路，并以本项目 Vulkan/GLSL ABI 独立实现。`references/rendering_algorithms/downloads/code/rtxgi-ddgi` 只用于本地设计核对，不参与 include、link、Cook 或分发；因此没有新增 NVIDIA SDK 运行时依赖。
+
+v1 不做 scrolling volume、多个 volume、bindless hit material、alpha-tested Ray Query、probe update prioritization、shadowed hit lighting、动态 BLAS update 或 async compute。支持 Ray Query 的设备会在模型上传期提前构建 BLAS，以换取会话内即时切换 DDGI；这会增加 DDGI 关闭时的模型加载与常驻显存，lazy BLAS residency 留待实际 profiling 后处理。
 
 ### Stage 8：可选硬件光追与 Reference
 
@@ -676,7 +684,7 @@ Reflections
   Max Distance / Thickness / Roughness Cutoff / Quality
 
 Global Illumination
-  Mode: Ambient or IBL / SSGI
+  Mode: Ambient or IBL / SSGI / DDGI / SSGI + DDGI
   Intensity / Ray Distance / Quality
 ```
 

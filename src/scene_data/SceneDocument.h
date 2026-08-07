@@ -69,6 +69,20 @@ struct ReflectionProbeComponentDocument {
     glm::vec3 captureOffset{0.0f};
 };
 
+struct DdgiProbeVolumeComponentDocument {
+    glm::uvec3 probeCounts{8u, 4u, 8u};
+    glm::vec3 probeSpacing{2.0f};
+    uint32_t raysPerProbe = 128;
+    uint32_t probesUpdatedPerFrame = 32;
+    float maxRayDistance = 20.0f;
+    float hysteresis = 0.97f;
+    float normalBias = 0.2f;
+    float viewBias = 0.1f;
+    float intensity = 1.0f;
+    bool relocationEnabled = true;
+    bool classificationEnabled = true;
+};
+
 struct CameraComponentDocument {
     float verticalFovRadians = 1.04719755f;
     float nearPlane = 0.05f;
@@ -86,6 +100,7 @@ struct SceneEntityDocument {
     std::optional<CameraComponentDocument> camera;
     std::optional<AtmosphereComponentDocument> atmosphere;
     std::optional<ReflectionProbeComponentDocument> reflectionProbe;
+    std::optional<DdgiProbeVolumeComponentDocument> ddgiProbeVolume;
 };
 
 struct SceneAmbientDocument {
@@ -100,7 +115,7 @@ struct SceneEnvironmentDocument {
 };
 
 struct SceneDocument {
-    static constexpr uint32_t kSchemaVersion = 4;
+    static constexpr uint32_t kSchemaVersion = 5;
 
     uint32_t schemaVersion = kSchemaVersion;
     SceneDocumentId id;

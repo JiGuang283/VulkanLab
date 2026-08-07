@@ -160,6 +160,22 @@ RenderView buildRenderView(const RenderViewInput &input) {
         glm::vec4(glm::max(input.ambientColor, glm::vec3(0.0f)),
                   std::max(input.ambientIntensity, 0.0f));
 
+    if (input.ddgiProbeVolume) {
+        const RenderWorldDdgiVolume &source = *input.ddgiProbeVolume;
+        result.ddgi.componentPresent = true;
+        result.ddgi.componentEntity = source.entityId;
+        result.ddgi.localToWorld = source.localToWorld;
+        result.ddgi.worldToLocal = source.worldToLocal;
+        result.ddgi.parameters = source.parameters;
+        result.ddgi.probeCount = source.parameters.probeCounts.x *
+                                 source.parameters.probeCounts.y *
+                                 source.parameters.probeCounts.z;
+        const GlobalIlluminationMode mode = input.settings.globalIlluminationMode;
+        result.ddgi.active = input.ddgiSupported &&
+                             (mode == GlobalIlluminationMode::Ddgi ||
+                              mode == GlobalIlluminationMode::SsgiDdgi);
+    }
+
     if (input.reflectionProbes) {
         std::vector<const RenderWorldReflectionProbe *> candidates;
         candidates.reserve(input.reflectionProbes->size());

@@ -68,7 +68,8 @@ void OutlinerPanel::draw(const OutlinerPanelSnapshot &snapshot,
         ImGui::SetTooltip("Create entity");
     if (ImGui::BeginPopup("CreateEntity")) {
         drawCreateMenu(actions, std::nullopt,
-                       snapshot.canCreateAtmosphere);
+                       snapshot.canCreateAtmosphere,
+                       snapshot.canCreateDdgiProbeVolume);
         ImGui::EndPopup();
     }
     ImGui::EndDisabled();
@@ -205,14 +206,16 @@ void OutlinerPanel::drawEntity(const OutlinerEntitySnapshot &entity,
     if (ImGui::BeginPopupContextItem("EntityActions")) {
         if (ImGui::BeginMenu("Create Child")) {
             drawCreateMenu(actions, entity.id,
-                           snapshot.canCreateAtmosphere);
+                           snapshot.canCreateAtmosphere,
+                           snapshot.canCreateDdgiProbeVolume);
             ImGui::EndMenu();
         }
         ImGui::BeginDisabled(!snapshot.editable);
         if (ImGui::MenuItem("Rename", "F2")) {
             beginRename(entity.id, entity.name);
         }
-        ImGui::BeginDisabled(entity.hasAtmosphere);
+        ImGui::BeginDisabled(entity.hasAtmosphere ||
+                             entity.hasDdgiProbeVolume);
         if (ImGui::MenuItem("Duplicate", "Ctrl+D") && actions.duplicate)
             actions.duplicate(entity.id);
         ImGui::EndDisabled();
@@ -234,7 +237,7 @@ void OutlinerPanel::drawEntity(const OutlinerEntitySnapshot &entity,
 void OutlinerPanel::drawCreateMenu(
     const OutlinerPanelActions &actions,
     std::optional<PersistentEntityId> parent,
-    bool canCreateAtmosphere) {
+    bool canCreateAtmosphere, bool canCreateDdgiProbeVolume) {
     const auto create = [&](const char *label, OutlinerCreateKind kind) {
         if (ImGui::MenuItem(label) && actions.create)
             actions.create(kind, parent);
@@ -256,6 +259,9 @@ void OutlinerPanel::drawCreateMenu(
     create("Spot Light", OutlinerCreateKind::SpotLight);
     create("Camera", OutlinerCreateKind::Camera);
     create("Reflection Probe", OutlinerCreateKind::ReflectionProbe);
+    ImGui::BeginDisabled(!canCreateDdgiProbeVolume || parent.has_value());
+    create("DDGI Probe Volume", OutlinerCreateKind::DdgiProbeVolume);
+    ImGui::EndDisabled();
     ImGui::BeginDisabled(!canCreateAtmosphere || parent.has_value());
     create("Sky Atmosphere", OutlinerCreateKind::SkyAtmosphere);
     ImGui::EndDisabled();

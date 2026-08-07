@@ -14,7 +14,8 @@
       "fragment": "pbr_lite/forward.frag",
       "sceneLights": true,
       "atmosphere": true,
-      "screenSpace": true
+      "screenSpace": true,
+      "ddgi": true
     },
     {
       "id": "forward.pbr-lite-normal-mapped",
@@ -23,7 +24,8 @@
       "fragment": "pbr_lite/forward_normal_mapped.frag",
       "sceneLights": true,
       "atmosphere": true,
-      "screenSpace": true
+      "screenSpace": true,
+      "ddgi": true
     },
     {
       "id": "debug.base-color",
@@ -208,6 +210,17 @@
       "id": "screenspace.reflection-composite",
       "contract": "compute",
       "compute": "screenspace/reflection_composite.comp"
+    },
+    {
+      "id": "gi.ddgi-trace",
+      "contract": "compute",
+      "compute": "ddgi/trace.comp",
+      "targetEnv": "vulkan1.2"
+    },
+    {
+      "id": "gi.ddgi-update",
+      "contract": "compute",
+      "compute": "ddgi/update.comp"
     },
     {
       "id": "postprocess.taa-resolve",

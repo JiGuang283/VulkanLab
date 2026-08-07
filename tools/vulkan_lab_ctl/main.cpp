@@ -86,10 +86,13 @@ void printUsage() {
            "[--ssr-max-distance N] [--ssr-thickness N] "
            "[--ssr-max-roughness N] [--ssr-intensity N] "
            "[--ssr-history-weight N] "
-           "[--gi ambient-or-ibl|ssgi] [--ssgi-quality low|medium|high] "
+           "[--gi ambient-or-ibl|ssgi|ddgi|ssgi-ddgi] "
+           "[--ssgi-quality low|medium|high] "
            "[--ssgi-max-distance N] [--ssgi-thickness N] "
            "[--ssgi-intensity N] [--ssgi-radiance-clamp N] "
            "[--ssgi-history-weight N] "
+           "[--ddgi-radiance-clamp N] "
+           "[--ddgi-debug none|irradiance|distance|classification] "
            "[--screen-space-debug none|nearest-depth|scene-color|ssao-raw|ssao-filtered|cacao-output|gtao-raw|gtao-temporal|gtao-filtered|gtao-rejection|gtao-history-weight|taa-history|taa-rejection|taa-history-weight|ssr-raw|ssr-temporal|ssr-filtered|ssr-confidence|ssr-rejection|ssgi-raw|ssgi-temporal|ssgi-filtered|ssgi-confidence|ssgi-variance|ssgi-rejection] "
            "[--screen-space-debug-mip N]\n"
         << "  VulkanLabCtl [--json] render wait [--stable-frames N] "
@@ -244,6 +247,8 @@ ParsedCommand parseCommand(int argc, char **argv) {
     std::optional<std::string> ssgiIntensity;
     std::optional<std::string> ssgiRadianceClamp;
     std::optional<std::string> ssgiHistoryWeight;
+    std::optional<std::string> ddgiRadianceClamp;
+    std::optional<std::string> ddgiDebug;
     std::optional<std::string> screenSpaceDebug;
     std::optional<std::string> screenSpaceDebugMip;
     for (int i = 1; i < argc; ++i) {
@@ -320,6 +325,8 @@ ParsedCommand parseCommand(int argc, char **argv) {
                   argument == "--ssgi-intensity" ||
                   argument == "--ssgi-radiance-clamp" ||
                   argument == "--ssgi-history-weight" ||
+                  argument == "--ddgi-radiance-clamp" ||
+                  argument == "--ddgi-debug" ||
                   argument == "--screen-space-debug" ||
                   argument == "--screen-space-debug-mip") {
             if (++i >= argc)
@@ -452,6 +459,10 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 ssgiRadianceClamp = argv[i];
             else if (argument == "--ssgi-history-weight")
                 ssgiHistoryWeight = argv[i];
+            else if (argument == "--ddgi-radiance-clamp")
+                ddgiRadianceClamp = argv[i];
+            else if (argument == "--ddgi-debug")
+                ddgiDebug = argv[i];
             else if (argument == "--screen-space-debug")
                 screenSpaceDebug = argv[i];
             else
@@ -837,9 +848,11 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 *ssrHistoryWeight, "--ssr-history-weight");
         if (globalIlluminationMode) {
             if (*globalIlluminationMode != "ambient-or-ibl" &&
-                *globalIlluminationMode != "ssgi")
+                *globalIlluminationMode != "ssgi" &&
+                *globalIlluminationMode != "ddgi" &&
+                *globalIlluminationMode != "ssgi-ddgi")
                 throw std::invalid_argument(
-                    "--gi must be ambient-or-ibl or ssgi");
+                    "--gi must be ambient-or-ibl, ssgi, ddgi, or ssgi-ddgi");
             parsed.params["globalIlluminationMode"] =
                 *globalIlluminationMode;
         }
@@ -865,6 +878,18 @@ ParsedCommand parseCommand(int argc, char **argv) {
         if (ssgiHistoryWeight)
             parsed.params["ssgiHistoryWeight"] = parseFiniteFloat(
                 *ssgiHistoryWeight, "--ssgi-history-weight");
+        if (ddgiRadianceClamp)
+            parsed.params["ddgiRadianceClamp"] = parseFiniteFloat(
+                *ddgiRadianceClamp, "--ddgi-radiance-clamp");
+        if (ddgiDebug) {
+            if (*ddgiDebug != "none" && *ddgiDebug != "irradiance" &&
+                *ddgiDebug != "distance" &&
+                *ddgiDebug != "classification") {
+                throw std::invalid_argument(
+                    "--ddgi-debug must be none, irradiance, distance, or classification");
+            }
+            parsed.params["ddgiDebugView"] = *ddgiDebug;
+        }
         if (screenSpaceDebug) {
             if (*screenSpaceDebug != "none" &&
                 *screenSpaceDebug != "nearest-depth" &&
@@ -1384,6 +1409,16 @@ void printHuman(const std::string &method, const Json &result) {
                   << result.value("ssgiIntensity", 0.0f) << "/"
                   << result.value("ssgiRadianceClamp", 0.0f) << "/"
                   << result.value("ssgiHistoryWeight", 0.0f)
+                  << "\nDDGI active/available/component: "
+                  << (result.value("ddgiActive", false) ? "yes" : "no")
+                  << "/"
+                  << (result.value("ddgiSupported", false) ? "yes" : "no")
+                  << "/"
+                  << (result.value("ddgiComponentPresent", false) ? "yes"
+                                                                     : "no")
+                  << ", clamp/debug: "
+                  << result.value("ddgiRadianceClamp", 0.0f) << "/"
+                  << result.value("ddgiDebugView", std::string{"none"})
                   << "\nScreen-space debug: "
                   << result.at("screenSpaceDebugView").get<std::string>()
                   << ", mip: "

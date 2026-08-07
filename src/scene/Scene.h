@@ -87,6 +87,9 @@ class Scene final : public IRenderWorld {
     reflectionProbes() const override {
         return reflectionProbes_;
     }
+    std::optional<RenderWorldDdgiVolume> ddgiProbeVolume() const override {
+        return std::nullopt;
+    }
     std::optional<CameraPose> initialCamera;
 
   private:

@@ -82,6 +82,7 @@ struct RuntimeEntitySnapshot {
     std::optional<CameraComponentDocument> camera;
     std::optional<AtmosphereComponentDocument> atmosphere;
     std::optional<ReflectionProbeComponentDocument> reflectionProbe;
+    std::optional<DdgiProbeVolumeComponentDocument> ddgiProbeVolume;
     ModelBindingState modelBindingState = ModelBindingState::Unresolved;
     std::string modelBindingError;
     std::string modelProfileId;
@@ -147,6 +148,9 @@ class RuntimeWorld final : public IRenderWorld {
     bool setReflectionProbe(
         EntityHandle handle,
         std::optional<ReflectionProbeComponentDocument> component);
+    bool setDdgiProbeVolume(
+        EntityHandle handle,
+        std::optional<DdgiProbeVolumeComponentDocument> component);
     bool setActiveCamera(const PersistentEntityId &id);
     bool bindModel(EntityHandle handle, uint64_t expectedRevision,
                    std::string profileId, ModelAssetHandle asset,
@@ -192,6 +196,7 @@ class RuntimeWorld final : public IRenderWorld {
     std::optional<RenderWorldAtmosphere> worldAtmosphere() const override;
     const std::vector<RenderWorldReflectionProbe> &
     reflectionProbes() const override;
+    std::optional<RenderWorldDdgiVolume> ddgiProbeVolume() const override;
 
     size_t entityCount() const { return order_.size(); }
     size_t modelInstanceCount() const;
@@ -213,6 +218,7 @@ class RuntimeWorld final : public IRenderWorld {
         std::optional<CameraComponentDocument> camera;
         std::optional<AtmosphereComponentDocument> atmosphere;
         std::optional<RuntimeReflectionProbeComponent> reflectionProbe;
+        std::optional<DdgiProbeVolumeComponentDocument> ddgiProbeVolume;
     };
 
     Slot *slot(EntityHandle handle);
@@ -242,6 +248,7 @@ class RuntimeWorld final : public IRenderWorld {
     std::vector<SceneLight> lights_;
     std::optional<RenderWorldAtmosphere> atmosphere_;
     std::vector<RenderWorldReflectionProbe> reflectionProbes_;
+    std::optional<RenderWorldDdgiVolume> ddgiProbeVolume_;
     std::vector<std::shared_ptr<MaterialInstance>> materials_;
     bool derivedDirty_ = true;
 };

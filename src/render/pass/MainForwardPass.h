@@ -26,7 +26,8 @@ class MainForwardPass final : public IRenderPass {
                      RendererResourceHandles resourceHandles,
                      ForwardPhase phase,
                      VkDescriptorSetLayout lightingDescriptorSetLayout,
-                     VkDescriptorSetLayout atmosphereDescriptorSetLayout);
+                     VkDescriptorSetLayout atmosphereDescriptorSetLayout,
+                     VkDescriptorSetLayout ddgiDescriptorSetLayout);
     ~MainForwardPass() override;
 
     MainForwardPass(const MainForwardPass &) = delete;
@@ -61,6 +62,7 @@ class MainForwardPass final : public IRenderPass {
     ForwardPhase phase_ = ForwardPhase::Opaque;
     VkDescriptorSetLayout lightingDescriptorSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout atmosphereDescriptorSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout ddgiDescriptorSetLayout_ = VK_NULL_HANDLE;
 
     VkRenderPass renderPass_ = VK_NULL_HANDLE;
     std::array<VkFramebuffer, MAX_FRAMES_IN_FLIGHT> framebuffers_{};

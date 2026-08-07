@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cmath>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -67,6 +68,22 @@ glm::vec3 readVec3(const Json &value, const std::string &field) {
             value.at(index).get<float>();
         if (!std::isfinite(result[static_cast<glm::length_t>(index)]))
             throw documentError(field, "values must be finite");
+    }
+    return result;
+}
+
+glm::uvec3 readUvec3(const Json &value, const std::string &field) {
+    if (!value.is_array() || value.size() != 3)
+        throw documentError(field, "expected three unsigned integers");
+    glm::uvec3 result{};
+    for (size_t index = 0; index < 3; ++index) {
+        const int64_t component = value.at(index).get<int64_t>();
+        if (component <= 0 ||
+            component > std::numeric_limits<uint32_t>::max()) {
+            throw documentError(field, "components must be positive uint32 values");
+        }
+        result[static_cast<glm::length_t>(index)] =
+            static_cast<uint32_t>(component);
     }
     return result;
 }
@@ -368,6 +385,38 @@ parseReflectionProbe(const Json &value, const std::string &field) {
     return probe;
 }
 
+DdgiProbeVolumeComponentDocument
+parseDdgiProbeVolume(const Json &value, const std::string &field) {
+    requireOnlyKeys(
+        value, field,
+        {"probeCounts", "probeSpacing", "raysPerProbe",
+         "probesUpdatedPerFrame", "maxRayDistance", "hysteresis",
+         "normalBias", "viewBias", "intensity", "relocationEnabled",
+         "classificationEnabled"});
+    DdgiProbeVolumeComponentDocument volume;
+    volume.probeCounts =
+        readUvec3(value.at("probeCounts"), field + ".probeCounts");
+    volume.probeSpacing =
+        readVec3(value.at("probeSpacing"), field + ".probeSpacing");
+    volume.raysPerProbe = value.at("raysPerProbe").get<uint32_t>();
+    volume.probesUpdatedPerFrame =
+        value.at("probesUpdatedPerFrame").get<uint32_t>();
+    volume.maxRayDistance =
+        finiteFloat(value.at("maxRayDistance"), field + ".maxRayDistance");
+    volume.hysteresis =
+        finiteFloat(value.at("hysteresis"), field + ".hysteresis");
+    volume.normalBias =
+        finiteFloat(value.at("normalBias"), field + ".normalBias");
+    volume.viewBias =
+        finiteFloat(value.at("viewBias"), field + ".viewBias");
+    volume.intensity =
+        finiteFloat(value.at("intensity"), field + ".intensity");
+    volume.relocationEnabled = value.at("relocationEnabled").get<bool>();
+    volume.classificationEnabled =
+        value.at("classificationEnabled").get<bool>();
+    return volume;
+}
+
 SceneEntityDocument parseEntity(const Json &value, size_t index,
                                 uint32_t sourceSchemaVersion) {
     const std::string field = "entities[" + std::to_string(index) + "]";
@@ -385,7 +434,12 @@ SceneEntityDocument parseEntity(const Json &value, size_t index,
 
     const Json &components = value.at("components");
     requireOnlyKeys(components, field + ".components",
-                    sourceSchemaVersion >= 4
+                    sourceSchemaVersion >= 5
+                        ? std::initializer_list<const char *>{
+                              "modelInstance", "light", "camera",
+                              "atmosphere", "reflectionProbe",
+                              "ddgiProbeVolume"}
+                    : sourceSchemaVersion >= 4
                         ? std::initializer_list<const char *>{
                               "modelInstance", "light", "camera",
                               "atmosphere", "reflectionProbe"}
@@ -416,6 +470,12 @@ SceneEntityDocument parseEntity(const Json &value, size_t index,
         entity.reflectionProbe = parseReflectionProbe(
             components.at("reflectionProbe"),
             field + ".components.reflectionProbe");
+    }
+    if (sourceSchemaVersion >= 5 &&
+        components.contains("ddgiProbeVolume")) {
+        entity.ddgiProbeVolume = parseDdgiProbeVolume(
+            components.at("ddgiProbeVolume"),
+            field + ".components.ddgiProbeVolume");
     }
     return entity;
 }
@@ -473,6 +533,10 @@ SceneDocument parseDocument(const Json &root) {
 }
 
 Json writeVec3(const glm::vec3 &value) {
+    return Json::array({value.x, value.y, value.z});
+}
+
+Json writeUvec3(const glm::uvec3 &value) {
     return Json::array({value.x, value.y, value.z});
 }
 
@@ -568,6 +632,22 @@ Json serializeDocument(const SceneDocument &document) {
                 {"intensity", probe.intensity},
                 {"boxProjection", probe.boxProjection},
                 {"captureOffset", writeVec3(probe.captureOffset)}};
+        }
+        if (entity.ddgiProbeVolume) {
+            const DdgiProbeVolumeComponentDocument &volume =
+                *entity.ddgiProbeVolume;
+            components["ddgiProbeVolume"] = {
+                {"probeCounts", writeUvec3(volume.probeCounts)},
+                {"probeSpacing", writeVec3(volume.probeSpacing)},
+                {"raysPerProbe", volume.raysPerProbe},
+                {"probesUpdatedPerFrame", volume.probesUpdatedPerFrame},
+                {"maxRayDistance", volume.maxRayDistance},
+                {"hysteresis", volume.hysteresis},
+                {"normalBias", volume.normalBias},
+                {"viewBias", volume.viewBias},
+                {"intensity", volume.intensity},
+                {"relocationEnabled", volume.relocationEnabled},
+                {"classificationEnabled", volume.classificationEnabled}};
         }
 
         Json item = Json::object();
@@ -719,6 +799,7 @@ void SceneDocumentService::validate(
         indices;
     size_t atmosphereCount = 0;
     size_t atmosphereSunCount = 0;
+    size_t ddgiVolumeCount = 0;
     for (size_t index = 0; index < document.entities.size(); ++index) {
         const SceneEntityDocument &entity = document.entities[index];
         const std::string field = "entities[" + std::to_string(index) + "]";
@@ -923,6 +1004,67 @@ void SceneDocumentService::validate(
                     throw documentError(probeField + ".environment",
                                         "unknown Catalog environment");
                 }
+            }
+        }
+        if (entity.ddgiProbeVolume) {
+            if (++ddgiVolumeCount > 1) {
+                throw documentError(
+                    field + ".components.ddgiProbeVolume",
+                    "only one DDGI probe volume is supported");
+            }
+            if (entity.parent) {
+                throw documentError(
+                    field + ".parent",
+                    "a DDGI probe volume must be at the scene root");
+            }
+            if (glm::any(glm::greaterThan(
+                    glm::abs(entity.transform.scale - glm::vec3(1.0f)),
+                    glm::vec3(1.0e-4f)))) {
+                throw documentError(
+                    field + ".transform.scale",
+                    "a DDGI probe volume must use unit scale");
+            }
+            const DdgiProbeVolumeComponentDocument &volume =
+                *entity.ddgiProbeVolume;
+            const std::string volumeField =
+                field + ".components.ddgiProbeVolume";
+            const uint64_t probeCount =
+                static_cast<uint64_t>(volume.probeCounts.x) *
+                volume.probeCounts.y * volume.probeCounts.z;
+            if (probeCount == 0 || probeCount > 2048) {
+                throw documentError(volumeField + ".probeCounts",
+                                    "total probe count must be in [1, 2048]");
+            }
+            validateFiniteVec3(volume.probeSpacing,
+                               volumeField + ".probeSpacing");
+            if (glm::any(glm::lessThanEqual(volume.probeSpacing,
+                                            glm::vec3(kEpsilon)))) {
+                throw documentError(volumeField + ".probeSpacing",
+                                    "components must be positive");
+            }
+            if (volume.raysPerProbe != 64 &&
+                volume.raysPerProbe != 128 &&
+                volume.raysPerProbe != 256) {
+                throw documentError(volumeField + ".raysPerProbe",
+                                    "expected 64, 128, or 256");
+            }
+            if (volume.probesUpdatedPerFrame == 0 ||
+                volume.probesUpdatedPerFrame > probeCount) {
+                throw documentError(
+                    volumeField + ".probesUpdatedPerFrame",
+                    "must be in [1, total probe count]");
+            }
+            if (!std::isfinite(volume.maxRayDistance) ||
+                volume.maxRayDistance <= 0.0f ||
+                !std::isfinite(volume.hysteresis) ||
+                volume.hysteresis < 0.0f || volume.hysteresis >= 1.0f ||
+                !std::isfinite(volume.normalBias) ||
+                volume.normalBias < 0.0f ||
+                !std::isfinite(volume.viewBias) || volume.viewBias < 0.0f ||
+                !std::isfinite(volume.intensity) ||
+                volume.intensity < 0.0f || volume.intensity > 4.0f) {
+                throw documentError(volumeField,
+                                    "contains out-of-range numeric values");
             }
         }
     }

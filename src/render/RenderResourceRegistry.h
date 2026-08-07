@@ -181,6 +181,9 @@ struct RendererResourceHandles {
     RenderImageHandle atmosphereSkyView{};
     RenderImageHandle atmosphereAerialPerspective{};
     RenderSamplerHandle atmosphereSampler{};
+    RenderImageHandle ddgiIrradiance{};
+    RenderImageHandle ddgiDistance{};
+    RenderSamplerHandle ddgiSampler{};
 };
 
 class RenderResourceRegistry {

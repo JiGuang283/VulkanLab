@@ -28,6 +28,8 @@ struct FrameRenderFeatures {
     bool ssrActive = false;
     bool ssgiRequired = false;
     bool ssgiActive = false;
+    bool ddgiRequired = false;
+    bool ddgiActive = false;
 };
 
 struct RenderFrameContext {
@@ -45,6 +47,8 @@ struct RenderFrameContext {
     VkDescriptorSetLayout atmosphereDescriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorSet screenSpaceDescriptorSet = VK_NULL_HANDLE;
     VkDescriptorSetLayout screenSpaceDescriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSet ddgiDescriptorSet = VK_NULL_HANDLE;
+    VkDescriptorSetLayout ddgiDescriptorSetLayout = VK_NULL_HANDLE;
     PipelineCache  *pipelineCache = nullptr;
     const GpuDebugUtils *debugUtils = nullptr;
     const TracyProfiler *tracyProfiler = nullptr;

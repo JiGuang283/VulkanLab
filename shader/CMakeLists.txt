@@ -25,6 +25,16 @@ endif()
 set(VKL_SHADER_SOURCES)
 math(EXPR VKL_SHADER_PROGRAM_LAST "${VKL_SHADER_PROGRAM_COUNT} - 1")
 foreach(PROGRAM_INDEX RANGE 0 ${VKL_SHADER_PROGRAM_LAST})
+    string(JSON PROGRAM_TARGET_ENV ERROR_VARIABLE TARGET_ENV_ERROR
+        GET "${VKL_SHADER_MANIFEST_JSON}"
+        programs ${PROGRAM_INDEX} targetEnv)
+    if(TARGET_ENV_ERROR)
+        set(PROGRAM_TARGET_ENV "vulkan1.0")
+    elseif(NOT PROGRAM_TARGET_ENV STREQUAL "vulkan1.0" AND
+           NOT PROGRAM_TARGET_ENV STREQUAL "vulkan1.2")
+        message(FATAL_ERROR
+            "Unsupported shader targetEnv: ${PROGRAM_TARGET_ENV}")
+    endif()
     foreach(STAGE_NAME vertex fragment compute)
         string(JSON SHADER_SOURCE ERROR_VARIABLE STAGE_ERROR
             GET "${VKL_SHADER_MANIFEST_JSON}"
@@ -59,6 +69,16 @@ foreach(PROGRAM_INDEX RANGE 0 ${VKL_SHADER_PROGRAM_LAST})
                     "Shader source from manifest is missing: ${SHADER_SOURCE}")
             endif()
             list(APPEND VKL_SHADER_SOURCES "${SHADER_SOURCE}")
+            string(MAKE_C_IDENTIFIER "${SHADER_SOURCE}" SHADER_SOURCE_ID)
+            set(SHADER_TARGET_VARIABLE
+                "VKL_SHADER_TARGET_ENV_${SHADER_SOURCE_ID}")
+            if(DEFINED ${SHADER_TARGET_VARIABLE} AND
+               NOT "${${SHADER_TARGET_VARIABLE}}" STREQUAL
+                   "${PROGRAM_TARGET_ENV}")
+                message(FATAL_ERROR
+                    "Shader source has conflicting target environments: ${SHADER_SOURCE}")
+            endif()
+            set(${SHADER_TARGET_VARIABLE} "${PROGRAM_TARGET_ENV}")
         endif()
     endforeach()
 endforeach()
@@ -71,6 +91,9 @@ set(VKL_RUNTIME_SHADER_ROOT
 set(VKL_RUNTIME_SHADER_OUTPUTS)
 
 foreach(SHADER_SOURCE IN LISTS VKL_SHADER_SOURCES)
+    string(MAKE_C_IDENTIFIER "${SHADER_SOURCE}" SHADER_SOURCE_ID)
+    set(SHADER_TARGET_ENV
+        "${VKL_SHADER_TARGET_ENV_${SHADER_SOURCE_ID}}")
     get_filename_component(SHADER_SUBDIRECTORY "${SHADER_SOURCE}" DIRECTORY)
     set(SHADER_INPUT "${CMAKE_CURRENT_SOURCE_DIR}/${SHADER_SOURCE}")
     set(SHADER_GENERATED_OUTPUT
@@ -82,9 +105,10 @@ foreach(SHADER_SOURCE IN LISTS VKL_SHADER_SOURCES)
         OUTPUT "${SHADER_GENERATED_OUTPUT}"
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "${VKL_GENERATED_SHADER_ROOT}/${SHADER_SUBDIRECTORY}"
-        COMMAND ${GLSLC} -I "${CMAKE_CURRENT_SOURCE_DIR}"
+        COMMAND ${GLSLC} --target-env=${SHADER_TARGET_ENV}
+            -I "${CMAKE_CURRENT_SOURCE_DIR}"
             "${SHADER_INPUT}" -o "${SHADER_GENERATED_OUTPUT}"
-        COMMAND ${SPIRV_VAL} --target-env vulkan1.0
+        COMMAND ${SPIRV_VAL} --target-env ${SHADER_TARGET_ENV}
             "${SHADER_GENERATED_OUTPUT}"
         DEPENDS "${SHADER_INPUT}" ${VKL_SHADER_INCLUDES}
         COMMENT "Compiling shader ${SHADER_SOURCE}"

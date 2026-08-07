@@ -52,6 +52,8 @@
 #include "render/Renderer.h"
 #include "render/RendererShaderPaths.h"
 #include "render/TemporalAA.h"
+#include "render/RayTracingScene.h"
+#include "render/pass/DdgiPass.h"
 #include "scene/AssetRepository.h"
 #include "scene/EnvironmentAssetRepository.h"
 #include "scene/ModelAsset.h"
@@ -1007,6 +1009,10 @@ void Application::init() {
         shaderRegistry_.program("atmosphere.aerial-perspective");
     const ShaderProgram &atmosphereSky =
         shaderRegistry_.program("atmosphere.sky");
+    const ShaderProgram &ddgiTrace =
+        shaderRegistry_.program("gi.ddgi-trace");
+    const ShaderProgram &ddgiUpdate =
+        shaderRegistry_.program("gi.ddgi-update");
     RendererShaderPaths shaderPaths;
     shaderPaths.shadowVert = shadowOpaque.vertSpvPath;
     shaderPaths.shadowMaskFrag = shadowMask.fragSpvPath;
@@ -1033,6 +1039,8 @@ void Application::init() {
     shaderPaths.ssgiFilterComp = ssgiFilter.computeSpvPath;
     shaderPaths.reflectionCompositeComp =
         reflectionComposite.computeSpvPath;
+    shaderPaths.ddgiTraceComp = ddgiTrace.computeSpvPath;
+    shaderPaths.ddgiUpdateComp = ddgiUpdate.computeSpvPath;
     shaderPaths.taaResolveComp = taaResolve.computeSpvPath;
     shaderPaths.fullscreenVert = toneMap.vertSpvPath;
     shaderPaths.toneMapFrag = toneMap.fragSpvPath;
@@ -2245,12 +2253,22 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
                 renderer_->screenSpaceEffectsStatus().ssrUnavailableReason);
     }
     if (patch.globalIlluminationMode &&
-        *patch.globalIlluminationMode == GlobalIlluminationMode::Ssgi &&
+        (*patch.globalIlluminationMode == GlobalIlluminationMode::Ssgi ||
+         *patch.globalIlluminationMode == GlobalIlluminationMode::SsgiDdgi) &&
         renderer_ && !renderer_->screenSpaceEffectsStatus().ssgiSupported) {
         throw RuntimeCommandError(
             "ssgi_unsupported",
             "SSGI is unavailable: " +
                 renderer_->screenSpaceEffectsStatus().ssgiUnavailableReason);
+    }
+    if (patch.globalIlluminationMode &&
+        (*patch.globalIlluminationMode == GlobalIlluminationMode::Ddgi ||
+         *patch.globalIlluminationMode == GlobalIlluminationMode::SsgiDdgi) &&
+        renderer_ && !renderer_->ddgiStatus().supported) {
+        throw RuntimeCommandError(
+            "ddgi_unsupported",
+            "DDGI is unavailable: " +
+                renderer_->ddgiStatus().unavailableReason);
     }
     if (patch.surfaceDebugView && patch.screenSpaceDebugView &&
         *patch.surfaceDebugView != SurfaceDebugView::None &&
@@ -2363,6 +2381,8 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
         glm::clamp(next.ssgiRadianceClamp, 0.1f, 100.0f);
     next.ssgiHistoryWeight =
         glm::clamp(next.ssgiHistoryWeight, 0.0f, 0.99f);
+    next.ddgi.radianceClamp =
+        glm::clamp(next.ddgi.radianceClamp, 0.1f, 100.0f);
     next.screenSpaceDebugMip =
         std::min(next.screenSpaceDebugMip, 31u);
     next.culling.shadowDistance =
@@ -3978,6 +3998,9 @@ ControlJson Application::runtimeRenderStatus() {
         renderer_->screenSpaceEffectsStatus();
     const ReflectionProbeRuntimeStatus reflectionProbeStatus =
         renderer_->reflectionProbeStatus();
+    const DdgiRuntimeStatus ddgiStatus = renderer_->ddgiStatus();
+    const RayTracingSceneStatus rayTracingStatus =
+        renderer_->rayTracingSceneStatus();
     const EnvironmentAssetRepositorySnapshot environmentRepository =
         environmentAssetRepository_
             ? environmentAssetRepository_->snapshot()
@@ -4110,6 +4133,29 @@ ControlJson Application::runtimeRenderStatus() {
            reflectionProbeStatus.descriptorGeneration},
           {"bufferBytes", reflectionProbeStatus.allocatedBytes},
           {"ignoredEntityIds", std::move(ignoredProbeEntities)}}},
+        {"ddgi",
+         {{"supported", ddgiStatus.supported},
+          {"componentPresent", ddgiStatus.componentPresent},
+          {"active", ddgiStatus.active},
+          {"componentEntity",
+           ddgiStatus.componentPresent
+               ? ControlJson(ddgiStatus.componentEntity.toString())
+               : ControlJson(nullptr)},
+          {"probeCount", ddgiStatus.probeCount},
+          {"raysPerProbe", ddgiStatus.raysPerProbe},
+          {"probesUpdatedPerFrame", ddgiStatus.probesUpdatedPerFrame},
+          {"updateCursor", ddgiStatus.updateCursor},
+          {"tracedInstanceCount", ddgiStatus.tracedInstanceCount},
+          {"generation", ddgiStatus.generation},
+          {"resetCount", ddgiStatus.resetCount},
+          {"allocatedBytes", ddgiStatus.allocatedBytes},
+          {"unavailableReason", ddgiStatus.unavailableReason},
+          {"rayTracing",
+           {{"supported", rayTracingStatus.supported},
+            {"active", rayTracingStatus.active},
+            {"instanceCount", rayTracingStatus.instanceCount},
+            {"allocatedBytes", rayTracingStatus.allocatedBytes},
+            {"unavailableReason", rayTracingStatus.unavailableReason}}}}},
         {"atmosphere",
          {{"supported", atmosphereStatus.supported},
           {"componentPresent", atmosphereStatus.componentPresent},
@@ -4479,6 +4525,15 @@ ControlJson Application::runtimeRenderSettingsGet() {
              screenSpaceStatus.ssgiLastResetReason},
             {"ssgiUnavailableReason",
              screenSpaceStatus.ssgiUnavailableReason},
+            {"ddgiRadianceClamp", renderSettings_.ddgi.radianceClamp},
+            {"ddgiDebugView",
+             ddgiDebugViewName(renderSettings_.ddgi.debugView)},
+            {"ddgiSupported", renderer_->ddgiStatus().supported},
+            {"ddgiComponentPresent",
+             renderer_->ddgiStatus().componentPresent},
+            {"ddgiActive", renderer_->ddgiStatus().active},
+            {"ddgiUnavailableReason",
+             renderer_->ddgiStatus().unavailableReason},
             {"screenSpaceDebugView",
              screenSpaceDebugViewName(
                  renderSettings_.screenSpaceDebugView)},
@@ -6110,18 +6165,38 @@ void Application::drawPostProcessingPanel() {
     }
 
     ImGui::SeparatorText("Global Illumination");
-    constexpr const char *giModeLabels[] = {"Ambient / IBL", "SSGI"};
+    constexpr const char *giModeLabels[] = {
+        "Ambient / IBL", "SSGI", "DDGI", "SSGI + DDGI"};
     int giMode = static_cast<int>(renderSettings_.globalIlluminationMode);
-    ImGui::BeginDisabled(!screenStatus.ssgiSupported);
-    if (ImGui::Combo("Mode##GI", &giMode, giModeLabels,
-                     static_cast<int>(std::size(giModeLabels)))) {
-        RenderSettingsPatch patch;
-        patch.globalIlluminationMode =
-            static_cast<GlobalIlluminationMode>(giMode);
-        applyRenderSettings(patch);
+    const DdgiRuntimeStatus ddgiStatus =
+        renderer_ ? renderer_->ddgiStatus() : DdgiRuntimeStatus{};
+    if (ImGui::BeginCombo("Mode##GI", giModeLabels[giMode])) {
+        for (int index = 0;
+             index < static_cast<int>(std::size(giModeLabels)); ++index) {
+            const auto mode = static_cast<GlobalIlluminationMode>(index);
+            const bool needsSsgi = mode == GlobalIlluminationMode::Ssgi ||
+                                   mode == GlobalIlluminationMode::SsgiDdgi;
+            const bool needsDdgi = mode == GlobalIlluminationMode::Ddgi ||
+                                   mode == GlobalIlluminationMode::SsgiDdgi;
+            const bool supported =
+                (!needsSsgi || screenStatus.ssgiSupported) &&
+                (!needsDdgi || ddgiStatus.supported);
+            ImGui::BeginDisabled(!supported);
+            if (ImGui::Selectable(giModeLabels[index], giMode == index)) {
+                RenderSettingsPatch patch;
+                patch.globalIlluminationMode = mode;
+                applyRenderSettings(patch);
+            }
+            ImGui::EndDisabled();
+            if (giMode == index)
+                ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
     }
     const bool ssgiRequested =
-        renderSettings_.globalIlluminationMode == GlobalIlluminationMode::Ssgi;
+        renderSettings_.globalIlluminationMode == GlobalIlluminationMode::Ssgi ||
+        renderSettings_.globalIlluminationMode ==
+            GlobalIlluminationMode::SsgiDdgi;
     ImGui::BeginDisabled(!ssgiRequested);
     constexpr const char *ssgiQualityLabels[] = {"Low", "Medium", "High"};
     int ssgiQuality = static_cast<int>(renderSettings_.ssgiQuality);
@@ -6167,7 +6242,6 @@ void Application::drawPostProcessingPanel() {
         applyRenderSettings(patch);
     }
     ImGui::EndDisabled();
-    ImGui::EndDisabled();
     editor::statusIndicator(
         screenStatus.ssgiActive ? "SSGI active" : "SSGI inactive",
         screenStatus.ssgiActive ? editor::StatusTone::Success
@@ -6187,6 +6261,53 @@ void Application::drawPostProcessingPanel() {
         if (!screenStatus.ssgiLastResetReason.empty())
             ImGui::TextDisabled("Reset: %s",
                                 screenStatus.ssgiLastResetReason.c_str());
+    }
+
+    const bool ddgiRequested =
+        renderSettings_.globalIlluminationMode == GlobalIlluminationMode::Ddgi ||
+        renderSettings_.globalIlluminationMode ==
+            GlobalIlluminationMode::SsgiDdgi;
+    ImGui::BeginDisabled(!ddgiRequested || !ddgiStatus.supported);
+    float ddgiClamp = renderSettings_.ddgi.radianceClamp;
+    if (ImGui::DragFloat("Radiance Clamp##DDGI", &ddgiClamp, 0.1f,
+                         0.1f, 100.0f, "%.1f")) {
+        RenderSettingsPatch patch;
+        patch.ddgiRadianceClamp = ddgiClamp;
+        applyRenderSettings(patch);
+    }
+    constexpr const char *ddgiDebugLabels[] = {
+        "None", "Irradiance", "Distance", "Classification"};
+    int ddgiDebug = static_cast<int>(renderSettings_.ddgi.debugView);
+    if (ImGui::Combo("Debug##DDGI", &ddgiDebug, ddgiDebugLabels,
+                     static_cast<int>(std::size(ddgiDebugLabels)))) {
+        RenderSettingsPatch patch;
+        patch.ddgiDebugView = static_cast<DdgiDebugView>(ddgiDebug);
+        applyRenderSettings(patch);
+    }
+    ImGui::EndDisabled();
+    editor::statusIndicator(
+        ddgiStatus.active ? "DDGI active" : "DDGI inactive",
+        ddgiStatus.active ? editor::StatusTone::Success
+                          : editor::StatusTone::Neutral,
+        !ddgiStatus.supported
+            ? ddgiStatus.unavailableReason.c_str()
+            : (ddgiRequested && !ddgiStatus.componentPresent
+                   ? "The active native scene has no DDGI Probe Volume."
+                   : (ddgiRequested &&
+                              !currentShaderVariant().supportsDdgi
+                          ? "Selected Shader does not consume DDGI."
+                          : nullptr)));
+    if (ddgiStatus.componentPresent) {
+        ImGui::TextDisabled(
+            "Probes: %u, update %u x %u rays, cursor %u",
+            ddgiStatus.probeCount, ddgiStatus.probesUpdatedPerFrame,
+            ddgiStatus.raysPerProbe, ddgiStatus.updateCursor);
+        ImGui::TextDisabled(
+            "TLAS instances: %u, generation %llu, memory %.2f MiB",
+            ddgiStatus.tracedInstanceCount,
+            static_cast<unsigned long long>(ddgiStatus.generation),
+            static_cast<double>(ddgiStatus.allocatedBytes) /
+                (1024.0 * 1024.0));
     }
 
     ImGui::SeparatorText("Screen-Space Debug");
@@ -7749,9 +7870,10 @@ void Application::duplicateSelectedEditorEntity() {
     try {
         if (const auto selected = sceneEditorSession_->world()->entity(
                 sceneEditorSession_->world()->find(rootId));
-            selected && selected->atmosphere) {
-            editorUi_->sceneError =
-                "Sky Atmosphere is a singleton and cannot be duplicated.";
+            selected && (selected->atmosphere || selected->ddgiProbeVolume)) {
+            editorUi_->sceneError = selected->atmosphere
+                                        ? "Sky Atmosphere is a singleton and cannot be duplicated."
+                                        : "DDGI Probe Volume is a singleton and cannot be duplicated.";
             return;
         }
         PersistentEntityId duplicateRoot;
@@ -7792,6 +7914,7 @@ void Application::duplicateSelectedEditorEntity() {
                         copy.light->atmosphereSunIndex.reset();
                     copy.camera = source.camera;
                     copy.reflectionProbe = source.reflectionProbe;
+                    copy.ddgiProbeVolume = source.ddgiProbeVolume;
                     remap[source.id] = copy.id;
                     if (source.id == rootId)
                         duplicateRoot = copy.id;
@@ -7836,6 +7959,11 @@ void Application::drawOutlinerPanel() {
         [](const RuntimeEntitySnapshot &entity) {
             return entity.atmosphere.has_value();
         });
+    snapshot.canCreateDdgiProbeVolume = std::none_of(
+        entities.begin(), entities.end(),
+        [](const RuntimeEntitySnapshot &entity) {
+            return entity.ddgiProbeVolume.has_value();
+        });
     std::unordered_set<PersistentEntityId, PersistentEntityIdHash>
         lightLimitExceeded;
     lightLimitExceeded.insert(lastLightStats_.ignoredEntityIds.begin(),
@@ -7849,7 +7977,8 @@ void Application::drawOutlinerPanel() {
              lightLimitExceeded.count(entity.id) != 0,
              entity.atmosphere.has_value(),
              entity.reflectionProbeBindingState,
-             entity.reflectionProbe.has_value()});
+             entity.reflectionProbe.has_value(),
+             entity.ddgiProbeVolume.has_value()});
     }
 
     OutlinerPanelActions actions;
@@ -7920,6 +8049,12 @@ void Application::drawOutlinerPanel() {
                 entity.name = "Reflection Probe";
                 entity.reflectionProbe =
                     ReflectionProbeComponentDocument{};
+                break;
+            case OutlinerCreateKind::DdgiProbeVolume:
+                entity.name = "DDGI Probe Volume";
+                entity.ddgiProbeVolume =
+                    DdgiProbeVolumeComponentDocument{};
+                parentId.reset();
                 break;
             }
             if (primitive) {
@@ -8212,6 +8347,23 @@ void Application::drawInspectorPanel() {
                 [id, value = std::move(value)](
                     RuntimeWorld &world) mutable {
                     return world.setReflectionProbe(world.find(id),
+                                                    std::move(value));
+                });
+        };
+    actions.setDdgiProbeVolume =
+        [this](PersistentEntityId id,
+               std::optional<DdgiProbeVolumeComponentDocument> value) {
+            if (sceneEditorSession_->continuousEditActive()) {
+                if (auto world = sceneEditorSession_->world())
+                    world->setDdgiProbeVolume(world->find(id),
+                                              std::move(value));
+                return;
+            }
+            sceneEditorSession_->execute(
+                "Set DDGI Probe Volume",
+                [id, value = std::move(value)](
+                    RuntimeWorld &world) mutable {
+                    return world.setDdgiProbeVolume(world.find(id),
                                                     std::move(value));
                 });
         };
@@ -8994,6 +9146,7 @@ void Application::mainLoop() {
         viewInput.viewportExtent = renderer_->viewportExtent();
         viewInput.atmosphereSupported =
             device_->atmosphereSupport().available;
+        viewInput.ddgiSupported = device_->ddgiSupport().available;
         viewInput.ambientColor = ambientColor_;
         viewInput.ambientIntensity = ambientIntensity_;
         viewInput.defaultSun = {defaultSunDirection_, defaultSunColor_,
@@ -9011,6 +9164,7 @@ void Application::mainLoop() {
             viewInput.fallbackSunEnabled =
                 currentScene_->allowsFallbackSun();
             viewInput.atmosphere = currentScene_->worldAtmosphere();
+            viewInput.ddgiProbeVolume = currentScene_->ddgiProbeVolume();
             if (const auto ambient = currentScene_->worldAmbient()) {
                 viewInput.ambientColor = ambient->color;
                 viewInput.ambientIntensity = ambient->intensity;

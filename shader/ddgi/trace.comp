@@ -1,0 +1,180 @@
+#version 460
+
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_ray_query : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+#include "include/global_frame.glsl"
+#include "include/scene_lights.glsl"
+#include "include/ddgi_common.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 1, binding = 0) uniform accelerationStructureEXT sceneTlas;
+
+struct GpuRayTracingInstance {
+    uvec4 addresses;
+    vec4 baseColorFactor;
+    vec4 emissiveMetallic;
+    vec4 materialParams;
+};
+layout(std430, set = 1, binding = 1) readonly buffer InstanceMetadata {
+    GpuRayTracingInstance instances[];
+} instanceMetadata;
+
+struct GpuDdgiRayResult {
+    vec4 radianceDistance;
+    vec4 directionHit;
+};
+layout(std430, set = 1, binding = 2) writeonly buffer RayResults {
+    GpuDdgiRayResult rays[];
+} rayResults;
+layout(std430, set = 1, binding = 5) readonly buffer ProbeStates {
+    GpuDdgiProbeState states[];
+} probeStates;
+
+layout(buffer_reference, buffer_reference_align = 4) readonly buffer
+RawBuffer { uint data[]; };
+
+uint64_t addressFromParts(uvec2 value)
+{
+    return uint64_t(value.x) | (uint64_t(value.y) << 32ul);
+}
+
+vec3 rayDirection(uint rayIndex, uint rayCount, uint frameIndex)
+{
+    float count = float(max(rayCount, 1u));
+    float y = 1.0 - 2.0 * (float(rayIndex) + 0.5) / count;
+    float radius = sqrt(max(1.0 - y * y, 0.0));
+    float angle = 2.39996323 * float(rayIndex) +
+                  0.61803399 * float(frameIndex & 1023u);
+    return vec3(cos(angle) * radius, y, sin(angle) * radius);
+}
+
+vec3 loadVertexNormal(RawBuffer vertices, uint vertexIndex)
+{
+    const uint vertexStrideWords = 18u;
+    uint offset = vertexIndex * vertexStrideWords + 3u;
+    return vec3(uintBitsToFloat(vertices.data[offset + 0u]),
+                uintBitsToFloat(vertices.data[offset + 1u]),
+                uintBitsToFloat(vertices.data[offset + 2u]));
+}
+
+float rangeAttenuation(float distanceToLight, float range)
+{
+    float attenuation = 1.0 / max(distanceToLight * distanceToLight, 0.01);
+    if (range <= 0.0) return attenuation;
+    float d = clamp(distanceToLight / range, 0.0, 1.0);
+    float fade = clamp(1.0 - d * d * d * d, 0.0, 1.0);
+    return attenuation * fade * fade;
+}
+
+vec3 shadeHit(vec3 position, vec3 normal, GpuRayTracingInstance material)
+{
+    vec3 albedo = max(material.baseColorFactor.rgb, vec3(0.0));
+    float metallic = clamp(material.emissiveMetallic.w, 0.0, 1.0);
+    vec3 result = material.emissiveMetallic.rgb +
+                  ubo.ambientColorIntensity.rgb *
+                  ubo.ambientColorIntensity.a * albedo * (1.0 - metallic);
+    uint directional = ubo.lightCounts.x;
+    uint pointCount = ubo.lightCounts.y;
+    uint spotCount = ubo.lightCounts.z;
+    for (uint i = 0u; i < directional; ++i) {
+        GpuLight light = sceneLightBuffer.lights[i];
+        vec3 l = normalize(light.directionInnerCos.xyz);
+        float ndl = max(dot(normal, l), 0.0);
+        result += albedo * (1.0 - metallic) *
+                  light.colorIntensity.rgb * light.colorIntensity.a *
+                  ndl / 3.14159265;
+    }
+    uint pointOffset = directional;
+    for (uint i = 0u; i < pointCount + spotCount; ++i) {
+        GpuLight light = sceneLightBuffer.lights[pointOffset + i];
+        vec3 toLight = light.positionRange.xyz - position;
+        float distanceToLight = length(toLight);
+        if (distanceToLight <= 1.0e-4 ||
+            (light.positionRange.w > 0.0 &&
+             distanceToLight >= light.positionRange.w)) continue;
+        vec3 l = toLight / distanceToLight;
+        float attenuation = rangeAttenuation(distanceToLight,
+                                              light.positionRange.w);
+        if (i >= pointCount) {
+            float cone = clamp((dot(-l, normalize(light.directionInnerCos.xyz)) -
+                                light.params.y) /
+                               max(light.directionInnerCos.w - light.params.y,
+                                   1.0e-3), 0.0, 1.0);
+            attenuation *= cone * cone;
+        }
+        result += albedo * (1.0 - metallic) *
+                  light.colorIntensity.rgb * light.colorIntensity.a *
+                  attenuation * max(dot(normal, l), 0.0) / 3.14159265;
+    }
+    return min(result, vec3(max(ddgi.traceParameters.x, 0.0)));
+}
+
+void main()
+{
+    uint rayIndex = gl_GlobalInvocationID.x;
+    uint updateIndex = gl_GlobalInvocationID.y;
+    uint rayCount = ddgi.runtimeParameters.x;
+    if (rayIndex >= rayCount || updateIndex >= ddgi.runtimeParameters.y)
+        return;
+    uint probeIndex = (ddgi.updateWindow.x + updateIndex) %
+                      max(ddgi.probeCounts.w, 1u);
+    GpuDdgiProbeState state = probeStates.states[probeIndex];
+    uvec3 coord = ddgiProbeCoord(probeIndex);
+    vec3 localPosition = ddgiProbeLocalPosition(
+        coord, state.offsetClassification.xyz);
+    vec3 origin = (ddgi.localToWorld * vec4(localPosition, 1.0)).xyz;
+    vec3 localDirection = rayDirection(rayIndex, rayCount,
+                                       ddgi.updateWindow.z);
+    vec3 direction = normalize(mat3(ddgi.localToWorld) * localDirection);
+
+    rayQueryEXT query;
+    rayQueryInitializeEXT(query, sceneTlas, gl_RayFlagsNoneEXT, 0xff,
+                          origin, 0.02, direction,
+                          ddgi.probeSpacingMaxDistance.w);
+    while (rayQueryProceedEXT(query)) {
+        if (rayQueryGetIntersectionTypeEXT(query, false) ==
+            gl_RayQueryCandidateIntersectionTriangleEXT)
+            rayQueryConfirmIntersectionEXT(query);
+    }
+
+    vec3 radiance = ubo.ambientColorIntensity.rgb *
+                    ubo.ambientColorIntensity.a;
+    float distance = ddgi.probeSpacingMaxDistance.w;
+    float hitKind = 0.0;
+    if (rayQueryGetIntersectionTypeEXT(query, true) ==
+        gl_RayQueryCommittedIntersectionTriangleEXT) {
+        distance = rayQueryGetIntersectionTEXT(query, true);
+        uint instanceIndex =
+            rayQueryGetIntersectionInstanceCustomIndexEXT(query, true);
+        uint primitive = rayQueryGetIntersectionPrimitiveIndexEXT(query, true);
+        vec2 bary = rayQueryGetIntersectionBarycentricsEXT(query, true);
+        GpuRayTracingInstance metadata =
+            instanceMetadata.instances[instanceIndex];
+        RawBuffer vertices = RawBuffer(
+            addressFromParts(metadata.addresses.xy));
+        RawBuffer indices = RawBuffer(
+            addressFromParts(metadata.addresses.zw));
+        uint base = primitive * 3u;
+        vec3 n0 = loadVertexNormal(vertices, indices.data[base + 0u]);
+        vec3 n1 = loadVertexNormal(vertices, indices.data[base + 1u]);
+        vec3 n2 = loadVertexNormal(vertices, indices.data[base + 2u]);
+        vec3 objectNormal = normalize(n0 * (1.0 - bary.x - bary.y) +
+                                      n1 * bary.x + n2 * bary.y);
+        mat4x3 worldToObject =
+            rayQueryGetIntersectionWorldToObjectEXT(query, true);
+        vec3 worldNormal = normalize(transpose(mat3(worldToObject)) *
+                                     objectNormal);
+        vec3 hitPosition = origin + direction * distance;
+        radiance = shadeHit(hitPosition, worldNormal, metadata);
+        hitKind = dot(worldNormal, direction) < 0.0 ? 1.0 : -1.0;
+    }
+    uint outputIndex = updateIndex * rayCount + rayIndex;
+    rayResults.rays[outputIndex].radianceDistance =
+        vec4(radiance, distance);
+    rayResults.rays[outputIndex].directionHit =
+        vec4(localDirection, hitKind);
+}

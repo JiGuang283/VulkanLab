@@ -76,6 +76,22 @@ struct CacaoSupport {
     std::string reason;
 };
 
+struct RayQuerySupport {
+    bool available = false;
+    std::string reason;
+    uint64_t maxGeometryCount = 0;
+    uint64_t maxInstanceCount = 0;
+    uint64_t maxPrimitiveCount = 0;
+    VkDeviceSize minScratchAlignment = 1;
+};
+
+struct DdgiSupport {
+    bool available = false;
+    VkFormat irradianceFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    VkFormat distanceFormat = VK_FORMAT_R16G16_SFLOAT;
+    std::string reason;
+};
+
 class Device {
   public:
     Device(VulkanContext &ctx);
@@ -113,6 +129,28 @@ class Device {
         return screenSpaceEffectsSupport_;
     }
     const CacaoSupport &cacaoSupport() const { return cacaoSupport_; }
+    const RayQuerySupport &rayQuerySupport() const {
+        return rayQuerySupport_;
+    }
+    const DdgiSupport &ddgiSupport() const { return ddgiSupport_; }
+
+    VkDeviceAddress bufferDeviceAddress(VkBuffer buffer) const;
+    VkAccelerationStructureKHR createAccelerationStructure(
+        VkBuffer buffer, VkDeviceSize size,
+        VkAccelerationStructureTypeKHR type,
+        const std::string &debugName = {}) const;
+    void destroyAccelerationStructure(
+        VkAccelerationStructureKHR accelerationStructure) const;
+    void accelerationStructureBuildSizes(
+        VkAccelerationStructureBuildGeometryInfoKHR &buildInfo,
+        uint32_t primitiveCount,
+        VkAccelerationStructureBuildSizesInfoKHR &sizes) const;
+    void cmdBuildAccelerationStructures(
+        VkCommandBuffer commandBuffer,
+        const VkAccelerationStructureBuildGeometryInfoKHR &buildInfo,
+        const VkAccelerationStructureBuildRangeInfoKHR &range) const;
+    VkDeviceAddress accelerationStructureDeviceAddress(
+        VkAccelerationStructureKHR accelerationStructure) const;
 
     SwapChainSupportDetails querySwapChainSupport() const;
 
@@ -125,6 +163,8 @@ class Device {
 
   private:
     void pickPhysicalDevice();
+    void queryRayQuerySupport();
+    void queryDdgiSupport();
     void createLogicalDevice();
 
     bool               isDeviceSuitable(VkPhysicalDevice device);
@@ -150,6 +190,19 @@ class Device {
     OcclusionCullingSupport occlusionCullingSupport_{};
     ScreenSpaceEffectsSupport screenSpaceEffectsSupport_{};
     CacaoSupport cacaoSupport_{};
+    RayQuerySupport rayQuerySupport_{};
+    DdgiSupport ddgiSupport_{};
+    std::vector<const char *> enabledDeviceExtensions_;
+    PFN_vkCreateAccelerationStructureKHR createAccelerationStructure_ =
+        nullptr;
+    PFN_vkDestroyAccelerationStructureKHR destroyAccelerationStructure_ =
+        nullptr;
+    PFN_vkGetAccelerationStructureBuildSizesKHR
+        getAccelerationStructureBuildSizes_ = nullptr;
+    PFN_vkCmdBuildAccelerationStructuresKHR
+        cmdBuildAccelerationStructures_ = nullptr;
+    PFN_vkGetAccelerationStructureDeviceAddressKHR
+        getAccelerationStructureDeviceAddress_ = nullptr;
     VmaAllocator          allocator_ = VK_NULL_HANDLE;
     std::unique_ptr<GpuDebugUtils> debugUtils_;
     std::unique_ptr<TracyProfiler> tracyProfiler_;

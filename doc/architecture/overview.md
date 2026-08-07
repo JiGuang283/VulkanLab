@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-02
-> Verified against: Procedural Sky Atmosphere v1 implementation
+> Verified against: DDGI v1 implementation
 
 VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Application` 为组合根，场景、渲染提交、GPU 资源和调试控制之间保持显式所有权，不使用全局引擎服务定位器。
 
@@ -16,9 +16,9 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 | `src/scene_data/` | 无 Renderer/ImGui 依赖的持久 Entity ID、SceneDocument DTO、严格验证和原子存储。 |
 | `src/workflows/` | UI 与 Application 之间的只读 workflow snapshot 和 action DTO。 |
 | `src/control/` | Windows Named Pipe 服务、运行时命令队列和 JSON 协议。 |
-| `src/core/` | Vulkan instance/device、SwapChain、FrameSync、Buffer/Image、Descriptor、Pipeline、VMA、同步与增量上传。 |
-| `src/render/` | Mesh、Texture、材质、纯 CPU glTF prepare、Environment GPU build、RenderView、RenderQueue、RenderResourceRegistry、PipelineCache、Renderer、GPU profiler 和 Shader variant。 |
-| `src/render/pass/` | RenderPipeline 中的具体 pass；当前为 AtmosphereLut、DirectionalShadow、SkyBackground、MainForward、Bloom、ToneMap 和 Present。 |
+| `src/core/` | Vulkan instance/device、SwapChain、FrameSync、Buffer/Image、AccelerationStructure、Descriptor、Pipeline、VMA、同步与增量上传。 |
+| `src/render/` | Mesh、Texture、材质、纯 CPU glTF prepare、Environment GPU build、RenderView、RenderQueue、RenderResourceRegistry、RayTracingScene、PipelineCache、Renderer、GPU profiler 和 Shader variant。 |
+| `src/render/pass/` | 显式 RenderPipeline 的 graphics/compute pass，包括 Atmosphere、Shadow、Surface/Visibility、AO、DDGI、Forward、SSR/SSGI、TAA、Bloom、ToneMap 和 Present。 |
 | `src/scene/` | IRenderWorld、RuntimeWorld、兼容 Scene facade、ModelAsset/ModelInstance、AssetRepository、ModelGpuBuilder、Native Scene 加载任务、Camera、SceneFactory 和内建场景。 |
 | `src/window/` | GLFW 窗口和输入状态。 |
 | `src/platform/` | Win32 原生文件选择等平台适配。 |
@@ -93,9 +93,9 @@ CaptureService 的主线程部分按请求从最终 Swapchain Workspace 或 per-
 3. 应用待切换场景，更新计时、输入模式、相机和 Scene tick。
 4. 轮询场景导入 future，构建全屏 DockSpace 及 Viewport、Scenes、Assets、Render、Materials 和 Diagnostics 窗口；Viewport 报告内容区尺寸和交互状态，并显示对应 frame slot 的 Viewport Color。
 5. `FrameSync::beginFrame()` 获取 frame index、swapchain image 和 command buffer。
-6. Application 组装 `RenderViewInput`；纯函数 `buildRenderView()` 完成默认 Sun、灯光截断/GPU 打包、阴影拟合、Atmosphere Sun 选择和大气 frame data，生成不可变 `RenderView`。
+6. Application 组装 `RenderViewInput`；纯函数 `buildRenderView()` 完成默认 Sun、灯光截断/GPU 打包、阴影拟合、Atmosphere Sun 选择、大气 frame data 和 DDGI Probe Volume frame data，生成不可变 `RenderView`。
 7. 当前 `IRenderWorld` 从 legacy SceneObject/预览 ModelInstance 或 RuntimeWorld Entity 生成 RenderCommand；Native Scene 实例矩阵使用 `entityWorld * localToAsset`，RenderQueue 分别排序 opaque 与 transparent 命令。
-8. Renderer 上传 Global UBO、Scene Light SSBO 和 Atmosphere UBO，读取已完成 frame slot 的 timestamp，并组装 RenderFrameContext；RenderPipeline 依次执行 AtmosphereLutPass、DirectionalShadowPass、SkyBackgroundPass、带 aerial perspective 的 MainForwardPass、可选 Compute Bloom、写入 Viewport Color 的 ToneMapPass，以及写入 Swapchain 的 PresentPass + ImGui。每个 Pass 由 timestamp query 包围。
+8. Renderer 上传 Global UBO、Scene Light SSBO 和 Atmosphere UBO，按需从 canonical Render Items 构建当前 frame slot TLAS，并组装 RenderFrameContext；RenderPipeline 依次执行 Atmosphere/Shadow/Surface/Visibility、AO、可选 DDGI、SkyBackground、Forward、SSR/SSGI composite、Transparent、TAA、Bloom、ToneMap 与 Present + ImGui。每个 Pass 由 timestamp query 包围。
 9. 若有截图任务，在同一个 frame command buffer 中复制最终 Swapchain Workspace 或 Viewport Color，再恢复其 present/shader-read layout。
 10. `FrameSync::endFrame()` 提交和 present；操作系统窗口变化只重建 Swapchain/Present 资源，稳定后的 Viewport 内容区变化只重建 viewport-dependent Registry 资源。后续帧推进 completed submission serial，并把已完成截图交给 CPU worker。
 

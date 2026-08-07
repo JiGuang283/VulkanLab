@@ -156,8 +156,9 @@ void VulkanContext::createInstance(
     environment.loaderApiVersion = loaderApiVersion();
     validationStatus_ =
         resolveValidationStatus(options_.validationProfile, environment);
-    instanceApiVersion_ =
-        validationInstanceApiVersion(validationStatus_);
+    instanceApiVersion_ = std::max(
+        validationInstanceApiVersion(validationStatus_),
+        std::min(environment.loaderApiVersion, VK_API_VERSION_1_4));
 
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;

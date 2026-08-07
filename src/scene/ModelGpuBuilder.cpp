@@ -237,6 +237,8 @@ void ModelGpuBuilder::pump(const Budget &budget) {
             uploadQueue_->poll();
             if (!uploadQueue_->idle())
                 return;
+            for (const std::shared_ptr<Mesh> &mesh : meshes_)
+                mesh->releaseAccelerationBuildScratch();
             phase_ = Phase::Materials;
         }
 

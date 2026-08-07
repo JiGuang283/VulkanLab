@@ -7,6 +7,7 @@
 #include "include/ibl.glsl"
 #include "include/atmosphere.glsl"
 #include "include/screen_space_lighting.glsl"
+#include "include/ddgi_sampling.glsl"
 
 const float PI = 3.14159265359;
 
@@ -288,8 +289,20 @@ void main()
         evaluateIndirectLightingComponents(
             n, v, albedo, roughness, metallic, occlusion,
             fragPositionWS);
+    if (!isBlendAlphaMode() && transmissionFactor() <= 0.0 &&
+        ddgiIsActive()) {
+        indirect.diffuse = evaluateDdgiDiffuse(
+            fragPositionWS, n, v, albedo, metallic, occlusion);
+    }
     vec3 baselineSpecular = indirect.specular;
     vec3 baselineDiffuse = indirect.diffuse;
+    if (!isBlendAlphaMode() && transmissionFactor() <= 0.0 &&
+        ddgiIsActive() && ddgiSampling.updateWindow.w != 0u) {
+        outColor = vec4(evaluateDdgiDebug(fragPositionWS, n), 1.0);
+        outBaselineSpecular = vec4(0.0);
+        outBaselineDiffuse = vec4(0.0);
+        return;
+    }
     vec3 color = applyTransmissionApprox(
         indirect.diffuse + indirect.specular + direct + emissive, n, v,
                                          roughness);

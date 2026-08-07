@@ -23,6 +23,8 @@ namespace {
 
 constexpr ImU32 kSelectionColor = IM_COL32(255, 176, 54, 255);
 constexpr ImU32 kPlacementColor = IM_COL32(76, 190, 255, 255);
+constexpr ImU32 kDdgiProbeColor = IM_COL32(81, 214, 188, 210);
+constexpr ImU32 kDdgiVolumeColor = IM_COL32(81, 214, 188, 150);
 
 ImGuizmo::OPERATION imGuizmoOperation(GizmoOperation operation) {
     switch (operation) {
@@ -121,6 +123,61 @@ void drawSelection(const RuntimeEntitySnapshot &entity,
         if (projected[edge[0]] && projected[edge[1]]) {
             drawList->AddLine(*projected[edge[0]], *projected[edge[1]],
                               kSelectionColor, 1.5f);
+        }
+    }
+}
+
+void drawDdgiProbeVolume(const RuntimeEntitySnapshot &entity,
+                         const SceneViewportCamera &camera,
+                         const EditorViewportState &viewport) {
+    if (!entity.ddgiProbeVolume)
+        return;
+
+    const DdgiProbeVolumeComponentDocument &volume =
+        *entity.ddgiProbeVolume;
+    const glm::uvec3 counts = volume.probeCounts;
+    if (glm::any(glm::equal(counts, glm::uvec3(0u))))
+        return;
+
+    const glm::vec3 halfExtent =
+        (glm::vec3(counts) - 1.0f) * volume.probeSpacing * 0.5f;
+    const glm::mat4 viewProjection = camera.projection * camera.view;
+    ImDrawList *drawList = ImGui::GetWindowDrawList();
+
+    std::array<std::optional<ImVec2>, 8> corners;
+    for (int index = 0; index < 8; ++index) {
+        const glm::vec3 local{
+            (index & 1) ? halfExtent.x : -halfExtent.x,
+            (index & 2) ? halfExtent.y : -halfExtent.y,
+            (index & 4) ? halfExtent.z : -halfExtent.z};
+        corners[index] = projectPoint(
+            glm::vec3(entity.world * glm::vec4(local, 1.0f)),
+            viewProjection, viewport);
+    }
+    constexpr std::array<std::array<int, 2>, 12> edges{{
+        {{0, 1}}, {{0, 2}}, {{0, 4}}, {{1, 3}}, {{1, 5}}, {{2, 3}},
+        {{2, 6}}, {{3, 7}}, {{4, 5}}, {{4, 6}}, {{5, 7}}, {{6, 7}},
+    }};
+    for (const auto &edge : edges) {
+        if (corners[edge[0]] && corners[edge[1]]) {
+            drawList->AddLine(*corners[edge[0]], *corners[edge[1]],
+                              kDdgiVolumeColor, 1.0f);
+        }
+    }
+
+    const glm::vec3 center = (glm::vec3(counts) - 1.0f) * 0.5f;
+    for (uint32_t z = 0; z < counts.z; ++z) {
+        for (uint32_t y = 0; y < counts.y; ++y) {
+            for (uint32_t x = 0; x < counts.x; ++x) {
+                const glm::vec3 local =
+                    (glm::vec3(x, y, z) - center) * volume.probeSpacing;
+                const auto point = projectPoint(
+                    glm::vec3(entity.world * glm::vec4(local, 1.0f)),
+                    viewProjection, viewport);
+                if (point)
+                    drawList->AddCircleFilled(*point, 2.0f,
+                                              kDdgiProbeColor);
+            }
         }
     }
 }
@@ -290,6 +347,7 @@ void SceneViewportController::drawOverlay(
     if (selected) {
         drawSelection(*selected, world->modelAsset(selected->handle), camera,
                       viewport);
+        drawDdgiProbeVolume(*selected, camera, viewport);
         const bool activeCameraSelected =
             session.cameraMode() == EditorCameraMode::ActiveScene &&
             world->activeCameraId() &&

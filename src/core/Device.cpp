@@ -6,19 +6,29 @@
 
 #include <BuildFeatures.h>
 
+#include <algorithm>
+#include <array>
+#include <cstring>
 #include <set>
 #include <string>
 #include <vector>
 
 namespace {
-const std::vector<const char *> deviceExtensions = {
+const std::vector<const char *> requiredDeviceExtensions = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+
+constexpr std::array<const char *, 3> rayQueryExtensions = {
+    VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+    VK_KHR_RAY_QUERY_EXTENSION_NAME,
+    VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME};
 } // namespace
 
 namespace vkr {
 
 Device::Device(VulkanContext &ctx) : ctx_(ctx) {
     pickPhysicalDevice();
+    queryRayQuerySupport();
+    queryDdgiSupport();
     createLogicalDevice();
     debugUtils_ =
         std::make_unique<GpuDebugUtils>(device_, ctx_.debugUtilsEnabled());
@@ -153,6 +163,8 @@ void Device::pickPhysicalDevice() {
             throw std::runtime_error("failed to find a suitable GPU!");
         }
     }
+
+    enabledDeviceExtensions_ = requiredDeviceExtensions;
 
     VkPhysicalDeviceFeatures features{};
     vkGetPhysicalDeviceFeatures(physicalDevice_, &features);
@@ -593,6 +605,130 @@ void Device::pickPhysicalDevice() {
                      cacaoSupport_.reason);
     }
 }
+
+void Device::queryRayQuerySupport() {
+    const VkPhysicalDeviceProperties properties = physicalDeviceProperties();
+    if (VK_VERSION_MAJOR(properties.apiVersion) < 1 ||
+        (VK_VERSION_MAJOR(properties.apiVersion) == 1 &&
+         VK_VERSION_MINOR(properties.apiVersion) < 2)) {
+        rayQuerySupport_.reason = "Vulkan 1.2 is required";
+        VKR_LOG_WARN("Device", "Ray Query unavailable: {}",
+                     rayQuerySupport_.reason);
+        return;
+    }
+
+    uint32_t extensionCount = 0;
+    vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr,
+                                         &extensionCount, nullptr);
+    std::vector<VkExtensionProperties> extensions(extensionCount);
+    vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr,
+                                         &extensionCount,
+                                         extensions.data());
+    const auto hasExtension = [&](const char *name) {
+        return std::any_of(extensions.begin(), extensions.end(),
+                           [&](const VkExtensionProperties &extension) {
+                               return std::strcmp(extension.extensionName,
+                                                  name) == 0;
+                           });
+    };
+    for (const char *extension : rayQueryExtensions) {
+        if (!hasExtension(extension)) {
+            rayQuerySupport_.reason =
+                std::string("missing device extension ") + extension;
+            VKR_LOG_WARN("Device", "Ray Query unavailable: {}",
+                         rayQuerySupport_.reason);
+            return;
+        }
+    }
+
+    VkPhysicalDeviceRayQueryFeaturesKHR rayQuery{};
+    rayQuery.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR acceleration{};
+    acceleration.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+    acceleration.pNext = &rayQuery;
+    VkPhysicalDeviceBufferDeviceAddressFeatures bufferAddress{};
+    bufferAddress.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+    bufferAddress.pNext = &acceleration;
+    VkPhysicalDeviceFeatures2 features{};
+    features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    features.pNext = &bufferAddress;
+    vkGetPhysicalDeviceFeatures2(physicalDevice_, &features);
+    if (!features.features.shaderInt64 ||
+        !bufferAddress.bufferDeviceAddress ||
+        !acceleration.accelerationStructure || !rayQuery.rayQuery) {
+        rayQuerySupport_.reason =
+            "shaderInt64, buffer device address, acceleration structure, or ray query feature is unavailable";
+        VKR_LOG_WARN("Device", "Ray Query unavailable: {}",
+                     rayQuerySupport_.reason);
+        return;
+    }
+
+    VkPhysicalDeviceAccelerationStructurePropertiesKHR accelerationProps{};
+    accelerationProps.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
+    VkPhysicalDeviceProperties2 properties2{};
+    properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    properties2.pNext = &accelerationProps;
+    vkGetPhysicalDeviceProperties2(physicalDevice_, &properties2);
+    rayQuerySupport_.available = true;
+    rayQuerySupport_.maxGeometryCount = accelerationProps.maxGeometryCount;
+    rayQuerySupport_.maxInstanceCount = accelerationProps.maxInstanceCount;
+    rayQuerySupport_.maxPrimitiveCount = accelerationProps.maxPrimitiveCount;
+    rayQuerySupport_.minScratchAlignment =
+        accelerationProps.minAccelerationStructureScratchOffsetAlignment;
+    enabledDeviceExtensions_.insert(enabledDeviceExtensions_.end(),
+                                    rayQueryExtensions.begin(),
+                                    rayQueryExtensions.end());
+    VKR_LOG_INFO("Device",
+                 "Vulkan Ray Query is supported (max instances={}, scratch alignment={})",
+                 rayQuerySupport_.maxInstanceCount,
+                 rayQuerySupport_.minScratchAlignment);
+}
+
+void Device::queryDdgiSupport() {
+    if (!rayQuerySupport_.available) {
+        ddgiSupport_.reason = rayQuerySupport_.reason;
+        return;
+    }
+    VkPhysicalDeviceFeatures features{};
+    vkGetPhysicalDeviceFeatures(physicalDevice_, &features);
+    if (!features.shaderStorageImageExtendedFormats) {
+        ddgiSupport_.reason =
+            "shaderStorageImageExtendedFormats is unavailable";
+        return;
+    }
+    const auto supportsAtlas = [&](VkFormat format) {
+        VkFormatProperties properties{};
+        vkGetPhysicalDeviceFormatProperties(physicalDevice_, format,
+                                            &properties);
+        constexpr VkFormatFeatureFlags required =
+            VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+            VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
+            VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
+        if ((properties.optimalTilingFeatures & required) != required)
+            return false;
+        VkImageFormatProperties imageProperties{};
+        return vkGetPhysicalDeviceImageFormatProperties(
+                   physicalDevice_, format, VK_IMAGE_TYPE_2D,
+                   VK_IMAGE_TILING_OPTIMAL,
+                   VK_IMAGE_USAGE_SAMPLED_BIT |
+                       VK_IMAGE_USAGE_STORAGE_BIT |
+                       VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                   0, &imageProperties) == VK_SUCCESS &&
+               imageProperties.maxArrayLayers >= 2048;
+    };
+    if (!supportsAtlas(ddgiSupport_.irradianceFormat) ||
+        !supportsAtlas(ddgiSupport_.distanceFormat)) {
+        ddgiSupport_.reason =
+            "required RGBA16F/RG16F 2048-layer storage atlases are unavailable";
+        return;
+    }
+    ddgiSupport_.available = true;
+    VKR_LOG_INFO("Device", "Ray Query DDGI is supported");
+}
 void Device::createLogicalDevice() {
     QueueFamilyIndices indices = findQueueFamilies(physicalDevice_);
 
@@ -619,11 +755,30 @@ void Device::createLogicalDevice() {
         (computeBloomSupport_.available || atmosphereSupport_.available ||
          screenSpaceEffectsSupport_.colorPyramidAvailable ||
          screenSpaceEffectsSupport_.ssaoAvailable ||
-         cacaoSupport_.available)
+         cacaoSupport_.available || ddgiSupport_.available)
             ? VK_TRUE
             : VK_FALSE;
     deviceFeatures.shaderImageGatherExtended =
         cacaoSupport_.available ? VK_TRUE : VK_FALSE;
+    deviceFeatures.shaderInt64 =
+        rayQuerySupport_.available ? VK_TRUE : VK_FALSE;
+
+    VkPhysicalDeviceRayQueryFeaturesKHR rayQuery{};
+    rayQuery.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+    rayQuery.rayQuery = rayQuerySupport_.available ? VK_TRUE : VK_FALSE;
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR acceleration{};
+    acceleration.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+    acceleration.accelerationStructure =
+        rayQuerySupport_.available ? VK_TRUE : VK_FALSE;
+    acceleration.pNext = &rayQuery;
+    VkPhysicalDeviceBufferDeviceAddressFeatures bufferAddress{};
+    bufferAddress.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+    bufferAddress.bufferDeviceAddress =
+        rayQuerySupport_.available ? VK_TRUE : VK_FALSE;
+    bufferAddress.pNext = &acceleration;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -634,14 +789,45 @@ void Device::createLogicalDevice() {
 
     createInfo.pEnabledFeatures = &deviceFeatures;
     createInfo.enabledExtensionCount =
-        static_cast<uint32_t>(deviceExtensions.size());
-    createInfo.ppEnabledExtensionNames = deviceExtensions.data();
+        static_cast<uint32_t>(enabledDeviceExtensions_.size());
+    createInfo.ppEnabledExtensionNames = enabledDeviceExtensions_.data();
+    createInfo.pNext = rayQuerySupport_.available ? &bufferAddress : nullptr;
 
     VK_CHECK(vkCreateDevice(physicalDevice_, &createInfo, nullptr, &device_));
 
     vkGetDeviceQueue(device_, indices.graphicsFamily.value(), 0,
                      &graphicsQueue_);
     vkGetDeviceQueue(device_, indices.presentFamily.value(), 0, &presentQueue_);
+
+    if (rayQuerySupport_.available) {
+        createAccelerationStructure_ =
+            reinterpret_cast<PFN_vkCreateAccelerationStructureKHR>(
+                vkGetDeviceProcAddr(device_,
+                                    "vkCreateAccelerationStructureKHR"));
+        destroyAccelerationStructure_ =
+            reinterpret_cast<PFN_vkDestroyAccelerationStructureKHR>(
+                vkGetDeviceProcAddr(device_,
+                                    "vkDestroyAccelerationStructureKHR"));
+        getAccelerationStructureBuildSizes_ =
+            reinterpret_cast<PFN_vkGetAccelerationStructureBuildSizesKHR>(
+                vkGetDeviceProcAddr(
+                    device_, "vkGetAccelerationStructureBuildSizesKHR"));
+        cmdBuildAccelerationStructures_ =
+            reinterpret_cast<PFN_vkCmdBuildAccelerationStructuresKHR>(
+                vkGetDeviceProcAddr(
+                    device_, "vkCmdBuildAccelerationStructuresKHR"));
+        getAccelerationStructureDeviceAddress_ =
+            reinterpret_cast<PFN_vkGetAccelerationStructureDeviceAddressKHR>(
+                vkGetDeviceProcAddr(
+                    device_, "vkGetAccelerationStructureDeviceAddressKHR"));
+        if (!createAccelerationStructure_ || !destroyAccelerationStructure_ ||
+            !getAccelerationStructureBuildSizes_ ||
+            !cmdBuildAccelerationStructures_ ||
+            !getAccelerationStructureDeviceAddress_) {
+            throw std::runtime_error(
+                "Ray Query extension functions could not be loaded");
+        }
+    }
 }
 
 bool Device::isDeviceSuitable(VkPhysicalDevice device) {
@@ -672,8 +858,8 @@ bool Device::checkDeviceExtensionSupport(VkPhysicalDevice device) {
     vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount,
                                          availableExtensions.data());
 
-    std::set<std::string> requiredExtensions(deviceExtensions.begin(),
-                                             deviceExtensions.end());
+    std::set<std::string> requiredExtensions(
+        requiredDeviceExtensions.begin(), requiredDeviceExtensions.end());
 
     for (const auto &extension : availableExtensions) {
         requiredExtensions.erase(extension.extensionName);
@@ -772,8 +958,81 @@ void Device::createAllocator() {
     info.physicalDevice = physicalDevice_;
     info.device = device_;
     info.instance = ctx_.instance();
-    info.vulkanApiVersion = VK_API_VERSION_1_0;
+    info.vulkanApiVersion = physicalDeviceProperties().apiVersion;
+    if (rayQuerySupport_.available)
+        info.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
     VK_CHECK(vmaCreateAllocator(&info, &allocator_));
+}
+
+VkDeviceAddress Device::bufferDeviceAddress(VkBuffer buffer) const {
+    if (!rayQuerySupport_.available || buffer == VK_NULL_HANDLE)
+        return 0;
+    VkBufferDeviceAddressInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+    info.buffer = buffer;
+    return vkGetBufferDeviceAddress(device_, &info);
+}
+
+VkAccelerationStructureKHR Device::createAccelerationStructure(
+    VkBuffer buffer, VkDeviceSize size,
+    VkAccelerationStructureTypeKHR type,
+    const std::string &debugName) const {
+    if (!rayQuerySupport_.available || !createAccelerationStructure_)
+        return VK_NULL_HANDLE;
+    VkAccelerationStructureCreateInfoKHR info{};
+    info.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+    info.buffer = buffer;
+    info.size = size;
+    info.type = type;
+    VkAccelerationStructureKHR result = VK_NULL_HANDLE;
+    VK_CHECK(createAccelerationStructure_(device_, &info, nullptr, &result));
+    if (!debugName.empty()) {
+        debugUtils_->setObjectName(VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR,
+                                   result, debugName);
+    }
+    return result;
+}
+
+void Device::destroyAccelerationStructure(
+    VkAccelerationStructureKHR accelerationStructure) const {
+    if (accelerationStructure != VK_NULL_HANDLE &&
+        destroyAccelerationStructure_) {
+        destroyAccelerationStructure_(device_, accelerationStructure,
+                                      nullptr);
+    }
+}
+
+void Device::accelerationStructureBuildSizes(
+    VkAccelerationStructureBuildGeometryInfoKHR &buildInfo,
+    uint32_t primitiveCount,
+    VkAccelerationStructureBuildSizesInfoKHR &sizes) const {
+    sizes = {};
+    sizes.sType =
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+    getAccelerationStructureBuildSizes_(
+        device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+        &buildInfo, &primitiveCount, &sizes);
+}
+
+void Device::cmdBuildAccelerationStructures(
+    VkCommandBuffer commandBuffer,
+    const VkAccelerationStructureBuildGeometryInfoKHR &buildInfo,
+    const VkAccelerationStructureBuildRangeInfoKHR &range) const {
+    const VkAccelerationStructureBuildRangeInfoKHR *rangePtr = &range;
+    cmdBuildAccelerationStructures_(commandBuffer, 1, &buildInfo,
+                                    &rangePtr);
+}
+
+VkDeviceAddress Device::accelerationStructureDeviceAddress(
+    VkAccelerationStructureKHR accelerationStructure) const {
+    if (accelerationStructure == VK_NULL_HANDLE ||
+        !getAccelerationStructureDeviceAddress_)
+        return 0;
+    VkAccelerationStructureDeviceAddressInfoKHR info{};
+    info.sType =
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+    info.accelerationStructure = accelerationStructure;
+    return getAccelerationStructureDeviceAddress_(device_, &info);
 }
 
 } // namespace vkr

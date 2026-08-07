@@ -78,6 +78,9 @@ struct InspectorPanelActions {
     std::function<void(PersistentEntityId,
                        std::optional<ReflectionProbeComponentDocument>)>
         setReflectionProbe;
+    std::function<void(PersistentEntityId,
+                       std::optional<DdgiProbeVolumeComponentDocument>)>
+        setDdgiProbeVolume;
     std::function<void(PersistentEntityId)> captureReflectionProbe;
     std::function<void(PersistentEntityId, bool)> setAtmosphereSun;
     std::function<void(PersistentEntityId)> setActiveCamera;
@@ -100,6 +103,7 @@ class InspectorPanel {
     bool sceneEditing_ = false;
     bool atmosphereEditing_ = false;
     bool reflectionProbeEditing_ = false;
+    bool ddgiProbeVolumeEditing_ = false;
 };
 
 } // namespace vkr

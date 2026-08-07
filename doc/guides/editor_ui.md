@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-07
-> Verified against: Local Reflection Probes v1
+> Verified against: Local Reflection Probes and DDGI v1
 
 VulkanLab 的开发 UI 使用 Dear ImGui `v1.92.7-docking`，在主 GLFW
 窗口内创建一个全屏 DockSpace。Viewport、Outliner、Inspector、Scenes、Assets、
@@ -87,9 +87,9 @@ Jobs / Cache 显示项目 cache、当前任务、取消、日志和历史。
 ### Outliner 与 Inspector
 
 Outliner 显示 Native Scene 的实体层级，支持搜索、单选、创建 Empty/Model/三类 Light/
-Camera/Sky Atmosphere/Reflection Probe、重命名、enabled、复制和删除 subtree。一个 Scene 最多创建一个
-Sky Atmosphere，且只能位于 Scene Root。Inspector 的 Entity 页编辑 parent、局部
-Translation/Euler Rotation/Scale，以及 Model、Light、Camera、Atmosphere component；Scene 页编辑
+Camera/Sky Atmosphere/Reflection Probe/DDGI Probe Volume、重命名、enabled、复制和删除 subtree。一个 Scene 最多创建一个
+Sky Atmosphere和一个 DDGI Probe Volume；Atmosphere 只能位于 Scene Root。Inspector 的 Entity 页编辑 parent、局部
+Translation/Euler Rotation/Scale，以及 Model、Light、Camera、Atmosphere、Reflection Probe 和 DDGI component；Scene 页编辑
 ambient、environment 和 active camera。Parent picker 使用 Keep Local。
 
 Outliner 的 Entity 可以拖到另一个 Entity，或拖到显式 `Scene Root` 行解除父子关系。
@@ -104,13 +104,16 @@ Directional Light Inspector 还提供 `Use as Atmosphere Sun` 和太阳角半径
 
 Reflection Probe Inspector 提供 Environment、Box/Sphere shape、extents/radius、blend distance、priority、intensity、box projection 和 capture offset。`Capture and Bake` 会临时以探针位置和六个固定 90° 方向依次捕获 256×256 线性 HDR，拼接为 2:1 RGBE HDR，并调用现有 EnvironmentAssetTool 离线生成 KTX2。只有全部 bake/upload 成功后才通过一条 Editor 命令绑定新 Environment；失败时保留旧探针资产和场景状态。该操作是显式的，不会因移动物体或灯光而自动重新捕获。
 
+DDGI Probe Volume Inspector 提供 probe counts/spacing、rays per probe、每帧更新预算、max ray distance、hysteresis、normal/view bias、intensity、relocation 和 classification。选中该 Entity 时 Viewport 显示 volume 边界和 probe grid；`Render -> Post Processing -> Global Illumination` 可切换 DDGI/SSGI + DDGI，并查看 Irradiance、Distance、Classification 调试输出、TLAS instance、update cursor、generation/reset、显存和 GPU pass time。
+
 ### Render
 
 Render 使用六个折叠区：
 
 - `Common`：Shader variant、Texture Limit、Exposure EV 和 Tone Mapper。
-- `Post Processing`：Bloom 开关、Intensity 和状态；Threshold/Soft Knee 放入默认
-  折叠的 Bloom Tuning。
+- `Post Processing`：Bloom、AO backend、TAA、SSR、SSGI/DDGI 模式和对应调试视图；
+  低频 tuning 参数放入各自的折叠区。DDGI 状态同时显示 Probe Volume、TLAS、
+  update cursor、generation/reset 和固定 atlas 显存。
 - `Lighting`：阴影、ambient、场景灯光、fallback Sun、IBL/Skybox、Reflection Probe 数量/Repository/capture 状态，以及 Atmosphere support、active Sun、相机高度和 LUT generation/dirty/update 状态。
 - `Culling`：Camera/Shadow/Distance/Small Object/Hi-Z Occlusion 开关、阈值、CPU/GPU 可见性统计和 indirect buffer 容量。
 - `Surface Data`：Normal、Roughness、Motion、History Validity 调试视图，以及 history generation、有效 item 数、失效原因和 per-frame buffer 容量。

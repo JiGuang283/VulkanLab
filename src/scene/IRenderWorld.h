@@ -42,6 +42,13 @@ struct RenderWorldAtmosphere {
     AtmosphereComponentDocument parameters{};
 };
 
+struct RenderWorldDdgiVolume {
+    PersistentEntityId entityId;
+    glm::mat4 localToWorld{1.0f};
+    glm::mat4 worldToLocal{1.0f};
+    DdgiProbeVolumeComponentDocument parameters{};
+};
+
 struct RenderWorldReflectionProbe {
     PersistentEntityId entityId;
     glm::mat4 world{1.0f};
@@ -74,6 +81,7 @@ class IRenderWorld {
     worldAtmosphere() const = 0;
     virtual const std::vector<RenderWorldReflectionProbe> &
     reflectionProbes() const = 0;
+    virtual std::optional<RenderWorldDdgiVolume> ddgiProbeVolume() const = 0;
 };
 
 } // namespace vkr

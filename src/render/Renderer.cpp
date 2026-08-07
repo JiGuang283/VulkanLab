@@ -15,6 +15,7 @@
 #include "render/RenderFrame.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/RenderView.h"
+#include "render/RayTracingScene.h"
 #include "render/TemporalAA.h"
 #include "render/Visibility.h"
 #include "render/ShaderVariant.h"
@@ -38,6 +39,7 @@
 #include "render/pass/PresentPass.h"
 #include "render/pass/BloomPass.h"
 #include "render/pass/AtmosphereLutPass.h"
+#include "render/pass/DdgiPass.h"
 #include "diagnostics/TracyProfiler.h"
 #include "diagnostics/Profiling.h"
 
@@ -69,6 +71,7 @@ Renderer::Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
       descriptorAllocator_(&descriptorAllocator),
       uniformBufferSize_(sizeof(GlobalFrameUbo)),
       shaderPaths_(std::move(shaderPaths)) {
+    rayTracingScene_ = std::make_unique<RayTracingScene>(device);
     createUniformBuffers();
     createSceneLightBuffers();
     createReflectionProbeBuffers();
@@ -243,9 +246,16 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
         view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsgiRejection;
     const bool ssgiShadingActive =
         screenSupport.ssgiAvailable && shaderVariant.supportsScreenSpace &&
-        view.settings.globalIlluminationMode == GlobalIlluminationMode::Ssgi;
+        view.settings.ddgi.debugView == DdgiDebugView::None &&
+        (view.settings.globalIlluminationMode == GlobalIlluminationMode::Ssgi ||
+         view.settings.globalIlluminationMode ==
+             GlobalIlluminationMode::SsgiDdgi);
     const bool ssgiPassRequired = screenSupport.ssgiAvailable &&
         (ssgiShadingActive || ssgiDebugRequested);
+    const bool ddgiShadingActive =
+        ddgiPass_ && device_->ddgiSupport().available &&
+        shaderVariant.supportsDdgi && view.ddgi.active;
+    const bool ddgiPassRequired = ddgiShadingActive;
     const AmbientOcclusionMode activeAoMode =
         gtaoShadingActive
             ? AmbientOcclusionMode::Gtao
@@ -298,6 +308,10 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
         screenSpaceDescriptorSets_.at(frame.frameIndex);
     renderFrame.screenSpaceDescriptorSetLayout =
         screenSpaceDescriptorSetLayout_;
+    renderFrame.ddgiDescriptorSet =
+        ddgiPass_->samplingDescriptorSet(frame.frameIndex);
+    renderFrame.ddgiDescriptorSetLayout =
+        ddgiPass_->samplingDescriptorSetLayout();
     renderFrame.pipelineCache = &pipelineCache;
     renderFrame.debugUtils = &device_->debugUtils();
     renderFrame.tracyProfiler = &device_->tracyProfiler();
@@ -347,6 +361,10 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.features.ssrActive = ssrShadingActive;
     renderFrame.features.ssgiRequired = ssgiPassRequired;
     renderFrame.features.ssgiActive = ssgiShadingActive;
+    renderFrame.features.ddgiRequired = ddgiPassRequired;
+    renderFrame.features.ddgiActive = ddgiShadingActive;
+    if (!ddgiShadingActive)
+        ddgiPass_->disableSampling(frame.frameIndex);
     lastSurfaceDataActive_ = renderFrame.features.surfaceDataRequired;
 
     screenSpaceStatus_.requestedMode = view.settings.ambientOcclusionMode;
@@ -354,8 +372,13 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     screenSpaceStatus_.requestedGiMode =
         view.settings.globalIlluminationMode;
     screenSpaceStatus_.activeGiMode =
-        ssgiShadingActive ? GlobalIlluminationMode::Ssgi
-                          : GlobalIlluminationMode::AmbientOrIbl;
+        ssgiShadingActive && ddgiShadingActive
+            ? GlobalIlluminationMode::SsgiDdgi
+            : ssgiShadingActive
+                  ? GlobalIlluminationMode::Ssgi
+                  : ddgiShadingActive
+                        ? GlobalIlluminationMode::Ddgi
+                        : GlobalIlluminationMode::AmbientOrIbl;
     renderFrame.visibilityDrawStream =
         occlusionCullPass_
             ? &occlusionCullPass_->drawStream(frame.frameIndex)
@@ -364,8 +387,19 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     gpuPassProfiler_->collect(frame.frameIndex);
     gpuPassProfiler_->beginFrame(frame.cmd, frame.frameIndex,
                                  frameSync_->lastSubmittedSerial() + 1);
+    if (ddgiPassRequired)
+        rayTracingScene_->build(frame.cmd, frame.frameIndex, visibility);
     pipeline_.execute(renderFrame, *renderResources_, visibility,
                       gpuPassProfiler_.get());
+    const bool ddgiActuallyActive = ddgiPass_ && ddgiPass_->status().active;
+    screenSpaceStatus_.activeGiMode =
+        ssgiShadingActive && ddgiActuallyActive
+            ? GlobalIlluminationMode::SsgiDdgi
+            : ssgiShadingActive
+                  ? GlobalIlluminationMode::Ssgi
+                  : ddgiActuallyActive
+                        ? GlobalIlluminationMode::Ddgi
+                        : GlobalIlluminationMode::AmbientOrIbl;
     if (taaPass_) {
         const TaaPassStatus &taa = taaPass_->status();
         screenSpaceStatus_.taaActive = taa.active;
@@ -1232,6 +1266,10 @@ AtmosphereRuntimeStatus Renderer::atmosphereStatus() const {
     return atmosphereStatus_;
 }
 
+DdgiRuntimeStatus Renderer::ddgiStatus() const {
+    return ddgiPass_ ? ddgiPass_->status() : DdgiRuntimeStatus{};
+}
+
 SceneLightBufferStatus Renderer::sceneLightBufferStatus() const {
     SceneLightBufferStatus status{};
     status.activeLights = activeSceneLightCount_;
@@ -1246,6 +1284,10 @@ SceneLightBufferStatus Renderer::sceneLightBufferStatus() const {
 
 ReflectionProbeRuntimeStatus Renderer::reflectionProbeStatus() const {
     return reflectionProbeStatus_;
+}
+
+const RayTracingSceneStatus &Renderer::rayTracingSceneStatus() const {
+    return rayTracingScene_->status();
 }
 
 OcclusionCullingStatus Renderer::occlusionCullingStatus() const {
@@ -1507,6 +1549,14 @@ void Renderer::createRenderPipeline() {
         pipeline_.addPass(std::move(cacaoPass));
     }
 
+    auto ddgiPass = std::make_unique<DdgiPass>(
+        *device_, *renderResources_, resourceHandles_,
+        *descriptorAllocator_, globalDescriptorSetLayout_,
+        *rayTracingScene_, shaderPaths_.ddgiTraceComp,
+        shaderPaths_.ddgiUpdateComp);
+    ddgiPass_ = ddgiPass.get();
+    pipeline_.addPass(std::move(ddgiPass));
+
     pipeline_.addPass(std::make_unique<SkyBackgroundPass>(
         *device_, *renderResources_, resourceHandles_,
         globalDescriptorSetLayout_, lightingDescriptorSetLayout_,
@@ -1516,7 +1566,8 @@ void Renderer::createRenderPipeline() {
     auto mainPass = std::make_unique<MainForwardPass>(
         *device_, *renderResources_, resourceHandles_,
         ForwardPhase::Opaque,
-        lightingDescriptorSetLayout_, atmosphereDescriptorSetLayout_);
+        lightingDescriptorSetLayout_, atmosphereDescriptorSetLayout_,
+        ddgiPass_->samplingDescriptorSetLayout());
     mainForwardPass_ = mainPass.get();
     pipeline_.addPass(std::move(mainPass));
 
@@ -1558,7 +1609,8 @@ void Renderer::createRenderPipeline() {
     pipeline_.addPass(std::make_unique<MainForwardPass>(
         *device_, *renderResources_, resourceHandles_,
         ForwardPhase::Transparent,
-        lightingDescriptorSetLayout_, atmosphereDescriptorSetLayout_));
+        lightingDescriptorSetLayout_, atmosphereDescriptorSetLayout_,
+        ddgiPass_->samplingDescriptorSetLayout()));
     postProcessHandles.hdrColor = resourceHandles_.compositedHdrColor;
 
     if (screenSupport.taaAvailable) {

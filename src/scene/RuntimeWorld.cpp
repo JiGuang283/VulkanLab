@@ -153,6 +153,7 @@ SceneDocument RuntimeWorld::toDocument() const {
         entity.atmosphere = entry->atmosphere;
         if (entry->reflectionProbe)
             entity.reflectionProbe = entry->reflectionProbe->document;
+        entity.ddgiProbeVolume = entry->ddgiProbeVolume;
         document.entities.push_back(std::move(entity));
     }
     return document;
@@ -215,6 +216,7 @@ void RuntimeWorld::replaceDocument(const SceneDocument &document) {
     lights_ = std::move(replacement->lights_);
     atmosphere_ = std::move(replacement->atmosphere_);
     reflectionProbes_ = std::move(replacement->reflectionProbes_);
+    ddgiProbeVolume_ = std::move(replacement->ddgiProbeVolume_);
     materials_ = std::move(replacement->materials_);
     derivedDirty_ = true;
 }
@@ -258,6 +260,22 @@ EntityHandle RuntimeWorld::createEntity(SceneEntityDocument entity,
                 "Atmosphere entity must be a root with identity rotation and unit scale");
         }
     }
+    if (entity.ddgiProbeVolume) {
+        for (EntityHandle handle : order_) {
+            const Slot *existing = slot(handle);
+            if (existing && existing->ddgiProbeVolume) {
+                throw std::invalid_argument(
+                    "RuntimeWorld supports only one DDGI probe volume");
+            }
+        }
+        if (entity.parent ||
+            glm::any(glm::greaterThan(
+                glm::abs(entity.transform.scale - glm::vec3(1.0f)),
+                glm::vec3(1.0e-4f)))) {
+            throw std::invalid_argument(
+                "DDGI probe volume must be a root with unit scale");
+        }
+    }
     uint32_t index = 0;
     if (!freeList_.empty()) {
         index = freeList_.back();
@@ -279,6 +297,7 @@ EntityHandle RuntimeWorld::createEntity(SceneEntityDocument entity,
     entry.light = std::move(entity.light);
     entry.camera = std::move(entity.camera);
     entry.atmosphere = std::move(entity.atmosphere);
+    entry.ddgiProbeVolume = std::move(entity.ddgiProbeVolume);
     if (entity.reflectionProbe) {
         RuntimeReflectionProbeComponent component;
         component.document = std::move(*entity.reflectionProbe);
@@ -333,6 +352,7 @@ void RuntimeWorld::destroyOne(EntityHandle handle) {
     eraseHandle(order_, handle);
     entry->model.reset();
     entry->reflectionProbe.reset();
+    entry->ddgiProbeVolume.reset();
     entry->children.clear();
     entry->alive = false;
     ++entry->generation;
@@ -364,9 +384,10 @@ bool RuntimeWorld::setParent(EntityHandle handle,
             *error = "invalid_parent";
         return false;
     }
-    if (entry->atmosphere && parent) {
+    if ((entry->atmosphere || entry->ddgiProbeVolume) && parent) {
         if (error)
-            *error = "atmosphere_must_be_root";
+            *error = entry->atmosphere ? "atmosphere_must_be_root"
+                                       : "ddgi_volume_must_be_root";
         return false;
     }
     if (parent && wouldCreateCycle(handle, *parent)) {
@@ -434,6 +455,11 @@ bool RuntimeWorld::setTransform(EntityHandle handle,
     if (!entry)
         return false;
     if (entry->atmosphere && !validAtmosphereTransform(transform))
+        return false;
+    if (entry->ddgiProbeVolume &&
+        glm::any(glm::greaterThan(
+            glm::abs(transform.scale - glm::vec3(1.0f)),
+            glm::vec3(1.0e-4f))))
         return false;
     entry->transform.local = transform;
     entry->transform.local.rotation =
@@ -525,6 +551,30 @@ bool RuntimeWorld::setReflectionProbe(
         }
         entry->reflectionProbe = std::move(runtime);
     }
+    derivedDirty_ = true;
+    return true;
+}
+
+bool RuntimeWorld::setDdgiProbeVolume(
+    EntityHandle handle,
+    std::optional<DdgiProbeVolumeComponentDocument> component) {
+    Slot *entry = slot(handle);
+    if (!entry)
+        return false;
+    if (component) {
+        if (entry->parent ||
+            glm::any(glm::greaterThan(
+                glm::abs(entry->transform.local.scale - glm::vec3(1.0f)),
+                glm::vec3(1.0e-4f)))) {
+            return false;
+        }
+        for (EntityHandle candidate : order_) {
+            const Slot *other = slot(candidate);
+            if (other && other != entry && other->ddgiProbeVolume)
+                return false;
+        }
+    }
+    entry->ddgiProbeVolume = std::move(component);
     derivedDirty_ = true;
     return true;
 }
@@ -653,6 +703,7 @@ void RuntimeWorld::rebuildDerivedState() {
     lights_.clear();
     atmosphere_.reset();
     reflectionProbes_.clear();
+    ddgiProbeVolume_.reset();
     materials_.clear();
     std::unordered_set<const MaterialInstance *> seenMaterials;
 
@@ -713,6 +764,18 @@ void RuntimeWorld::rebuildDerivedState() {
         probe.environmentGeneration =
             entry->reflectionProbe->asset.generation();
         reflectionProbes_.push_back(std::move(probe));
+    }
+
+    for (EntityHandle handle : order_) {
+        const Slot *entry = slot(handle);
+        if (!entry || !entry->effectiveEnabled ||
+            !entry->ddgiProbeVolume)
+            continue;
+        ddgiProbeVolume_ = RenderWorldDdgiVolume{
+            entry->id, entry->transform.world,
+            glm::inverse(entry->transform.world),
+            *entry->ddgiProbeVolume};
+        break;
     }
 
     for (EntityHandle handle : order_) {
@@ -910,6 +973,12 @@ RuntimeWorld::reflectionProbes() const {
     return reflectionProbes_;
 }
 
+std::optional<RenderWorldDdgiVolume>
+RuntimeWorld::ddgiProbeVolume() const {
+    const_cast<RuntimeWorld *>(this)->rebuildDerivedState();
+    return ddgiProbeVolume_;
+}
+
 std::vector<RuntimeEntitySnapshot> RuntimeWorld::entities() const {
     const_cast<RuntimeWorld *>(this)->rebuildDerivedState();
     std::vector<RuntimeEntitySnapshot> result;
@@ -960,6 +1029,7 @@ RuntimeWorld::entity(EntityHandle handle) const {
         result.reflectionProbeBindingRevision =
             entry->reflectionProbe->bindingRevision;
     }
+    result.ddgiProbeVolume = entry->ddgiProbeVolume;
     return result;
 }
 

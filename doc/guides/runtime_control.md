@@ -122,6 +122,7 @@ cd build\windows-msvc-debug\Debug
 - 当前选择和已发布的 environment，以及环境加载任务；
 - 当前 Scene 的 Directional/Point/Spot 数量、按类型与总计的实际上传数量、256 灯上限、每个 frame slot 的 SSBO capacity/总字节、超限数量与最多 32 个 ignored Entity ID，以及当前 Directional shadow caster；
 - `culling` 的 source/visible 数量、frustum/distance/small-object 计数、shadow candidates/culled、depth draws、GPU occluded、Hi-Z mip 数和 indirect capacity；
+- `ddgi` 的设备支持、Probe Volume Entity、active 状态、probe/update/ray 数量、更新 cursor、TLAS instance、generation/reset 和显存估算；
 - `atmosphere` 的设备 support、active 状态、component/Sun Entity、Sun buffer index、相机高度、静态 LUT ready/dirty、generation、更新时间和不可用原因；
 - capture queue 计数，以及 Workspace/Viewport 各自的 capture capability；
 - `viewport` 的模式、可见/hover 状态、display extent、render extent 和 resize pending；
@@ -274,6 +275,12 @@ Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模�
   --ssgi-radiance-clamp 10 `
   --ssgi-history-weight 0.9
 .\VulkanLabCtl.exe render-settings set `
+  --gi ddgi `
+  --ddgi-radiance-clamp 10 `
+  --ddgi-debug none
+.\VulkanLabCtl.exe render-settings set `
+  --gi ssgi-ddgi
+.\VulkanLabCtl.exe render-settings set `
   --screen-space-debug ssgi-variance
 ```
 
@@ -289,7 +296,9 @@ Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模�
 
 `--reflection` 接受 `ibl-only/ssr`，`--ssr-quality` 接受 `low/medium/high`；max distance、thickness、max roughness、intensity 和 history weight 的范围分别为 `[0.1,1000]`、`[0.001,5]`、`[0,1]`、`[0,4]` 和 `[0,0.99]`。SSR 默认关闭，只对两个 PBR variant 生效；miss 和低 confidence 区域回退当前 IBL/constant ambient baseline。SSR history 与 TAA/GTAO 独立，并响应相同的 camera cut、resize、scene/shader/camera mode 失效事件。
 
-`--gi` 接受 `ambient-or-ibl/ssgi`，`--ssgi-quality` 接受 `low/medium/high`；max distance、thickness、intensity、radiance clamp 和 history weight 的范围分别为 `[0.05,1000]`、`[0.001,10]`、`[0,4]`、`[0.1,100]` 和 `[0,0.99]`。SSGI 默认关闭，只对两个 PBR variant 生效；miss 与低 confidence 区域回退当前 ambient/IBL baseline。SSGI history 与 TAA、GTAO、SSR 分离，并响应相同的 camera cut、resize、scene/shader/camera mode 失效事件。
+`--gi` 接受 `ambient-or-ibl/ssgi/ddgi/ssgi-ddgi`，`--ssgi-quality` 接受 `low/medium/high`；max distance、thickness、intensity、radiance clamp 和 history weight 的范围分别为 `[0.05,1000]`、`[0.001,10]`、`[0,4]`、`[0.1,100]` 和 `[0,0.99]`。SSGI 默认关闭，只对两个 PBR variant 生效；miss 与低 confidence 区域回退 DDGI 或当前 ambient/IBL baseline。SSGI history 与 TAA、GTAO、SSR 分离，并响应相同的 camera cut、resize、scene/shader/camera mode 失效事件。
+
+`ddgi` 和 `ssgi-ddgi` 还要求当前 Native Scene 存在一个有效的 DDGI Probe Volume、当前设备支持 Vulkan Ray Query/Acceleration Structure 与所需 storage image format，并使用支持 DDGI 的 PBR variant。`--ddgi-radiance-clamp` 范围为 `[0.1,100]`；`--ddgi-debug` 接受 `none/irradiance/distance/classification`。组合模式把 DDGI 作为屏幕外低频 diffuse baseline，并用 SSGI confidence 覆盖近场屏幕空间结果。`render-settings get` 与 `render.status.ddgi` 会报告实际 active 状态、不可用原因、TLAS instance 和 probe update 进度。
 
 `--screen-space-debug` 接受 `none`、`nearest-depth`、`scene-color`、`ssao-raw`、`ssao-filtered`、`cacao-output`、`gtao-raw`、`gtao-temporal`、`gtao-filtered`、`gtao-rejection`、`gtao-history-weight`、`taa-history`、`taa-rejection`、`taa-history-weight`、`ssr-raw`、`ssr-temporal`、`ssr-filtered`、`ssr-confidence`、`ssr-rejection`、`ssgi-raw`、`ssgi-temporal`、`ssgi-filtered`、`ssgi-confidence`、`ssgi-variance` 和 `ssgi-rejection`，mip 范围为 `[0,31]` 并在 shader 中限制到实际 mip。Surface 与 Screen-Space Debug 互斥；同一 patch 同时请求两个非 `none` 模式时返回 `conflicting_debug_views`，分开切换时新模式会关闭旧模式。
 

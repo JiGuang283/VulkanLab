@@ -1,0 +1,121 @@
+#version 450
+
+#extension GL_GOOGLE_include_directive : require
+#include "include/ddgi_common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+struct GpuDdgiRayResult {
+    vec4 radianceDistance;
+    vec4 directionHit;
+};
+layout(std430, set = 1, binding = 2) readonly buffer RayResults {
+    GpuDdgiRayResult rays[];
+} rayResults;
+layout(set = 1, binding = 3, rgba16f) uniform image2DArray irradianceAtlas;
+layout(set = 1, binding = 4, rg16f) uniform image2DArray distanceAtlas;
+layout(std430, set = 1, binding = 5) buffer ProbeStates {
+    GpuDdgiProbeState states[];
+} probeStates;
+
+vec4 integrateIrradiance(uint updateIndex, vec3 direction)
+{
+    vec3 sum = vec3(0.0);
+    float weightSum = 0.0;
+    uint rayCount = ddgi.runtimeParameters.x;
+    for (uint ray = 0u; ray < rayCount; ++ray) {
+        GpuDdgiRayResult sampleValue =
+            rayResults.rays[updateIndex * rayCount + ray];
+        float weight = max(dot(direction, sampleValue.directionHit.xyz), 0.0);
+        sum += sampleValue.radianceDistance.rgb * weight;
+        weightSum += weight;
+    }
+    return vec4(sum / max(weightSum, 1.0e-5), 1.0);
+}
+
+vec2 integrateDistance(uint updateIndex, vec3 direction)
+{
+    vec2 sum = vec2(0.0);
+    float weightSum = 0.0;
+    uint rayCount = ddgi.runtimeParameters.x;
+    for (uint ray = 0u; ray < rayCount; ++ray) {
+        GpuDdgiRayResult sampleValue =
+            rayResults.rays[updateIndex * rayCount + ray];
+        float weight = pow(max(dot(direction,
+                                   sampleValue.directionHit.xyz), 0.0), 4.0);
+        float distance = sampleValue.radianceDistance.w;
+        sum += vec2(distance, distance * distance) * weight;
+        weightSum += weight;
+    }
+    return sum / max(weightSum, 1.0e-5);
+}
+
+void main()
+{
+    uint updateIndex = gl_WorkGroupID.z;
+    if (updateIndex >= ddgi.runtimeParameters.y) return;
+    uint probeIndex = (ddgi.updateWindow.x + updateIndex) %
+                      max(ddgi.probeCounts.w, 1u);
+    ivec2 pixel = ivec2(gl_LocalInvocationID.xy);
+    float hysteresis = ddgi.traceParameters.y > 0.5
+                           ? 0.0 : clamp(ddgi.updateParameters.x, 0.0, 0.9999);
+
+    vec3 irradianceDirection = ddgiOctDecode(
+        (vec2(pixel) + 0.5) / 8.0);
+    vec4 currentIrradiance = integrateIrradiance(
+        updateIndex, irradianceDirection);
+    vec4 previousIrradiance = imageLoad(
+        irradianceAtlas, ivec3(pixel, int(probeIndex)));
+    imageStore(irradianceAtlas, ivec3(pixel, int(probeIndex)),
+               mix(currentIrradiance, previousIrradiance, hysteresis));
+
+    for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 2; ++x) {
+            ivec2 distancePixel = pixel + ivec2(x * 8, y * 8);
+            vec3 direction = ddgiOctDecode(
+                (vec2(distancePixel) + 0.5) / 16.0);
+            vec2 current = integrateDistance(updateIndex, direction);
+            vec2 previous = imageLoad(
+                distanceAtlas,
+                ivec3(distancePixel, int(probeIndex))).rg;
+            imageStore(distanceAtlas,
+                       ivec3(distancePixel, int(probeIndex)),
+                       vec4(mix(current, previous, hysteresis), 0.0, 0.0));
+        }
+    }
+
+    if (all(equal(gl_LocalInvocationID.xy, uvec2(0u)))) {
+        uint rayCount = ddgi.runtimeParameters.x;
+        uint backfaces = 0u;
+        uint nearHits = 0u;
+        vec3 relocation = vec3(0.0);
+        float nearThreshold = min(min(ddgi.probeSpacingMaxDistance.x,
+                                      ddgi.probeSpacingMaxDistance.y),
+                                  ddgi.probeSpacingMaxDistance.z) * 0.25;
+        for (uint ray = 0u; ray < rayCount; ++ray) {
+            GpuDdgiRayResult sampleValue =
+                rayResults.rays[updateIndex * rayCount + ray];
+            if (sampleValue.directionHit.w < 0.0) ++backfaces;
+            if (sampleValue.directionHit.w != 0.0 &&
+                sampleValue.radianceDistance.w < nearThreshold) {
+                ++nearHits;
+                relocation -= sampleValue.directionHit.xyz *
+                              (nearThreshold - sampleValue.radianceDistance.w);
+            }
+        }
+        GpuDdgiProbeState state = probeStates.states[probeIndex];
+        bool probeActive = ddgi.runtimeParameters.w == 0u ||
+                           backfaces * 4u <= rayCount;
+        state.offsetClassification.w = probeActive ? 1.0 : 0.0;
+        if (ddgi.runtimeParameters.z != 0u && nearHits > 0u) {
+            vec3 maxOffset = ddgi.probeSpacingMaxDistance.xyz * 0.45;
+            vec3 target = relocation / float(nearHits);
+            state.offsetClassification.xyz = clamp(
+                mix(state.offsetClassification.xyz, target, 0.25),
+                -maxOffset, maxOffset);
+        }
+        state.statistics = vec4(float(backfaces) / float(rayCount),
+                                float(nearHits) / float(rayCount), 0.0, 0.0);
+        probeStates.states[probeIndex] = state;
+    }
+}

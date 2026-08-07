@@ -2,12 +2,15 @@
 #include "TangentGenerator.h"
 #include "Vertex.h"
 #include "core/Device.h"
+#include "core/AccelerationStructure.h"
 #include "core/Log.h"
 #include "core/UploadRecorder.h"
 #include "diagnostics/SceneLoadStats.h"
 
 #include <tiny_obj_loader.h>
 
+#include <algorithm>
+#include <array>
 #include <cstring>
 #include <filesystem>
 #include <limits>
@@ -44,10 +47,13 @@ Bounds computeBounds(const void *vertexData, VkDeviceSize vertexSize) {
 
 } // namespace
 
+Mesh::~Mesh() = default;
+
 Mesh::Mesh(Device &device, UploadRecorder &upload, const void *vertexData,
            VkDeviceSize vertexSize, const uint32_t *indexData,
            uint32_t indexCount, std::string debugName)
-    : indexCount_(indexCount) {
+    : vertexCount_(static_cast<uint32_t>(vertexSize / sizeof(Vertex))),
+      indexCount_(indexCount) {
     ResourceLoadStats *loadStats = upload.stats();
     localBounds_ = computeBounds(vertexData, vertexSize);
     ScopedLoadTimer uploadTimer(loadStats ? &loadStats->meshUploadMs
@@ -58,23 +64,41 @@ Mesh::Mesh(Device &device, UploadRecorder &upload, const void *vertexData,
 
     // Complete every fallible allocation before recording copies. This keeps
     // constructor failure from destroying a buffer referenced by a batch.
+    VkBufferUsageFlags vertexUsage = VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    VkBufferUsageFlags indexUsage = VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                    VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+    if (device.rayQuerySupport().available) {
+        vertexUsage |=
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        indexUsage |=
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    }
     vertexBuffer_ =
         std::make_unique<Buffer>(device, vertexSize,
-                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                 vertexUsage,
                                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0,
                                  debugName.empty()
                                      ? "Mesh/Unnamed/VertexBuffer"
                                      : debugName + "/VertexBuffer");
     indexBuffer_ = std::make_unique<Buffer>(
         device, indexSize,
-        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+        indexUsage,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0,
         debugName.empty() ? "Mesh/Unnamed/IndexBuffer"
                           : debugName + "/IndexBuffer");
 
     upload.uploadBuffer(vertexData, vertexSize, vertexBuffer_->handle());
     upload.uploadBuffer(indexData, indexSize, indexBuffer_->handle());
+    if (device.rayQuerySupport().available && vertexCount_ > 0 &&
+        indexCount_ >= 3) {
+        buildBottomLevelAccelerationStructure(device, upload.commandBuffer(),
+                                               debugName);
+    }
 
     if (loadStats) {
         ++loadStats->gpuMeshCount;
@@ -84,6 +108,97 @@ Mesh::Mesh(Device &device, UploadRecorder &upload, const void *vertexData,
         loadStats->indexUploadBytes +=
             static_cast<uint64_t>(indexCount) * sizeof(uint32_t);
     }
+}
+
+void Mesh::buildBottomLevelAccelerationStructure(
+    Device &device, VkCommandBuffer commandBuffer,
+    const std::string &debugName) {
+    std::array<VkBufferMemoryBarrier, 2> barriers{};
+    for (VkBufferMemoryBarrier &barrier : barriers) {
+        barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask =
+            VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.offset = 0;
+        barrier.size = VK_WHOLE_SIZE;
+    }
+    barriers[0].buffer = vertexBuffer_->handle();
+    barriers[1].buffer = indexBuffer_->handle();
+    vkCmdPipelineBarrier(
+        commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 0,
+        nullptr, static_cast<uint32_t>(barriers.size()), barriers.data(), 0,
+        nullptr);
+
+    VkAccelerationStructureGeometryTrianglesDataKHR triangles{};
+    triangles.sType =
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+    triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+    triangles.vertexData.deviceAddress = vertexBuffer_->deviceAddress();
+    triangles.vertexStride = sizeof(Vertex);
+    triangles.maxVertex = vertexCount_ - 1;
+    triangles.indexType = VK_INDEX_TYPE_UINT32;
+    triangles.indexData.deviceAddress = indexBuffer_->deviceAddress();
+
+    VkAccelerationStructureGeometryKHR geometry{};
+    geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+    geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+    geometry.geometry.triangles = triangles;
+
+    const uint32_t primitiveCount = indexCount_ / 3;
+    VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
+    buildInfo.sType =
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+    buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    buildInfo.flags =
+        VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    buildInfo.geometryCount = 1;
+    buildInfo.pGeometries = &geometry;
+    VkAccelerationStructureBuildSizesInfoKHR sizes{};
+    device.accelerationStructureBuildSizes(buildInfo, primitiveCount, sizes);
+
+    const std::string name = debugName.empty()
+                                 ? "Mesh/Unnamed/BLAS"
+                                 : debugName + "/BLAS";
+    bottomLevelAccelerationStructure_ =
+        std::make_unique<AccelerationStructure>(
+            device, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
+            sizes.accelerationStructureSize, name);
+
+    const VkDeviceSize alignment =
+        std::max<VkDeviceSize>(device.rayQuerySupport().minScratchAlignment,
+                               1);
+    accelerationBuildScratch_ = std::make_unique<Buffer>(
+        device, sizes.buildScratchSize + alignment - 1,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, name + "/Scratch");
+    const VkDeviceAddress scratchBase =
+        accelerationBuildScratch_->deviceAddress();
+    const VkDeviceAddress scratchAddress =
+        (scratchBase + alignment - 1) & ~(alignment - 1);
+
+    buildInfo.dstAccelerationStructure =
+        bottomLevelAccelerationStructure_->handle();
+    buildInfo.scratchData.deviceAddress = scratchAddress;
+    VkAccelerationStructureBuildRangeInfoKHR range{};
+    range.primitiveCount = primitiveCount;
+    device.cmdBuildAccelerationStructures(commandBuffer, buildInfo, range);
+}
+
+VkDeviceAddress Mesh::vertexDeviceAddress() const {
+    return vertexBuffer_ ? vertexBuffer_->deviceAddress() : 0;
+}
+
+VkDeviceAddress Mesh::indexDeviceAddress() const {
+    return indexBuffer_ ? indexBuffer_->deviceAddress() : 0;
+}
+
+void Mesh::releaseAccelerationBuildScratch() {
+    accelerationBuildScratch_.reset();
 }
 
 std::unique_ptr<Mesh> Mesh::fromOBJ(Device &device, UploadRecorder &upload,

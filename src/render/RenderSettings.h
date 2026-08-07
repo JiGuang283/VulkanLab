@@ -69,11 +69,18 @@ inline std::optional<SsrQuality> ssrQualityFromName(std::string_view name) {
 enum class GlobalIlluminationMode {
     AmbientOrIbl,
     Ssgi,
+    Ddgi,
+    SsgiDdgi,
 };
 
 inline const char *globalIlluminationModeName(GlobalIlluminationMode mode) {
-    return mode == GlobalIlluminationMode::Ssgi ? "ssgi"
-                                                : "ambient-or-ibl";
+    switch (mode) {
+    case GlobalIlluminationMode::AmbientOrIbl: return "ambient-or-ibl";
+    case GlobalIlluminationMode::Ssgi: return "ssgi";
+    case GlobalIlluminationMode::Ddgi: return "ddgi";
+    case GlobalIlluminationMode::SsgiDdgi: return "ssgi-ddgi";
+    }
+    return "ambient-or-ibl";
 }
 
 inline std::optional<GlobalIlluminationMode>
@@ -82,8 +89,43 @@ globalIlluminationModeFromName(std::string_view name) {
         return GlobalIlluminationMode::AmbientOrIbl;
     if (name == "ssgi")
         return GlobalIlluminationMode::Ssgi;
+    if (name == "ddgi")
+        return GlobalIlluminationMode::Ddgi;
+    if (name == "ssgi-ddgi")
+        return GlobalIlluminationMode::SsgiDdgi;
     return std::nullopt;
 }
+
+enum class DdgiDebugView {
+    None,
+    Irradiance,
+    Distance,
+    Classification,
+};
+
+inline const char *ddgiDebugViewName(DdgiDebugView view) {
+    switch (view) {
+    case DdgiDebugView::None: return "none";
+    case DdgiDebugView::Irradiance: return "irradiance";
+    case DdgiDebugView::Distance: return "distance";
+    case DdgiDebugView::Classification: return "classification";
+    }
+    return "none";
+}
+
+inline std::optional<DdgiDebugView>
+ddgiDebugViewFromName(std::string_view name) {
+    if (name == "none") return DdgiDebugView::None;
+    if (name == "irradiance") return DdgiDebugView::Irradiance;
+    if (name == "distance") return DdgiDebugView::Distance;
+    if (name == "classification") return DdgiDebugView::Classification;
+    return std::nullopt;
+}
+
+struct DdgiSettings {
+    float radianceClamp = 20.0f;
+    DdgiDebugView debugView = DdgiDebugView::None;
+};
 
 enum class SsgiQuality {
     Low,
@@ -531,6 +573,7 @@ struct RenderSettings {
     float ssgiIntensity = 1.0f;
     float ssgiRadianceClamp = 10.0f;
     float ssgiHistoryWeight = 0.9f;
+    DdgiSettings ddgi{};
     ScreenSpaceDebugView screenSpaceDebugView = ScreenSpaceDebugView::None;
     uint32_t screenSpaceDebugMip = 0;
     CullingSettings culling{};
@@ -587,6 +630,8 @@ struct RenderSettingsPatch {
     std::optional<float> ssgiIntensity;
     std::optional<float> ssgiRadianceClamp;
     std::optional<float> ssgiHistoryWeight;
+    std::optional<float> ddgiRadianceClamp;
+    std::optional<DdgiDebugView> ddgiDebugView;
     std::optional<ScreenSpaceDebugView> screenSpaceDebugView;
     std::optional<uint32_t> screenSpaceDebugMip;
     std::optional<bool>  frustumCullingEnabled;
@@ -706,6 +751,10 @@ inline void applyRenderSettingsPatch(RenderSettings &settings,
         settings.ssgiRadianceClamp = *patch.ssgiRadianceClamp;
     if (patch.ssgiHistoryWeight)
         settings.ssgiHistoryWeight = *patch.ssgiHistoryWeight;
+    if (patch.ddgiRadianceClamp)
+        settings.ddgi.radianceClamp = *patch.ddgiRadianceClamp;
+    if (patch.ddgiDebugView)
+        settings.ddgi.debugView = *patch.ddgiDebugView;
     if (patch.screenSpaceDebugView)
         settings.screenSpaceDebugView = *patch.screenSpaceDebugView;
     if (patch.screenSpaceDebugMip)

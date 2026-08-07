@@ -51,10 +51,13 @@ MainForwardPass::MainForwardPass(Device &device,
                                  VkDescriptorSetLayout
                                      lightingDescriptorSetLayout,
                                  VkDescriptorSetLayout
-                                     atmosphereDescriptorSetLayout)
+                                     atmosphereDescriptorSetLayout,
+                                 VkDescriptorSetLayout
+                                     ddgiDescriptorSetLayout)
     : device_(&device), resourceHandles_(resourceHandles), phase_(phase),
       lightingDescriptorSetLayout_(lightingDescriptorSetLayout),
-      atmosphereDescriptorSetLayout_(atmosphereDescriptorSetLayout) {
+      atmosphereDescriptorSetLayout_(atmosphereDescriptorSetLayout),
+      ddgiDescriptorSetLayout_(ddgiDescriptorSetLayout) {
     createRenderPass(resources);
     createFramebuffers(resources);
 }
@@ -80,6 +83,14 @@ std::vector<RenderImageUsage> MainForwardPass::resourceUsages() const {
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
     usages.push_back({resourceHandles_.atmosphereAerialPerspective,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    usages.push_back({resourceHandles_.ddgiIrradiance,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    usages.push_back({resourceHandles_.ddgiDistance,
                       RenderImageAccess::SampledRead,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
@@ -264,6 +275,10 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                 pipelineConfig.descriptorLayouts.push_back(
                     frame.screenSpaceDescriptorSetLayout);
             }
+            if (frame.shaderVariant->supportsDdgi) {
+                pipelineConfig.descriptorLayouts.push_back(
+                    ddgiDescriptorSetLayout_);
+            }
 
             Pipeline &pipeline = frame.pipelineCache->getOrCreate(
                 renderPass_, std::move(pipelineConfig));
@@ -289,6 +304,12 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                         frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                         pipeline.layout(), 4, 1,
                         &frame.screenSpaceDescriptorSet, 0, nullptr);
+                }
+                if (frame.shaderVariant->supportsDdgi) {
+                    vkCmdBindDescriptorSets(
+                        frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        pipeline.layout(), 5, 1,
+                        &frame.ddgiDescriptorSet, 0, nullptr);
                 }
                 boundPipeline = &pipeline;
             }

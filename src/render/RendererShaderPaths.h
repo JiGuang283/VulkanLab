@@ -29,6 +29,8 @@ struct RendererShaderPaths {
     std::string ssgiTemporalComp;
     std::string ssgiFilterComp;
     std::string reflectionCompositeComp;
+    std::string ddgiTraceComp;
+    std::string ddgiUpdateComp;
     std::string taaResolveComp;
     std::string fullscreenVert;
     std::string toneMapFrag;

@@ -13,6 +13,35 @@ namespace vkr {
 
 inline constexpr uint32_t kMaxSceneLights = 256;
 inline constexpr uint32_t kMaxReflectionProbes = 8;
+inline constexpr uint32_t kMaxDdgiProbes = 2048;
+
+struct alignas(16) GpuRayTracingInstance {
+    glm::uvec4 addresses{};
+    glm::vec4 baseColorFactor{1.0f};
+    glm::vec4 emissiveMetallic{};
+    glm::vec4 materialParams{};
+};
+
+struct alignas(16) DdgiGpuParams {
+    glm::mat4 localToWorld{1.0f};
+    glm::mat4 worldToLocal{1.0f};
+    glm::uvec4 probeCounts{};
+    glm::vec4 probeSpacingMaxDistance{};
+    glm::vec4 updateParameters{};
+    glm::uvec4 runtimeParameters{};
+    glm::uvec4 updateWindow{};
+    glm::vec4 traceParameters{};
+};
+
+struct alignas(16) GpuDdgiProbeState {
+    glm::vec4 offsetClassification{};
+    glm::vec4 statistics{};
+};
+
+struct alignas(16) GpuDdgiRayResult {
+    glm::vec4 radianceDistance{};
+    glm::vec4 directionHit{};
+};
 
 struct alignas(16) GpuLight {
     glm::vec4 positionRange;
@@ -113,6 +142,10 @@ static_assert(std::is_standard_layout_v<GpuLight>);
 static_assert(std::is_standard_layout_v<GlobalFrameUbo>);
 static_assert(sizeof(GpuLight) == 64);
 static_assert(sizeof(GpuReflectionProbe) == 112);
+static_assert(sizeof(GpuRayTracingInstance) == 64);
+static_assert(sizeof(DdgiGpuParams) == 224);
+static_assert(sizeof(GpuDdgiProbeState) == 32);
+static_assert(sizeof(GpuDdgiRayResult) == 32);
 static_assert(sizeof(GpuReflectionProbeBuffer) == 912);
 static_assert(offsetof(GpuLight, positionRange) == 0);
 static_assert(offsetof(GpuLight, directionInnerCos) == 16);

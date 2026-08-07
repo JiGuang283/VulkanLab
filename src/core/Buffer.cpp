@@ -71,6 +71,12 @@ void *Buffer::map() {
     return mapped_;
 }
 
+VkDeviceAddress Buffer::deviceAddress() const {
+    if (!device_ || buffer_ == VK_NULL_HANDLE)
+        return 0;
+    return device_->bufferDeviceAddress(buffer_);
+}
+
 void Buffer::invalidate(VkDeviceSize offset, VkDeviceSize size) {
     if (offset > size_)
         throw std::out_of_range("buffer invalidate range is out of bounds");

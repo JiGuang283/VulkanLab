@@ -23,6 +23,7 @@ class Buffer {
 
     VkBuffer     handle() const { return buffer_; }
     VkDeviceSize size() const { return size_; }
+    VkDeviceAddress deviceAddress() const;
 
     void *map();
     void  unmap();

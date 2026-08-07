@@ -559,6 +559,103 @@ void InspectorPanel::draw(const InspectorPanelSnapshot &snapshot,
                 ImGui::EndDisabled();
             }
 
+            if (entity.ddgiProbeVolume &&
+                ImGui::CollapsingHeader("DDGI Probe Volume",
+                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+                DdgiProbeVolumeComponentDocument volume =
+                    *entity.ddgiProbeVolume;
+                const auto applyVolumeEdit = [&](bool changed) {
+                    beginContinuousIfNeeded(
+                        changed, ddgiProbeVolumeEditing_,
+                        "Edit DDGI Probe Volume", actions);
+                    if (changed && actions.setDdgiProbeVolume)
+                        actions.setDdgiProbeVolume(entity.id, volume);
+                    endContinuousIfNeeded(ddgiProbeVolumeEditing_, actions);
+                };
+
+                int counts[3] = {
+                    static_cast<int>(volume.probeCounts.x),
+                    static_cast<int>(volume.probeCounts.y),
+                    static_cast<int>(volume.probeCounts.z)};
+                bool changed = ImGui::InputInt3("Probe Counts", counts);
+                if (changed) {
+                    for (int &count : counts)
+                        count = std::clamp(count, 1, 32);
+                    while (static_cast<uint64_t>(counts[0]) * counts[1] *
+                               counts[2] >
+                           2048) {
+                        const int largest =
+                            counts[0] >= counts[1]
+                                ? (counts[0] >= counts[2] ? 0 : 2)
+                                : (counts[1] >= counts[2] ? 1 : 2);
+                        --counts[largest];
+                    }
+                    volume.probeCounts = glm::uvec3(
+                        counts[0], counts[1], counts[2]);
+                    volume.probesUpdatedPerFrame = std::min(
+                        volume.probesUpdatedPerFrame,
+                        volume.probeCounts.x * volume.probeCounts.y *
+                            volume.probeCounts.z);
+                }
+                applyVolumeEdit(changed);
+                changed = ImGui::DragFloat3(
+                    "Probe Spacing", &volume.probeSpacing.x, 0.05f,
+                    0.05f, 1000.0f);
+                volume.probeSpacing =
+                    glm::max(volume.probeSpacing, glm::vec3(0.05f));
+                applyVolumeEdit(changed);
+
+                int rays = volume.raysPerProbe == 64
+                               ? 0
+                               : (volume.raysPerProbe == 128 ? 1 : 2);
+                if (ImGui::Combo("Rays / Probe", &rays,
+                                 "64\0 128\0 256\0")) {
+                    volume.raysPerProbe = rays == 0 ? 64u
+                                                    : (rays == 1 ? 128u
+                                                                 : 256u);
+                    if (actions.setDdgiProbeVolume)
+                        actions.setDdgiProbeVolume(entity.id, volume);
+                }
+                int updateCount = static_cast<int>(
+                    volume.probesUpdatedPerFrame);
+                const int totalProbes = static_cast<int>(
+                    volume.probeCounts.x * volume.probeCounts.y *
+                    volume.probeCounts.z);
+                changed = ImGui::SliderInt("Update Budget", &updateCount, 1,
+                                           std::max(totalProbes, 1));
+                volume.probesUpdatedPerFrame =
+                    static_cast<uint32_t>(updateCount);
+                applyVolumeEdit(changed);
+                changed = ImGui::DragFloat("Max Ray Distance",
+                                           &volume.maxRayDistance, 0.1f,
+                                           0.1f, 10000.0f);
+                applyVolumeEdit(changed);
+                changed = ImGui::SliderFloat("Hysteresis",
+                                             &volume.hysteresis, 0.0f,
+                                             0.999f, "%.3f");
+                applyVolumeEdit(changed);
+                changed = ImGui::DragFloat("Normal Bias",
+                                           &volume.normalBias, 0.01f,
+                                           0.0f, 10.0f);
+                applyVolumeEdit(changed);
+                changed = ImGui::DragFloat("View Bias", &volume.viewBias,
+                                           0.01f, 0.0f, 10.0f);
+                applyVolumeEdit(changed);
+                changed = ImGui::SliderFloat("Intensity", &volume.intensity,
+                                             0.0f, 4.0f);
+                applyVolumeEdit(changed);
+                changed = ImGui::Checkbox("Relocation",
+                                          &volume.relocationEnabled);
+                applyVolumeEdit(changed);
+                changed = ImGui::Checkbox("Classification",
+                                          &volume.classificationEnabled);
+                applyVolumeEdit(changed);
+                ImGui::TextDisabled("Probe count: %u / 2048",
+                                    volume.probeCounts.x *
+                                        volume.probeCounts.y *
+                                        volume.probeCounts.z);
+            }
+
             if (ImGui::CollapsingHeader("Camera")) {
                 bool present = entity.camera.has_value();
                 if (ImGui::Checkbox("Camera Component", &present) &&

@@ -220,6 +220,8 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         command, "ssgiRadianceClamp", 0.1f, 100.0f);
     patch.ssgiHistoryWeight = optionalFiniteFloat(
         command, "ssgiHistoryWeight", 0.0f, 0.99f);
+    patch.ddgiRadianceClamp = optionalFiniteFloat(
+        command, "ddgiRadianceClamp", 0.1f, 100.0f);
     patch.screenSpaceDebugMip =
         optionalUint32(command, "screenSpaceDebugMip", 31u);
     if (const auto toneMapper = optionalString(command, "toneMapper")) {
@@ -312,7 +314,17 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         if (!patch.globalIlluminationMode) {
             throw RuntimeCommandError(
                 "invalid_params",
-                "Parameter 'globalIlluminationMode' must be ambient-or-ibl or ssgi.");
+                "Parameter 'globalIlluminationMode' must be ambient-or-ibl, "
+                "ssgi, ddgi, or ssgi-ddgi.");
+        }
+    }
+    if (const auto debugView = optionalString(command, "ddgiDebugView")) {
+        patch.ddgiDebugView = ddgiDebugViewFromName(*debugView);
+        if (!patch.ddgiDebugView) {
+            throw RuntimeCommandError(
+                "invalid_params",
+                "Parameter 'ddgiDebugView' must be none, irradiance, "
+                "distance, or classification.");
         }
     }
     if (const auto quality = optionalString(command, "ssgiQuality")) {
@@ -367,6 +379,7 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         !patch.ssgiQuality && !patch.ssgiMaxDistance &&
         !patch.ssgiThickness && !patch.ssgiIntensity &&
         !patch.ssgiRadianceClamp && !patch.ssgiHistoryWeight &&
+        !patch.ddgiRadianceClamp && !patch.ddgiDebugView &&
         !patch.screenSpaceDebugView && !patch.screenSpaceDebugMip) {
         throw RuntimeCommandError(
             "invalid_params",

@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-07
-> Verified against: Shared Model/Environment repositories and Local Reflection Probes v1
+> Verified against: Shared Model/Environment repositories, Local Reflection Probes and DDGI v1
 
 ## 项目、Catalog 与导入
 
@@ -154,7 +154,7 @@ CPU prepare 完成后，Repository 将记录放入唯一的 GPU build FIFO。`Mo
 
 DescriptorAllocator 创建支持单独释放 set 的 pool。MaterialInstance 析构会归还 descriptor set，因此失败、取消和反复重载不会持续耗尽 pool 容量。
 
-`RenderResourceRegistry` 不管理这里的 ModelAsset Texture/Mesh 或 Environment Texture，也不参与上传或 residency。它只拥有 Renderer 内部的 HDR、depth、shadow、Bloom、Viewport Color、程序化 Atmosphere LUT 和 sampler；模型与环境资源分别由 AssetRepository/ModelGpuBuilder、EnvironmentGpuBuilder、Texture/Mesh 与上传队列按上述生命周期管理。Atmosphere 是 SceneDocument 中的纯参数数据，不产生独立派生资产或加载任务。
+`RenderResourceRegistry` 不管理这里的 ModelAsset Texture/Mesh 或 Environment Texture，也不参与上传或 residency。它只拥有 Renderer 内部的 HDR、depth、shadow、Bloom、Viewport Color、程序化 Atmosphere LUT、DDGI probe atlas 和 sampler；模型与环境资源分别由 AssetRepository/ModelGpuBuilder、EnvironmentGpuBuilder、Texture/Mesh 与上传队列按上述生命周期管理。Atmosphere 与 DDGI Probe Volume 都是 SceneDocument 中的纯参数数据，不产生独立派生资产或加载任务。支持 Ray Query 时，Mesh 上传会同时构建 BLAS；TLAS 由 Renderer 按当前 frame slot 从 Render Items 动态构建，两者都不是 cache/Cook artifact。
 
 ## 发布与失败语义
 
@@ -194,7 +194,7 @@ VMA 快照在 ModelGpuBuilder 完成并发布后采集；Repository 面板另外
 6. 每个 Model/profile 的 Native BC7 manifest 与内容寻址 KTX2 blob 去重集合。
 7. 每个 Environment/profile 的 manifest 与四类浮点 KTX2 blob；不复制源 HDR。
 
-`CookPackageBuilder` 将旧 SceneDocument 规范化为当前 schema v4 写入 staging，不修改项目源文件。Atmosphere 和 Reflection Probe 参数随 SceneDocument 打包；每个 probe 引用的 environment 都进入闭包。所需程序由 Shader Manifest/SPIR-V 闭包携带。Cooked Catalog 只保留闭包内 Scene、Model、Environment 和解析必需 profiles，且不创建 Model Preview entry。Model 的 Validator 报告必须为 Valid/Warnings，实际使用 profile 必须为 Native BC7。Cooked texture manifest 的 source stamp 改写为包内 glTF/GLB stamp；environment source stamp 清空，因为源 HDR 不进入包。
+`CookPackageBuilder` 将旧 SceneDocument 规范化为当前 schema v5 写入 staging，不修改项目源文件。Atmosphere、Reflection Probe 和 DDGI Probe Volume 参数随 SceneDocument 打包；每个 reflection probe 引用的 environment 都进入闭包，DDGI 不增加文件资产依赖。所需 PBR/DDGI 程序由 Shader Manifest/SPIR-V 闭包携带。Cooked Catalog 只保留闭包内 Scene、Model、Environment 和解析必需 profiles，且不创建 Model Preview entry。Model 的 Validator 报告必须为 Valid/Warnings，实际使用 profile 必须为 Native BC7。Cooked texture manifest 的 source stamp 改写为包内 glTF/GLB stamp；environment source stamp 清空，因为源 HDR 不进入包。
 
 Artifact Index schema v4 将记录分类为 `Model`、`Environment` 和 `SceneDocument`；旧 `Scene` 读取为 Model。SceneDocument record 保存文档 stamp 和精确 Model/profile、Environment/profile references。包内索引由 cooked closure 重建，不从开发索引直接复制。
 
