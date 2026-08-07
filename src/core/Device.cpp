@@ -460,6 +460,18 @@ void Device::pickPhysicalDevice() {
         screenSpaceEffectsSupport_.taaAvailable = true;
     }
 
+    if (!surfaceDataSupport_.available) {
+        screenSpaceEffectsSupport_.ssrReason = surfaceDataSupport_.reason;
+    } else if (!screenSpaceEffectsSupport_.depthPyramidAvailable) {
+        screenSpaceEffectsSupport_.ssrReason =
+            screenSpaceEffectsSupport_.depthPyramidReason;
+    } else if (!screenSpaceEffectsSupport_.colorPyramidAvailable) {
+        screenSpaceEffectsSupport_.ssrReason =
+            screenSpaceEffectsSupport_.colorPyramidReason;
+    } else {
+        screenSpaceEffectsSupport_.ssrAvailable = true;
+    }
+
     cacaoSupport_.compiled = build::kCacao;
     const auto supportsCacao2D = [&](VkFormat format, uint32_t arrayLayers,
                                      uint32_t mipLevels,

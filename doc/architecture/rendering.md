@@ -1,8 +1,8 @@
 # 渲染流程
 
 > Status: Current
-> Last verified: 2026-08-06
-> Verified against: Screen-space foundations, AO backends and TAA v1
+> Last verified: 2026-08-07
+> Verified against: Screen-space foundations, AO backends, TAA, GTAO and SSR v1
 
 ## 帧图与 Pass 顺序
 
@@ -25,10 +25,18 @@ SsaoPass
         -> half-resolution raw + bilateral-filtered AO
 SkyBackgroundPass
         -> procedural atmosphere / skybox / clear
-MainForwardPass
-        -> linear HDR color + screen AO + aerial perspective
+MainForwardPass (Opaque)
+        -> opaque HDR + baseline indirect specular
 SceneColorPyramidPass
-        -> HDR color mip chain when requested
+        -> opaque HDR color mip chain when requested
+SsrPass
+        -> half-resolution trace + temporal + bilateral filter
+HdrCompositePass
+        -> replace baseline specular by SSR according to confidence
+MainForwardPass (Transparent)
+        -> blend over composited HDR with read-only Surface Depth
+TaaPass
+        -> optional temporal resolve of complete scene color
 BloomPass
         -> half-resolution bloom pyramid
 ToneMapPass
@@ -37,9 +45,9 @@ PresentPass + ImGui
         -> swapchain / Workspace capture
 ```
 
-`RenderResourceRegistry` 使用稳定的类型化 handle 管理内部 render target 和 sampler。资源描述明确指定 fixed/viewport-relative extent、相对尺寸除数、single/per-frame multiplicity、format、sample count、usage、aspect、array layer、view type、history capability 和 fixed/full mip policy。当前注册 HDR resolve、可选 HDR MSAA、main depth、2048x2048 directional shadow depth、Surface Depth、`RGBA16F` world normal/roughness/history validity、`RG16F` motion、用于遮挡剔除的 `R32_SFLOAT` max-depth Hi-Z、用于屏幕空间效果的 `R32_SFLOAT` nearest-depth pyramid、`RGBA16F` Scene Color pyramid、三张半分辨率 `R16_SFLOAT` SSAO 图像、五张半分辨率 GTAO 图像、最多六级 Bloom 图像、LDR Viewport Color，以及四张 Atmosphere LUT 和相关 sampler。每个 per-frame image 按 `MAX_FRAMES_IN_FLIGHT` 分配；HDR 优先使用 `R16G16B16A16_SFLOAT`，不满足 color attachment 与 sampled 要求时回退到 `R32G32B32A32_SFLOAT`。Viewport Color 使用 Swapchain format，以延续既有 sRGB/gamma 行为。HDR sample count 取 color/depth format 和设备能力的交集，Surface Data、Atmosphere、Shadow、屏幕空间效果、Bloom、ToneMap 与 Present 固定为 1x。
+`RenderResourceRegistry` 使用稳定的类型化 handle 管理内部 render target 和 sampler。资源描述明确指定 fixed/viewport-relative extent、相对尺寸除数、single/per-frame multiplicity、format、sample count、usage、aspect、array layer、view type、history capability 和 fixed/full mip policy。当前注册 HDR resolve、可选 HDR MSAA、baseline indirect specular 及其可选 MSAA resolve、composited HDR、main depth、2048x2048 directional shadow depth、Surface Depth、`RGBA16F` world normal/roughness/history validity、`RG16F` motion、用于遮挡剔除的 `R32_SFLOAT` max-depth Hi-Z、用于屏幕空间效果的 `R32_SFLOAT` nearest-depth pyramid、`RGBA16F` Scene Color pyramid、三张半分辨率 `R16_SFLOAT` SSAO 图像、五张半分辨率 GTAO 图像、五张半分辨率 `RGBA16F` SSR 图像、最多六级 Bloom 图像、LDR Viewport Color，以及四张 Atmosphere LUT 和相关 sampler。每个 per-frame image 按 `MAX_FRAMES_IN_FLIGHT` 分配；HDR 优先使用 `R16G16B16A16_SFLOAT`，不满足 color attachment 与 sampled 要求时回退到 `R32G32B32A32_SFLOAT`。Viewport Color 使用 Swapchain format，以延续既有 sRGB/gamma 行为。HDR sample count 取 color/depth format 和设备能力的交集，Surface Data、Atmosphere、Shadow、屏幕空间效果、Bloom、ToneMap 与 Present 固定为 1x。
 
-每个 Pass 通过 `resourceUsages()` 声明 attachment write、attachment read/write、sampled read、storage write/read-write、required/final layout。`RenderPipeline` 在初始化和 resize 后验证 handle、usage flag、sample/aspect、read-before-write 与相邻 layout 契约。Registry 不插入 barrier、不推导 lifetime、不重排 Pass；`RenderPipeline` 仍按 Atmosphere LUT、Shadow、Surface Prepass、Visibility Hi-Z、Occlusion、Screen Depth Pyramid、SSAO/GTAO/CACAO、Sky Background、Forward、TAA、Scene Color Pyramid、Bloom、ToneMap、Present 顺序记录到同一个 frame command buffer。Render pass 之间使用 final/initial layout 和 dependency；compute pass 通过集中式经典 Vulkan barrier helper 明确记录逐 mip、temporal resolve 和逐滤波阶段的 image barrier，以及 Occlusion SSBO write 到 indirect-command read 的 buffer barrier。
+每个 Pass 通过 `resourceUsages()` 声明 attachment write/read、sampled read、storage write/read-write、transfer read/write、required/final layout。`RenderPipeline` 在初始化和 resize 后验证 handle、usage flag、sample/aspect、read-before-write 与相邻 layout 契约。Registry 不插入 barrier、不推导 lifetime、不重排 Pass；`RenderPipeline` 仍按 Atmosphere LUT、Shadow、Surface Prepass、Visibility Hi-Z、Occlusion、Screen Depth Pyramid、SSAO/GTAO/CACAO、Sky Background、Opaque Forward、Scene Color Pyramid、SSR、Reflection Composite、Transparent Forward、TAA、Bloom、ToneMap、Present 顺序记录到同一个 frame command buffer。Render pass 之间使用 final/initial layout 和 dependency；compute pass 通过集中式经典 Vulkan barrier helper明确记录逐 mip、temporal resolve 和逐滤波阶段的 image barrier，以及 Occlusion SSBO write 到 indirect-command read 的 buffer barrier。
 
 Application 每帧只组装 `RenderViewInput`。纯函数 `buildRenderView()` 负责默认 Sun 规则、灯光过滤与分组、稳定阴影 caster、Atmosphere Sun 选择、阴影矩阵和 Atmosphere GPU 参数，输出不可变 `RenderView`。Renderer 将 `GlobalFrameUbo`、variable-length `sceneLights` 和 `AtmosphereGpuParams` 上传到当前 frame slot；Pass 通过 `RenderFrameContext::view` 读取同一份 settings、shadow 和 atmosphere 数据。
 
@@ -50,7 +58,7 @@ Application 每帧只组装 `RenderViewInput`。纯函数 `buildRenderView()` �
 - Opaque 使用 MaterialTemplate、MaterialInstance、Mesh 地址排序，减少 pipeline、descriptor 和 vertex/index buffer 切换。
 - Transparent 使用对象 world translation 到相机的距离从远到近排序。这是对象级近似，没有使用 mesh bounds，也不是 order-independent transparency。
 
-SkyBackgroundPass 负责清空 HDR color，并按优先级绘制程序化 Atmosphere、环境 Skybox 或纯色背景。MainForwardPass 使用 `LOAD` 保留该颜色，只清空 depth，然后先画 Opaque/Mask，再画 Transparent。它不再写 swapchain，也不再绘制 ImGui。MSAA HDR color 不使用 transient allocation，因为其内容必须跨 Sky Background 与 MainForward 两个 render pass 保留。
+SkyBackgroundPass 负责清空 HDR color，并按优先级绘制程序化 Atmosphere、环境 Skybox 或纯色背景。Opaque MainForward 使用 `LOAD` 保留背景、清空主 depth，并把 PBR baseline indirect specular写入第二个 MRT。Reflection Composite 完成后，Transparent MainForward 使用 `LOAD` 保留 composited HDR，并以 Surface Depth 的 read-only layout 做 depth test；透明阶段不写 baseline MRT。Forward 不再写 swapchain，也不再绘制 ImGui。MSAA HDR 与 baseline specular image 不使用 transient allocation，因为内容跨多个 render pass 保留。
 
 | 队列 | Blending | Depth test | Depth write |
 |---|---:|---:|---:|
@@ -97,6 +105,23 @@ indirectOcclusion = materialOcclusion * screenSpaceAo;
 Direct Lighting、Shadow、Emissive 与 Atmosphere direct transmittance 不乘 screen-space AO；BLEND 与 transmission 强制使用 `screenSpaceAo=1`。SSAO、CACAO 与 GTAO 复用固定 `set=4` AO binding，同一帧只选择一个 active output；仅选择各自 Debug View 时也会执行对应 Pass，但不会因此开启 PBR AO shading。Surface Debug 与 Screen-Space Debug 互斥；Depth 使用 near/far 对数显示，Scene Color 使用当前 exposure/tone mapper，AO、history rejection 与 history weight 使用灰度 pass-through。
 
 能力检查按功能独立降级：nearest depth 要求 graphics compute 与 `R32_SFLOAT` sampled/storage；Scene Color 要求 `RGBA16F` sampled/linear/storage；SSAO 额外要求 Surface Data 与 `R16_SFLOAT` sampled/linear/storage。GTAO 同时要求 SSAO 的 Surface/R16F 能力和 nearest-depth pyramid；CACAO 还要求编译期开关、`shaderImageGatherExtended` 以及上游内部/adapter 所需的 sampled/storage formats。功能不可用时 Renderer 继续启动并通过 UI、Runtime Control 和 `render.status.screenSpace` 报告原因。
+
+## Screen-Space Reflections
+
+SSR 默认关闭，只在两个 PBR variant、Surface Data、nearest-depth pyramid 和 Scene Color pyramid 均可用时激活。Opaque Forward 的第二个 MRT 保存已经计入最终 HDR 的 baseline indirect specular；Scene Color pyramid 在 Opaque 后、Transparent 前从不透明 HDR 生成，因此 trace 不会递归采样本帧 SSR，也不会把透明层当作稳定反射源。
+
+`SsrPass` 使用五张半分辨率 `RGBA16F` per-frame image：Raw、History、Temp、Filtered 和 Debug。Trace 从每个 2x2 full-resolution block 选择最近表面，按 normal、view vector 和 roughness 发射 reflection ray，并使用 nearest-depth pyramid 的 mip 做保守步进；输出 RGB radiance 与 alpha confidence。Temporal 阶段使用 motion、previous depth/normal、3x3 neighborhood clamp 和独立 history generation 做重投影，之后执行两次 depth/normal bilateral blur。camera cut、resize、scene generation、camera mode、projection、Shader variant、参数签名或不连续执行只重置 SSR 自身 history。
+
+`HdrCompositePass` 在 SSR active 时执行：
+
+```glsl
+result = opaqueHdr - baselineSpecular
+       + mix(baselineSpecular, ssrRadiance, confidence);
+```
+
+miss、屏幕边缘、高 roughness 和 rejection 区域因 confidence 降低而自然回到当前 baseline IBL/constant ambient specular。SSR inactive 时该 Pass 只把 opaque HDR 复制到 composited HDR，不 dispatch SSR shader。Transparent 随后在 composited HDR 上执行原有 blending；BLEND/transmission 不写 Surface Data，也不参与 SSR trace。
+
+SSR 要求 graphics compute、Surface Data、`R32_SFLOAT` sampled/storage 以及 `RGBA16F` sampled/linear/storage。能力不足时 requested mode 保留但 active=false，渲染继续使用 baseline specular，并通过 UI、Runtime Control 和 `render.status.screenSpace` 报告原因。Raw、Temporal、Filtered、Confidence 与 Rejection 可通过统一 ToneMap debug source 查看。
 
 ## Temporal Anti-Aliasing
 
@@ -221,7 +246,7 @@ Forward descriptor 约定为：
   - binding 4：Aerial Perspective 2D-array LUT。
 - 128 字节 push constant：model matrix 和材质因子。
 
-Lighting 的五个 binding 始终绑定真实资源或合法 fallback，不依赖 partially-bound descriptor。ToneMap 使用独立的 pass-local descriptor layout：binding 0/1 为当前 HDR source/Bloom，binding 2/3 为 Surface Normal-Roughness/Motion，binding 4/5 为 Screen Depth/Scene Color pyramid，binding 6/7 为 SSAO Raw/Filtered，binding 8 为 CACAO Output，binding 9/10 为 TAA History/Debug，binding 11–14 为 GTAO Raw/History/Filtered/Debug。未在本帧生成的可选输入都绑定已初始化 fallback，push constant 禁止采样。Present 使用另一个 pass-local descriptor，只包含当前 frame slot 的 Viewport Color。
+Lighting 的五个 binding 始终绑定真实资源或合法 fallback，不依赖 partially-bound descriptor。ToneMap 使用固定五 binding 的 pass-local descriptor：当前 HDR、Bloom、Surface Normal-Roughness、Motion 和按当前 debug mode 选择的单一 Debug Source。Depth/Color pyramid、AO、TAA、GTAO 与 SSR 调试图像都在 CPU 更新 descriptor 时映射到该动态 source，避免每新增一个算法就扩大 ToneMap descriptor ABI。未在本帧生成的输入绑定已初始化 fallback，push constant 禁止采样。Present 使用另一个 pass-local descriptor，只包含当前 frame slot 的 Viewport Color。
 
 ## Shader Variant
 
@@ -249,7 +274,7 @@ PBR Forward 按 Directional、Point、Spot 三段遍历 SSBO，Point/Spot 在超
 
 ## GPU Pass 计时
 
-Renderer 持有一个 `GpuPassProfiler` 和 timestamp query pool。每个 frame slot 为 `Atmosphere LUTs`、`DirectionalShadow`、`SurfacePrepass`、`HiZBuild`、`OcclusionCull`、按需 `ScreenDepthPyramid`、`SSAO`、`GTAO`、可选 `CACAO Input Adapter/CACAO`、`SkyBackground`、`MainForward`、`TAA`、按需 `SceneColorPyramid`、可选 `Bloom`、`ToneMap` 和 `Present + UI` 分配 begin/end query。总时间从第一个 Pass begin 到最后一个 Pass end 计算。
+Renderer 持有一个 `GpuPassProfiler` 和 timestamp query pool。每个 frame slot 为 `Atmosphere LUTs`、`DirectionalShadow`、`SurfacePrepass`、`HiZBuild`、`OcclusionCull`、按需 `ScreenDepthPyramid`、`SSAO`、`GTAO`、可选 `CACAO Input Adapter/CACAO`、`SkyBackground`、`MainForward Opaque`、按需 `SceneColorPyramid`、`SSR`、`ReflectionComposite`、`MainForward Transparent`、`TAA`、可选 `Bloom`、`ToneMap` 和 `Present + UI` 分配 begin/end query。总时间从第一个 Pass begin 到最后一个 Pass end 计算。
 
 `FrameSync::beginFrame()` 已等待对应 slot 的 fence 后，Profiler 才使用不带 `WAIT_BIT` 的 `vkGetQueryPoolResults()` 读取旧结果，然后在新 command buffer 中 reset 该 slot。计时不会增加 queue/device idle 或额外 fence wait。换算使用设备 `timestampPeriod`，并按 graphics queue 的 `timestampValidBits` 处理计数器回绕；不支持 timestamp 的设备返回 `available=false`，渲染继续运行。结果显示在 `VulkanLab -> Diagnostics -> Performance`，并由 `render.status.gpuTimings` 返回。
 
@@ -273,7 +298,7 @@ FrameSync 使用单调 submission serial 和正常 frame fence 管理 readback �
 
 Viewport 内容区变化与操作系统窗口 resize 使用两条独立生命周期。
 
-Viewport resize 采用 120 ms debounce；首次有效尺寸立即在下一帧应用。Application 调用 `FrameSync::waitForAllFrames()` 后移除 ImGui viewport descriptors，Pass 释放 viewport-dependent framebuffer/descriptor，Screen-Space descriptor 临时切回 white/HDR fallback，Registry 重建 HDR、MSAA、depth、screen pyramid、SSAO、GTAO、可选 CACAO adapter/output、Bloom 与 Viewport Color，随后 Pass、CACAO contexts 和 ImGui descriptors 重新绑定。TAA 与 GTAO history 在新 extent 上分别重置。该路径不重建 Swapchain、不清空 PipelineCache，也不调用 `vkDeviceWaitIdle()`。
+Viewport resize 采用 120 ms debounce；首次有效尺寸立即在下一帧应用。Application 调用 `FrameSync::waitForAllFrames()` 后移除 ImGui viewport descriptors，Pass 释放 viewport-dependent framebuffer/descriptor，Screen-Space descriptor 临时切回 white/HDR fallback，Registry 重建 HDR、baseline specular、composited HDR、MSAA、depth、screen pyramid、SSAO、GTAO、SSR、可选 CACAO adapter/output、Bloom 与 Viewport Color，随后 Pass、CACAO contexts 和 ImGui descriptors 重新绑定。TAA、GTAO 与 SSR history 在新 extent 上分别重置。该路径不重建 Swapchain、不清空 PipelineCache，也不调用 `vkDeviceWaitIdle()`。
 
 Swapchain resize 只释放 PresentPass 的 swapchain framebuffer，重建 Swapchain、FrameSync 和 Present framebuffer；无 GUI 路径同时把 viewport extent 更新为新的 Swapchain extent。窗口最小化导致 framebuffer extent 为 0 时会延迟重建，并以短暂 sleep 保持主循环和 Runtime Control 可响应。
 

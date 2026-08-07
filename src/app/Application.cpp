@@ -945,6 +945,14 @@ void Application::init() {
         shaderRegistry_.program("screenspace.gtao-trace");
     const ShaderProgram &gtaoTemporal =
         shaderRegistry_.program("screenspace.gtao-temporal");
+    const ShaderProgram &ssrTrace =
+        shaderRegistry_.program("screenspace.ssr-trace");
+    const ShaderProgram &ssrTemporal =
+        shaderRegistry_.program("screenspace.ssr-temporal");
+    const ShaderProgram &ssrBlur =
+        shaderRegistry_.program("screenspace.ssr-blur");
+    const ShaderProgram &reflectionComposite =
+        shaderRegistry_.program("screenspace.reflection-composite");
     const ShaderProgram &taaResolve =
         shaderRegistry_.program("postprocess.taa-resolve");
     const ShaderProgram &toneMap =
@@ -984,6 +992,11 @@ void Application::init() {
     shaderPaths.cacaoNormalAdapterComp = cacaoNormalAdapter.computeSpvPath;
     shaderPaths.gtaoTraceComp = gtaoTrace.computeSpvPath;
     shaderPaths.gtaoTemporalComp = gtaoTemporal.computeSpvPath;
+    shaderPaths.ssrTraceComp = ssrTrace.computeSpvPath;
+    shaderPaths.ssrTemporalComp = ssrTemporal.computeSpvPath;
+    shaderPaths.ssrBlurComp = ssrBlur.computeSpvPath;
+    shaderPaths.reflectionCompositeComp =
+        reflectionComposite.computeSpvPath;
     shaderPaths.taaResolveComp = taaResolve.computeSpvPath;
     shaderPaths.fullscreenVert = toneMap.vertSpvPath;
     shaderPaths.toneMapFrag = toneMap.fragSpvPath;
@@ -2121,6 +2134,14 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
             "TAA is unavailable: " +
                 renderer_->screenSpaceEffectsStatus().taaUnavailableReason);
     }
+    if (patch.reflectionMode &&
+        *patch.reflectionMode == ReflectionMode::Ssr && renderer_ &&
+        !renderer_->screenSpaceEffectsStatus().ssrSupported) {
+        throw RuntimeCommandError(
+            "ssr_unsupported",
+            "SSR is unavailable: " +
+                renderer_->screenSpaceEffectsStatus().ssrUnavailableReason);
+    }
     if (patch.surfaceDebugView && patch.screenSpaceDebugView &&
         *patch.surfaceDebugView != SurfaceDebugView::None &&
         *patch.screenSpaceDebugView != ScreenSpaceDebugView::None) {
@@ -2152,7 +2173,13 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
             ((view == ScreenSpaceDebugView::TaaHistory ||
               view == ScreenSpaceDebugView::TaaRejection ||
               view == ScreenSpaceDebugView::TaaHistoryWeight) &&
-             status.taaSupported);
+             status.taaSupported) ||
+            ((view == ScreenSpaceDebugView::SsrRaw ||
+              view == ScreenSpaceDebugView::SsrTemporal ||
+              view == ScreenSpaceDebugView::SsrFiltered ||
+              view == ScreenSpaceDebugView::SsrConfidence ||
+              view == ScreenSpaceDebugView::SsrRejection) &&
+             status.ssrSupported);
         if (!supported) {
             throw RuntimeCommandError(
                 "screen_space_unsupported",
@@ -2204,6 +2231,13 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
     next.taaHistoryWeight =
         glm::clamp(next.taaHistoryWeight, 0.0f, 0.99f);
     next.taaSharpness = glm::clamp(next.taaSharpness, 0.0f, 1.0f);
+    next.ssrMaxDistance =
+        glm::clamp(next.ssrMaxDistance, 0.1f, 1000.0f);
+    next.ssrThickness = glm::clamp(next.ssrThickness, 0.001f, 10.0f);
+    next.ssrMaxRoughness = glm::clamp(next.ssrMaxRoughness, 0.0f, 1.0f);
+    next.ssrIntensity = glm::clamp(next.ssrIntensity, 0.0f, 4.0f);
+    next.ssrHistoryWeight =
+        glm::clamp(next.ssrHistoryWeight, 0.0f, 0.99f);
     next.screenSpaceDebugMip =
         std::min(next.screenSpaceDebugMip, 31u);
     next.culling.shadowDistance =
@@ -3836,6 +3870,23 @@ ControlJson Application::runtimeRenderSettingsGet() {
              screenSpaceStatus.taaLastResetReason},
             {"taaUnavailableReason",
              screenSpaceStatus.taaUnavailableReason},
+            {"reflectionMode",
+             reflectionModeName(renderSettings_.reflectionMode)},
+            {"ssrQuality", ssrQualityName(renderSettings_.ssrQuality)},
+            {"ssrMaxDistance", renderSettings_.ssrMaxDistance},
+            {"ssrThickness", renderSettings_.ssrThickness},
+            {"ssrMaxRoughness", renderSettings_.ssrMaxRoughness},
+            {"ssrIntensity", renderSettings_.ssrIntensity},
+            {"ssrHistoryWeight", renderSettings_.ssrHistoryWeight},
+            {"ssrAvailable", screenSpaceStatus.ssrSupported},
+            {"ssrActive", screenSpaceStatus.ssrActive},
+            {"ssrHistoryValid", screenSpaceStatus.ssrHistoryValid},
+            {"ssrHistoryGeneration",
+             screenSpaceStatus.ssrHistoryGeneration},
+            {"ssrLastResetReason",
+             screenSpaceStatus.ssrLastResetReason},
+            {"ssrUnavailableReason",
+             screenSpaceStatus.ssrUnavailableReason},
             {"screenSpaceDebugView",
              screenSpaceDebugViewName(
                  renderSettings_.screenSpaceDebugView)},
@@ -5391,12 +5442,89 @@ void Application::drawPostProcessingPanel() {
         }
     }
 
+    ImGui::SeparatorText("Reflections");
+    constexpr const char *reflectionLabels[] = {"IBL Only", "SSR"};
+    int reflectionMode = static_cast<int>(renderSettings_.reflectionMode);
+    ImGui::BeginDisabled(!screenStatus.ssrSupported);
+    if (ImGui::Combo("Mode##Reflections", &reflectionMode,
+                     reflectionLabels,
+                     static_cast<int>(std::size(reflectionLabels)))) {
+        RenderSettingsPatch patch;
+        patch.reflectionMode = static_cast<ReflectionMode>(reflectionMode);
+        applyRenderSettings(patch);
+    }
+    const bool ssrRequested =
+        renderSettings_.reflectionMode == ReflectionMode::Ssr;
+    ImGui::BeginDisabled(!ssrRequested);
+    constexpr const char *ssrQualityLabels[] = {"Low", "Medium", "High"};
+    int ssrQuality = static_cast<int>(renderSettings_.ssrQuality);
+    if (ImGui::Combo("Quality##SSR", &ssrQuality, ssrQualityLabels,
+                     static_cast<int>(std::size(ssrQualityLabels)))) {
+        RenderSettingsPatch patch;
+        patch.ssrQuality = static_cast<SsrQuality>(ssrQuality);
+        applyRenderSettings(patch);
+    }
+    float ssrDistance = renderSettings_.ssrMaxDistance;
+    if (ImGui::DragFloat("Max Distance##SSR", &ssrDistance, 0.25f,
+                         0.1f, 1000.0f, "%.1f")) {
+        RenderSettingsPatch patch; patch.ssrMaxDistance = ssrDistance;
+        applyRenderSettings(patch);
+    }
+    float ssrThickness = renderSettings_.ssrThickness;
+    if (ImGui::DragFloat("Thickness##SSR", &ssrThickness, 0.005f,
+                         0.001f, 10.0f, "%.3f")) {
+        RenderSettingsPatch patch; patch.ssrThickness = ssrThickness;
+        applyRenderSettings(patch);
+    }
+    float ssrRoughness = renderSettings_.ssrMaxRoughness;
+    if (ImGui::SliderFloat("Max Roughness##SSR", &ssrRoughness,
+                           0.0f, 1.0f, "%.2f")) {
+        RenderSettingsPatch patch; patch.ssrMaxRoughness = ssrRoughness;
+        applyRenderSettings(patch);
+    }
+    float ssrIntensity = renderSettings_.ssrIntensity;
+    if (ImGui::SliderFloat("Intensity##SSR", &ssrIntensity,
+                           0.0f, 4.0f, "%.2f")) {
+        RenderSettingsPatch patch; patch.ssrIntensity = ssrIntensity;
+        applyRenderSettings(patch);
+    }
+    float ssrHistory = renderSettings_.ssrHistoryWeight;
+    if (ImGui::SliderFloat("History Weight##SSR", &ssrHistory,
+                           0.0f, 0.99f, "%.2f")) {
+        RenderSettingsPatch patch; patch.ssrHistoryWeight = ssrHistory;
+        applyRenderSettings(patch);
+    }
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+    editor::statusIndicator(
+        screenStatus.ssrActive ? "SSR active" : "SSR inactive",
+        screenStatus.ssrActive ? editor::StatusTone::Success
+                               : editor::StatusTone::Neutral,
+        !screenStatus.ssrSupported
+            ? screenStatus.ssrUnavailableReason.c_str()
+            : (ssrRequested && !currentShaderVariant().supportsScreenSpace
+                   ? "Selected Shader does not consume screen-space reflections."
+                   : nullptr));
+    if (screenStatus.ssrSupported && ssrRequested) {
+        ImGui::TextDisabled("History: %s, generation %llu, %ux%u",
+                            screenStatus.ssrHistoryValid ? "valid" : "reset",
+                            static_cast<unsigned long long>(
+                                screenStatus.ssrHistoryGeneration),
+                            screenStatus.ssrExtent.width,
+                            screenStatus.ssrExtent.height);
+        if (!screenStatus.ssrLastResetReason.empty())
+            ImGui::TextDisabled("Reset: %s",
+                                screenStatus.ssrLastResetReason.c_str());
+    }
+
     ImGui::SeparatorText("Screen-Space Debug");
     constexpr const char *screenDebugLabels[] = {
         "None", "Nearest Depth", "Scene Color", "SSAO Raw",
         "SSAO Filtered", "CACAO Output", "GTAO Raw", "GTAO Temporal",
         "GTAO Filtered", "GTAO Rejection", "GTAO History Weight",
-        "TAA History", "TAA Rejection", "TAA History Weight"};
+        "TAA History", "TAA Rejection", "TAA History Weight",
+        "SSR Raw", "SSR Temporal", "SSR Filtered", "SSR Confidence",
+        "SSR Rejection"};
     int screenDebug =
         static_cast<int>(renderSettings_.screenSpaceDebugView);
     const char *preview = screenDebugLabels[screenDebug];
@@ -5424,7 +5552,13 @@ void Application::drawPostProcessingPanel() {
                 ((view == ScreenSpaceDebugView::TaaHistory ||
                   view == ScreenSpaceDebugView::TaaRejection ||
                   view == ScreenSpaceDebugView::TaaHistoryWeight) &&
-                 screenStatus.taaSupported);
+                 screenStatus.taaSupported) ||
+                ((view == ScreenSpaceDebugView::SsrRaw ||
+                  view == ScreenSpaceDebugView::SsrTemporal ||
+                  view == ScreenSpaceDebugView::SsrFiltered ||
+                  view == ScreenSpaceDebugView::SsrConfidence ||
+                  view == ScreenSpaceDebugView::SsrRejection) &&
+                 screenStatus.ssrSupported);
             ImGui::BeginDisabled(!supported);
             const bool selected = index == screenDebug;
             if (ImGui::Selectable(screenDebugLabels[index], selected)) {

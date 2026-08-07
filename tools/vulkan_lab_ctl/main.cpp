@@ -82,7 +82,11 @@ void printUsage() {
            "[--gtao-falloff N] [--gtao-intensity N] [--gtao-power N] "
            "[--gtao-temporal-weight N] "
            "[--taa off|taa] [--taa-history-weight N] [--taa-sharpness N] "
-           "[--screen-space-debug none|nearest-depth|scene-color|ssao-raw|ssao-filtered|cacao-output|gtao-raw|gtao-temporal|gtao-filtered|gtao-rejection|gtao-history-weight|taa-history|taa-rejection|taa-history-weight] "
+           "[--reflection ibl-only|ssr] [--ssr-quality low|medium|high] "
+           "[--ssr-max-distance N] [--ssr-thickness N] "
+           "[--ssr-max-roughness N] [--ssr-intensity N] "
+           "[--ssr-history-weight N] "
+           "[--screen-space-debug none|nearest-depth|scene-color|ssao-raw|ssao-filtered|cacao-output|gtao-raw|gtao-temporal|gtao-filtered|gtao-rejection|gtao-history-weight|taa-history|taa-rejection|taa-history-weight|ssr-raw|ssr-temporal|ssr-filtered|ssr-confidence|ssr-rejection] "
            "[--screen-space-debug-mip N]\n"
         << "  VulkanLabCtl [--json] render wait [--stable-frames N] "
            "[--timeout-ms N]\n"
@@ -222,6 +226,13 @@ ParsedCommand parseCommand(int argc, char **argv) {
     std::optional<std::string> temporalAntiAliasing;
     std::optional<std::string> taaHistoryWeight;
     std::optional<std::string> taaSharpness;
+    std::optional<std::string> reflectionMode;
+    std::optional<std::string> ssrQuality;
+    std::optional<std::string> ssrMaxDistance;
+    std::optional<std::string> ssrThickness;
+    std::optional<std::string> ssrMaxRoughness;
+    std::optional<std::string> ssrIntensity;
+    std::optional<std::string> ssrHistoryWeight;
     std::optional<std::string> screenSpaceDebug;
     std::optional<std::string> screenSpaceDebugMip;
     for (int i = 1; i < argc; ++i) {
@@ -284,6 +295,13 @@ ParsedCommand parseCommand(int argc, char **argv) {
                   argument == "--taa" ||
                   argument == "--taa-history-weight" ||
                   argument == "--taa-sharpness" ||
+                  argument == "--reflection" ||
+                  argument == "--ssr-quality" ||
+                  argument == "--ssr-max-distance" ||
+                  argument == "--ssr-thickness" ||
+                  argument == "--ssr-max-roughness" ||
+                  argument == "--ssr-intensity" ||
+                  argument == "--ssr-history-weight" ||
                   argument == "--screen-space-debug" ||
                   argument == "--screen-space-debug-mip") {
             if (++i >= argc)
@@ -388,6 +406,20 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 taaHistoryWeight = argv[i];
             else if (argument == "--taa-sharpness")
                 taaSharpness = argv[i];
+            else if (argument == "--reflection")
+                reflectionMode = argv[i];
+            else if (argument == "--ssr-quality")
+                ssrQuality = argv[i];
+            else if (argument == "--ssr-max-distance")
+                ssrMaxDistance = argv[i];
+            else if (argument == "--ssr-thickness")
+                ssrThickness = argv[i];
+            else if (argument == "--ssr-max-roughness")
+                ssrMaxRoughness = argv[i];
+            else if (argument == "--ssr-intensity")
+                ssrIntensity = argv[i];
+            else if (argument == "--ssr-history-weight")
+                ssrHistoryWeight = argv[i];
             else if (argument == "--screen-space-debug")
                 screenSpaceDebug = argv[i];
             else
@@ -743,6 +775,34 @@ ParsedCommand parseCommand(int argc, char **argv) {
             parsed.params["taaSharpness"] =
                 parseFiniteFloat(*taaSharpness, "--taa-sharpness");
         }
+        if (reflectionMode) {
+            if (*reflectionMode != "ibl-only" && *reflectionMode != "ssr")
+                throw std::invalid_argument(
+                    "--reflection must be ibl-only or ssr");
+            parsed.params["reflectionMode"] = *reflectionMode;
+        }
+        if (ssrQuality) {
+            if (*ssrQuality != "low" && *ssrQuality != "medium" &&
+                *ssrQuality != "high")
+                throw std::invalid_argument(
+                    "--ssr-quality must be low, medium, or high");
+            parsed.params["ssrQuality"] = *ssrQuality;
+        }
+        if (ssrMaxDistance)
+            parsed.params["ssrMaxDistance"] = parseFiniteFloat(
+                *ssrMaxDistance, "--ssr-max-distance");
+        if (ssrThickness)
+            parsed.params["ssrThickness"] = parseFiniteFloat(
+                *ssrThickness, "--ssr-thickness");
+        if (ssrMaxRoughness)
+            parsed.params["ssrMaxRoughness"] = parseFiniteFloat(
+                *ssrMaxRoughness, "--ssr-max-roughness");
+        if (ssrIntensity)
+            parsed.params["ssrIntensity"] = parseFiniteFloat(
+                *ssrIntensity, "--ssr-intensity");
+        if (ssrHistoryWeight)
+            parsed.params["ssrHistoryWeight"] = parseFiniteFloat(
+                *ssrHistoryWeight, "--ssr-history-weight");
         if (screenSpaceDebug) {
             if (*screenSpaceDebug != "none" &&
                 *screenSpaceDebug != "nearest-depth" &&
@@ -757,13 +817,19 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 *screenSpaceDebug != "gtao-history-weight" &&
                 *screenSpaceDebug != "taa-history" &&
                 *screenSpaceDebug != "taa-rejection" &&
-                *screenSpaceDebug != "taa-history-weight") {
+                *screenSpaceDebug != "taa-history-weight" &&
+                *screenSpaceDebug != "ssr-raw" &&
+                *screenSpaceDebug != "ssr-temporal" &&
+                *screenSpaceDebug != "ssr-filtered" &&
+                *screenSpaceDebug != "ssr-confidence" &&
+                *screenSpaceDebug != "ssr-rejection") {
                 throw std::invalid_argument(
                     "--screen-space-debug must be none, nearest-depth, "
                     "scene-color, ssao-raw, ssao-filtered, cacao-output, "
                     "gtao-raw, gtao-temporal, gtao-filtered, gtao-rejection, "
                     "gtao-history-weight, taa-history, taa-rejection, or "
-                    "taa-history-weight");
+                    "taa-history-weight, ssr-raw, ssr-temporal, "
+                    "ssr-filtered, ssr-confidence, or ssr-rejection");
             }
             parsed.params["screenSpaceDebugView"] = *screenSpaceDebug;
         }
@@ -1217,6 +1283,21 @@ void printHuman(const std::string &method, const Json &result) {
                   << result.at("gtaoIntensity").get<float>() << "/"
                   << result.at("gtaoPower").get<float>() << "/"
                   << result.at("gtaoTemporalWeight").get<float>()
+                  << "\nSSR active/available/history: "
+                  << (result.value("ssrActive", false) ? "yes" : "no")
+                  << "/"
+                  << (result.value("ssrAvailable", false) ? "yes" : "no")
+                  << "/"
+                  << (result.value("ssrHistoryValid", false) ? "valid"
+                                                               : "reset")
+                  << ", mode/quality/distance/thickness/roughness/intensity/history: "
+                  << result.value("reflectionMode", std::string{"ibl-only"}) << "/"
+                  << result.value("ssrQuality", std::string{"medium"}) << "/"
+                  << result.value("ssrMaxDistance", 0.0f) << "/"
+                  << result.value("ssrThickness", 0.0f) << "/"
+                  << result.value("ssrMaxRoughness", 0.0f) << "/"
+                  << result.value("ssrIntensity", 0.0f) << "/"
+                  << result.value("ssrHistoryWeight", 0.0f)
                   << "\nScreen-space debug: "
                   << result.at("screenSpaceDebugView").get<std::string>()
                   << ", mip: "

@@ -25,6 +25,7 @@ layout(set = 1, binding = 4) uniform sampler2D emissiveTexture;
 layout(set = 2, binding = 0) uniform sampler2DShadow directionalShadowMap;
 
 layout(location = 0) out vec4 outColor;
+layout(location = 1) out vec4 outBaselineSpecular;
 
 bool isMaskAlphaMode()
 {
@@ -281,9 +282,12 @@ void main()
     vec3 direct = evaluateDirectLighting(n, v, fragPositionWS, albedo,
                                          roughness, metallic);
 
-    vec3 indirect = evaluateIndirectLighting(
-        n, v, albedo, roughness, metallic, occlusion);
-    vec3 color = applyTransmissionApprox(indirect + direct + emissive, n, v,
+    IndirectLightingComponents indirect =
+        evaluateIndirectLightingComponents(
+            n, v, albedo, roughness, metallic, occlusion);
+    vec3 baselineSpecular = indirect.specular;
+    vec3 color = applyTransmissionApprox(
+        indirect.diffuse + indirect.specular + direct + emissive, n, v,
                                          roughness);
     if (atmosphereIsActive()) {
         vec3 viewRay = fragPositionWS - ubo.cameraPosWS.xyz;
@@ -292,6 +296,8 @@ void main()
         color = color * aerial.a + aerial.rgb *
                 atmosphere.sunColorIntensity.rgb *
                 atmosphere.sunColorIntensity.a;
+        baselineSpecular *= aerial.a;
     }
     outColor = vec4(color, materialAlpha(baseColor.a));
+    outBaselineSpecular = vec4(baselineSpecular, 1.0);
 }

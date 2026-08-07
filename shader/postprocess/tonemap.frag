@@ -5,17 +5,7 @@ layout(set = 0, binding = 0) uniform sampler2D hdrColor;
 layout(set = 0, binding = 1) uniform sampler2D bloomColor;
 layout(set = 0, binding = 2) uniform sampler2D surfaceNormalRoughness;
 layout(set = 0, binding = 3) uniform sampler2D surfaceMotion;
-layout(set = 0, binding = 4) uniform sampler2D screenDepthPyramid;
-layout(set = 0, binding = 5) uniform sampler2D sceneColorPyramid;
-layout(set = 0, binding = 6) uniform sampler2D ssaoRaw;
-layout(set = 0, binding = 7) uniform sampler2D ssaoFiltered;
-layout(set = 0, binding = 8) uniform sampler2D cacaoOutput;
-layout(set = 0, binding = 9) uniform sampler2D taaHistory;
-layout(set = 0, binding = 10) uniform sampler2D taaDebug;
-layout(set = 0, binding = 11) uniform sampler2D gtaoRaw;
-layout(set = 0, binding = 12) uniform sampler2D gtaoHistory;
-layout(set = 0, binding = 13) uniform sampler2D gtaoFiltered;
-layout(set = 0, binding = 14) uniform sampler2D gtaoDebug;
+layout(set = 0, binding = 4) uniform sampler2D screenDebugSource;
 
 layout(push_constant) uniform ToneMapPushConstants {
     float exposureEv;
@@ -94,10 +84,10 @@ void main()
         vec3 debugColor = vec3(0.0);
         bool allowToneMap = false;
         if (push.screenDebugMode == 1u) {
-            int levels = textureQueryLevels(screenDepthPyramid);
+            int levels = textureQueryLevels(screenDebugSource);
             float mip = float(min(push.screenDebugMip,
                                   uint(max(levels - 1, 0))));
-            float depth = textureLod(screenDepthPyramid, fragUv, mip).r;
+            float depth = textureLod(screenDebugSource, fragUv, mip).r;
             float nearPlane = max(push.cameraNear, 1e-4);
             float farPlane = max(push.cameraFar, nearPlane + 1e-3);
             float linearDepth = nearPlane * farPlane /
@@ -106,33 +96,42 @@ void main()
                 max(log2(farPlane / nearPlane), 1e-4);
             debugColor = vec3(clamp(normalized, 0.0, 1.0));
         } else if (push.screenDebugMode == 2u) {
-            int levels = textureQueryLevels(sceneColorPyramid);
+            int levels = textureQueryLevels(screenDebugSource);
             float mip = float(min(push.screenDebugMip,
                                   uint(max(levels - 1, 0))));
-            debugColor = textureLod(sceneColorPyramid, fragUv, mip).rgb;
+            debugColor = textureLod(screenDebugSource, fragUv, mip).rgb;
             allowToneMap = true;
         } else if (push.screenDebugMode == 3u) {
-            debugColor = vec3(texture(ssaoRaw, fragUv).r);
+            debugColor = vec3(texture(screenDebugSource, fragUv).r);
         } else if (push.screenDebugMode == 4u) {
-            debugColor = vec3(texture(ssaoFiltered, fragUv).r);
+            debugColor = vec3(texture(screenDebugSource, fragUv).r);
         } else if (push.screenDebugMode == 5u) {
-            debugColor = vec3(texture(cacaoOutput, fragUv).r);
+            debugColor = vec3(texture(screenDebugSource, fragUv).r);
         } else if (push.screenDebugMode == 6u) {
-            debugColor = vec3(texture(gtaoRaw, fragUv).r);
+            debugColor = vec3(texture(screenDebugSource, fragUv).r);
         } else if (push.screenDebugMode == 7u) {
-            debugColor = vec3(texture(gtaoHistory, fragUv).r);
+            debugColor = vec3(texture(screenDebugSource, fragUv).r);
         } else if (push.screenDebugMode == 8u) {
-            debugColor = vec3(texture(gtaoFiltered, fragUv).r);
+            debugColor = vec3(texture(screenDebugSource, fragUv).r);
         } else if (push.screenDebugMode == 9u ||
                    push.screenDebugMode == 10u) {
-            debugColor = vec3(texture(gtaoDebug, fragUv).r);
+            debugColor = vec3(texture(screenDebugSource, fragUv).r);
         } else if (push.screenDebugMode == 11u) {
-            debugColor = texture(taaHistory, fragUv).rgb;
+            debugColor = texture(screenDebugSource, fragUv).rgb;
             allowToneMap = true;
         } else if (push.screenDebugMode == 12u) {
-            debugColor = vec3(texture(taaDebug, fragUv).r);
+            debugColor = vec3(texture(screenDebugSource, fragUv).r);
         } else if (push.screenDebugMode == 13u) {
-            debugColor = vec3(texture(taaDebug, fragUv).g);
+            debugColor = vec3(texture(screenDebugSource, fragUv).g);
+        } else if (push.screenDebugMode == 14u ||
+                   push.screenDebugMode == 15u ||
+                   push.screenDebugMode == 16u) {
+            debugColor = texture(screenDebugSource, fragUv).rgb;
+            allowToneMap = true;
+        } else if (push.screenDebugMode == 17u) {
+            debugColor = vec3(texture(screenDebugSource, fragUv).g);
+        } else if (push.screenDebugMode == 18u) {
+            debugColor = vec3(texture(screenDebugSource, fragUv).r);
         }
         outColor = vec4(applyDisplayTransform(debugColor, allowToneMap), 1.0);
         return;

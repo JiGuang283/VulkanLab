@@ -26,6 +26,46 @@ enum class TemporalAntiAliasingMode {
     Taa,
 };
 
+enum class ReflectionMode {
+    IblOnly,
+    Ssr,
+};
+
+inline const char *reflectionModeName(ReflectionMode mode) {
+    return mode == ReflectionMode::Ssr ? "ssr" : "ibl-only";
+}
+
+inline std::optional<ReflectionMode>
+reflectionModeFromName(std::string_view name) {
+    if (name == "ibl-only")
+        return ReflectionMode::IblOnly;
+    if (name == "ssr")
+        return ReflectionMode::Ssr;
+    return std::nullopt;
+}
+
+enum class SsrQuality {
+    Low,
+    Medium,
+    High,
+};
+
+inline const char *ssrQualityName(SsrQuality quality) {
+    switch (quality) {
+    case SsrQuality::Low: return "low";
+    case SsrQuality::Medium: return "medium";
+    case SsrQuality::High: return "high";
+    }
+    return "medium";
+}
+
+inline std::optional<SsrQuality> ssrQualityFromName(std::string_view name) {
+    if (name == "low") return SsrQuality::Low;
+    if (name == "medium") return SsrQuality::Medium;
+    if (name == "high") return SsrQuality::High;
+    return std::nullopt;
+}
+
 inline const char *
 temporalAntiAliasingModeName(TemporalAntiAliasingMode mode) {
     return mode == TemporalAntiAliasingMode::Taa ? "taa" : "off";
@@ -211,6 +251,11 @@ enum class ScreenSpaceDebugView {
     TaaHistory,
     TaaRejection,
     TaaHistoryWeight,
+    SsrRaw,
+    SsrTemporal,
+    SsrFiltered,
+    SsrConfidence,
+    SsrRejection,
 };
 
 inline const char *screenSpaceDebugViewName(ScreenSpaceDebugView view) {
@@ -243,6 +288,16 @@ inline const char *screenSpaceDebugViewName(ScreenSpaceDebugView view) {
         return "taa-rejection";
     case ScreenSpaceDebugView::TaaHistoryWeight:
         return "taa-history-weight";
+    case ScreenSpaceDebugView::SsrRaw:
+        return "ssr-raw";
+    case ScreenSpaceDebugView::SsrTemporal:
+        return "ssr-temporal";
+    case ScreenSpaceDebugView::SsrFiltered:
+        return "ssr-filtered";
+    case ScreenSpaceDebugView::SsrConfidence:
+        return "ssr-confidence";
+    case ScreenSpaceDebugView::SsrRejection:
+        return "ssr-rejection";
     }
     return "none";
 }
@@ -277,6 +332,16 @@ screenSpaceDebugViewFromName(std::string_view name) {
         return ScreenSpaceDebugView::TaaRejection;
     if (name == "taa-history-weight")
         return ScreenSpaceDebugView::TaaHistoryWeight;
+    if (name == "ssr-raw")
+        return ScreenSpaceDebugView::SsrRaw;
+    if (name == "ssr-temporal")
+        return ScreenSpaceDebugView::SsrTemporal;
+    if (name == "ssr-filtered")
+        return ScreenSpaceDebugView::SsrFiltered;
+    if (name == "ssr-confidence")
+        return ScreenSpaceDebugView::SsrConfidence;
+    if (name == "ssr-rejection")
+        return ScreenSpaceDebugView::SsrRejection;
     return std::nullopt;
 }
 
@@ -380,6 +445,13 @@ struct RenderSettings {
         TemporalAntiAliasingMode::Off;
     float taaHistoryWeight = 0.9f;
     float taaSharpness = 0.1f;
+    ReflectionMode reflectionMode = ReflectionMode::IblOnly;
+    SsrQuality ssrQuality = SsrQuality::Medium;
+    float ssrMaxDistance = 50.0f;
+    float ssrThickness = 0.2f;
+    float ssrMaxRoughness = 0.8f;
+    float ssrIntensity = 1.0f;
+    float ssrHistoryWeight = 0.9f;
     ScreenSpaceDebugView screenSpaceDebugView = ScreenSpaceDebugView::None;
     uint32_t screenSpaceDebugMip = 0;
     CullingSettings culling{};
@@ -422,6 +494,13 @@ struct RenderSettingsPatch {
     std::optional<TemporalAntiAliasingMode> temporalAntiAliasingMode;
     std::optional<float> taaHistoryWeight;
     std::optional<float> taaSharpness;
+    std::optional<ReflectionMode> reflectionMode;
+    std::optional<SsrQuality> ssrQuality;
+    std::optional<float> ssrMaxDistance;
+    std::optional<float> ssrThickness;
+    std::optional<float> ssrMaxRoughness;
+    std::optional<float> ssrIntensity;
+    std::optional<float> ssrHistoryWeight;
     std::optional<ScreenSpaceDebugView> screenSpaceDebugView;
     std::optional<uint32_t> screenSpaceDebugMip;
     std::optional<bool>  frustumCullingEnabled;
@@ -513,6 +592,20 @@ inline void applyRenderSettingsPatch(RenderSettings &settings,
         settings.taaHistoryWeight = *patch.taaHistoryWeight;
     if (patch.taaSharpness)
         settings.taaSharpness = *patch.taaSharpness;
+    if (patch.reflectionMode)
+        settings.reflectionMode = *patch.reflectionMode;
+    if (patch.ssrQuality)
+        settings.ssrQuality = *patch.ssrQuality;
+    if (patch.ssrMaxDistance)
+        settings.ssrMaxDistance = *patch.ssrMaxDistance;
+    if (patch.ssrThickness)
+        settings.ssrThickness = *patch.ssrThickness;
+    if (patch.ssrMaxRoughness)
+        settings.ssrMaxRoughness = *patch.ssrMaxRoughness;
+    if (patch.ssrIntensity)
+        settings.ssrIntensity = *patch.ssrIntensity;
+    if (patch.ssrHistoryWeight)
+        settings.ssrHistoryWeight = *patch.ssrHistoryWeight;
     if (patch.screenSpaceDebugView)
         settings.screenSpaceDebugView = *patch.screenSpaceDebugView;
     if (patch.screenSpaceDebugMip)

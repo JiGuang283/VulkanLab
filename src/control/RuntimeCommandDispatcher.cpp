@@ -200,6 +200,16 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         command, "taaHistoryWeight", 0.0f, 0.99f);
     patch.taaSharpness = optionalFiniteFloat(
         command, "taaSharpness", 0.0f, 1.0f);
+    patch.ssrMaxDistance = optionalFiniteFloat(
+        command, "ssrMaxDistance", 0.1f, 1000.0f);
+    patch.ssrThickness = optionalFiniteFloat(
+        command, "ssrThickness", 0.001f, 10.0f);
+    patch.ssrMaxRoughness = optionalFiniteFloat(
+        command, "ssrMaxRoughness", 0.0f, 1.0f);
+    patch.ssrIntensity = optionalFiniteFloat(
+        command, "ssrIntensity", 0.0f, 4.0f);
+    patch.ssrHistoryWeight = optionalFiniteFloat(
+        command, "ssrHistoryWeight", 0.0f, 0.99f);
     patch.screenSpaceDebugMip =
         optionalUint32(command, "screenSpaceDebugMip", 31u);
     if (const auto toneMapper = optionalString(command, "toneMapper")) {
@@ -271,6 +281,22 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
                 "Parameter 'temporalAntiAliasingMode' must be off or taa.");
         }
     }
+    if (const auto mode = optionalString(command, "reflectionMode")) {
+        patch.reflectionMode = reflectionModeFromName(*mode);
+        if (!patch.reflectionMode) {
+            throw RuntimeCommandError(
+                "invalid_params",
+                "Parameter 'reflectionMode' must be ibl-only or ssr.");
+        }
+    }
+    if (const auto quality = optionalString(command, "ssrQuality")) {
+        patch.ssrQuality = ssrQualityFromName(*quality);
+        if (!patch.ssrQuality) {
+            throw RuntimeCommandError(
+                "invalid_params",
+                "Parameter 'ssrQuality' must be low, medium, or high.");
+        }
+    }
     if (const auto debugView =
             optionalString(command, "screenSpaceDebugView")) {
         patch.screenSpaceDebugView = screenSpaceDebugViewFromName(*debugView);
@@ -281,7 +307,8 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
                 "nearest-depth, scene-color, ssao-raw, ssao-filtered, or "
                 "cacao-output, gtao-raw, gtao-temporal, gtao-filtered, "
                 "gtao-rejection, gtao-history-weight, taa-history, "
-                "taa-rejection, or taa-history-weight.");
+                "taa-rejection, taa-history-weight, ssr-raw, ssr-temporal, "
+                "ssr-filtered, ssr-confidence, or ssr-rejection.");
         }
     }
     if (!patch.shadowsEnabled && !patch.shadowReceiverBias &&
@@ -305,7 +332,10 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         !patch.gtaoIntensity && !patch.gtaoPower &&
         !patch.gtaoTemporalWeight &&
         !patch.temporalAntiAliasingMode && !patch.taaHistoryWeight &&
-        !patch.taaSharpness &&
+        !patch.taaSharpness && !patch.reflectionMode && !patch.ssrQuality &&
+        !patch.ssrMaxDistance && !patch.ssrThickness &&
+        !patch.ssrMaxRoughness && !patch.ssrIntensity &&
+        !patch.ssrHistoryWeight &&
         !patch.screenSpaceDebugView && !patch.screenSpaceDebugMip) {
         throw RuntimeCommandError(
             "invalid_params",

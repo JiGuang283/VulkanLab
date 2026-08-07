@@ -368,6 +368,26 @@ void checkPushConstant(const SpvReflectShaderModule &module,
                 {"parameters", 0}, {"dimensions", 16}};
             checkBlockLayout(*blocks[0], 32, members,
                              "GtaoTemporalPushConstants", path);
+        } else if (path.find("screenspace/ssr_trace") !=
+                   std::string_view::npos) {
+            static const std::vector<MemberLayout> members = {
+                {"parameters", 0}, {"dimensions", 16}, {"sampling", 32}};
+            checkBlockLayout(*blocks[0], 48, members,
+                             "SsrTracePushConstants", path);
+        } else if (path.find("screenspace/ssr_temporal") !=
+                   std::string_view::npos) {
+            static const std::vector<MemberLayout> members = {
+                {"parameters", 0}, {"dimensions", 16}};
+            checkBlockLayout(*blocks[0], 32, members,
+                             "SsrTemporalPushConstants", path);
+        } else if (path.find("screenspace/ssr_blur") !=
+                       std::string_view::npos ||
+                   path.find("screenspace/reflection_composite") !=
+                       std::string_view::npos) {
+            static const std::vector<MemberLayout> members = {
+                {"dimensions", 0}};
+            checkBlockLayout(*blocks[0], 16, members,
+                             "SsrDimensionsPushConstants", path);
         } else {
             static const std::vector<MemberLayout> members = {{"extents", 0}};
             checkBlockLayout(*blocks[0], 16, members,
@@ -413,12 +433,28 @@ void checkDescriptors(const ReflectedModule &reflected,
         const bool gtaoTemporal =
             reflected.path().find("screenspace/gtao_temporal") !=
             std::string::npos;
+        const bool ssrTrace =
+            reflected.path().find("screenspace/ssr_trace") !=
+            std::string::npos;
+        const bool ssrTemporal =
+            reflected.path().find("screenspace/ssr_temporal") !=
+            std::string::npos;
+        const bool ssrBlur =
+            reflected.path().find("screenspace/ssr_blur") !=
+            std::string::npos;
+        const bool reflectionComposite =
+            reflected.path().find("screenspace/reflection_composite") !=
+            std::string::npos;
         const uint32_t expectedCount = expectsAtmosphere
                                            ? 6u
                                            : ssao ? 5u
                                             : cacaoAdapter ? 5u
                                             : gtaoTrace ? 5u
                                             : gtaoTemporal ? 9u
+                                            : ssrTrace ? 6u
+                                            : ssrTemporal ? 9u
+                                            : ssrBlur ? 5u
+                                            : reflectionComposite ? 4u
                                             : taa ? 10u
                                            : occlusion ? 4u
                                                        : 2u;
@@ -530,6 +566,79 @@ void checkDescriptors(const ReflectedModule &reflected,
                                   reflected.path());
                 continue;
             }
+            if (ssrTrace) {
+                const bool globalUbo =
+                    binding->set == 0 && binding->binding == 0 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                const bool source =
+                    binding->set == 1 && binding->binding <= 3 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                const bool destination =
+                    binding->set == 1 && binding->binding == 4 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                requireShader(binding->count == 1 &&
+                                  (globalUbo || source || destination),
+                              "SSR trace descriptor contract mismatch in " +
+                                  reflected.path());
+                if (globalUbo)
+                    checkGlobalUbo(*binding, reflected.path());
+                continue;
+            }
+            if (ssrTemporal) {
+                const bool source =
+                    binding->set == 0 && binding->binding <= 6 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                const bool destination =
+                    binding->set == 0 && binding->binding >= 7 &&
+                    binding->binding <= 8 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                requireShader(binding->count == 1 &&
+                                  (source || destination),
+                              "SSR temporal descriptor contract mismatch in " +
+                                  reflected.path());
+                continue;
+            }
+            if (ssrBlur) {
+                const bool globalUbo =
+                    binding->set == 0 && binding->binding == 0 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                const bool source =
+                    binding->set == 1 && binding->binding <= 2 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                const bool destination =
+                    binding->set == 1 && binding->binding == 3 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                requireShader(binding->count == 1 &&
+                                  (globalUbo || source || destination),
+                              "SSR blur descriptor contract mismatch in " +
+                                  reflected.path());
+                if (globalUbo)
+                    checkGlobalUbo(*binding, reflected.path());
+                continue;
+            }
+            if (reflectionComposite) {
+                const bool source =
+                    binding->set == 0 && binding->binding <= 2 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                const bool destination =
+                    binding->set == 0 && binding->binding == 3 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                requireShader(binding->count == 1 &&
+                                  (source || destination),
+                              "reflection composite descriptor contract "
+                              "mismatch in " + reflected.path());
+                continue;
+            }
             if (taa) {
                 const bool ubo =
                     binding->set == 0 && binding->binding == 0 &&
@@ -605,7 +714,7 @@ void checkDescriptors(const ReflectedModule &reflected,
                           reflected.path());
         if (toneMap) {
             requireShader(
-                binding->set == 0 && binding->binding < 15 &&
+                binding->set == 0 && binding->binding < 5 &&
                     binding->descriptor_type ==
                         SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
                     stage == VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -832,6 +941,15 @@ void checkFragmentOutputs(const ReflectedModule &reflected,
                               SPV_REFLECT_FORMAT_R32G32_SFLOAT,
                       "surface prepass MRT output contract mismatch in " +
                           reflected.path());
+    } else if (contract == vkr::ShaderProgramContract::MainForward &&
+               reflected.path().find("/pbr_lite/") != std::string::npos) {
+        const auto baselineSpecular = outputs.find({1, 0});
+        requireShader(
+            outputs.size() == 2 && baselineSpecular != outputs.end() &&
+                baselineSpecular->second ==
+                    SPV_REFLECT_FORMAT_R32G32B32A32_SFLOAT,
+            "PBR baseline specular MRT output contract mismatch in " +
+                reflected.path());
     }
 }
 

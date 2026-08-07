@@ -9,7 +9,7 @@
 
 本路线在现有 Forward + Compute 管线上逐步增加环境遮蔽、屏幕空间反射和间接漫反射，并为后续 Reflection Probe、DDGI 和可选硬件光追保留清晰边界。
 
-> Progress: Stage 0（共享屏幕空间基础）、Stage 1（SSAO）、FidelityFX CACAO comparison backend、Stage 2（TAA v1）和 Stage 3（GTAO v1）已完成；下一阶段为 Stage 4 SSR。
+> Progress: Stage 0（共享屏幕空间基础）、Stage 1（SSAO）、FidelityFX CACAO comparison backend、Stage 2（TAA v1）、Stage 3（GTAO v1）和 Stage 4（SSR v1）已完成；下一阶段为 Stage 5 SSGI。
 
 三个问题必须分开处理：
 
@@ -581,12 +581,25 @@ GTAO history 独立于 TAA，响应 frame-level camera cut、viewport resize、s
 
 完成标准：GTAO 在大尺度遮蔽和视角变化下优于 SSAO，切换模式不重建场景或材质。
 
-### Stage 4：SSR
+### Stage 4：SSR（已完成）
 
 - 拆分 Opaque 与 Transparent 执行位置。
 - 输出 baseline indirect specular。
 - hierarchical ray trace、color pyramid、confidence 和 temporal resolve。
 - 按 confidence 替换 IBL/Probe specular。
+
+实际实现把 Forward 拆成 Opaque 和 Transparent 两个阶段。Opaque PBR MRT 同时输出完整 HDR 与 baseline indirect specular；随后生成只包含不透明场景的 color pyramid，半分辨率 SSR 执行 view-space reflection trace、nearest-depth hierarchy 查询、roughness/distance/edge confidence、独立 temporal history 和两次 depth/normal bilateral blur。`ReflectionComposite` 使用：
+
+```text
+opaque - baselineSpecular
+       + mix(baselineSpecular, ssrRadiance, confidence)
+```
+
+生成 composited HDR，最后 Transparent 使用 Surface Depth read-only 并对该结果做普通 back-to-front blending。SSR 关闭时不执行 trace/temporal/blur，Composite 只复制 opaque HDR，因此新增功能默认关闭且不改变原有能量结果。SSR history 独立于 TAA/GTAO，响应 camera cut、resize、scene generation、camera mode、projection、Shader variant、设置签名和执行序列中断。
+
+Editor、Runtime Control 与 `VulkanLabCtl` 提供 IBL Only/SSR、Low/Medium/High、Max Distance、Thickness、Max Roughness、Intensity、History Weight，以及 Raw、Temporal、Filtered、Confidence 和 Rejection 调试视图。GPU profiler、Tracy 和 RenderDoc 分别记录 `SSR`、`ReflectionComposite` 与拆分后的 Forward 阶段。
+
+实现参考本地 `screen_space_ray_tracing_2014.pdf` 和 FidelityFX SSSR 固定提交 `34dcacd1feefcfab2855b82e76c7d711f2020a75` 的 MIT 源码，用于核对层级深度搜索、confidence 和 temporal/denoise 职责。正式实现为项目内 Vulkan/GLSL 重写，不 include、link 或运行 FidelityFX SSSR；v1 使用固定步进加 depth-pyramid LOD，而不是移植其 SPD、tile classification、wave ops 与完整 hierarchical traversal。
 
 完成标准：ChronographWatch、CarConcept 和 Sponza 光滑表面获得可见反射，屏幕边缘和 miss 区域平滑回退 IBL。
 

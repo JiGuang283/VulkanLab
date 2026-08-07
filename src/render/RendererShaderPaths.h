@@ -22,6 +22,10 @@ struct RendererShaderPaths {
     std::string cacaoNormalAdapterComp;
     std::string gtaoTraceComp;
     std::string gtaoTemporalComp;
+    std::string ssrTraceComp;
+    std::string ssrTemporalComp;
+    std::string ssrBlurComp;
+    std::string reflectionCompositeComp;
     std::string taaResolveComp;
     std::string fullscreenVert;
     std::string toneMapFrag;

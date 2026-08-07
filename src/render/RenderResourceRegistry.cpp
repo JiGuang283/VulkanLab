@@ -95,12 +95,17 @@ VkImageUsageFlags requiredUsage(RenderImageAccess access) {
     case RenderImageAccess::ColorAttachmentReadWrite:
         return VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     case RenderImageAccess::DepthAttachmentWrite:
+    case RenderImageAccess::DepthAttachmentRead:
         return VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
     case RenderImageAccess::SampledRead:
         return VK_IMAGE_USAGE_SAMPLED_BIT;
     case RenderImageAccess::StorageWrite:
     case RenderImageAccess::StorageReadWrite:
         return VK_IMAGE_USAGE_STORAGE_BIT;
+    case RenderImageAccess::TransferRead:
+        return VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    case RenderImageAccess::TransferWrite:
+        return VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     }
     return 0;
 }
@@ -367,13 +372,16 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
     const VkFormat shadowDepthFormat = chooseDepthFormat(device, true);
     const VkSampleCountFlagBits samples =
         chooseSamples(device, hdrFormat, depthFormat);
+    const ScreenSpaceEffectsSupport &screenSupport =
+        device.screenSpaceEffectsSupport();
 
     RendererResourceHandles handles{};
     handles.hdrColor = registry.registerImage(
         {"HDR Color", RenderExtentPolicy::Viewport, {},
          RenderResourceMultiplicity::PerFrame, hdrFormat,
          VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL,
-         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+             VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, VK_IMAGE_ASPECT_COLOR_BIT});
     if (samples != VK_SAMPLE_COUNT_1_BIT) {
         handles.hdrMsaaColor = registry.registerImage(
@@ -384,6 +392,34 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
              VK_IMAGE_ASPECT_COLOR_BIT});
     }
+    handles.baselineSpecular = registry.registerImage(
+            {"Baseline Indirect Specular", RenderExtentPolicy::Viewport, {},
+             RenderResourceMultiplicity::PerFrame, hdrFormat,
+             VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL,
+             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                 VK_IMAGE_USAGE_SAMPLED_BIT,
+             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+             VK_IMAGE_ASPECT_COLOR_BIT});
+    if (samples != VK_SAMPLE_COUNT_1_BIT) {
+        handles.baselineSpecularMsaa = registry.registerImage(
+                {"Baseline Indirect Specular MSAA",
+                 RenderExtentPolicy::Viewport, {},
+                 RenderResourceMultiplicity::PerFrame, hdrFormat, samples,
+                 VK_IMAGE_TILING_OPTIMAL,
+                 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                 VK_IMAGE_ASPECT_COLOR_BIT});
+    }
+    handles.compositedHdrColor = registry.registerImage(
+            {"Composited HDR Color", RenderExtentPolicy::Viewport, {},
+             RenderResourceMultiplicity::PerFrame, hdrFormat,
+             VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL,
+             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                 VK_IMAGE_USAGE_SAMPLED_BIT |
+                 (screenSupport.ssrAvailable ? VK_IMAGE_USAGE_STORAGE_BIT : 0u) |
+                 VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+             VK_IMAGE_ASPECT_COLOR_BIT});
     handles.mainDepth = registry.registerImage(
         {"Main Depth", RenderExtentPolicy::Viewport, {},
          RenderResourceMultiplicity::PerFrame, depthFormat, samples,
@@ -460,8 +496,6 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
         handles.visibilityHiZ = registry.registerImage(std::move(hiZ));
     }
 
-    const ScreenSpaceEffectsSupport &screenSupport =
-        device.screenSpaceEffectsSupport();
     if (screenSupport.depthPyramidAvailable) {
         RenderImageDesc depthPyramid{};
         depthPyramid.name = "Screen Depth Pyramid";
@@ -542,6 +576,27 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
         handles.gtaoTemp = registerGtaoImage("GTAO Temp");
         handles.gtaoFiltered = registerGtaoImage("GTAO Filtered");
         handles.gtaoDebug = registerGtaoImage("GTAO Debug");
+    }
+    if (screenSupport.ssrAvailable) {
+        const auto registerSsrImage = [&](std::string name,
+                                          bool historyCapable = false) {
+            RenderImageDesc desc{};
+            desc.name = std::move(name);
+            desc.extentPolicy = RenderExtentPolicy::Viewport;
+            desc.extentDivisor = 2;
+            desc.multiplicity = RenderResourceMultiplicity::PerFrame;
+            desc.format = screenSupport.colorPyramidFormat;
+            desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                         VK_IMAGE_USAGE_STORAGE_BIT;
+            desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+            desc.historyCapable = historyCapable;
+            return registry.registerImage(std::move(desc));
+        };
+        handles.ssrRaw = registerSsrImage("SSR Raw");
+        handles.ssrHistory = registerSsrImage("SSR History", true);
+        handles.ssrTemp = registerSsrImage("SSR Temp");
+        handles.ssrFiltered = registerSsrImage("SSR Filtered");
+        handles.ssrDebug = registerSsrImage("SSR Debug");
     }
     if (device.cacaoSupport().available) {
         RenderImageDesc depth{};
@@ -711,6 +766,15 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
         taaSampler.minFilter = VK_FILTER_LINEAR;
         handles.taaSampler = registry.registerSampler(std::move(taaSampler));
     }
+    if (screenSupport.ssrAvailable) {
+        RenderSamplerDesc ssrSampler{};
+        ssrSampler.name = "SSR Sampler";
+        ssrSampler.magFilter = VK_FILTER_LINEAR;
+        ssrSampler.minFilter = VK_FILTER_LINEAR;
+        ssrSampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        ssrSampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        handles.ssrSampler = registry.registerSampler(std::move(ssrSampler));
+    }
 
     if (device.computeBloomSupport().available) {
         RenderSamplerDesc bloomSampler{};
@@ -777,6 +841,8 @@ void validateRenderResourceContracts(
 
             const bool reads =
                 use.access == RenderImageAccess::SampledRead ||
+                use.access == RenderImageAccess::DepthAttachmentRead ||
+                use.access == RenderImageAccess::TransferRead ||
                 use.access ==
                     RenderImageAccess::ColorAttachmentReadWrite ||
                 use.access == RenderImageAccess::StorageReadWrite;

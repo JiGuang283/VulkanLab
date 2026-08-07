@@ -24,6 +24,8 @@ struct FrameRenderFeatures {
     bool gtaoRequired = false;
     bool taaRequired = false;
     bool taaActive = false;
+    bool ssrRequired = false;
+    bool ssrActive = false;
 };
 
 struct RenderFrameContext {

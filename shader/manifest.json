@@ -175,6 +175,26 @@
       "compute": "screenspace/gtao_temporal.comp"
     },
     {
+      "id": "screenspace.ssr-trace",
+      "contract": "compute",
+      "compute": "screenspace/ssr_trace.comp"
+    },
+    {
+      "id": "screenspace.ssr-temporal",
+      "contract": "compute",
+      "compute": "screenspace/ssr_temporal.comp"
+    },
+    {
+      "id": "screenspace.ssr-blur",
+      "contract": "compute",
+      "compute": "screenspace/ssr_blur.comp"
+    },
+    {
+      "id": "screenspace.reflection-composite",
+      "contract": "compute",
+      "compute": "screenspace/reflection_composite.comp"
+    },
+    {
       "id": "postprocess.taa-resolve",
       "contract": "compute",
       "compute": "postprocess/taa_resolve.comp"

@@ -1,0 +1,27 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D opaqueHdr;
+layout(set = 0, binding = 1) uniform sampler2D baselineSpecular;
+layout(set = 0, binding = 2) uniform sampler2D ssrReflection;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D destination;
+
+layout(push_constant) uniform CompositePush {
+    uvec4 dimensions; // active, width, height, unused
+} push;
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(destination);
+    if (any(greaterThanEqual(pixel, size))) return;
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+    vec3 base = texelFetch(opaqueHdr, pixel, 0).rgb;
+    vec3 baseline = texelFetch(baselineSpecular, pixel, 0).rgb;
+    vec4 ssr = texture(ssrReflection, uv);
+    float confidence = push.dimensions.x != 0u ? clamp(ssr.a, 0.0, 1.0) : 0.0;
+    vec3 reflection = mix(baseline, ssr.rgb, confidence);
+    imageStore(destination, pixel,
+               vec4(max(base - baseline + reflection, vec3(0.0)), 1.0));
+}

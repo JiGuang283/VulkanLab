@@ -49,19 +49,38 @@ vec3 evaluateIblSpecular(vec3 n, vec3 v, vec3 albedo,
     return prefiltered * (f * brdf.x + brdf.y);
 }
 
+struct IndirectLightingComponents {
+    vec3 diffuse;
+    vec3 specular;
+};
+
+IndirectLightingComponents evaluateIndirectLightingComponents(
+    vec3 n, vec3 v, vec3 albedo, float roughness, float metallic,
+    float occlusion)
+{
+    IndirectLightingComponents result;
+    if (ubo.environmentParams.x < 0.5) {
+        result.diffuse = ubo.ambientColorIntensity.rgb *
+                         ubo.ambientColorIntensity.a * albedo * occlusion;
+        result.specular = vec3(0.0);
+        return result;
+    }
+    float scale = ubo.environmentParams.y * occlusion;
+    result.diffuse = evaluateIblDiffuse(
+        n, v, albedo, roughness, metallic) * scale;
+    result.specular = evaluateIblSpecular(
+        n, v, albedo, roughness, metallic) * scale;
+    return result;
+}
+
 vec3 evaluateIndirectLighting(vec3 n, vec3 v, vec3 albedo,
                               float roughness, float metallic,
                               float occlusion)
 {
-    if (ubo.environmentParams.x < 0.5) {
-        return ubo.ambientColorIntensity.rgb *
-               ubo.ambientColorIntensity.a * albedo * occlusion;
-    }
-    vec3 diffuse =
-        evaluateIblDiffuse(n, v, albedo, roughness, metallic);
-    vec3 specular =
-        evaluateIblSpecular(n, v, albedo, roughness, metallic);
-    return (diffuse + specular) * ubo.environmentParams.y * occlusion;
+    IndirectLightingComponents components =
+        evaluateIndirectLightingComponents(
+            n, v, albedo, roughness, metallic, occlusion);
+    return components.diffuse + components.specular;
 }
 
 #endif

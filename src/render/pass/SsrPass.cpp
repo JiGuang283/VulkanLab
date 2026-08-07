@@ -1,0 +1,498 @@
+#include "render/pass/SsrPass.h"
+
+#include "core/ComputePipeline.h"
+#include "core/ComputePipelineConfig.h"
+#include "core/DescriptorAllocator.h"
+#include "core/Device.h"
+#include "core/GpuBarrier.h"
+#include "core/GpuDebugUtils.h"
+#include "core/Image.h"
+#include "core/VulkanCheck.h"
+#include "diagnostics/Profiling.h"
+#include "diagnostics/TracyProfiler.h"
+#include "render/PipelineCache.h"
+#include "render/RenderFrame.h"
+#include "render/RenderView.h"
+#include "render/Visibility.h"
+
+#include <glm/glm.hpp>
+#include <stdexcept>
+#include <utility>
+
+namespace vkr {
+namespace {
+
+constexpr uint32_t kWorkgroupSize = 8;
+uint32_t groups(uint32_t value) {
+    return (value + kWorkgroupSize - 1u) / kWorkgroupSize;
+}
+VkImageSubresourceRange colorRange() {
+    return {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+}
+
+struct TracePush {
+    glm::vec4 parameters{};
+    glm::uvec4 dimensions{};
+    glm::vec4 sampling{};
+};
+struct TemporalPush {
+    glm::vec4 parameters{};
+    glm::uvec4 dimensions{};
+};
+struct BlurPush { glm::uvec4 dimensions{}; };
+
+uint32_t stepCount(SsrQuality quality) {
+    switch (quality) {
+    case SsrQuality::Low: return 24;
+    case SsrQuality::Medium: return 48;
+    case SsrQuality::High: return 96;
+    }
+    return 48;
+}
+
+uint64_t signature(const RenderSettings &settings) {
+    uint64_t value = static_cast<uint64_t>(settings.ssrQuality);
+    const auto add = [&](float input) {
+        value ^= static_cast<uint64_t>(glm::floatBitsToUint(input)) +
+                 0x9e3779b97f4a7c15ull + (value << 6u) + (value >> 2u);
+    };
+    add(settings.ssrMaxDistance);
+    add(settings.ssrThickness);
+    add(settings.ssrMaxRoughness);
+    add(settings.ssrIntensity);
+    add(settings.ssrHistoryWeight);
+    return value;
+}
+
+} // namespace
+
+SsrPass::SsrPass(Device &device, const RenderResourceRegistry &resources,
+                 RendererResourceHandles resourceHandles,
+                 DescriptorAllocator &descriptorAllocator,
+                 VkDescriptorSetLayout globalDescriptorSetLayout,
+                 std::string traceShaderPath,
+                 std::string temporalShaderPath,
+                 std::string blurShaderPath)
+    : device_(&device), resources_(resourceHandles),
+      descriptorAllocator_(&descriptorAllocator),
+      globalLayout_(globalDescriptorSetLayout),
+      traceShaderPath_(std::move(traceShaderPath)),
+      temporalShaderPath_(std::move(temporalShaderPath)),
+      blurShaderPath_(std::move(blurShaderPath)) {
+    if (!resources_.ssrRaw.valid() || !resources_.ssrHistory.valid() ||
+        !resources_.ssrTemp.valid() || !resources_.ssrFiltered.valid() ||
+        !resources_.ssrDebug.valid())
+        throw std::invalid_argument("SsrPass requires all SSR resources");
+    status_.supported = true;
+    createLayouts();
+    createDescriptors(resources);
+    status_.extent = resources.extent(resources_.ssrFiltered);
+}
+
+SsrPass::~SsrPass() {
+    freeDescriptors();
+    for (VkDescriptorSetLayout layout :
+         {traceLayout_, temporalLayout_, blurLayout_}) {
+        if (layout != VK_NULL_HANDLE)
+            vkDestroyDescriptorSetLayout(device_->logicalDevice(), layout,
+                                         nullptr);
+    }
+}
+
+std::vector<RenderImageUsage> SsrPass::resourceUsages() const {
+    return {
+        {resources_.surfaceDepth, RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
+        {resources_.surfaceNormalRoughness, RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {resources_.surfaceMotion, RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {resources_.screenDepthPyramid, RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {resources_.sceneColorPyramid, RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {resources_.surfaceDepth, RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+         RenderImageFrame::Previous},
+        {resources_.surfaceNormalRoughness, RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+         RenderImageFrame::Previous},
+        {resources_.ssrHistory, RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+         RenderImageFrame::Previous},
+        {resources_.ssrRaw, RenderImageAccess::StorageWrite,
+         VK_IMAGE_LAYOUT_UNDEFINED,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {resources_.ssrHistory, RenderImageAccess::StorageWrite,
+         VK_IMAGE_LAYOUT_UNDEFINED,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {resources_.ssrTemp, RenderImageAccess::StorageWrite,
+         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL},
+        {resources_.ssrFiltered, RenderImageAccess::StorageWrite,
+         VK_IMAGE_LAYOUT_UNDEFINED,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {resources_.ssrDebug, RenderImageAccess::StorageWrite,
+         VK_IMAGE_LAYOUT_UNDEFINED,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+    };
+}
+
+void SsrPass::releaseViewportResources() {
+    freeDescriptors();
+    initialized_.fill(false);
+    historyWritten_.fill(false);
+    lastExecutionSerial_ = 0;
+    status_.active = false;
+    status_.historyValid = false;
+    status_.lastResetReason = "viewport resized";
+}
+
+void SsrPass::onViewportResize(const RenderResourceRegistry &resources) {
+    createDescriptors(resources);
+    status_.extent = resources.extent(resources_.ssrFiltered);
+}
+
+void SsrPass::execute(const RenderFrameContext &frame,
+                      const RenderResourceRegistry &resources,
+                      const VisibilityFrame &visibility) {
+    status_.active = frame.features.ssrActive;
+    if (!frame.features.ssrRequired || !frame.pipelineCache || !frame.view)
+        return;
+    VKL_PROFILE_ZONE("Record SSR");
+    VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "SSR");
+    ScopedGpuLabel label(device_->debugUtils(), frame.cmd, "SSR");
+
+    const uint32_t current = frame.frameIndex;
+    const uint32_t previous =
+        (current + resources.frameCount() - 1u) % resources.frameCount();
+    const uint64_t settingsSignature = signature(frame.view->settings);
+    const bool contiguous = lastExecutionSerial_ != 0 &&
+                            lastExecutionSerial_ + 1 == frame.submissionSerial;
+    const bool generationMatches = lastExecutionSerial_ != 0 &&
+        lastHistoryGeneration_ == visibility.history.historyGeneration;
+    const bool settingsMatch = lastExecutionSerial_ != 0 &&
+        lastSettingsSignature_ == settingsSignature;
+    const bool historyValid = visibility.history.globalValid && contiguous &&
+        generationMatches && settingsMatch && historyWritten_[previous];
+    status_.historyValid = historyValid;
+    status_.historyGeneration = visibility.history.historyGeneration;
+    status_.lastFrameSerial = frame.submissionSerial;
+    if (!historyValid) {
+        status_.lastResetReason = !visibility.history.invalidationReason.empty()
+            ? visibility.history.invalidationReason
+            : (!contiguous ? "SSR was not executed continuously"
+                           : (!generationMatches ? "temporal generation changed"
+                                                 : (!settingsMatch ? "SSR settings changed"
+                                                                   : "history is unavailable")));
+    } else {
+        status_.lastResetReason.clear();
+    }
+
+    const std::array<RenderImageHandle, 5> outputs = {
+        resources_.ssrRaw, resources_.ssrHistory, resources_.ssrTemp,
+        resources_.ssrFiltered, resources_.ssrDebug};
+    for (uint32_t i = 0; i < outputs.size(); ++i) {
+        const bool temp = i == 2;
+        const Image &image = resources.image(outputs[i], current);
+        cmdImageBarrier(
+            frame.cmd,
+            initialized_[current]
+                ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            initialized_[current]
+                ? VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT
+                : 0u,
+            VK_ACCESS_SHADER_WRITE_BIT, image.handle(),
+            initialized_[current]
+                ? (temp ? VK_IMAGE_LAYOUT_GENERAL
+                        : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                : VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_GENERAL, colorRange());
+    }
+
+    const VkPushConstantRange traceRange{VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                          sizeof(TracePush)};
+    const VkPushConstantRange temporalRange{VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                             sizeof(TemporalPush)};
+    const VkPushConstantRange blurRange{VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                         sizeof(BlurPush)};
+    ComputePipelineConfig traceConfig{};
+    traceConfig.debugName = "Pipeline/ScreenSpace/SSR/Trace";
+    traceConfig.computeShaderPath = traceShaderPath_;
+    traceConfig.descriptorLayouts = {globalLayout_, traceLayout_};
+    traceConfig.pushConstants = {traceRange};
+    ComputePipelineConfig temporalConfig{};
+    temporalConfig.debugName = "Pipeline/ScreenSpace/SSR/Temporal";
+    temporalConfig.computeShaderPath = temporalShaderPath_;
+    temporalConfig.descriptorLayouts = {temporalLayout_};
+    temporalConfig.pushConstants = {temporalRange};
+    ComputePipelineConfig blurConfig{};
+    blurConfig.debugName = "Pipeline/ScreenSpace/SSR/Blur";
+    blurConfig.computeShaderPath = blurShaderPath_;
+    blurConfig.descriptorLayouts = {globalLayout_, blurLayout_};
+    blurConfig.pushConstants = {blurRange};
+    ComputePipeline &trace = frame.pipelineCache->getOrCreateCompute(
+        std::move(traceConfig));
+    ComputePipeline &temporal = frame.pipelineCache->getOrCreateCompute(
+        std::move(temporalConfig));
+    ComputePipeline &blur = frame.pipelineCache->getOrCreateCompute(
+        std::move(blurConfig));
+
+    const VkExtent2D full = resources.extent(resources_.surfaceDepth);
+    const VkExtent2D half = resources.extent(resources_.ssrFiltered);
+    TracePush tracePush{};
+    tracePush.parameters = {
+        frame.view->settings.ssrMaxDistance,
+        frame.view->settings.ssrThickness,
+        frame.view->settings.ssrMaxRoughness,
+        frame.view->settings.ssrIntensity};
+    tracePush.dimensions = {stepCount(frame.view->settings.ssrQuality), 4,
+                            full.width, full.height};
+    tracePush.sampling = {
+        float(resources.mipLevelCount(resources_.screenDepthPyramid) - 1),
+        float(resources.mipLevelCount(resources_.sceneColorPyramid) - 1),
+        float(frame.submissionSerial & 7u), 0.0f};
+    vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      trace.handle());
+    vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            trace.layout(), 0, 1,
+                            &frame.globalDescriptorSet, 0, nullptr);
+    vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            trace.layout(), 1, 1, &traceSets_[current], 0,
+                            nullptr);
+    vkCmdPushConstants(frame.cmd, trace.layout(), VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(tracePush), &tracePush);
+    vkCmdDispatch(frame.cmd, groups(half.width), groups(half.height), 1);
+    cmdImageBarrier(frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                    resources.image(resources_.ssrRaw, current).handle(),
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                    colorRange());
+
+    TemporalPush temporalPush{};
+    temporalPush.parameters = {frame.view->settings.ssrHistoryWeight,
+                               0.01f, 0.8f, 0.0f};
+    temporalPush.dimensions = {full.width, full.height,
+                               historyValid ? 1u : 0u, 0u};
+    vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      temporal.handle());
+    vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            temporal.layout(), 0, 1,
+                            &temporalSets_[current], 0, nullptr);
+    vkCmdPushConstants(frame.cmd, temporal.layout(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                       sizeof(temporalPush), &temporalPush);
+    vkCmdDispatch(frame.cmd, groups(half.width), groups(half.height), 1);
+    cmdImageBarrier(frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                    resources.image(resources_.ssrHistory, current).handle(),
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                    colorRange());
+
+    BlurPush blurPush{{full.width, full.height, 0u, 0u}};
+    const auto dispatchBlur = [&](VkDescriptorSet set, uint32_t axis) {
+        blurPush.dimensions.z = axis;
+        vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          blur.handle());
+        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                blur.layout(), 0, 1,
+                                &frame.globalDescriptorSet, 0, nullptr);
+        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                blur.layout(), 1, 1, &set, 0, nullptr);
+        vkCmdPushConstants(frame.cmd, blur.layout(),
+                           VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(blurPush), &blurPush);
+        vkCmdDispatch(frame.cmd, groups(half.width), groups(half.height), 1);
+    };
+    dispatchBlur(horizontalSets_[current], 0);
+    cmdImageBarrier(frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                    resources.image(resources_.ssrTemp, current).handle(),
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                    colorRange());
+    dispatchBlur(verticalSets_[current], 1);
+
+    for (RenderImageHandle handle : {resources_.ssrRaw,
+                                     resources_.ssrHistory,
+                                     resources_.ssrFiltered,
+                                     resources_.ssrDebug}) {
+        const Image &image = resources.image(handle, current);
+        cmdImageBarrier(frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                        VK_ACCESS_SHADER_WRITE_BIT,
+                        VK_ACCESS_SHADER_READ_BIT, image.handle(),
+                        VK_IMAGE_LAYOUT_GENERAL,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        colorRange());
+    }
+    initialized_[current] = true;
+    historyWritten_[current] = true;
+    lastExecutionSerial_ = frame.submissionSerial;
+    lastHistoryGeneration_ = visibility.history.historyGeneration;
+    lastSettingsSignature_ = settingsSignature;
+}
+
+void SsrPass::createLayouts() {
+    std::array<VkDescriptorSetLayoutBinding, 5> trace{};
+    for (uint32_t i = 0; i < 4; ++i)
+        trace[i] = {i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                    VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    trace[4] = {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
+                VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    VkDescriptorSetLayoutCreateInfo info{
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    info.bindingCount = uint32_t(trace.size());
+    info.pBindings = trace.data();
+    VK_CHECK(vkCreateDescriptorSetLayout(device_->logicalDevice(), &info,
+                                         nullptr, &traceLayout_));
+
+    std::array<VkDescriptorSetLayoutBinding, 9> temporal{};
+    for (uint32_t i = 0; i < 7; ++i)
+        temporal[i] = {i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                       VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    for (uint32_t i = 7; i < 9; ++i)
+        temporal[i] = {i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
+                       VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    info.bindingCount = uint32_t(temporal.size());
+    info.pBindings = temporal.data();
+    VK_CHECK(vkCreateDescriptorSetLayout(device_->logicalDevice(), &info,
+                                         nullptr, &temporalLayout_));
+
+    std::array<VkDescriptorSetLayoutBinding, 4> blur{};
+    for (uint32_t i = 0; i < 3; ++i)
+        blur[i] = {i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                   VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    blur[3] = {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
+               VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    info.bindingCount = uint32_t(blur.size());
+    info.pBindings = blur.data();
+    VK_CHECK(vkCreateDescriptorSetLayout(device_->logicalDevice(), &info,
+                                         nullptr, &blurLayout_));
+}
+
+void SsrPass::createDescriptors(const RenderResourceRegistry &registry) {
+    const VkSampler depthSampler = registry.sampler(resources_.surfaceDepthSampler);
+    const VkSampler surfaceSampler = registry.sampler(resources_.surfaceDataSampler);
+    const VkSampler pyramidSampler = registry.sampler(resources_.screenPyramidSampler);
+    const VkSampler ssrSampler = registry.sampler(resources_.ssrSampler);
+    for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+        const auto view = [&](RenderImageHandle handle) {
+            return registry.image(handle, frame).imageView();
+        };
+        const VkImageView depth = view(resources_.surfaceDepth);
+        const VkImageView normal = view(resources_.surfaceNormalRoughness);
+        const VkImageView motion = view(resources_.surfaceMotion);
+        const VkImageView raw = view(resources_.ssrRaw);
+        const VkImageView history = view(resources_.ssrHistory);
+        const VkImageView temp = view(resources_.ssrTemp);
+        const VkImageView filtered = view(resources_.ssrFiltered);
+        const VkImageView debug = view(resources_.ssrDebug);
+
+        traceSets_[frame] = descriptorAllocator_->allocate(
+            traceLayout_, {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4},
+                           {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1}},
+            "SSR/Trace/Frame" + std::to_string(frame));
+        std::array<VkDescriptorImageInfo, 5> traceInfos = {{
+            {depthSampler, depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
+            {surfaceSampler, normal, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+            {pyramidSampler, view(resources_.screenDepthPyramid), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+            {pyramidSampler, view(resources_.sceneColorPyramid), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+            {VK_NULL_HANDLE, raw, VK_IMAGE_LAYOUT_GENERAL}}};
+        std::array<VkWriteDescriptorSet, 5> traceWrites{};
+        for (uint32_t i = 0; i < traceWrites.size(); ++i) {
+            traceWrites[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            traceWrites[i].dstSet = traceSets_[frame];
+            traceWrites[i].dstBinding = i;
+            traceWrites[i].descriptorCount = 1;
+            traceWrites[i].descriptorType = i < 4
+                ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+                : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            traceWrites[i].pImageInfo = &traceInfos[i];
+        }
+        vkUpdateDescriptorSets(device_->logicalDevice(), uint32_t(traceWrites.size()),
+                               traceWrites.data(), 0, nullptr);
+
+        temporalSets_[frame] = descriptorAllocator_->allocate(
+            temporalLayout_, {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 7},
+                              {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2}},
+            "SSR/Temporal/Frame" + std::to_string(frame));
+        std::array<VkDescriptorImageInfo, 9> temporalInfos = {{
+            {ssrSampler, raw, VK_IMAGE_LAYOUT_GENERAL},
+            {depthSampler, depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
+            {surfaceSampler, normal, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+            {surfaceSampler, motion, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+            {depthSampler, registry.previousImage(resources_.surfaceDepth, frame).imageView(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
+            {surfaceSampler, registry.previousImage(resources_.surfaceNormalRoughness, frame).imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+            {ssrSampler, registry.previousImage(resources_.ssrHistory, frame).imageView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+            {VK_NULL_HANDLE, history, VK_IMAGE_LAYOUT_GENERAL},
+            {VK_NULL_HANDLE, debug, VK_IMAGE_LAYOUT_GENERAL}}};
+        std::array<VkWriteDescriptorSet, 9> temporalWrites{};
+        for (uint32_t i = 0; i < temporalWrites.size(); ++i) {
+            temporalWrites[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            temporalWrites[i].dstSet = temporalSets_[frame];
+            temporalWrites[i].dstBinding = i;
+            temporalWrites[i].descriptorCount = 1;
+            temporalWrites[i].descriptorType = i < 7
+                ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+                : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            temporalWrites[i].pImageInfo = &temporalInfos[i];
+        }
+        vkUpdateDescriptorSets(device_->logicalDevice(), uint32_t(temporalWrites.size()),
+                               temporalWrites.data(), 0, nullptr);
+
+        const auto makeBlur = [&](std::string name, VkImageView source,
+                                  VkImageView destination) {
+            VkDescriptorSet set = descriptorAllocator_->allocate(
+                blurLayout_, {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3},
+                              {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1}},
+                "SSR/" + name + "/Frame" + std::to_string(frame));
+            std::array<VkDescriptorImageInfo, 4> infos = {{
+                {depthSampler, depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
+                {surfaceSampler, normal, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                {ssrSampler, source, VK_IMAGE_LAYOUT_GENERAL},
+                {VK_NULL_HANDLE, destination, VK_IMAGE_LAYOUT_GENERAL}}};
+            std::array<VkWriteDescriptorSet, 4> writes{};
+            for (uint32_t i = 0; i < writes.size(); ++i) {
+                writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+                writes[i].dstSet = set;
+                writes[i].dstBinding = i;
+                writes[i].descriptorCount = 1;
+                writes[i].descriptorType = i < 3
+                    ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+                    : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                writes[i].pImageInfo = &infos[i];
+            }
+            vkUpdateDescriptorSets(device_->logicalDevice(), uint32_t(writes.size()),
+                                   writes.data(), 0, nullptr);
+            return set;
+        };
+        horizontalSets_[frame] = makeBlur("Horizontal", history, temp);
+        verticalSets_[frame] = makeBlur("Vertical", temp, filtered);
+    }
+}
+
+void SsrPass::freeDescriptors() {
+    for (auto *sets : {&traceSets_, &temporalSets_, &horizontalSets_,
+                       &verticalSets_}) {
+        for (VkDescriptorSet &set : *sets) {
+            if (set != VK_NULL_HANDLE) descriptorAllocator_->free(set);
+            set = VK_NULL_HANDLE;
+        }
+    }
+}
+
+} // namespace vkr

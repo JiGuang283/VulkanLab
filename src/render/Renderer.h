@@ -31,6 +31,7 @@ class AtmosphereLutPass;
 class ToneMapPass;
 class CacaoPass;
 class GtaoPass;
+class SsrPass;
 class TaaPass;
 class Texture;
 class PresentPass;
@@ -91,6 +92,9 @@ struct ScreenSpaceEffectsStatus {
     bool taaSupported = false;
     bool taaActive = false;
     bool taaHistoryValid = false;
+    bool ssrSupported = false;
+    bool ssrActive = false;
+    bool ssrHistoryValid = false;
     AmbientOcclusionMode requestedMode = AmbientOcclusionMode::Off;
     AmbientOcclusionMode activeMode = AmbientOcclusionMode::Off;
     uint32_t depthMipLevels = 0;
@@ -105,8 +109,11 @@ struct ScreenSpaceEffectsStatus {
     uint64_t gtaoHistoryGeneration = 0;
     uint64_t gtaoLastFrameSerial = 0;
     VkExtent2D taaExtent{};
+    VkExtent2D ssrExtent{};
     uint64_t taaHistoryGeneration = 0;
     uint64_t taaLastFrameSerial = 0;
+    uint64_t ssrHistoryGeneration = 0;
+    uint64_t ssrLastFrameSerial = 0;
     glm::vec2 taaJitterPixels{0.0f};
     uint64_t estimatedMemoryBytes = 0;
     std::string depthPyramidUnavailableReason;
@@ -117,6 +124,8 @@ struct ScreenSpaceEffectsStatus {
     std::string gtaoLastResetReason;
     std::string taaUnavailableReason;
     std::string taaLastResetReason;
+    std::string ssrUnavailableReason;
+    std::string ssrLastResetReason;
 };
 
 class Renderer {
@@ -244,6 +253,7 @@ class Renderer {
     ScreenSpaceEffectsStatus screenSpaceStatus_{};
     CacaoPass *cacaoPass_ = nullptr;
     GtaoPass *gtaoPass_ = nullptr;
+    SsrPass *ssrPass_ = nullptr;
     TaaPass *taaPass_ = nullptr;
     class OcclusionCullPass *occlusionCullPass_ = nullptr;
     uint32_t lastOcclusionFrameIndex_ = 0;

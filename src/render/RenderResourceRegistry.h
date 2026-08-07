@@ -93,9 +93,12 @@ enum class RenderImageAccess {
     ColorAttachmentWrite,
     ColorAttachmentReadWrite,
     DepthAttachmentWrite,
+    DepthAttachmentRead,
     SampledRead,
     StorageWrite,
     StorageReadWrite,
+    TransferRead,
+    TransferWrite,
 };
 
 enum class RenderImageFrame {
@@ -143,6 +146,14 @@ struct RendererResourceHandles {
     RenderImageHandle gtaoDebug{};
     RenderImageHandle taaHistory{};
     RenderImageHandle taaDebug{};
+    RenderImageHandle baselineSpecular{};
+    RenderImageHandle baselineSpecularMsaa{};
+    RenderImageHandle compositedHdrColor{};
+    RenderImageHandle ssrRaw{};
+    RenderImageHandle ssrHistory{};
+    RenderImageHandle ssrTemp{};
+    RenderImageHandle ssrFiltered{};
+    RenderImageHandle ssrDebug{};
     std::array<RenderImageHandle, kBloomPyramidLevelCount> bloomLevels{};
     RenderSamplerHandle hdrSampler{};
     RenderSamplerHandle viewportSampler{};
@@ -153,6 +164,7 @@ struct RendererResourceHandles {
     RenderSamplerHandle screenPyramidSampler{};
     RenderSamplerHandle ssaoSampler{};
     RenderSamplerHandle taaSampler{};
+    RenderSamplerHandle ssrSampler{};
     RenderSamplerHandle bloomSampler{};
     RenderImageHandle atmosphereTransmittance{};
     RenderImageHandle atmosphereMultipleScattering{};

@@ -177,6 +177,7 @@ set(VKL_ENGINE_SOURCES
     render/Texture.cpp
     render/TextureData.cpp
     render/pass/MainForwardPass.cpp
+    render/pass/HdrCompositePass.cpp
     render/pass/AtmosphereLutPass.cpp
     render/pass/DirectionalShadowPass.cpp
     render/pass/SurfacePrepass.cpp
@@ -185,6 +186,7 @@ set(VKL_ENGINE_SOURCES
     render/pass/ScreenSpacePyramidPass.cpp
     render/pass/SsaoPass.cpp
     render/pass/GtaoPass.cpp
+    render/pass/SsrPass.cpp
     render/pass/CacaoNormalAdapterPass.cpp
     render/pass/TaaPass.cpp
     render/pass/BloomPass.cpp

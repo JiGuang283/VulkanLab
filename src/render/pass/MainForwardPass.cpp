@@ -46,11 +46,12 @@ float alphaModeToShaderValue(AlphaMode mode) {
 MainForwardPass::MainForwardPass(Device &device,
                                  const RenderResourceRegistry &resources,
                                  RendererResourceHandles resourceHandles,
+                                 ForwardPhase phase,
                                  VkDescriptorSetLayout
                                      lightingDescriptorSetLayout,
                                  VkDescriptorSetLayout
                                      atmosphereDescriptorSetLayout)
-    : device_(&device), resourceHandles_(resourceHandles),
+    : device_(&device), resourceHandles_(resourceHandles), phase_(phase),
       lightingDescriptorSetLayout_(lightingDescriptorSetLayout),
       atmosphereDescriptorSetLayout_(atmosphereDescriptorSetLayout) {
     createRenderPass(resources);
@@ -87,6 +88,17 @@ std::vector<RenderImageUsage> MainForwardPass::resourceUsages() const {
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
     }
+    if (phase_ == ForwardPhase::Transparent) {
+        usages.push_back({resourceHandles_.surfaceDepth,
+                          RenderImageAccess::DepthAttachmentRead,
+                          VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                          VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL});
+        usages.push_back({resourceHandles_.compositedHdrColor,
+                          RenderImageAccess::ColorAttachmentReadWrite,
+                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+        return usages;
+    }
     if (resourceHandles_.hdrMsaaColor.valid()) {
         usages.push_back({resourceHandles_.hdrMsaaColor,
                           RenderImageAccess::ColorAttachmentReadWrite,
@@ -106,6 +118,16 @@ std::vector<RenderImageUsage> MainForwardPass::resourceUsages() const {
              ? VK_IMAGE_LAYOUT_UNDEFINED
              : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    if (resourceHandles_.baselineSpecularMsaa.valid()) {
+        usages.push_back({resourceHandles_.baselineSpecularMsaa,
+                          RenderImageAccess::ColorAttachmentWrite,
+                          VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
+    }
+    usages.push_back({resourceHandles_.baselineSpecular,
+                      RenderImageAccess::ColorAttachmentWrite,
+                      VK_IMAGE_LAYOUT_UNDEFINED,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
     return usages;
 }
 
@@ -117,8 +139,11 @@ void MainForwardPass::onViewportResize(
 void MainForwardPass::execute(const RenderFrameContext &frame,
                               const RenderResourceRegistry &resources,
                               const VisibilityFrame &visibility) {
-    VKL_PROFILE_ZONE("Record MainForward");
-    VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "MainForward");
+    VKL_PROFILE_ZONE("Record Forward Phase");
+    ScopedGpuLabel phaseLabel(
+        device_->debugUtils(), frame.cmd,
+        phase_ == ForwardPhase::Opaque ? "MainForward/Opaque"
+                                       : "MainForward/Transparent");
     begin(frame.cmd, frame.frameIndex, resources);
     drawQueue(frame, resources, visibility);
     vkCmdEndRenderPass(frame.cmd);
@@ -126,10 +151,14 @@ void MainForwardPass::execute(const RenderFrameContext &frame,
 
 void MainForwardPass::begin(VkCommandBuffer cmd, uint32_t frameIndex,
                             const RenderResourceRegistry &resources) {
-    const VkExtent2D extent = resources.extent(resourceHandles_.hdrColor);
-    std::array<VkClearValue, 2> clearValues{};
+    const RenderImageHandle colorHandle =
+        phase_ == ForwardPhase::Opaque ? resourceHandles_.hdrColor
+                                       : resourceHandles_.compositedHdrColor;
+    const VkExtent2D extent = resources.extent(colorHandle);
+    std::array<VkClearValue, 3> clearValues{};
     clearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
-    clearValues[1].depthStencil = {1.0f, 0};
+    clearValues[1].color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+    clearValues[2].depthStencil = {1.0f, 0};
 
     VkRenderPassBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -137,7 +166,9 @@ void MainForwardPass::begin(VkCommandBuffer cmd, uint32_t frameIndex,
     beginInfo.framebuffer = framebuffers_.at(frameIndex);
     beginInfo.renderArea.offset = {0, 0};
     beginInfo.renderArea.extent = extent;
-    beginInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    beginInfo.clearValueCount = phase_ == ForwardPhase::Opaque
+                                   ? static_cast<uint32_t>(clearValues.size())
+                                   : 0u;
     beginInfo.pClearValues = clearValues.data();
     vkCmdBeginRenderPass(cmd, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -157,9 +188,10 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
     if (!frame.pipelineCache || !frame.shaderVariant)
         return;
 
-    const auto drawCommands = [&](const std::vector<RenderItemIndex> &indices,
-                                  RenderQueueType queueType) {
-        const bool transparent = queueType == RenderQueueType::Transparent;
+    const bool transparent = phase_ == ForwardPhase::Transparent;
+    const auto &indices = transparent ? visibility.cameraTransparent
+                                      : visibility.cameraOpaque;
+    const auto drawCommands = [&]() {
         ScopedGpuLabel queueLabel(device_->debugUtils(), frame.cmd,
                                   transparent ? "Transparent" : "Opaque");
         Pipeline *boundPipeline = nullptr;
@@ -175,14 +207,16 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
             const VkCullModeFlags cullMode =
                 p.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
             auto pipelineConfig = materialTemplate.pipelineConfig();
-            if (pipelineConfig.colorBlendAttachments.empty())
-                pipelineConfig.colorBlendAttachments.resize(1);
+            pipelineConfig.colorBlendAttachments.resize(transparent ? 1u : 2u);
             pipelineConfig.colorBlendAttachments[0].blendEnable = transparent;
+            if (!transparent)
+                pipelineConfig.colorBlendAttachments[1].blendEnable = false;
             pipelineConfig.depthTest = true;
             pipelineConfig.depthWrite = !transparent;
             pipelineConfig.cullMode = cullMode;
-            pipelineConfig.msaaSamples =
-                resources.description(resourceHandles_.mainDepth).samples;
+            pipelineConfig.msaaSamples = transparent
+                ? VK_SAMPLE_COUNT_1_BIT
+                : resources.description(resourceHandles_.mainDepth).samples;
             pipelineConfig.vertShaderPath =
                 frame.shaderVariant->vertSpvPath;
             pipelineConfig.fragShaderPath =
@@ -273,21 +307,84 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
             }
         }
     };
-
-    {
-        VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "Opaque");
-        drawCommands(visibility.cameraOpaque, RenderQueueType::Opaque);
-    }
-    {
-        VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd,
-                             "Transparent");
-        drawCommands(visibility.cameraTransparent,
-                     RenderQueueType::Transparent);
-    }
+    drawCommands();
 }
 
 void MainForwardPass::createRenderPass(
     const RenderResourceRegistry &resources) {
+    if (phase_ == ForwardPhase::Transparent) {
+        const auto &colorDesc =
+            resources.description(resourceHandles_.compositedHdrColor);
+        const auto &depthDesc =
+            resources.description(resourceHandles_.surfaceDepth);
+
+        VkAttachmentDescription color{};
+        color.format = colorDesc.format;
+        color.samples = VK_SAMPLE_COUNT_1_BIT;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        color.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkAttachmentDescription depth{};
+        depth.format = depthDesc.format;
+        depth.samples = VK_SAMPLE_COUNT_1_BIT;
+        depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        depth.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depth.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depth.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        depth.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+        const VkAttachmentReference colorRef{
+            0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        const VkAttachmentReference depthRef{
+            1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &colorRef;
+        subpass.pDepthStencilAttachment = &depthRef;
+
+        std::array<VkSubpassDependency, 2> dependencies{};
+        dependencies[0] = {VK_SUBPASS_EXTERNAL, 0,
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                               VK_PIPELINE_STAGE_TRANSFER_BIT,
+                           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                               VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                           VK_ACCESS_SHADER_WRITE_BIT |
+                               VK_ACCESS_TRANSFER_WRITE_BIT,
+                           VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                               VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                               VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                           VK_DEPENDENCY_BY_REGION_BIT};
+        dependencies[1] = {0, VK_SUBPASS_EXTERNAL,
+                           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                               VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                           VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                           VK_ACCESS_SHADER_READ_BIT,
+                           VK_DEPENDENCY_BY_REGION_BIT};
+
+        const std::array<VkAttachmentDescription, 2> attachments = {
+            color, depth};
+        VkRenderPassCreateInfo info{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+        info.attachmentCount = static_cast<uint32_t>(attachments.size());
+        info.pAttachments = attachments.data();
+        info.subpassCount = 1;
+        info.pSubpasses = &subpass;
+        info.dependencyCount = static_cast<uint32_t>(dependencies.size());
+        info.pDependencies = dependencies.data();
+        VK_CHECK(vkCreateRenderPass(device_->logicalDevice(), &info, nullptr,
+                                    &renderPass_));
+        device_->debugUtils().setObjectName(
+            VK_OBJECT_TYPE_RENDER_PASS, renderPass_,
+            "Pass/MainForwardTransparent/RenderPass");
+        return;
+    }
+
     const RenderImageDesc &hdrDesc =
         resources.description(resourceHandles_.hdrColor);
     const RenderImageDesc &depthDesc =
@@ -307,6 +404,10 @@ void MainForwardPass::createRenderPass(
     color.finalLayout = multisampled
                             ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
                             : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkAttachmentDescription baseline = color;
+    baseline.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    baseline.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     VkAttachmentDescription depth{};
     depth.format = depthDesc.format;
@@ -328,19 +429,23 @@ void MainForwardPass::createRenderPass(
     resolve.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     resolve.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    VkAttachmentReference colorRef{0,
-                                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-    VkAttachmentReference depthRef{1,
+    VkAttachmentDescription baselineResolve = resolve;
+
+    const std::array<VkAttachmentReference, 2> colorRefs = {{
+        {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+        {1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}}};
+    VkAttachmentReference depthRef{2,
                                    VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
-    VkAttachmentReference resolveRef{2,
-                                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    const std::array<VkAttachmentReference, 2> resolveRefs = {{
+        {3, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+        {4, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}}};
 
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorRef;
+    subpass.colorAttachmentCount = 2;
+    subpass.pColorAttachments = colorRefs.data();
     subpass.pDepthStencilAttachment = &depthRef;
-    subpass.pResolveAttachments = multisampled ? &resolveRef : nullptr;
+    subpass.pResolveAttachments = multisampled ? resolveRefs.data() : nullptr;
 
     std::array<VkSubpassDependency, 2> dependencies{};
     dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
@@ -369,11 +474,11 @@ void MainForwardPass::createRenderPass(
     dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
-    const std::array<VkAttachmentDescription, 3> allAttachments = {
-        color, depth, resolve};
+    const std::array<VkAttachmentDescription, 5> allAttachments = {
+        color, baseline, depth, resolve, baselineResolve};
     VkRenderPassCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    info.attachmentCount = multisampled ? 3u : 2u;
+    info.attachmentCount = multisampled ? 5u : 3u;
     info.pAttachments = allAttachments.data();
     info.subpassCount = 1;
     info.pSubpasses = &subpass;
@@ -388,11 +493,39 @@ void MainForwardPass::createRenderPass(
 
 void MainForwardPass::createFramebuffers(
     const RenderResourceRegistry &resources) {
+    if (phase_ == ForwardPhase::Transparent) {
+        const VkExtent2D extent =
+            resources.extent(resourceHandles_.compositedHdrColor);
+        for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT;
+             ++frameIndex) {
+            const std::array<VkImageView, 2> attachments = {
+                resources.image(resourceHandles_.compositedHdrColor,
+                                frameIndex).imageView(),
+                resources.image(resourceHandles_.surfaceDepth,
+                                frameIndex).imageView()};
+            VkFramebufferCreateInfo info{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+            info.renderPass = renderPass_;
+            info.attachmentCount = static_cast<uint32_t>(attachments.size());
+            info.pAttachments = attachments.data();
+            info.width = extent.width;
+            info.height = extent.height;
+            info.layers = 1;
+            VK_CHECK(vkCreateFramebuffer(device_->logicalDevice(), &info,
+                                         nullptr,
+                                         &framebuffers_[frameIndex]));
+            device_->debugUtils().setObjectName(
+                VK_OBJECT_TYPE_FRAMEBUFFER, framebuffers_[frameIndex],
+                "Pass/MainForwardTransparent/Framebuffer/Frame" +
+                    std::to_string(frameIndex));
+        }
+        return;
+    }
+
     const bool multisampled = resourceHandles_.hdrMsaaColor.valid();
     const VkExtent2D extent = resources.extent(resourceHandles_.hdrColor);
     for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT;
          ++frameIndex) {
-        std::array<VkImageView, 3> attachments{};
+        std::array<VkImageView, 5> attachments{};
         attachments[0] =
             multisampled
                 ? resources
@@ -401,16 +534,25 @@ void MainForwardPass::createFramebuffers(
                 : resources.image(resourceHandles_.hdrColor, frameIndex)
                       .imageView();
         attachments[1] =
+            multisampled
+                ? resources.image(resourceHandles_.baselineSpecularMsaa,
+                                  frameIndex).imageView()
+                : resources.image(resourceHandles_.baselineSpecular,
+                                  frameIndex).imageView();
+        attachments[2] =
             resources.image(resourceHandles_.mainDepth, frameIndex)
                 .imageView();
-        attachments[2] =
+        attachments[3] =
             resources.image(resourceHandles_.hdrColor, frameIndex)
+                .imageView();
+        attachments[4] =
+            resources.image(resourceHandles_.baselineSpecular, frameIndex)
                 .imageView();
 
         VkFramebufferCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         info.renderPass = renderPass_;
-        info.attachmentCount = multisampled ? 3u : 2u;
+        info.attachmentCount = multisampled ? 5u : 3u;
         info.pAttachments = attachments.data();
         info.width = extent.width;
         info.height = extent.height;

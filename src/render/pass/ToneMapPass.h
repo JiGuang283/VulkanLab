@@ -17,6 +17,7 @@ class RenderResourceRegistry;
 class SwapChain;
 struct RenderFrameContext;
 struct FrameRenderFeatures;
+enum class ScreenSpaceDebugView;
 
 class ToneMapPass final : public IRenderPass {
   public:
@@ -40,9 +41,14 @@ class ToneMapPass final : public IRenderPass {
                 RenderImageHandle gtaoDebug,
                 RenderImageHandle taaHistory,
                 RenderImageHandle taaDebug,
+                RenderImageHandle ssrRaw,
+                RenderImageHandle ssrHistory,
+                RenderImageHandle ssrFiltered,
+                RenderImageHandle ssrDebug,
                 RenderSamplerHandle screenPyramidSampler,
                 RenderSamplerHandle ssaoSampler,
                 RenderSamplerHandle taaSampler,
+                RenderSamplerHandle ssrSampler,
                 DescriptorAllocator &descriptorAllocator,
                 std::string fullscreenVertPath,
                 std::string toneMapFragPath);
@@ -68,7 +74,8 @@ class ToneMapPass final : public IRenderPass {
     void updateDescriptors(const RenderResourceRegistry &resources);
     void updateScreenDescriptors(const RenderResourceRegistry &resources,
                                  uint32_t frameIndex,
-                                 const FrameRenderFeatures &features);
+                                 const FrameRenderFeatures &features,
+                                 ScreenSpaceDebugView debugView);
 
     Device *device_ = nullptr;
     RenderImageHandle hdrColor_{};
@@ -90,9 +97,14 @@ class ToneMapPass final : public IRenderPass {
     RenderImageHandle gtaoDebug_{};
     RenderImageHandle taaHistory_{};
     RenderImageHandle taaDebug_{};
+    RenderImageHandle ssrRaw_{};
+    RenderImageHandle ssrHistory_{};
+    RenderImageHandle ssrFiltered_{};
+    RenderImageHandle ssrDebug_{};
     RenderSamplerHandle screenPyramidSampler_{};
     RenderSamplerHandle ssaoSampler_{};
     RenderSamplerHandle taaSampler_{};
+    RenderSamplerHandle ssrSampler_{};
     DescriptorAllocator *descriptorAllocator_ = nullptr;
     std::string fullscreenVertPath_;
     std::string toneMapFragPath_;
