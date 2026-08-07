@@ -48,7 +48,7 @@ std::filesystem::path defaultRelativePath(uint64_t taskId) {
     return name.str();
 }
 
-void appendPngBytes(void *context, void *data, int size) {
+void appendEncodedBytes(void *context, void *data, int size) {
     if (!context || !data || size <= 0)
         return;
     auto &bytes = *static_cast<std::vector<uint8_t> *>(context);
@@ -61,7 +61,7 @@ void atomicPublish(const std::filesystem::path &temporary,
 #ifdef _WIN32
     if (!MoveFileExW(temporary.c_str(), output.c_str(),
                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        throw std::runtime_error("could not publish capture PNG (Win32 error " +
+        throw std::runtime_error("could not publish capture (Win32 error " +
                                  std::to_string(GetLastError()) + ")");
     }
 #else
@@ -105,16 +105,30 @@ EncodeResult encodeCapture(EncodeJob job) {
             return finish();
         }
 
-        std::vector<uint8_t> rgba = convertCapturePixelsToRgba(
-            job.rawPixels.data(), job.rawPixels.size(), job.width, job.height,
-            job.format);
-        std::vector<uint8_t> png;
-        if (!stbi_write_png_to_func(appendPngBytes, &png,
-                                    static_cast<int>(job.width),
-                                    static_cast<int>(job.height), 4,
-                                    rgba.data(),
-                                    static_cast<int>(job.width * 4))) {
-            throw std::runtime_error("stb failed to encode capture PNG");
+        const CaptureFormatDescription format =
+            describeCaptureFormat(job.format);
+        std::vector<uint8_t> encoded;
+        if (format.encoding == CapturePixelEncoding::Unorm8) {
+            std::vector<uint8_t> rgba = convertCapturePixelsToRgba(
+                job.rawPixels.data(), job.rawPixels.size(), job.width,
+                job.height, job.format);
+            if (!stbi_write_png_to_func(
+                    appendEncodedBytes, &encoded,
+                    static_cast<int>(job.width),
+                    static_cast<int>(job.height), 4, rgba.data(),
+                    static_cast<int>(job.width * 4))) {
+                throw std::runtime_error("stb failed to encode capture PNG");
+            }
+        } else {
+            std::vector<float> rgb = convertCapturePixelsToRgbFloat(
+                job.rawPixels.data(), job.rawPixels.size(), job.width,
+                job.height, job.format);
+            if (!stbi_write_hdr_to_func(
+                    appendEncodedBytes, &encoded,
+                    static_cast<int>(job.width),
+                    static_cast<int>(job.height), 3, rgb.data())) {
+                throw std::runtime_error("stb failed to encode capture HDR");
+            }
         }
         if (job.cancelled && job.cancelled->load()) {
             result.cancelled = true;
@@ -127,12 +141,12 @@ EncodeResult encodeCapture(EncodeJob job) {
         {
             std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
             if (!output)
-                throw std::runtime_error("could not open temporary capture PNG");
-            output.write(reinterpret_cast<const char *>(png.data()),
-                         static_cast<std::streamsize>(png.size()));
+                throw std::runtime_error("could not open temporary capture");
+            output.write(reinterpret_cast<const char *>(encoded.data()),
+                         static_cast<std::streamsize>(encoded.size()));
             output.flush();
             if (!output)
-                throw std::runtime_error("could not write temporary capture PNG");
+                throw std::runtime_error("could not write temporary capture");
         }
         if (job.cancelled && job.cancelled->load()) {
             std::error_code ignored;
@@ -149,7 +163,7 @@ EncodeResult encodeCapture(EncodeJob job) {
             return finish();
         }
 
-        result.sha256 = sha256Bytes(png);
+        result.sha256 = sha256Bytes(encoded);
         result.success = true;
     } catch (const std::exception &error) {
         result.error = error.what();
@@ -198,6 +212,19 @@ class CaptureService::Impl {
 
     uint64_t request(std::filesystem::path relativeOutputPath,
                      bool includeGui) {
+        return requestSource(std::move(relativeOutputPath),
+                             includeGui ? CaptureSourceKind::Workspace
+                                        : CaptureSourceKind::Viewport,
+                             includeGui);
+    }
+
+    uint64_t requestHdr(std::filesystem::path relativeOutputPath) {
+        return requestSource(std::move(relativeOutputPath),
+                             CaptureSourceKind::Hdr, false);
+    }
+
+    uint64_t requestSource(std::filesystem::path relativeOutputPath,
+                           CaptureSourceKind source, bool includeGui) {
         if (!accepting_)
             throw std::runtime_error("capture service is shutting down");
 
@@ -205,10 +232,12 @@ class CaptureService::Impl {
         if (relativeOutputPath.empty())
             relativeOutputPath = defaultRelativePath(nextTaskId);
         const std::filesystem::path outputPath =
-            resolveCaptureOutputPath(captureRoot_, relativeOutputPath);
+            resolveCaptureOutputPath(captureRoot_, relativeOutputPath,
+                                     source);
 
         const uint64_t taskId =
-            tasks_.enqueue(relativeOutputPath.lexically_normal(), includeGui);
+            tasks_.enqueue(relativeOutputPath.lexically_normal(), includeGui,
+                           source);
         CaptureTaskSnapshot *task = tasks_.find(taskId);
         task->result.outputPath = outputPath;
 
@@ -239,7 +268,8 @@ class CaptureService::Impl {
 
     std::optional<CaptureFrameSelection>
     prepareFrame(const CaptureImageSource &viewport,
-                 const CaptureImageSource &workspace) {
+                 const CaptureImageSource &workspace,
+                 const CaptureImageSource &hdr) {
         if (active_)
             return std::nullopt;
 
@@ -252,8 +282,19 @@ class CaptureService::Impl {
         runtime.recordingAt = Clock::now();
 
         try {
-            const CaptureImageSource &source =
-                task->request.includeGui ? workspace : viewport;
+            const CaptureImageSource *sourcePtr = &viewport;
+            switch (task->request.source) {
+            case CaptureSourceKind::Viewport:
+                sourcePtr = &viewport;
+                break;
+            case CaptureSourceKind::Workspace:
+                sourcePtr = &workspace;
+                break;
+            case CaptureSourceKind::Hdr:
+                sourcePtr = &hdr;
+                break;
+            }
+            const CaptureImageSource &source = *sourcePtr;
             if (!source.supported)
                 throw std::runtime_error(source.unsupportedReason.empty()
                                              ? "capture source is unsupported"
@@ -264,8 +305,11 @@ class CaptureService::Impl {
             if (!describeCaptureFormat(source.format).supported)
                 throw std::runtime_error("capture source format is unsupported");
             const VkExtent2D extent = source.extent;
-            const uint64_t bytes =
-                checkedCaptureByteSize(extent.width, extent.height);
+            const CaptureFormatDescription format =
+                describeCaptureFormat(source.format);
+            const uint64_t bytes = checkedCaptureByteSize(
+                extent.width, extent.height, kMaxCaptureBytes,
+                format.bytesPerPixel);
 
             ActiveCapture active;
             active.taskId = taskId;
@@ -633,6 +677,11 @@ uint64_t CaptureService::request(std::filesystem::path relativeOutputPath,
     return impl_->request(std::move(relativeOutputPath), includeGui);
 }
 
+uint64_t CaptureService::requestHdr(
+    std::filesystem::path relativeOutputPath) {
+    return impl_->requestHdr(std::move(relativeOutputPath));
+}
+
 bool CaptureService::cancel(uint64_t taskId) {
     return impl_->cancel(taskId);
 }
@@ -648,8 +697,9 @@ std::vector<CaptureTaskSnapshot> CaptureService::tasks() const {
 
 std::optional<CaptureFrameSelection>
 CaptureService::prepareFrame(const CaptureImageSource &viewport,
-                             const CaptureImageSource &workspace) {
-    return impl_->prepareFrame(viewport, workspace);
+                             const CaptureImageSource &workspace,
+                             const CaptureImageSource &hdr) {
+    return impl_->prepareFrame(viewport, workspace, hdr);
 }
 
 void CaptureService::recordCopy(VkCommandBuffer commandBuffer) {

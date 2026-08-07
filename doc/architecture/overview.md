@@ -44,7 +44,7 @@ schema v3 Cooked package 中 `projectRoot == runtimeRoot == package root`，cach
 3. VulkanContext、Device 和 DescriptorAllocator。
 4. SwapChain 和 FrameSync。
 5. Renderer、全局 UBO、Lighting descriptor generation、类型化 render resource registry、Forward + Compute RenderPipeline、GPU timestamp profiler 和开发模式 CaptureService。
-6. PipelineCache、AssetRepository/EnvironmentLoadManager worker、SceneLoadManager 操作 facade、ArtifactIndex 和初始 Scene/environment admission；只有 OnDemand 创建 AssetImportManager supervisor。
+6. PipelineCache、AssetRepository/EnvironmentAssetRepository worker、SceneLoadManager 操作 facade、ArtifactIndex 和初始 Scene/environment admission；只有 OnDemand 创建 AssetImportManager supervisor。
 7. GuiSystem。
 8. 可选的 Runtime Control 命令队列和 Named Pipe 线程。
 
@@ -72,7 +72,7 @@ AssetRepository 持有一个长期 FIFO worker。worker 只执行 glTF 文件读
 
 SceneLoadManager 的单 worker 负责解析和验证 Native SceneDocument；主线程随后请求文档中的唯一 ModelAsset 集合并等待 environment。全部依赖 Ready 后构造 `RuntimeWorld` 并原子替换当前 `IRenderWorld`。加载失败、取消或发布前出现新的未保存编辑时保留旧 World；旧 World 按 submission serial 延迟销毁。
 
-EnvironmentLoadManager 持有独立 worker，只读取和校验已经离线 bake 的四个浮点 KTX2，输出 `PreparedEnvironment`。主线程使用 EnvironmentGpuBuilder 和增量上传队列创建 cubemap/LUT；完整新 generation 发布前保留旧环境，旧 descriptor/resources 按 submission serial 延迟销毁。
+EnvironmentAssetRepository 持有独立 FIFO worker，只读取和校验已经离线 bake 的四个浮点 KTX2，输出 `PreparedEnvironment`。主线程使用唯一活动 EnvironmentGpuBuilder 和增量上传队列创建 cubemap/LUT；全局环境与 Reflection Probe 对相同 `(environmentId, profileId)` 共享 generation 和 consumer lease。完整新 generation 发布前保留旧环境，旧 descriptor/resources 按 submission serial 延迟销毁。
 
 `VulkanLab -> Scene -> Scenes` 的文件对话框在主线程打开；选定文件后的依赖 preflight 和 `ModelImportService` 事务由独立 `std::async` worker 执行。该 worker 可以读取/复制源文件并通过 `SceneCatalogStore` 原子更新源码项目 Catalog，但不能访问 GLFW、ImGui 或 Vulkan。Application 只轮询 controller 中的 future 和进度；退出时先请求取消并等待导入 worker 收束。
 

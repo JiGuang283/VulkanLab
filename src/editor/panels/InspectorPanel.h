@@ -49,6 +49,9 @@ struct InspectorPanelSnapshot {
     InspectorLightShadowStatus selectedLightShadowStatus =
         InspectorLightShadowStatus::Disabled;
     bool atmospherePresent = false;
+    bool reflectionProbeCaptureAvailable = false;
+    bool reflectionProbeCaptureActive = false;
+    std::string reflectionProbeCaptureStatus;
     bool editable = false;
 };
 
@@ -72,6 +75,10 @@ struct InspectorPanelActions {
     std::function<void(PersistentEntityId,
                        std::optional<AtmosphereComponentDocument>)>
         setAtmosphere;
+    std::function<void(PersistentEntityId,
+                       std::optional<ReflectionProbeComponentDocument>)>
+        setReflectionProbe;
+    std::function<void(PersistentEntityId)> captureReflectionProbe;
     std::function<void(PersistentEntityId, bool)> setAtmosphereSun;
     std::function<void(PersistentEntityId)> setActiveCamera;
     std::function<void(SceneAmbientDocument)> setAmbient;
@@ -92,6 +99,7 @@ class InspectorPanel {
     bool cameraEditing_ = false;
     bool sceneEditing_ = false;
     bool atmosphereEditing_ = false;
+    bool reflectionProbeEditing_ = false;
 };
 
 } // namespace vkr

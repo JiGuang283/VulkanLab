@@ -1,8 +1,8 @@
 # 资源加载
 
 > Status: Current
-> Last verified: 2026-08-02
-> Verified against: Procedural Sky Atmosphere v1 implementation
+> Last verified: 2026-08-07
+> Verified against: Shared Model/Environment repositories and Local Reflection Probes v1
 
 ## 项目、Catalog 与导入
 
@@ -103,7 +103,7 @@ manifest schema v3 记录 project/scene/profile 稳定身份、scene、texture l
 
 默认 `ibl_desktop_v1` 的尺寸为 512/32/256/256，样本数为 diffuse 1024、specular 512、BRDF 1024。四个原生浮点 KTX2 使用 Zstd 9，不转为 BC7。cache key 包含源 SHA-256、profile、算法版本、格式、尺寸、mip 和采样参数。每个输出先写临时文件并重新验证；全部成功后才原子发布 `DerivedEnvironmentManifest`。有效 manifest/blob 命中时跳过 HDR decode、卷积和 KTX2 编码；`--force` 才重新计算。
 
-运行时 `EnvironmentLoadManager` 使用独立 worker 读取并验证四个 KTX2，形成只含 CPU payload/subresource 描述的 `PreparedEnvironment`。主线程随后由 `EnvironmentGpuBuilder` 使用现有 `IncrementalUploadQueue` 上传所有 face/mip。设备必须支持 `RGBA16F` cubemap sampled + linear filtering 和 `RG16F` 2D sampled + linear filtering；不支持时环境功能不可用，但 Scene 渲染和 constant ambient 保持工作。
+运行时 `EnvironmentAssetRepository` 按 `(environmentId, profileId)` 管理共享 generation。单个 FIFO worker 读取并验证四个 KTX2，形成只含 CPU payload/subresource 描述的 `PreparedEnvironment`；主线程随后由唯一活动 `EnvironmentGpuBuilder` 使用现有 `IncrementalUploadQueue` 上传所有 face/mip。相同 key 的全局环境、多个 Reflection Probe 和并发请求会合并到同一 prepare/upload；Reload 创建新 generation，未使用的旧 generation 按 submission serial 延迟释放。设备必须支持 `RGBA16F` cubemap sampled + linear filtering 和 `RG16F` 2D sampled + linear filtering；不支持时环境功能不可用，但 Scene 渲染和 constant ambient 保持工作。
 
 环境发布是事务性的：只有四张 GPU texture 和统一 Lighting descriptor generation 全部完成后，Renderer 才切换到新环境。失败或取消保留旧环境；旧 generation 按 `FrameSync` submission serial 延迟销毁，不调用 `vkDeviceWaitIdle()`。所有 binding 始终有合法 fallback texture，因此关闭 IBL、选择 `None` 或加载期间都不会产生 partially-bound descriptor。
 
@@ -188,13 +188,13 @@ VMA 快照在 ModelGpuBuilder 完成并发布后采集；Repository 面板另外
 
 1. 有序 SceneDocument roots 和 `startupSceneId`。
 2. Entity 引用的唯一 Catalog Models；每个 Model 使用自身 `importProfile`。
-3. SceneDocument 引用的唯一 Environments 和各自 environment profile。
+3. SceneDocument 全局环境和 Reflection Probe component 引用的唯一 Environments，以及各自 environment profile。
 4. `VulkanLab.exe`、Shader Manifest 及其 programs 实际引用的唯一 SPIR-V。
 5. glTF/GLB 主文件和外部 buffer；不复制源 PNG/JPEG。
 6. 每个 Model/profile 的 Native BC7 manifest 与内容寻址 KTX2 blob 去重集合。
 7. 每个 Environment/profile 的 manifest 与四类浮点 KTX2 blob；不复制源 HDR。
 
-`CookPackageBuilder` 将 v1/v2 SceneDocument 规范化为 schema v3 写入 staging，不修改项目源文件。Atmosphere 参数随 SceneDocument 打包，所需程序由 Shader Manifest/SPIR-V 闭包携带，不增加 texture/environment artifact。Cooked Catalog 只保留闭包内 Scene、Model、Environment 和解析必需 profiles，且不创建 Model Preview entry。Model 的 Validator 报告必须为 Valid/Warnings，实际使用 profile 必须为 Native BC7。Cooked texture manifest 的 source stamp 改写为包内 glTF/GLB stamp；environment source stamp 清空，因为源 HDR 不进入包。
+`CookPackageBuilder` 将旧 SceneDocument 规范化为当前 schema v4 写入 staging，不修改项目源文件。Atmosphere 和 Reflection Probe 参数随 SceneDocument 打包；每个 probe 引用的 environment 都进入闭包。所需程序由 Shader Manifest/SPIR-V 闭包携带。Cooked Catalog 只保留闭包内 Scene、Model、Environment 和解析必需 profiles，且不创建 Model Preview entry。Model 的 Validator 报告必须为 Valid/Warnings，实际使用 profile 必须为 Native BC7。Cooked texture manifest 的 source stamp 改写为包内 glTF/GLB stamp；environment source stamp 清空，因为源 HDR 不进入包。
 
 Artifact Index schema v4 将记录分类为 `Model`、`Environment` 和 `SceneDocument`；旧 `Scene` 读取为 Model。SceneDocument record 保存文档 stamp 和精确 Model/profile、Environment/profile references。包内索引由 cooked closure 重建，不从开发索引直接复制。
 
@@ -228,6 +228,6 @@ Native BC7 是当前 Windows desktop platform artifact。采用它的直接原�
 - 使用 graphics queue，没有专用 transfer queue 或 queue ownership transfer。
 - 开发模式中未生成或未命中 KTX2 profile 的图片仍可能运行时 decode/resize，并以 RGBA8 上传；CookedOnly 禁止该路径。
 - Windows desktop profiles 统一使用 BC7，不使用 BC5 normal 或 BC4 AO，也不对 Native BC7 blob 使用 Zstd；开发设备无 BC7 时回退源 RGBA8，Cooked package 要求 BC7。
-- 环境只支持本地 RGBE `.hdr` 和单个全局环境；没有 EXR、runtime convolution、reflection probe、parallax correction、diffuse SH、BC6H 或 environment streaming。
+- 环境只支持本地 RGBE `.hdr` 与离线 KTX2 bake；全局环境和最多 8 个局部 Reflection Probe 共享 Repository。没有 EXR、runtime convolution、自动 probe 更新、diffuse SH、BC6H 或 environment streaming。
 - 没有渲染进程内编码、mip streaming、LRU residency、virtual texturing 或新旧大模型重叠时的显存 admission 策略；OnDemand 重建由独立 AssetTool 进程完成。
 - Viking Room 仍使用同步 OBJ/PNG factory；开发模式从 `projectRoot` 读取，正式包使用 Cook 闭包。

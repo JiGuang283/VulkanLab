@@ -13,6 +13,9 @@ CaptureService::~CaptureService() = default;
 uint64_t CaptureService::request(std::filesystem::path, bool) {
     throw std::runtime_error("capture support was not compiled");
 }
+uint64_t CaptureService::requestHdr(std::filesystem::path) {
+    throw std::runtime_error("capture support was not compiled");
+}
 
 bool CaptureService::cancel(uint64_t) { return false; }
 
@@ -24,6 +27,7 @@ std::vector<CaptureTaskSnapshot> CaptureService::tasks() const { return {}; }
 
 std::optional<CaptureFrameSelection>
 CaptureService::prepareFrame(const CaptureImageSource &,
+                             const CaptureImageSource &,
                              const CaptureImageSource &) {
     return std::nullopt;
 }

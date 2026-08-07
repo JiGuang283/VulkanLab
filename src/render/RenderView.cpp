@@ -1,6 +1,7 @@
 #include "render/RenderView.h"
 #include "diagnostics/Profiling.h"
 #include "render/TemporalAA.h"
+#include "render/EnvironmentGpuResources.h"
 
 #include <algorithm>
 #include <cmath>
@@ -158,6 +159,64 @@ RenderView buildRenderView(const RenderViewInput &input) {
     result.globalUbo.ambientColorIntensity =
         glm::vec4(glm::max(input.ambientColor, glm::vec3(0.0f)),
                   std::max(input.ambientIntensity, 0.0f));
+
+    if (input.reflectionProbes) {
+        std::vector<const RenderWorldReflectionProbe *> candidates;
+        candidates.reserve(input.reflectionProbes->size());
+        for (const RenderWorldReflectionProbe &probe :
+             *input.reflectionProbes) {
+            ++result.reflectionProbeStats.sourceCount;
+            if (!probe.environment ||
+                !probe.environment->prefilteredSpecular)
+                continue;
+            candidates.push_back(&probe);
+        }
+        std::sort(candidates.begin(), candidates.end(),
+                  [](const auto *left, const auto *right) {
+                      if (left->parameters.priority !=
+                          right->parameters.priority) {
+                          return left->parameters.priority >
+                                 right->parameters.priority;
+                      }
+                      return left->entityId.toString() <
+                             right->entityId.toString();
+                  });
+        result.reflectionProbes.reserve(
+            std::min(candidates.size(),
+                     size_t{kMaxReflectionProbes}));
+        for (size_t index = 0; index < candidates.size(); ++index) {
+            const RenderWorldReflectionProbe &source = *candidates[index];
+            if (result.reflectionProbes.size() >=
+                kMaxReflectionProbes) {
+                ++result.reflectionProbeStats.ignoredCount;
+                result.reflectionProbeStats.ignoredEntityIds.push_back(
+                    source.entityId);
+                continue;
+            }
+            RenderViewReflectionProbe probe;
+            probe.entityId = source.entityId;
+            probe.environment = source.environment;
+            probe.environmentGeneration =
+                source.environmentGeneration;
+            probe.gpu.worldToLocal = source.worldToLocal;
+            probe.gpu.capturePositionRadius = glm::vec4(
+                source.capturePositionWS,
+                source.parameters.sphereRadius);
+            probe.gpu.boxExtentsBlend = glm::vec4(
+                source.parameters.boxExtents,
+                source.parameters.blendDistance);
+            probe.gpu.params = glm::vec4(
+                source.parameters.intensity,
+                std::max(source.environment->maxSpecularLod, 0.0f),
+                source.parameters.shape == ReflectionProbeShape::Sphere
+                    ? 1.0f
+                    : 0.0f,
+                source.parameters.boxProjection ? 1.0f : 0.0f);
+            result.reflectionProbes.push_back(std::move(probe));
+        }
+        result.reflectionProbeStats.activeCount =
+            static_cast<uint32_t>(result.reflectionProbes.size());
+    }
 
     SceneLight fallbackSun{};
     std::vector<const SceneLight *> effectiveLights;

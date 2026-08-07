@@ -12,6 +12,7 @@
 namespace vkr {
 
 class MaterialInstance;
+struct EnvironmentGpuResources;
 struct RenderItem;
 struct SceneLight;
 
@@ -41,6 +42,16 @@ struct RenderWorldAtmosphere {
     AtmosphereComponentDocument parameters{};
 };
 
+struct RenderWorldReflectionProbe {
+    PersistentEntityId entityId;
+    glm::mat4 world{1.0f};
+    glm::mat4 worldToLocal{1.0f};
+    glm::vec3 capturePositionWS{0.0f};
+    ReflectionProbeComponentDocument parameters{};
+    std::shared_ptr<EnvironmentGpuResources> environment;
+    uint64_t environmentGeneration = 0;
+};
+
 class IRenderWorld {
   public:
     virtual ~IRenderWorld() = default;
@@ -61,6 +72,8 @@ class IRenderWorld {
     worldEnvironment() const = 0;
     virtual std::optional<RenderWorldAtmosphere>
     worldAtmosphere() const = 0;
+    virtual const std::vector<RenderWorldReflectionProbe> &
+    reflectionProbes() const = 0;
 };
 
 } // namespace vkr

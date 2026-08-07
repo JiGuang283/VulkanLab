@@ -2,14 +2,14 @@
 
 > Status: Active
 > Last reviewed: 2026-08-07
-> Based on: Stage 0–5 plus optional FidelityFX CACAO comparison integration
+> Based on: Stage 0–6 plus optional FidelityFX CACAO comparison integration
 > Current architecture: [渲染流程](../architecture/rendering.md)
 
 ## Summary
 
 本路线在现有 Forward + Compute 管线上逐步增加环境遮蔽、屏幕空间反射和间接漫反射，并为后续 Reflection Probe、DDGI 和可选硬件光追保留清晰边界。
 
-> Progress: Stage 0（共享屏幕空间基础）、Stage 1（SSAO）、FidelityFX CACAO comparison backend、Stage 2（TAA v1）、Stage 3（GTAO v1）、Stage 4（SSR v1）和 Stage 5（SSGI v1）已完成；下一阶段为 Stage 6 Local Reflection Probes。
+> Progress: Stage 0（共享屏幕空间基础）、Stage 1（SSAO）、FidelityFX CACAO comparison backend、Stage 2（TAA v1）、Stage 3（GTAO v1）、Stage 4（SSR v1）、Stage 5（SSGI v1）和 Stage 6（Local Reflection Probes）已完成；下一阶段为 Stage 7 DDGI。
 
 三个问题必须分开处理：
 
@@ -634,9 +634,17 @@ Editor、Runtime Control 与 `VulkanLabCtl` 提供 Ambient or IBL/SSGI、Low/Med
 
 ### Stage 6：Local Reflection Probes
 
-- Scene component、资源导入/捕获、influence volume 和 parallax correction。
-- SSR -> Local Probe -> Global IBL fallback 链。
-- Native Scene Cook closure。
+- **状态：已完成（2026-08-07）。**
+- SceneDocument schema v4 增加 Reflection Probe component，支持 Box/Sphere influence、blend distance、priority、intensity、capture offset 和可选 box projection。
+- RuntimeWorld 异步绑定共享 `EnvironmentAssetRepository`；同一 `(environmentId, profileId)` 合并 prepare/upload，并按 submission serial 延迟释放。
+- 每帧按 priority 降序、Entity UUID 升序稳定选择最多 8 个探针，通过固定 112B metadata SSBO 和 8 个 cubemap descriptor上传。
+- PBR 的间接镜面链为 SSR confidence replacement -> Local Probe -> Global IBL；局部探针只替换 specular baseline，global diffuse irradiance 保持不变。
+- Box probe 执行 parallax-corrected ray-box lookup；Sphere probe 使用距离和 blend shell 计算 influence。重叠区域按剩余权重混合，而不是只选择单个最近探针。
+- Editor 支持六个 256×256 HDR face 的显式 Capture and Bake，先拼接为 2:1 RGBE HDR，再复用现有 EnvironmentAssetTool 生成 KTX2 radiance/irradiance/prefilter/BRDF 资产。
+- Native Scene Cook closure 会自动包含全局环境和所有 probe environment；Cooked runtime 继续只读取派生 KTX2。
+- Shader 使用常量分支访问 8 个 sampler，避免把 `shaderSampledImageArrayDynamicIndexing` 提升为设备硬要求。
+
+当前不做自动重新捕获、动态探针逐帧更新、diffuse local probe、探针可见性剔除或 capture resolution UI；这些能力不应与 Stage 7 DDGI 的动态 irradiance volume 混为一体。
 
 ### Stage 7：DDGI
 

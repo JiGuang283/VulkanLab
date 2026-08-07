@@ -27,6 +27,7 @@ enum class CaptureTaskState {
 enum class CaptureSourceKind {
     Viewport,
     Workspace,
+    Hdr,
 };
 
 struct CaptureImageSource {
@@ -55,6 +56,7 @@ struct CaptureRequest {
     uint64_t taskId = 0;
     std::filesystem::path relativeOutputPath;
     bool includeGui = false;
+    CaptureSourceKind source = CaptureSourceKind::Viewport;
 };
 
 struct CaptureResult {
@@ -76,10 +78,13 @@ struct CaptureTaskSnapshot {
 };
 
 enum class CaptureChannelOrder { Rgba, Bgra };
+enum class CapturePixelEncoding { Unorm8, Float16, Float32 };
 
 struct CaptureFormatDescription {
     bool supported = false;
     CaptureChannelOrder channelOrder = CaptureChannelOrder::Rgba;
+    CapturePixelEncoding encoding = CapturePixelEncoding::Unorm8;
+    uint32_t bytesPerPixel = 0;
     const char *name = "Unsupported";
 };
 
@@ -91,13 +96,19 @@ bool isValidCaptureTaskTransition(CaptureTaskState from,
 
 CaptureFormatDescription describeCaptureFormat(VkFormat format);
 uint64_t checkedCaptureByteSize(uint32_t width, uint32_t height,
-                                uint64_t maximumBytes = kMaxCaptureBytes);
+                                uint64_t maximumBytes = kMaxCaptureBytes,
+                                uint32_t bytesPerPixel = 4);
 std::vector<uint8_t>
 convertCapturePixelsToRgba(const uint8_t *pixels, size_t byteCount,
                            uint32_t width, uint32_t height, VkFormat format);
+std::vector<float>
+convertCapturePixelsToRgbFloat(const uint8_t *pixels, size_t byteCount,
+                               uint32_t width, uint32_t height,
+                               VkFormat format);
 
 std::filesystem::path resolveCaptureOutputPath(
     const std::filesystem::path &captureRoot,
-    const std::filesystem::path &relativeOutputPath);
+    const std::filesystem::path &relativeOutputPath,
+    CaptureSourceKind source = CaptureSourceKind::Viewport);
 
 } // namespace vkr

@@ -33,6 +33,7 @@
 #include "diagnostics/TracyProfiler.h"
 #if VKL_ENABLE_EDITOR_UI
 #include "editor/EditorDockWorkspace.h"
+#include "editor/ReflectionProbeCapture.h"
 #include "editor/SceneEditorSession.h"
 #include "editor/SceneViewportController.h"
 #include "editor/EditorWidgets.h"
@@ -44,7 +45,6 @@
 #include "editor/EditorUiState.h"
 #include "render/GuiSystem.h"
 #include "render/DirectionalShadow.h"
-#include "render/EnvironmentGpuBuilder.h"
 #include "render/MaterialInstance.h"
 #include "render/MaterialTextureSlot.h"
 #include "render/PipelineCache.h"
@@ -53,6 +53,7 @@
 #include "render/RendererShaderPaths.h"
 #include "render/TemporalAA.h"
 #include "scene/AssetRepository.h"
+#include "scene/EnvironmentAssetRepository.h"
 #include "scene/ModelAsset.h"
 #include "scene/ModelInstance.h"
 #include "scene/ModelSourceResolver.h"
@@ -719,6 +720,32 @@ void logSceneLoadStats(const SceneLoadStats &stats) {
         bytesToMiB(stats.allocatorAfter.blockBytes));
 }
 
+#if VKL_ENABLE_EDITOR_UI
+std::string reflectionProbeEnvironmentId(const SceneDocumentId &sceneId,
+                                         const PersistentEntityId &entityId) {
+    std::string compactEntity = entityId.toString();
+    compactEntity.erase(
+        std::remove(compactEntity.begin(), compactEntity.end(), '-'),
+        compactEntity.end());
+    if (compactEntity.size() > 12)
+        compactEntity.resize(12);
+    return ModelImportService::suggestModelId(
+        "probe-" + sceneId.value() + "-" + compactEntity);
+}
+
+void publishProbeSource(const std::filesystem::path &temporary,
+                        const std::filesystem::path &destination) {
+    std::filesystem::create_directories(destination.parent_path());
+    if (!MoveFileExW(temporary.c_str(), destination.c_str(),
+                     MOVEFILE_REPLACE_EXISTING |
+                         MOVEFILE_WRITE_THROUGH)) {
+        throw std::runtime_error(
+            "Could not publish reflection probe HDR (Win32 error " +
+            std::to_string(GetLastError()) + ")");
+    }
+}
+#endif
+
 } // namespace
 
 namespace {
@@ -828,11 +855,10 @@ Application::~Application() {
     }
     if (assetImportManager_)
         assetImportManager_->shutdown();
-    if (environmentGpuBuilder_)
-        environmentGpuBuilder_->cancel();
-    environmentGpuBuilder_.reset();
-    if (environmentLoadManager_)
-        environmentLoadManager_->shutdown();
+    pendingEnvironmentAsset_.reset();
+    activeEnvironmentAsset_.reset();
+    if (environmentAssetRepository_)
+        environmentAssetRepository_->shutdown();
     if (sceneLoadManager_)
         sceneLoadManager_->shutdown();
     if (assetRepository_)
@@ -849,6 +875,7 @@ Application::~Application() {
     currentScene_.reset();
     retiredScenes_.clear();
     assetRepository_.reset();
+    environmentAssetRepository_.reset();
 }
 
 void Application::run() {
@@ -1061,8 +1088,8 @@ void Application::init() {
     assetRepository_ = std::make_unique<AssetRepository>(
         *device_, *descriptorAllocator_);
     sceneLoadManager_ = std::make_unique<SceneLoadManager>();
-    environmentLoadManager_ =
-        std::make_unique<EnvironmentLoadManager>();
+    environmentAssetRepository_ =
+        std::make_unique<EnvironmentAssetRepository>(*device_);
 #if VKL_ENABLE_ASSET_AUTHORING
     if (config_.assetImportMode == AssetImportMode::OnDemand) {
         assetImportManager_ = std::make_unique<AssetImportManager>(
@@ -1153,6 +1180,11 @@ void Application::loadScene(int index, bool replaceCurrent) {
             retiredScenes_.clear();
             if (assetRepository_) {
                 assetRepository_->releaseUnused(
+                    frameSync_->lastSubmittedSerial(),
+                    frameSync_->completedSubmissionSerial());
+            }
+            if (environmentAssetRepository_) {
+                environmentAssetRepository_->releaseUnused(
                     frameSync_->lastSubmittedSerial(),
                     frameSync_->completedSubmissionSerial());
             }
@@ -1388,13 +1420,8 @@ bool Application::cancelSceneLoad(uint64_t taskId) {
 }
 
 bool Application::cancelEnvironmentLoad(uint64_t taskId) {
-    if (environmentGpuBuilder_ &&
-        environmentGpuBuilder_->task()->id == taskId) {
-        environmentGpuBuilder_->cancel();
-        return true;
-    }
-    return environmentLoadManager_ &&
-           environmentLoadManager_->cancel(taskId);
+    return environmentAssetRepository_ &&
+           environmentAssetRepository_->cancel(taskId);
 }
 
 uint64_t Application::setEnvironment(const std::string &id) {
@@ -1404,10 +1431,8 @@ uint64_t Application::setEnvironment(const std::string &id) {
                 latestEnvironmentLoadTask_->state.load())) {
             cancelEnvironmentLoad(latestEnvironmentLoadTask_->id);
         }
-        if (environmentGpuBuilder_)
-            environmentGpuBuilder_->cancel();
-        stagedEnvironmentTaskId_ = 0;
-        stagedEnvironmentResources_.reset();
+        pendingEnvironmentAsset_.reset();
+        activeEnvironmentAsset_.reset();
         selectedEnvironmentId_.clear();
         renderer_->clearEnvironment();
         VKR_LOG_INFO("Environment", "Environment cleared");
@@ -1429,7 +1454,26 @@ uint64_t Application::setEnvironment(const std::string &id) {
 }
 
 uint64_t Application::queueEnvironmentLoad(
-    const CatalogEnvironment &environment, bool stagedForNativeScene) {
+    const CatalogEnvironment &environment, bool reload) {
+    EnvironmentAssetHandle handle =
+        requestEnvironmentAsset(environment, reload);
+    latestEnvironmentLoadTask_ =
+        environmentAssetRepository_->task(handle.taskId());
+    if (!latestEnvironmentLoadTask_)
+        throw std::logic_error("Environment repository lost its task");
+    selectedEnvironmentId_ = environment.id;
+    pendingEnvironmentAsset_ =
+        std::make_unique<EnvironmentAssetHandle>(std::move(handle));
+    VKR_LOG_INFO("Environment",
+                 "Queued environment load task {} for {}",
+                 latestEnvironmentLoadTask_->id,
+                 environment.displayName);
+    return latestEnvironmentLoadTask_->id;
+}
+
+EnvironmentAssetHandle Application::requestEnvironmentAsset(
+    const CatalogEnvironment &environment, bool reload,
+    bool *repositoryHit, bool *coalesced) {
     const EnvironmentProfile &profile =
         catalog_.environmentProfile(environment.environmentProfile);
     (void)profile;
@@ -1452,79 +1496,61 @@ uint64_t Application::queueEnvironmentLoad(
         }
     }
 
-    if (environmentGpuBuilder_)
-        environmentGpuBuilder_->cancel();
-    if (!stagedForNativeScene) {
-        stagedEnvironmentTaskId_ = 0;
-        stagedEnvironmentResources_.reset();
-        selectedEnvironmentId_ = environment.id;
-    }
-    latestEnvironmentLoadTask_ =
-        environmentLoadManager_->request(
-            {std::filesystem::u8path(
-                 config_.derivedTextureCachePath),
-             source, catalog_.projectId, environment.id,
-             environment.displayName,
-             environment.environmentProfile,
-             !projectContext_.cookedPackage});
-    if (stagedForNativeScene) {
-        stagedEnvironmentTaskId_ = latestEnvironmentLoadTask_->id;
-        stagedEnvironmentResources_.reset();
-    }
-    VKR_LOG_INFO("Environment",
-                 "Queued {}environment load task {} for {}",
-                 stagedForNativeScene ? "staged " : "",
-                 latestEnvironmentLoadTask_->id,
-                 environment.displayName);
-    return latestEnvironmentLoadTask_->id;
+    EnvironmentAssetRequest request{};
+    request.key = {environment.id, environment.environmentProfile};
+    request.displayName = environment.displayName;
+    request.cacheRoot =
+        std::filesystem::u8path(config_.derivedTextureCachePath);
+    request.sourcePath = source;
+    request.projectId = catalog_.projectId;
+    request.validateSource = !projectContext_.cookedPackage;
+    request.policy = reload ? EnvironmentAssetRequestPolicy::Reload
+                            : EnvironmentAssetRequestPolicy::UseCached;
+    return environmentAssetRepository_->request(
+        request, repositoryHit, coalesced);
 }
 
 uint64_t Application::reloadCurrentEnvironment() {
     if (selectedEnvironmentId_.empty())
         return 0;
-    return setEnvironment(selectedEnvironmentId_);
+    const CatalogEnvironment *environment =
+        catalog_.findEnvironment(selectedEnvironmentId_);
+    if (!environment)
+        throw RuntimeCommandError("unknown_environment",
+                                  "Current environment is not in Catalog");
+    return queueEnvironmentLoad(*environment, true);
 }
 
 void Application::updateEnvironmentLoading() {
     VKL_PROFILE_ZONE("Environment Load Update");
-    if (environmentGpuBuilder_) {
-        environmentGpuBuilder_->pump();
-        const auto task = environmentGpuBuilder_->task();
-        if (environmentGpuBuilder_->ready()) {
-            auto resources = environmentGpuBuilder_->takeResources();
-            if (task->id == stagedEnvironmentTaskId_) {
-                stagedEnvironmentResources_ = std::move(resources);
-            } else {
-                renderer_->publishEnvironment(std::move(resources));
-            }
-            environmentGpuBuilder_.reset();
-            task->state = EnvironmentLoadState::Completed;
+    if (!environmentAssetRepository_)
+        return;
+    environmentAssetRepository_->pump();
+
+    if (pendingEnvironmentAsset_) {
+        const EnvironmentAssetHandleSnapshot snapshot =
+            pendingEnvironmentAsset_->snapshot();
+        if (snapshot.state == EnvironmentAssetState::Ready) {
+            std::shared_ptr<EnvironmentGpuResources> resources =
+                pendingEnvironmentAsset_->asset();
+            if (!resources)
+                throw std::logic_error(
+                    "Ready environment asset has no GPU resources");
+            renderer_->publishEnvironment(resources);
+            activeEnvironmentAsset_ =
+                std::move(pendingEnvironmentAsset_);
             if (artifactIndex_) {
                 artifactIndex_->touchEnvironment(
-                    task->environmentId, task->profileId);
+                    snapshot.key.environmentId, snapshot.key.profileId);
                 persistArtifactIndex();
             }
-            VKR_LOG_INFO(
-                "Environment", "{} environment '{}' from task {}",
-                task->id == stagedEnvironmentTaskId_ ? "Prepared staged"
-                                                     : "Published",
-                task->displayName, task->id);
-        } else if (environmentGpuBuilder_->finished()) {
-            environmentGpuBuilder_.reset();
-        }
-    }
-
-    if (environmentGpuBuilder_ || !latestEnvironmentLoadTask_)
-        return;
-    if (latestEnvironmentLoadTask_->state.load() ==
-        EnvironmentLoadState::ReadyForUpload) {
-        auto prepared = environmentLoadManager_->takePrepared(
-            latestEnvironmentLoadTask_->id);
-        if (prepared) {
-            environmentGpuBuilder_ =
-                std::make_unique<EnvironmentGpuBuilder>(
-                    *device_, latestEnvironmentLoadTask_,
-                    std::move(prepared));
+            VKR_LOG_INFO("Environment",
+                         "Published environment '{}:{}' generation {}",
+                         snapshot.key.environmentId, snapshot.key.profileId,
+                         snapshot.generation);
+        } else if (snapshot.state == EnvironmentAssetState::Failed ||
+                   snapshot.state == EnvironmentAssetState::Cancelled) {
+            pendingEnvironmentAsset_.reset();
         }
     }
 }
@@ -1696,9 +1722,45 @@ void Application::resolveNativeSceneModels(
             {ModelAssetId(modelId), source->profileId, std::move(handle)});
     }
 
+    std::vector<std::pair<std::string, bool>> environmentIds;
+    std::unordered_set<std::string> seenEnvironments;
+    if (loaded.document.environment) {
+        const std::string &id =
+            loaded.document.environment->environmentId;
+        seenEnvironments.insert(id);
+        environmentIds.emplace_back(id, true);
+    }
+    for (const SceneEntityDocument &entity : loaded.document.entities) {
+        if (!entity.reflectionProbe ||
+            !entity.reflectionProbe->environmentId)
+            continue;
+        const std::string &id =
+            *entity.reflectionProbe->environmentId;
+        if (seenEnvironments.insert(id).second)
+            environmentIds.emplace_back(id, false);
+    }
+    std::vector<NativeSceneEnvironmentBinding> environmentBindings;
+    environmentBindings.reserve(environmentIds.size());
+    for (const auto &[environmentId, globalEnvironment] :
+         environmentIds) {
+        const CatalogEnvironment *environment =
+            catalog_.findEnvironment(environmentId);
+        if (!environment) {
+            throw std::runtime_error(
+                "Scene references unknown environment: " +
+                environmentId);
+        }
+        EnvironmentAssetHandle handle =
+            requestEnvironmentAsset(*environment, false);
+        environmentBindings.push_back(
+            {environmentId, environment->environmentProfile,
+             globalEnvironment, std::move(handle)});
+    }
+
     {
         std::lock_guard<std::mutex> lock(task->mutex);
         task->nativeModels = std::move(bindings);
+        task->nativeEnvironments = std::move(environmentBindings);
         task->uniqueModelCount = modelIds.size();
         task->readyModelCount = 0;
         task->repositoryHit = allHits;
@@ -1707,6 +1769,9 @@ void Application::resolveNativeSceneModels(
             loaded.document.environment
                 ? loaded.document.environment->environmentId
                 : std::string{};
+        task->uniqueEnvironmentCount = environmentIds.size();
+        task->readyEnvironmentCount = 0;
+        task->failedEnvironmentId.clear();
     }
     task->phase = SceneLoadPhase::LoadingModels;
     task->state = modelIds.empty() ? SceneLoadState::ReadyForUpload
@@ -1719,11 +1784,13 @@ void Application::updateNativeSceneLoading(
     if ((state == SceneLoadState::Failed ||
          state == SceneLoadState::Cancelled) &&
         task->id != lastFinalizedTaskId_) {
-        if (task->environmentTaskId != 0)
-            cancelEnvironmentLoad(task->environmentTaskId);
-        if (task->environmentTaskId == stagedEnvironmentTaskId_) {
-            stagedEnvironmentTaskId_ = 0;
-            stagedEnvironmentResources_.reset();
+        {
+            std::lock_guard<std::mutex> lock(task->mutex);
+            for (const NativeSceneEnvironmentBinding &binding :
+                 task->nativeEnvironments) {
+                cancelEnvironmentLoad(binding.asset.taskId());
+            }
+            task->nativeEnvironments.clear();
         }
         task->stats.allocatorAfter = device_->allocatorMemorySnapshot();
         finalizeSceneLoad(task, false);
@@ -1786,26 +1853,11 @@ void Application::updateNativeSceneLoading(
                 return;
             }
 
-            if (task->targetEnvironmentId.empty()) {
-                task->environmentReady = true;
-                task->phase = SceneLoadPhase::PublishingWorld;
-                task->state = SceneLoadState::ReadyToPublish;
-            } else if (renderer_->environmentReady() &&
-                       renderer_->currentEnvironmentId() ==
-                           task->targetEnvironmentId) {
+            if (task->uniqueEnvironmentCount == 0) {
                 task->environmentReady = true;
                 task->phase = SceneLoadPhase::PublishingWorld;
                 task->state = SceneLoadState::ReadyToPublish;
             } else {
-                const CatalogEnvironment *environment =
-                    catalog_.findEnvironment(task->targetEnvironmentId);
-                if (!environment) {
-                    throw std::runtime_error(
-                        "Scene references unknown environment: " +
-                        task->targetEnvironmentId);
-                }
-                task->environmentTaskId =
-                    queueEnvironmentLoad(*environment, true);
                 task->phase = SceneLoadPhase::LoadingEnvironment;
                 task->state = SceneLoadState::WaitingForGpu;
                 return;
@@ -1813,22 +1865,39 @@ void Application::updateNativeSceneLoading(
         }
 
         if (task->phase.load() == SceneLoadPhase::LoadingEnvironment) {
-            const auto environmentTask = environmentLoadManager_->task(
-                task->environmentTaskId);
-            if (!environmentTask)
-                throw std::runtime_error(
-                    "Environment load task disappeared");
-            const EnvironmentLoadState environmentState =
-                environmentTask->state.load();
-            if (environmentState == EnvironmentLoadState::Failed ||
-                environmentState == EnvironmentLoadState::Cancelled) {
-                std::lock_guard<std::mutex> lock(environmentTask->mutex);
-                throw std::runtime_error(
-                    "Environment '" + task->targetEnvironmentId +
-                    "' failed: " + environmentTask->error);
+            uint64_t ready = 0;
+            std::string failedEnvironment;
+            std::string failure;
+            {
+                std::lock_guard<std::mutex> lock(task->mutex);
+                for (const NativeSceneEnvironmentBinding &binding :
+                     task->nativeEnvironments) {
+                    const EnvironmentAssetHandleSnapshot snapshot =
+                        binding.asset.snapshot();
+                    if (snapshot.state == EnvironmentAssetState::Ready ||
+                        snapshot.state ==
+                            EnvironmentAssetState::Retiring) {
+                        ++ready;
+                    } else if (snapshot.state ==
+                                   EnvironmentAssetState::Failed ||
+                               snapshot.state ==
+                                   EnvironmentAssetState::Cancelled) {
+                        failedEnvironment = binding.environmentId;
+                        failure = snapshot.error.empty()
+                                      ? "Environment load was cancelled"
+                                      : snapshot.error;
+                        break;
+                    }
+                }
+                task->readyEnvironmentCount = ready;
+                task->failedEnvironmentId = failedEnvironment;
             }
-            if (environmentState != EnvironmentLoadState::Completed ||
-                !stagedEnvironmentResources_) {
+            if (!failedEnvironment.empty()) {
+                throw std::runtime_error(
+                    "Environment '" + failedEnvironment +
+                    "' failed: " + failure);
+            }
+            if (ready < task->uniqueEnvironmentCount) {
                 task->state = SceneLoadState::WaitingForGpu;
                 return;
             }
@@ -1860,6 +1929,7 @@ void Application::publishNativeScene(
 #endif
     LoadedSceneDocument loaded;
     std::vector<ResolvedModelAsset> assets;
+    std::vector<ResolvedEnvironmentAsset> environments;
     {
         std::lock_guard<std::mutex> lock(task->mutex);
         if (!task->loadedDocument)
@@ -1870,8 +1940,16 @@ void Application::publishNativeScene(
             assets.push_back(
                 {binding.modelId, binding.profileId, binding.asset});
         }
+        environments.reserve(task->nativeEnvironments.size());
+        for (const NativeSceneEnvironmentBinding &binding :
+             task->nativeEnvironments) {
+            environments.push_back({binding.environmentId,
+                                    binding.profileId,
+                                    binding.asset});
+        }
     }
-    auto world = RuntimeWorld::fromDocument(loaded.document, assets);
+    auto world = RuntimeWorld::fromDocument(loaded.document, assets,
+                                            environments);
     populateSceneLightStats(task->stats, world.get());
     task->stats.materialCount = world->materials().size();
     task->stats.objectCount = world->renderableCount();
@@ -1880,12 +1958,20 @@ void Application::publishNativeScene(
     if (loaded.document.environment) {
         const std::string &environmentId =
             loaded.document.environment->environmentId;
-        if (renderer_->currentEnvironmentId() != environmentId) {
-            if (!stagedEnvironmentResources_)
-                throw std::runtime_error(
-                    "Staged environment is not ready for publication");
-            renderer_->publishEnvironment(stagedEnvironmentResources_);
+        const auto found = std::find_if(
+            task->nativeEnvironments.begin(),
+            task->nativeEnvironments.end(),
+            [&](const NativeSceneEnvironmentBinding &binding) {
+                return binding.environmentId == environmentId;
+            });
+        if (found == task->nativeEnvironments.end() ||
+            !found->asset.asset()) {
+            throw std::runtime_error(
+                "Global environment is not ready for publication");
         }
+        renderer_->publishEnvironment(found->asset.asset());
+        activeEnvironmentAsset_ =
+            std::make_unique<EnvironmentAssetHandle>(found->asset);
         selectedEnvironmentId_ = environmentId;
         renderSettings_.environmentIntensity =
             loaded.document.environment->intensity;
@@ -1893,10 +1979,9 @@ void Application::publishNativeScene(
             loaded.document.environment->rotationRadians;
     } else {
         renderer_->clearEnvironment();
+        activeEnvironmentAsset_.reset();
         selectedEnvironmentId_.clear();
     }
-    stagedEnvironmentTaskId_ = 0;
-    stagedEnvironmentResources_.reset();
 
     retireCurrentScene();
     std::shared_ptr<RuntimeWorld> sharedWorld(std::move(world));
@@ -1906,7 +1991,10 @@ void Application::publishNativeScene(
         sceneEditorSession_->attach(sharedWorld, loaded.path,
                                     loaded.sourceStamp);
         sceneEditorSession_->setWorldChangedCallback(
-            [this]() { updateEditorModelBindings(); });
+            [this]() {
+                updateEditorModelBindings();
+                updateEditorReflectionProbeBindings();
+            });
     }
 #endif
     currentSceneIndex_ = task->sceneIndex;
@@ -1916,6 +2004,7 @@ void Application::publishNativeScene(
     {
         std::lock_guard<std::mutex> lock(task->mutex);
         task->nativeModels.clear();
+        task->nativeEnvironments.clear();
     }
     finalizeSceneLoad(task, true);
     task->phase = SceneLoadPhase::Complete;
@@ -1940,6 +2029,10 @@ void Application::collectRetiredScenes() {
     if (assetRepository_) {
         assetRepository_->releaseUnused(frameSync_->lastSubmittedSerial(),
                                         completed);
+    }
+    if (environmentAssetRepository_) {
+        environmentAssetRepository_->releaseUnused(
+            frameSync_->lastSubmittedSerial(), completed);
     }
 }
 
@@ -2621,6 +2714,380 @@ void Application::updateEditorModelBindings() {
 #endif
 }
 
+void Application::updateEditorReflectionProbeBindings() {
+#if VKL_ENABLE_EDITOR_UI
+    if (!sceneEditorSession_ || !sceneEditorSession_->active() ||
+        !environmentAssetRepository_)
+        return;
+    const std::shared_ptr<RuntimeWorld> world = sceneEditorSession_->world();
+    for (const RuntimeEntitySnapshot &entity : world->entities()) {
+        if (!entity.reflectionProbe ||
+            entity.reflectionProbeBindingState !=
+                ModelBindingState::Unresolved)
+            continue;
+        if (!entity.reflectionProbe->environmentId) {
+            continue;
+        }
+        const std::string &environmentId =
+            *entity.reflectionProbe->environmentId;
+        const CatalogEnvironment *environment =
+            catalog_.findEnvironment(environmentId);
+        if (!environment) {
+            world->bindReflectionProbe(
+                entity.handle, entity.reflectionProbeBindingRevision, {},
+                {}, "Unknown probe environment: " + environmentId);
+            continue;
+        }
+        try {
+            EnvironmentAssetHandle handle =
+                requestEnvironmentAsset(*environment);
+            world->bindReflectionProbe(
+                entity.handle, entity.reflectionProbeBindingRevision,
+                environment->environmentProfile, std::move(handle));
+        } catch (const std::exception &error) {
+            world->bindReflectionProbe(
+                entity.handle, entity.reflectionProbeBindingRevision, {},
+                {}, error.what());
+        }
+    }
+#endif
+}
+
+void Application::beginReflectionProbeCapture(
+    PersistentEntityId entityId) {
+#if VKL_ENABLE_EDITOR_UI
+    if (reflectionProbeCapture_)
+        throw std::runtime_error(
+            "Another reflection probe capture is already active");
+    if (!sceneEditorSession_ || !sceneEditorSession_->active())
+        throw std::runtime_error("No native scene is open");
+    if (!projectContext_.catalogWritable)
+        throw std::runtime_error("The project Catalog is read-only");
+    if (!captureService_ || !assetImportManager_)
+        throw std::runtime_error(
+            "Reflection probe capture requires Capture and Asset Authoring");
+
+    const auto entity = sceneEditorSession_->world()->entity(
+        sceneEditorSession_->world()->find(entityId));
+    if (!entity || !entity->reflectionProbe)
+        throw std::runtime_error(
+            "The selected entity is not a reflection probe");
+    if (catalog_.environmentProfiles.empty())
+        throw std::runtime_error(
+            "The Catalog does not define an environment profile");
+
+    ReflectionProbeCaptureState state;
+    state.entityId = entityId;
+    state.environmentId = reflectionProbeEnvironmentId(
+        sceneEditorSession_->world()->id(), entityId);
+    if (const CatalogEnvironment *existing =
+            catalog_.findEnvironment(state.environmentId)) {
+        state.profileId = existing->environmentProfile;
+        state.sourcePath =
+            projectContext_.resolveProjectPath(existing->source);
+    } else {
+        state.profileId =
+            catalog_.environmentProfiles.count("ibl_desktop_v1") != 0
+                ? "ibl_desktop_v1"
+                : std::min_element(
+                      catalog_.environmentProfiles.begin(),
+                      catalog_.environmentProfiles.end(),
+                      [](const auto &left, const auto &right) {
+                          return left.first < right.first;
+                      })
+                      ->first;
+        state.sourcePath =
+            projectContext_.projectRoot / "assets" / "environments" /
+            state.environmentId / (state.environmentId + ".hdr");
+    }
+    state.previousExtent = renderer_->viewportExtent();
+    state.temporaryDirectory =
+        captureService_->captureRoot() / "probe-capture" /
+        state.environmentId;
+    for (uint32_t face = 0; face < state.facePaths.size(); ++face) {
+        state.faceRelativePaths[face] =
+            std::filesystem::path("probe-capture") /
+            state.environmentId /
+            ("face-" + std::to_string(face) + ".hdr");
+        state.facePaths[face] =
+            captureService_->captureRoot() /
+            state.faceRelativePaths[face];
+    }
+    state.status = "Resizing viewport for probe capture";
+    reflectionProbeCapture_ = std::move(state);
+    viewportResize_.desiredWidth =
+        reflectionProbeCapture_->faceSize;
+    viewportResize_.desiredHeight =
+        reflectionProbeCapture_->faceSize;
+    viewportResize_.changedAt = std::chrono::steady_clock::now();
+    viewportResize_.pending = true;
+    viewportResize_.immediate = true;
+    editorUi_->sceneStatus = reflectionProbeCapture_->status;
+#else
+    (void)entityId;
+#endif
+}
+
+void Application::updateReflectionProbeCapture() {
+#if VKL_ENABLE_EDITOR_UI
+    if (!reflectionProbeCapture_)
+        return;
+
+    const auto fail = [this](const std::string &message) {
+        ReflectionProbeCaptureState state =
+            std::move(*reflectionProbeCapture_);
+        reflectionProbeCapture_.reset();
+        if (!state.backupPath.empty() &&
+            std::filesystem::exists(state.backupPath)) {
+            try {
+                publishProbeSource(state.backupPath, state.sourcePath);
+            } catch (const std::exception &error) {
+                VKR_LOG_ERROR("ReflectionProbe",
+                              "Could not restore probe source: {}",
+                              error.what());
+            }
+        }
+        if (state.catalogEntryAdded) {
+            try {
+                SceneCatalogEditor::removeEnvironment(
+                    projectContext_, state.environmentId);
+                std::error_code ignored;
+                std::filesystem::remove(state.sourcePath, ignored);
+                refreshSceneRegistry();
+            } catch (const std::exception &error) {
+                VKR_LOG_ERROR("ReflectionProbe",
+                              "Could not roll back probe Catalog entry: {}",
+                              error.what());
+            }
+        }
+        viewportResize_.desiredWidth = state.previousExtent.width;
+        viewportResize_.desiredHeight = state.previousExtent.height;
+        viewportResize_.changedAt = std::chrono::steady_clock::now();
+        viewportResize_.pending = true;
+        viewportResize_.immediate = true;
+        editorUi_->sceneError = message;
+        VKR_LOG_ERROR("ReflectionProbe", "Probe capture failed: {}",
+                      message);
+    };
+
+    try {
+        ReflectionProbeCaptureState &state = *reflectionProbeCapture_;
+        if (!sceneEditorSession_ || !sceneEditorSession_->active() ||
+            !sceneEditorSession_->world()->find(state.entityId)) {
+            fail("Reflection probe entity was removed during capture");
+            return;
+        }
+
+        if (state.phase ==
+            ReflectionProbeCapturePhase::AwaitingResize) {
+            const VkExtent2D extent = renderer_->viewportExtent();
+            if (extent.width != state.faceSize ||
+                extent.height != state.faceSize)
+                return;
+            state.phase = ReflectionProbeCapturePhase::CapturingFaces;
+            state.status = "Capturing reflection probe face 1/6";
+        }
+
+        if (state.phase ==
+            ReflectionProbeCapturePhase::CapturingFaces) {
+            if (state.captureTaskId == 0) {
+                state.captureTaskId = captureService_->requestHdr(
+                    state.faceRelativePaths[state.faceIndex]);
+                state.status =
+                    "Capturing reflection probe face " +
+                    std::to_string(state.faceIndex + 1u) + "/6";
+                editorUi_->sceneStatus = state.status;
+                return;
+            }
+            const auto capture =
+                captureService_->task(state.captureTaskId);
+            if (!capture || !isTerminalCaptureTaskState(capture->state))
+                return;
+            if (capture->state != CaptureTaskState::Completed) {
+                fail(capture->result.error.empty()
+                         ? "Reflection probe face capture was cancelled"
+                         : capture->result.error);
+                return;
+            }
+            state.captureTaskId = 0;
+            ++state.faceIndex;
+            if (state.faceIndex < state.facePaths.size())
+                return;
+
+            state.status = "Stitching reflection probe HDR";
+            editorUi_->sceneStatus = state.status;
+            std::filesystem::path temporary = state.sourcePath;
+            temporary += ".capture-tmp";
+            editor::stitchReflectionProbeFaces(
+                state.facePaths, temporary, state.faceSize);
+
+            const bool existed =
+                std::filesystem::exists(state.sourcePath);
+            if (existed) {
+                state.backupPath = state.sourcePath;
+                state.backupPath += ".probe-backup";
+                std::filesystem::copy_file(
+                    state.sourcePath, state.backupPath,
+                    std::filesystem::copy_options::overwrite_existing);
+            }
+            publishProbeSource(temporary, state.sourcePath);
+
+            if (!catalog_.findEnvironment(state.environmentId)) {
+                CatalogEnvironment environment;
+                environment.id = state.environmentId;
+                environment.displayName =
+                    "Reflection Probe " +
+                    state.entityId.toString().substr(0, 8);
+                environment.source = std::filesystem::relative(
+                    state.sourcePath, projectContext_.projectRoot);
+                environment.environmentProfile = state.profileId;
+                SceneCatalogEditor::addEnvironment(projectContext_,
+                                                   environment);
+                state.catalogEntryAdded = true;
+                refreshSceneRegistry();
+            }
+
+            const auto bake = assetImportManager_->request(
+                {state.environmentId, state.profileId,
+                 ImportReason::ManualReimport, true,
+                 AssetImportKind::Environment});
+            state.bakeTaskId = bake->id;
+            state.phase = ReflectionProbeCapturePhase::Baking;
+            state.status = "Baking reflection probe environment";
+            viewportResize_.desiredWidth = state.previousExtent.width;
+            viewportResize_.desiredHeight = state.previousExtent.height;
+            viewportResize_.changedAt =
+                std::chrono::steady_clock::now();
+            viewportResize_.pending = true;
+            viewportResize_.immediate = true;
+            editorUi_->sceneStatus = state.status;
+            return;
+        }
+
+        if (state.phase == ReflectionProbeCapturePhase::Baking) {
+            const auto bake = assetImportManager_->task(state.bakeTaskId);
+            if (!bake || !isTerminalAssetImportState(bake->state.load()))
+                return;
+            if (bake->state.load() != AssetImportState::Completed) {
+                std::string error;
+                {
+                    std::lock_guard<std::mutex> lock(bake->mutex);
+                    error = bake->error;
+                }
+                fail(error.empty() ?
+                         "Reflection probe environment bake failed" :
+                         error);
+                return;
+            }
+            reloadArtifactIndex();
+            environmentAssetRepository_->invalidate(
+                state.environmentId, &state.profileId);
+            const std::string environmentId = state.environmentId;
+            const PersistentEntityId entityId = state.entityId;
+            sceneEditorSession_->execute(
+                "Capture Reflection Probe",
+                [entityId, environmentId](RuntimeWorld &world) {
+                    const auto entity = world.entity(world.find(entityId));
+                    if (!entity || !entity->reflectionProbe)
+                        return false;
+                    ReflectionProbeComponentDocument probe =
+                        *entity->reflectionProbe;
+                    probe.environmentId = environmentId;
+                    return world.setReflectionProbe(world.find(entityId),
+                                                    probe);
+                });
+            state.phase = ReflectionProbeCapturePhase::Loading;
+            state.status = "Uploading reflection probe environment";
+            editorUi_->sceneStatus = state.status;
+            return;
+        }
+
+        if (state.phase == ReflectionProbeCapturePhase::Loading) {
+            const auto entity = sceneEditorSession_->world()->entity(
+                sceneEditorSession_->world()->find(state.entityId));
+            if (!entity || !entity->reflectionProbe) {
+                fail("Reflection probe entity disappeared during upload");
+                return;
+            }
+            if (entity->reflectionProbeBindingState ==
+                ModelBindingState::Failed) {
+                fail(entity->reflectionProbeBindingError.empty()
+                         ? "Reflection probe upload failed"
+                         : entity->reflectionProbeBindingError);
+                return;
+            }
+            if (entity->reflectionProbeBindingState !=
+                ModelBindingState::Ready)
+                return;
+
+            const std::string environmentId = state.environmentId;
+            const std::filesystem::path backup = state.backupPath;
+            const std::filesystem::path temporaryDirectory =
+                state.temporaryDirectory;
+            reflectionProbeCapture_.reset();
+            std::error_code ignored;
+            if (!backup.empty())
+                std::filesystem::remove(backup, ignored);
+            std::filesystem::remove_all(temporaryDirectory, ignored);
+            editorUi_->sceneStatus =
+                "Reflection probe ready: " + environmentId;
+            editorUi_->sceneError.clear();
+            VKR_LOG_INFO("ReflectionProbe",
+                         "Reflection probe {} captured and published as {}",
+                         entity->id.toString(), environmentId);
+        }
+    } catch (const std::exception &error) {
+        fail(error.what());
+    }
+#endif
+}
+
+void Application::applyReflectionProbeCaptureView(
+    RenderViewInput &input, std::string &cameraIdentity) const {
+#if VKL_ENABLE_EDITOR_UI
+    if (!reflectionProbeCapture_ ||
+        reflectionProbeCapture_->phase !=
+            ReflectionProbeCapturePhase::CapturingFaces ||
+        !sceneEditorSession_ || !sceneEditorSession_->active())
+        return;
+    const ReflectionProbeCaptureState &state =
+        *reflectionProbeCapture_;
+    const auto entity = sceneEditorSession_->world()->entity(
+        sceneEditorSession_->world()->find(state.entityId));
+    if (!entity || !entity->reflectionProbe || state.faceIndex >= 6)
+        return;
+
+    const glm::vec3 position =
+        glm::vec3(entity->world *
+                  glm::vec4(entity->reflectionProbe->captureOffset, 1.0f));
+    input.view = editor::reflectionProbeFaceView(state.faceIndex, position);
+    input.projection = glm::perspectiveRH_ZO(
+        glm::half_pi<float>(), 1.0f, 0.05f,
+        std::max(1000.0f, input.cameraFarPlane));
+    input.projection[1][1] *= -1.0f;
+    input.cameraPosition = position;
+    input.cameraNearPlane = 0.05f;
+    input.cameraFarPlane = std::max(1000.0f, input.cameraFarPlane);
+    input.viewportExtent = {state.faceSize, state.faceSize};
+    input.reflectionProbes = nullptr;
+    input.settings.iblEnabled = false;
+    input.settings.bloomEnabled = false;
+    input.settings.ambientOcclusionMode = AmbientOcclusionMode::Off;
+    input.settings.temporalAntiAliasingMode =
+        TemporalAntiAliasingMode::Off;
+    input.settings.reflectionMode = ReflectionMode::IblOnly;
+    input.settings.globalIlluminationMode =
+        GlobalIlluminationMode::AmbientOrIbl;
+    input.settings.surfaceDebugView = SurfaceDebugView::None;
+    input.settings.screenSpaceDebugView = ScreenSpaceDebugView::None;
+    cameraIdentity = "reflection-probe:" + state.entityId.toString() +
+                     ":" + std::to_string(state.faceIndex);
+#else
+    (void)input;
+    (void)cameraIdentity;
+#endif
+}
+
 void Application::updateAssetImports() {
     VKL_PROFILE_ZONE("Asset Import Update");
     if (!assetImportManager_)
@@ -3025,9 +3492,10 @@ Application::runtimeLoadStatus(std::optional<uint64_t> requestedTaskId) {
     }
     if ((taskId & EnvironmentLoadManager::kTaskIdMask) != 0 &&
         (taskId & AssetImportManager::kTaskIdMask) == 0) {
-        const auto task = environmentLoadManager_
-                              ? environmentLoadManager_->task(taskId)
-                              : nullptr;
+        const auto task =
+            environmentAssetRepository_
+                ? environmentAssetRepository_->task(taskId)
+                : nullptr;
         if (!task)
             throw RuntimeCommandError("load_not_found",
                                       "Load task was not found.");
@@ -3360,8 +3828,10 @@ ControlJson Application::runtimeRenderStatus() {
         inFlightUploadBatches =
             assetRepository_->inFlightUploadBatches();
     }
-    if (environmentGpuBuilder_) {
-        const auto task = environmentGpuBuilder_->task();
+    if (latestEnvironmentLoadTask_ &&
+        !isTerminalEnvironmentLoadState(
+            latestEnvironmentLoadTask_->state.load())) {
+        const auto &task = latestEnvironmentLoadTask_;
         const uint64_t uploaded = task->uploadedImages.load();
         pendingUploads +=
             task->totalImages > uploaded
@@ -3506,6 +3976,32 @@ ControlJson Application::runtimeRenderStatus() {
     const SurfaceDataStatus surfaceStatus = renderer_->surfaceDataStatus();
     const ScreenSpaceEffectsStatus screenSpaceStatus =
         renderer_->screenSpaceEffectsStatus();
+    const ReflectionProbeRuntimeStatus reflectionProbeStatus =
+        renderer_->reflectionProbeStatus();
+    const EnvironmentAssetRepositorySnapshot environmentRepository =
+        environmentAssetRepository_
+            ? environmentAssetRepository_->snapshot()
+            : EnvironmentAssetRepositorySnapshot{};
+    ControlJson ignoredProbeEntities = ControlJson::array();
+    for (size_t index = 0;
+         index < std::min<size_t>(
+                     reflectionProbeStatus.ignoredEntityIds.size(), 32);
+         ++index) {
+        ignoredProbeEntities.push_back(
+            reflectionProbeStatus.ignoredEntityIds[index].toString());
+    }
+    ControlJson environmentRepositoryRecords = ControlJson::array();
+    for (const EnvironmentAssetRecordSnapshot &record :
+         environmentRepository.records) {
+        environmentRepositoryRecords.push_back(
+            {{"environmentId", record.key.environmentId},
+             {"profileId", record.key.profileId},
+             {"generation", record.generation},
+             {"state", environmentAssetStateName(record.state)},
+             {"consumers", record.consumerCount},
+             {"uploadedImages", record.uploadedImages},
+             {"error", record.error}});
+    }
     ControlJson indirectCapacities = ControlJson::array();
     for (const uint32_t capacity : cullingStatus.indirectCapacities)
         indirectCapacities.push_back(capacity);
@@ -3559,6 +4055,7 @@ ControlJson Application::runtimeRenderStatus() {
             {"entities", world->entityCount()},
             {"modelInstances", world->modelInstanceCount()},
             {"explicitLights", world->explicitLightCount()},
+            {"reflectionProbes", world->reflectionProbes().size()},
             {"renderables", world->renderableCount()},
             {"activeCamera",
              world->activeCameraId()
@@ -3593,7 +4090,26 @@ ControlJson Application::runtimeRenderStatus() {
                : ControlJson(nullptr)},
           {"ready", renderer_->environmentReady()},
           {"loadTask",
-           environmentLoadTaskToJson(latestEnvironmentLoadTask_)}}},
+           environmentLoadTaskToJson(latestEnvironmentLoadTask_)},
+          {"repository",
+           {{"records", environmentRepository.recordCount},
+            {"ready", environmentRepository.readyCount},
+            {"loading", environmentRepository.loadingCount},
+            {"failed", environmentRepository.failedCount},
+            {"retiring", environmentRepository.retiringCount},
+            {"readyHits", environmentRepository.readyHits},
+            {"coalescedRequests",
+             environmentRepository.coalescedRequests},
+            {"entries", std::move(environmentRepositoryRecords)}}}}},
+        {"reflectionProbes",
+         {{"sourceCount", reflectionProbeStatus.sourceCount},
+          {"activeCount", reflectionProbeStatus.activeCount},
+          {"ignoredCount", reflectionProbeStatus.ignoredCount},
+          {"limit", reflectionProbeStatus.limit},
+          {"descriptorGeneration",
+           reflectionProbeStatus.descriptorGeneration},
+          {"bufferBytes", reflectionProbeStatus.allocatedBytes},
+          {"ignoredEntityIds", std::move(ignoredProbeEntities)}}},
         {"atmosphere",
          {{"supported", atmosphereStatus.supported},
           {"componentPresent", atmosphereStatus.componentPresent},
@@ -6172,6 +6688,39 @@ void Application::drawLightingPanel() {
         ImGui::TextWrapped("Environment error: %s",
                            editorUi_->environmentError.c_str());
     }
+    if (ImGui::TreeNodeEx("Reflection Probes")) {
+        const ReflectionProbeRuntimeStatus probeStatus =
+            renderer_->reflectionProbeStatus();
+        const EnvironmentAssetRepositorySnapshot repository =
+            environmentAssetRepository_
+                ? environmentAssetRepository_->snapshot()
+                : EnvironmentAssetRepositorySnapshot{};
+        ImGui::Text("Active: %u / %u", probeStatus.activeCount,
+                    probeStatus.limit);
+        ImGui::Text("Sources: %u", probeStatus.sourceCount);
+        ImGui::Text("Ignored: %u", probeStatus.ignoredCount);
+        ImGui::Text("Descriptor generation: %llu",
+                    static_cast<unsigned long long>(
+                        probeStatus.descriptorGeneration));
+        ImGui::Text("Probe metadata buffers: %.2f KiB",
+                    static_cast<double>(probeStatus.allocatedBytes) /
+                        1024.0);
+        ImGui::Text("Environment repository: %llu ready, %llu loading, "
+                    "%llu retiring",
+                    static_cast<unsigned long long>(repository.readyCount),
+                    static_cast<unsigned long long>(repository.loadingCount),
+                    static_cast<unsigned long long>(repository.retiringCount));
+        if (reflectionProbeCapture_)
+            ImGui::TextWrapped("Capture: %s",
+                               reflectionProbeCapture_->status.c_str());
+        if (probeStatus.ignoredCount > 0) {
+            for (const PersistentEntityId &id :
+                 probeStatus.ignoredEntityIds) {
+                ImGui::BulletText("Ignored %s", id.toString().c_str());
+            }
+        }
+        ImGui::TreePop();
+    }
     ImGui::Separator();
     ImGui::ColorEdit3("Ambient Color", &ambientColor_.x);
     ImGui::DragFloat("Ambient Intensity", &ambientIntensity_, 0.01f, 0.0f,
@@ -6996,7 +7545,10 @@ void Application::drawSceneAuthoringDialogs() {
                 world->replaceDocument(document);
                 sceneEditorSession_->attach(world, path, stamp);
                 sceneEditorSession_->setWorldChangedCallback(
-                    [this]() { updateEditorModelBindings(); });
+                    [this]() {
+                        updateEditorModelBindings();
+                        updateEditorReflectionProbeBindings();
+                    });
                 refreshSceneRegistry(id);
                 currentSceneIndex_ = sceneWorkflow_->findEntryById(id);
                 ui.sceneStatus = "Saved as " + name;
@@ -7239,6 +7791,7 @@ void Application::duplicateSelectedEditorEntity() {
                     if (copy.light)
                         copy.light->atmosphereSunIndex.reset();
                     copy.camera = source.camera;
+                    copy.reflectionProbe = source.reflectionProbe;
                     remap[source.id] = copy.id;
                     if (source.id == rootId)
                         duplicateRoot = copy.id;
@@ -7294,7 +7847,9 @@ void Application::drawOutlinerPanel() {
                  *sceneEditorSession_->selection() == entity.id,
              entity.modelBindingState, entity.modelInstance.has_value(),
              lightLimitExceeded.count(entity.id) != 0,
-             entity.atmosphere.has_value()});
+             entity.atmosphere.has_value(),
+             entity.reflectionProbeBindingState,
+             entity.reflectionProbe.has_value()});
     }
 
     OutlinerPanelActions actions;
@@ -7360,6 +7915,11 @@ void Application::drawOutlinerPanel() {
                 entity.name = "Sky Atmosphere";
                 entity.atmosphere = AtmosphereComponentDocument{};
                 parentId.reset();
+                break;
+            case OutlinerCreateKind::ReflectionProbe:
+                entity.name = "Reflection Probe";
+                entity.reflectionProbe =
+                    ReflectionProbeComponentDocument{};
                 break;
             }
             if (primitive) {
@@ -7461,6 +8021,14 @@ void Application::drawInspectorPanel() {
     snapshot.environment = world->environment();
     snapshot.activeCamera = world->activeCameraId();
     snapshot.editable = projectContext_.catalogWritable;
+    snapshot.reflectionProbeCaptureAvailable =
+        projectContext_.catalogWritable && captureService_ &&
+        assetImportManager_;
+    snapshot.reflectionProbeCaptureActive =
+        reflectionProbeCapture_.has_value();
+    if (reflectionProbeCapture_)
+        snapshot.reflectionProbeCaptureStatus =
+            reflectionProbeCapture_->status;
     const std::vector<RuntimeEntitySnapshot> entities = world->entities();
     snapshot.entities = entities;
     snapshot.atmospherePresent = std::any_of(
@@ -7629,6 +8197,32 @@ void Application::drawInspectorPanel() {
                     }
                     return true;
                 });
+        };
+    actions.setReflectionProbe =
+        [this](PersistentEntityId id,
+               std::optional<ReflectionProbeComponentDocument> value) {
+            if (sceneEditorSession_->continuousEditActive()) {
+                if (auto world = sceneEditorSession_->world())
+                    world->setReflectionProbe(world->find(id),
+                                              std::move(value));
+                return;
+            }
+            sceneEditorSession_->execute(
+                "Set Reflection Probe",
+                [id, value = std::move(value)](
+                    RuntimeWorld &world) mutable {
+                    return world.setReflectionProbe(world.find(id),
+                                                    std::move(value));
+                });
+        };
+    actions.captureReflectionProbe =
+        [this](PersistentEntityId id) {
+            try {
+                beginReflectionProbeCapture(id);
+                editorUi_->sceneError.clear();
+            } catch (const std::exception &error) {
+                editorUi_->sceneError = error.what();
+            }
         };
     actions.setActiveCamera = [this](PersistentEntityId id) {
         sceneEditorSession_->execute(
@@ -8087,16 +8681,19 @@ void Application::drawGui() {
         viewportDisplayHeight_ = viewport.pixelHeight;
         camera_.setAspect(viewport.logicalWidth / viewport.logicalHeight);
 
-        const bool desiredChanged =
-            viewportResize_.desiredWidth != viewport.pixelWidth ||
-            viewportResize_.desiredHeight != viewport.pixelHeight;
-        if (desiredChanged) {
-            viewportResize_.desiredWidth = viewport.pixelWidth;
-            viewportResize_.desiredHeight = viewport.pixelHeight;
-            viewportResize_.changedAt = std::chrono::steady_clock::now();
-            viewportResize_.pending = true;
-            viewportResize_.immediate = !viewportResize_.measured;
-            viewportResize_.measured = true;
+        if (!reflectionProbeCapture_) {
+            const bool desiredChanged =
+                viewportResize_.desiredWidth != viewport.pixelWidth ||
+                viewportResize_.desiredHeight != viewport.pixelHeight;
+            if (desiredChanged) {
+                viewportResize_.desiredWidth = viewport.pixelWidth;
+                viewportResize_.desiredHeight = viewport.pixelHeight;
+                viewportResize_.changedAt =
+                    std::chrono::steady_clock::now();
+                viewportResize_.pending = true;
+                viewportResize_.immediate = !viewportResize_.measured;
+                viewportResize_.measured = true;
+            }
         }
     }
 }
@@ -8227,6 +8824,9 @@ void Application::mainLoop() {
         }
         updateSceneLoading();
         updateEnvironmentLoading();
+#if VKL_ENABLE_EDITOR_UI
+        updateReflectionProbeCapture();
+#endif
 
         // 2. 时间
         const auto now = std::chrono::high_resolution_clock::now();
@@ -8354,8 +8954,35 @@ void Application::mainLoop() {
             workspaceSource.supported = swapChain_->captureSupported();
             workspaceSource.unsupportedReason =
                 swapChain_->captureUnsupportedReason();
+
+            const RendererHdrOutput hdrOutput = renderer_->hdrOutput();
+            CaptureImageSource hdrSource{};
+            hdrSource.kind = CaptureSourceKind::Hdr;
+            hdrSource.image = hdrOutput.images[ctx->frameIndex];
+            hdrSource.extent = hdrOutput.extent;
+            hdrSource.format = hdrOutput.format;
+            hdrSource.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            hdrSource.sourceStage =
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            hdrSource.sourceAccess =
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+            hdrSource.restoreStage =
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            hdrSource.restoreAccess = VK_ACCESS_SHADER_READ_BIT;
+            const CaptureFormatDescription hdrFormat =
+                describeCaptureFormat(hdrSource.format);
+            hdrSource.supported = hdrFormat.supported &&
+                                  hdrFormat.encoding !=
+                                      CapturePixelEncoding::Unorm8;
+            if (!hdrSource.supported)
+                hdrSource.unsupportedReason =
+                    "renderer HDR format is not supported for HDR capture";
             captureSelection = captureService_->prepareFrame(
-                viewportSource, workspaceSource);
+                viewportSource, workspaceSource, hdrSource);
         }
 
         RenderViewInput viewInput{};
@@ -8379,6 +9006,8 @@ void Application::mainLoop() {
         if (currentScene_) {
             viewInput.sceneBounds = currentScene_->bounds();
             viewInput.sceneLights = &currentScene_->lights();
+            viewInput.reflectionProbes =
+                &currentScene_->reflectionProbes();
             viewInput.fallbackSunEnabled =
                 currentScene_->allowsFallbackSun();
             viewInput.atmosphere = currentScene_->worldAtmosphere();
@@ -8423,6 +9052,9 @@ void Application::mainLoop() {
                 }
             }
         }
+#if VKL_ENABLE_EDITOR_UI
+        applyReflectionProbeCaptureView(viewInput, cameraHistoryIdentity);
+#endif
         const bool taaJitterEnabled =
             device_->screenSpaceEffectsSupport().taaAvailable &&
             taaPassRequested(viewInput.settings);

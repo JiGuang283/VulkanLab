@@ -71,6 +71,7 @@ Renderer::Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
       shaderPaths_(std::move(shaderPaths)) {
     createUniformBuffers();
     createSceneLightBuffers();
+    createReflectionProbeBuffers();
     createGlobalDescriptorSetLayout();
     createGlobalDescriptorSets();
     renderResources_ = std::make_unique<RenderResourceRegistry>(device);
@@ -175,6 +176,7 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     }
     activeSceneLightCount_ =
         static_cast<uint32_t>(view.sceneLights.size());
+    updateReflectionProbes(view, frame.frameIndex);
     collectRetiredLightingGenerations();
 
     const ScreenSpaceEffectsSupport &screenSupport =
@@ -472,6 +474,21 @@ void Renderer::createUniformBuffers() {
     }
 }
 
+RendererHdrOutput Renderer::hdrOutput() const {
+    RendererHdrOutput output{};
+    output.extent = renderResources_->viewportExtent();
+    output.format = renderResources_
+                        ->description(resourceHandles_.compositedHdrColor)
+                        .format;
+    for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+        output.images[frame] =
+            renderResources_
+                ->image(resourceHandles_.compositedHdrColor, frame)
+                .handle();
+    }
+    return output;
+}
+
 void Renderer::createSceneLightBuffers() {
     for (uint32_t frame = 0; frame < sceneLightBuffers_.size(); ++frame) {
         FrameSceneLightStorage &storage = sceneLightBuffers_[frame];
@@ -484,6 +501,25 @@ void Renderer::createSceneLightBuffers() {
             0, "Frame/" + std::to_string(frame) + "/SceneLightBuffer");
         storage.buffer->map();
     }
+}
+
+void Renderer::createReflectionProbeBuffers() {
+    for (uint32_t frame = 0; frame < reflectionProbeBuffers_.size();
+         ++frame) {
+        reflectionProbeBuffers_[frame] = std::make_unique<Buffer>(
+            *device_, sizeof(GpuReflectionProbeBuffer),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            0, "Frame/" + std::to_string(frame) +
+                   "/ReflectionProbeBuffer");
+        reflectionProbeBuffers_[frame]->map();
+        GpuReflectionProbeBuffer empty{};
+        std::memcpy(reflectionProbeBuffers_[frame]->mappedData(),
+                    &empty, sizeof(empty));
+    }
+    reflectionProbeStatus_.allocatedBytes =
+        sizeof(GpuReflectionProbeBuffer) * MAX_FRAMES_IN_FLIGHT;
 }
 
 void Renderer::ensureSceneLightCapacity(uint32_t frameIndex,
@@ -715,14 +751,23 @@ void Renderer::updateScreenSpaceDescriptor(uint32_t frameIndex,
 }
 
 void Renderer::createLightingDescriptorSetLayout() {
-    std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
-    for (uint32_t binding = 0; binding < bindings.size(); ++binding) {
+    std::array<VkDescriptorSetLayoutBinding, 7> bindings{};
+    for (uint32_t binding = 0; binding < 5; ++binding) {
         bindings[binding].binding = binding;
         bindings[binding].descriptorType =
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[binding].descriptorCount = 1;
         bindings[binding].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
+    bindings[5].binding = 5;
+    bindings[5].descriptorType =
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[5].descriptorCount = kMaxReflectionProbes;
+    bindings[5].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[6].binding = 6;
+    bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[6].descriptorCount = 1;
+    bindings[6].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     info.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -947,17 +992,26 @@ void Renderer::createFallbackEnvironment() {
 }
 
 void Renderer::createLightingGeneration(
-    std::shared_ptr<EnvironmentGpuResources> environment) {
+    std::shared_ptr<EnvironmentGpuResources> environment,
+    std::vector<std::shared_ptr<EnvironmentGpuResources>>
+        reflectionProbeEnvironments) {
     if (!environment)
         environment = fallbackEnvironment_;
     auto generation =
         std::make_unique<LightingDescriptorGeneration>();
     generation->environment = std::move(environment);
+    if (reflectionProbeEnvironments.size() > kMaxReflectionProbes)
+        reflectionProbeEnvironments.resize(kMaxReflectionProbes);
+    generation->reflectionProbeEnvironments =
+        std::move(reflectionProbeEnvironments);
+    generation->generation = nextLightingDescriptorGeneration_++;
     for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT;
          ++frameIndex) {
         VkDescriptorSet set = descriptorAllocator_->allocate(
             lightingDescriptorSetLayout_,
-            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5}},
+            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+              5 + kMaxReflectionProbes},
+             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1}},
             "Lighting/DescriptorSet/Frame" +
                 std::to_string(frameIndex));
         generation->sets[frameIndex] = set;
@@ -981,11 +1035,43 @@ void Renderer::createLightingGeneration(
         fillEnvironment(1, generation->environment->irradiance);
         fillEnvironment(2,
                         generation->environment->prefilteredSpecular);
-        fillEnvironment(3, generation->environment->brdfLut);
+        // The BRDF LUT is environment-independent. When only local probes are
+        // active, use one of their baked LUTs instead of the neutral fallback.
+        const std::shared_ptr<EnvironmentGpuResources> brdfEnvironment =
+            generation->environment.get() != fallbackEnvironment_.get()
+                ? generation->environment
+                : (!generation->reflectionProbeEnvironments.empty()
+                       ? generation->reflectionProbeEnvironments.front()
+                       : fallbackEnvironment_);
+        fillEnvironment(3, brdfEnvironment->brdfLut);
         fillEnvironment(4, generation->environment->radiance);
 
-        std::array<VkWriteDescriptorSet, 5> writes{};
-        for (uint32_t binding = 0; binding < writes.size(); ++binding) {
+        std::array<VkDescriptorImageInfo, kMaxReflectionProbes>
+            probeImages{};
+        for (uint32_t probeIndex = 0;
+             probeIndex < kMaxReflectionProbes; ++probeIndex) {
+            const std::shared_ptr<EnvironmentGpuResources> probe =
+                probeIndex <
+                        generation->reflectionProbeEnvironments.size()
+                    ? generation->reflectionProbeEnvironments[probeIndex]
+                    : fallbackEnvironment_;
+            const std::shared_ptr<Texture> texture =
+                probe && probe->prefilteredSpecular
+                    ? probe->prefilteredSpecular
+                    : fallbackEnvironment_->prefilteredSpecular;
+            probeImages[probeIndex].sampler = texture->sampler();
+            probeImages[probeIndex].imageView = texture->imageView();
+            probeImages[probeIndex].imageLayout =
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+        VkDescriptorBufferInfo probeBuffer{};
+        probeBuffer.buffer =
+            reflectionProbeBuffers_[frameIndex]->handle();
+        probeBuffer.offset = 0;
+        probeBuffer.range = sizeof(GpuReflectionProbeBuffer);
+
+        std::array<VkWriteDescriptorSet, 7> writes{};
+        for (uint32_t binding = 0; binding < 5; ++binding) {
             writes[binding].sType =
                 VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[binding].dstSet = set;
@@ -995,6 +1081,19 @@ void Renderer::createLightingGeneration(
             writes[binding].descriptorCount = 1;
             writes[binding].pImageInfo = &images[binding];
         }
+        writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[5].dstSet = set;
+        writes[5].dstBinding = 5;
+        writes[5].descriptorType =
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[5].descriptorCount = kMaxReflectionProbes;
+        writes[5].pImageInfo = probeImages.data();
+        writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[6].dstSet = set;
+        writes[6].dstBinding = 6;
+        writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[6].descriptorCount = 1;
+        writes[6].pBufferInfo = &probeBuffer;
         vkUpdateDescriptorSets(
             device_->logicalDevice(), static_cast<uint32_t>(writes.size()),
             writes.data(), 0, nullptr);
@@ -1006,6 +1105,55 @@ void Renderer::createLightingGeneration(
             std::move(*currentLightingGeneration_));
     }
     currentLightingGeneration_ = std::move(generation);
+    reflectionProbeStatus_.descriptorGeneration =
+        currentLightingGeneration_->generation;
+}
+
+void Renderer::updateReflectionProbes(const RenderView &view,
+                                      uint32_t frameIndex) {
+    if (view.reflectionProbes.size() > kMaxReflectionProbes)
+        throw std::runtime_error("RenderView exceeded reflection probe limit");
+
+    std::vector<std::shared_ptr<EnvironmentGpuResources>> environments;
+    environments.reserve(view.reflectionProbes.size());
+    GpuReflectionProbeBuffer gpu{};
+    gpu.counts.x = static_cast<uint32_t>(view.reflectionProbes.size());
+    gpu.counts.y = view.settings.iblEnabled ? 1u : 0u;
+    for (size_t index = 0; index < view.reflectionProbes.size(); ++index) {
+        gpu.probes[index] = view.reflectionProbes[index].gpu;
+        environments.push_back(view.reflectionProbes[index].environment);
+    }
+    std::memcpy(reflectionProbeBuffers_.at(frameIndex)->mappedData(),
+                &gpu, sizeof(gpu));
+
+    bool descriptorsChanged = !currentLightingGeneration_ ||
+        currentLightingGeneration_->reflectionProbeEnvironments.size() !=
+            environments.size();
+    if (!descriptorsChanged) {
+        for (size_t index = 0; index < environments.size(); ++index) {
+            if (currentLightingGeneration_
+                    ->reflectionProbeEnvironments[index].get() !=
+                environments[index].get()) {
+                descriptorsChanged = true;
+                break;
+            }
+        }
+    }
+    if (descriptorsChanged) {
+        createLightingGeneration(
+            currentLightingGeneration_
+                ? currentLightingGeneration_->environment
+                : fallbackEnvironment_,
+            std::move(environments));
+    }
+    reflectionProbeStatus_.sourceCount =
+        view.reflectionProbeStats.sourceCount;
+    reflectionProbeStatus_.activeCount =
+        view.reflectionProbeStats.activeCount;
+    reflectionProbeStatus_.ignoredCount =
+        view.reflectionProbeStats.ignoredCount;
+    reflectionProbeStatus_.ignoredEntityIds =
+        view.reflectionProbeStats.ignoredEntityIds;
 }
 
 void Renderer::freeLightingGeneration(
@@ -1015,6 +1163,7 @@ void Renderer::freeLightingGeneration(
         set = VK_NULL_HANDLE;
     }
     generation.environment.reset();
+    generation.reflectionProbeEnvironments.clear();
 }
 
 void Renderer::collectRetiredLightingGenerations() {
@@ -1030,11 +1179,19 @@ void Renderer::collectRetiredLightingGenerations() {
 
 void Renderer::publishEnvironment(
     std::shared_ptr<EnvironmentGpuResources> environment) {
-    createLightingGeneration(std::move(environment));
+    createLightingGeneration(
+        std::move(environment),
+        currentLightingGeneration_
+            ? currentLightingGeneration_->reflectionProbeEnvironments
+            : std::vector<std::shared_ptr<EnvironmentGpuResources>>{});
 }
 
 void Renderer::clearEnvironment() {
-    createLightingGeneration(fallbackEnvironment_);
+    createLightingGeneration(
+        fallbackEnvironment_,
+        currentLightingGeneration_
+            ? currentLightingGeneration_->reflectionProbeEnvironments
+            : std::vector<std::shared_ptr<EnvironmentGpuResources>>{});
 }
 
 bool Renderer::environmentReady() const {
@@ -1085,6 +1242,10 @@ SceneLightBufferStatus Renderer::sceneLightBufferStatus() const {
             sizeof(GpuLight);
     }
     return status;
+}
+
+ReflectionProbeRuntimeStatus Renderer::reflectionProbeStatus() const {
+    return reflectionProbeStatus_;
 }
 
 OcclusionCullingStatus Renderer::occlusionCullingStatus() const {

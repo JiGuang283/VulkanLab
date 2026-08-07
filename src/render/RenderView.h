@@ -31,6 +31,7 @@ struct RenderViewInput {
     glm::vec3 cameraPosition{0.0f};
     Bounds sceneBounds{};
     const std::vector<SceneLight> *sceneLights = nullptr;
+    const std::vector<RenderWorldReflectionProbe> *reflectionProbes = nullptr;
     glm::vec3 ambientColor{1.0f};
     float ambientIntensity = 0.08f;
     DefaultSunSettings defaultSun{};
@@ -73,6 +74,20 @@ struct RenderViewLightStats {
     bool shadowCasterActive = false;
 };
 
+struct RenderViewReflectionProbe {
+    PersistentEntityId entityId;
+    GpuReflectionProbe gpu{};
+    std::shared_ptr<EnvironmentGpuResources> environment;
+    uint64_t environmentGeneration = 0;
+};
+
+struct RenderViewReflectionProbeStats {
+    uint32_t sourceCount = 0;
+    uint32_t activeCount = 0;
+    uint32_t ignoredCount = 0;
+    std::vector<PersistentEntityId> ignoredEntityIds;
+};
+
 struct RenderView {
     GlobalFrameUbo globalUbo{};
     glm::mat4 stableProjection{1.0f};
@@ -80,9 +95,11 @@ struct RenderView {
     glm::vec2 projectionJitterNdc{0.0f};
     glm::vec2 projectionJitterPixels{0.0f};
     std::vector<GpuLight> sceneLights;
+    std::vector<RenderViewReflectionProbe> reflectionProbes;
     DirectionalShadowFrameData directionalShadow{};
     RenderSettings settings{};
     RenderViewLightStats lightStats{};
+    RenderViewReflectionProbeStats reflectionProbeStats{};
     AtmosphereFrameData atmosphere{};
     AtmosphereGpuParams atmosphereGpuParams{};
     float cameraNearPlane = 0.05f;

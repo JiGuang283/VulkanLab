@@ -451,6 +451,114 @@ void InspectorPanel::draw(const InspectorPanelSnapshot &snapshot,
                 }
             }
 
+            if (entity.reflectionProbe &&
+                ImGui::CollapsingHeader("Reflection Probe",
+                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+                ReflectionProbeComponentDocument probe =
+                    *entity.reflectionProbe;
+                const auto applyProbeEdit = [&](bool changed) {
+                    beginContinuousIfNeeded(
+                        changed, reflectionProbeEditing_,
+                        "Edit Reflection Probe", actions);
+                    if (changed && actions.setReflectionProbe)
+                        actions.setReflectionProbe(entity.id, probe);
+                    endContinuousIfNeeded(reflectionProbeEditing_, actions);
+                };
+
+                const char *environmentName = "Not Captured";
+                if (probe.environmentId) {
+                    environmentName = probe.environmentId->c_str();
+                    for (const InspectorEnvironmentOption &environment :
+                         snapshot.environments) {
+                        if (environment.id == *probe.environmentId) {
+                            environmentName = environment.displayName.c_str();
+                            break;
+                        }
+                    }
+                }
+                if (ImGui::BeginCombo("Environment", environmentName)) {
+                    if (ImGui::Selectable("Not Captured",
+                                          !probe.environmentId) &&
+                        actions.setReflectionProbe) {
+                        probe.environmentId.reset();
+                        actions.setReflectionProbe(entity.id, probe);
+                    }
+                    for (const InspectorEnvironmentOption &environment :
+                         snapshot.environments) {
+                        const bool selected = probe.environmentId &&
+                                              *probe.environmentId ==
+                                                  environment.id;
+                        if (ImGui::Selectable(environment.displayName.c_str(),
+                                              selected) &&
+                            actions.setReflectionProbe) {
+                            probe.environmentId = environment.id;
+                            actions.setReflectionProbe(entity.id, probe);
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::TextDisabled(
+                    "Binding: %s",
+                    modelBindingStateName(
+                        entity.reflectionProbeBindingState));
+                if (!entity.reflectionProbeBindingError.empty())
+                    ImGui::TextWrapped(
+                        "%s", entity.reflectionProbeBindingError.c_str());
+
+                int shape = probe.shape == ReflectionProbeShape::Box ? 0 : 1;
+                if (ImGui::Combo("Shape", &shape, "Box\0Sphere\0") &&
+                    actions.setReflectionProbe) {
+                    probe.shape = shape == 0 ? ReflectionProbeShape::Box
+                                             : ReflectionProbeShape::Sphere;
+                    actions.setReflectionProbe(entity.id, probe);
+                }
+                bool changed = false;
+                if (probe.shape == ReflectionProbeShape::Box) {
+                    changed = ImGui::DragFloat3(
+                        "Box Extents", &probe.boxExtents.x, 0.05f,
+                        0.01f, 100000.0f);
+                    probe.boxExtents = glm::max(
+                        probe.boxExtents, glm::vec3(0.01f));
+                    applyProbeEdit(changed);
+                } else {
+                    changed = ImGui::DragFloat(
+                        "Sphere Radius", &probe.sphereRadius, 0.05f,
+                        0.01f, 100000.0f);
+                    probe.sphereRadius = std::max(probe.sphereRadius, 0.01f);
+                    applyProbeEdit(changed);
+                }
+                changed = ImGui::DragFloat(
+                    "Blend Distance", &probe.blendDistance, 0.05f,
+                    0.0f, 100000.0f);
+                probe.blendDistance = std::max(probe.blendDistance, 0.0f);
+                applyProbeEdit(changed);
+                changed = ImGui::DragInt("Priority", &probe.priority, 1.0f);
+                applyProbeEdit(changed);
+                changed = ImGui::DragFloat(
+                    "Intensity", &probe.intensity, 0.01f, 0.0f, 100.0f);
+                probe.intensity = std::max(probe.intensity, 0.0f);
+                applyProbeEdit(changed);
+                changed = ImGui::Checkbox("Box Projection",
+                                          &probe.boxProjection);
+                applyProbeEdit(changed);
+                changed = ImGui::DragFloat3(
+                    "Capture Offset", &probe.captureOffset.x, 0.05f);
+                applyProbeEdit(changed);
+
+                if (snapshot.reflectionProbeCaptureActive)
+                    ImGui::TextDisabled(
+                        "%s", snapshot.reflectionProbeCaptureStatus.c_str());
+                ImGui::BeginDisabled(
+                    !snapshot.reflectionProbeCaptureAvailable ||
+                    snapshot.reflectionProbeCaptureActive ||
+                    !actions.captureReflectionProbe);
+                if (ImGui::Button("Capture and Bake") &&
+                    actions.captureReflectionProbe) {
+                    actions.captureReflectionProbe(entity.id);
+                }
+                ImGui::EndDisabled();
+            }
+
             if (ImGui::CollapsingHeader("Camera")) {
                 bool present = entity.camera.has_value();
                 if (ImGui::Checkbox("Camera Component", &present) &&

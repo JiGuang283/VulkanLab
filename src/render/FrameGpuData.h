@@ -6,17 +6,31 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <array>
 #include <type_traits>
 
 namespace vkr {
 
 inline constexpr uint32_t kMaxSceneLights = 256;
+inline constexpr uint32_t kMaxReflectionProbes = 8;
 
 struct alignas(16) GpuLight {
     glm::vec4 positionRange;
     glm::vec4 directionInnerCos;
     glm::vec4 colorIntensity;
     glm::vec4 params;
+};
+
+struct alignas(16) GpuReflectionProbe {
+    glm::mat4 worldToLocal{1.0f};
+    glm::vec4 capturePositionRadius{0.0f};
+    glm::vec4 boxExtentsBlend{0.0f};
+    glm::vec4 params{0.0f};
+};
+
+struct alignas(16) GpuReflectionProbeBuffer {
+    glm::uvec4 counts{0u};
+    std::array<GpuReflectionProbe, kMaxReflectionProbes> probes{};
 };
 
 struct alignas(16) GlobalFrameUbo {
@@ -98,6 +112,8 @@ struct alignas(16) BloomPushConstants {
 static_assert(std::is_standard_layout_v<GpuLight>);
 static_assert(std::is_standard_layout_v<GlobalFrameUbo>);
 static_assert(sizeof(GpuLight) == 64);
+static_assert(sizeof(GpuReflectionProbe) == 112);
+static_assert(sizeof(GpuReflectionProbeBuffer) == 912);
 static_assert(offsetof(GpuLight, positionRange) == 0);
 static_assert(offsetof(GpuLight, directionInnerCos) == 16);
 static_assert(offsetof(GpuLight, colorIntensity) == 32);

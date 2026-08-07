@@ -170,6 +170,13 @@ void OutlinerPanel::drawEntity(const OutlinerEntitySnapshot &entity,
         ImGui::SameLine();
         ImGui::TextDisabled("[Not uploaded]");
     }
+    if (entity.hasReflectionProbe &&
+        entity.reflectionProbeState != ModelBindingState::Ready) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("[Probe %s]",
+                            modelBindingStateName(
+                                entity.reflectionProbeState));
+    }
     if (ImGui::IsItemClicked() && actions.select)
         actions.select(entity.id);
     if (snapshot.editable && !entity.hasAtmosphere &&
@@ -248,6 +255,7 @@ void OutlinerPanel::drawCreateMenu(
     create("Point Light", OutlinerCreateKind::PointLight);
     create("Spot Light", OutlinerCreateKind::SpotLight);
     create("Camera", OutlinerCreateKind::Camera);
+    create("Reflection Probe", OutlinerCreateKind::ReflectionProbe);
     ImGui::BeginDisabled(!canCreateAtmosphere || parent.has_value());
     create("Sky Atmosphere", OutlinerCreateKind::SkyAtmosphere);
     ImGui::EndDisabled();

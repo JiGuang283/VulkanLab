@@ -200,6 +200,19 @@ void verifyArtifactIndexClosure(
             references.emplace("Environment", environment->id,
                                environment->environmentProfile);
         }
+        for (const SceneEntityDocument &entity : loaded.document.entities) {
+            if (!entity.reflectionProbe ||
+                !entity.reflectionProbe->environmentId)
+                continue;
+            const CatalogEnvironment *environment = catalog.findEnvironment(
+                *entity.reflectionProbe->environmentId);
+            if (!environment)
+                throw std::runtime_error(
+                    "artifact index scene references an unknown reflection "
+                    "probe environment");
+            references.emplace("Environment", environment->id,
+                               environment->environmentProfile);
+        }
     }
 
     std::set<std::tuple<std::string, std::string, std::string>> actual;
@@ -283,6 +296,13 @@ void verifyNativeSceneClosure(const std::filesystem::path &packageRoot,
         if (loaded.document.environment) {
             environmentIds.insert(
                 loaded.document.environment->environmentId);
+        }
+        for (const SceneEntityDocument &entity : loaded.document.entities) {
+            if (entity.reflectionProbe &&
+                entity.reflectionProbe->environmentId) {
+                environmentIds.insert(
+                    *entity.reflectionProbe->environmentId);
+            }
         }
     }
 

@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-07
-> Verified against: Screen-space foundations, AO backends, TAA, GTAO, SSR and SSGI v1
+> Verified against: Screen-space foundations, AO backends, TAA, GTAO, SSR, SSGI and Local Reflection Probes v1
 
 ## 帧图与 Pass 顺序
 
@@ -260,6 +260,8 @@ Forward descriptor 约定为：
   - binding 2：Prefiltered Specular cubemap。
   - binding 3：BRDF LUT。
   - binding 4：Radiance cubemap。
+  - binding 5：最多 8 个局部 Reflection Probe prefiltered cubemap。
+  - binding 6：每帧 Reflection Probe metadata SSBO。
 - `set=3`：Atmosphere descriptor，仅 Atmosphere programs 和两个 PBR variants 声明。
   - binding 0：每帧 `AtmosphereGpuParams` UBO。
   - binding 1：Transmittance LUT。
@@ -268,7 +270,7 @@ Forward descriptor 约定为：
   - binding 4：Aerial Perspective 2D-array LUT。
 - 128 字节 push constant：model matrix 和材质因子。
 
-Lighting 的五个 binding 始终绑定真实资源或合法 fallback，不依赖 partially-bound descriptor。ToneMap 使用固定五 binding 的 pass-local descriptor：当前 HDR、Bloom、Surface Normal-Roughness、Motion 和按当前 debug mode 选择的单一 Debug Source。Depth/Color pyramid、AO、TAA、GTAO、SSR 与 SSGI 调试图像都在 CPU 更新 descriptor 时映射到该动态 source，避免每新增一个算法就扩大 ToneMap descriptor ABI。未在本帧生成的输入绑定已初始化 fallback，push constant 禁止采样。Present 使用另一个 pass-local descriptor，只包含当前 frame slot 的 Viewport Color。
+Lighting 的七个 binding 始终绑定真实资源或合法 fallback，不依赖 partially-bound descriptor。局部 Reflection Probe 按 priority 和 Entity UUID 稳定选择最多 8 个；Box/Sphere influence 与 box parallax correction 在 PBR fragment shader 中完成。SSR 使用 confidence 替换 `Local Probe -> Global IBL` 的 specular baseline，global diffuse irradiance 不被局部探针替换。sampler array 通过常量 switch 访问，因此不要求 sampled-image array dynamic indexing。ToneMap 使用固定五 binding 的 pass-local descriptor：当前 HDR、Bloom、Surface Normal-Roughness、Motion 和按当前 debug mode 选择的单一 Debug Source。Depth/Color pyramid、AO、TAA、GTAO、SSR 与 SSGI 调试图像都在 CPU 更新 descriptor 时映射到该动态 source，避免每新增一个算法就扩大 ToneMap descriptor ABI。未在本帧生成的输入绑定已初始化 fallback，push constant 禁止采样。Present 使用另一个 pass-local descriptor，只包含当前 frame slot 的 Viewport Color。
 
 ## Shader Variant
 
@@ -292,7 +294,7 @@ SceneLight 支持 Directional、Point 和 Spot。glTF loader 解析 `KHR_lights_
 
 PBR Forward 按 Directional、Point、Spot 三段遍历 SSBO，Point/Spot 在超出 range 时提前跳过。三类灯共享 256 灯上限，超出部分保留在 SceneDocument 并计入 ignored；Legacy 继续使用 baseline 光照且不读取 SSBO。存在任意有效场景灯光时不注入 fallback Sun；如果场景灯全部无效，则按兼容规则使用 fallback Sun。Point/Spot 当前不投射阴影。颜色和 intensity 保持 glTF 物理单位，不做自动缩放；高强度场景通过 Exposure EV 和 Tone Mapping 调整。没有可用 IBL 时，环境项由 ambient color/intensity 提供；AO 只影响间接项。
 
-当前只支持一张全局环境和一张方向光 shadow map；没有 CSM、Point/Spot shadow、local reflection probe、parallax correction、deferred rendering 或 auto exposure。Bloom 是同步 compute 后处理，不使用异步 compute、lens dirt、anamorphic filter 或 temporal stabilization。
+当前支持一张全局环境、最多 8 个局部 Reflection Probe 和一张方向光 shadow map；没有 CSM、Point/Spot shadow、动态 probe 自动更新、local diffuse probe、deferred rendering 或 auto exposure。Bloom 是同步 compute 后处理，不使用异步 compute、lens dirt、anamorphic filter 或 temporal stabilization。
 
 ## GPU Pass 计时
 

@@ -24,6 +24,7 @@ enum class OutlinerCreateKind {
     SpotLight,
     Camera,
     SkyAtmosphere,
+    ReflectionProbe,
 };
 
 struct OutlinerEntitySnapshot {
@@ -36,6 +37,9 @@ struct OutlinerEntitySnapshot {
     bool hasModel = false;
     bool lightLimitExceeded = false;
     bool hasAtmosphere = false;
+    ModelBindingState reflectionProbeState =
+        ModelBindingState::Unresolved;
+    bool hasReflectionProbe = false;
 };
 
 struct OutlinerPanelSnapshot {

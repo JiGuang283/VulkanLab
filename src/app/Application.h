@@ -23,7 +23,9 @@
 
 #include <cstdint>
 #include <chrono>
+#include <array>
 #include <deque>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -55,12 +57,11 @@ class RuntimeCommandQueue;
 class NamedPipeServerWin32;
 class SceneLoadManager;
 class AssetRepository;
+class EnvironmentAssetRepository;
+class EnvironmentAssetHandle;
 struct SceneLoadTask;
 struct ModelAsset;
-class EnvironmentLoadManager;
-class EnvironmentGpuBuilder;
 struct EnvironmentLoadTask;
-struct EnvironmentGpuResources;
 class SceneWorkflowController;
 struct ModelImportUiState;
 struct SceneAssetOperationState;
@@ -119,6 +120,11 @@ class Application final
     void drawInspectorPanel();
     void drawSceneAuthoringDialogs();
     void updateEditorModelBindings();
+    void updateEditorReflectionProbeBindings();
+    void beginReflectionProbeCapture(PersistentEntityId entityId);
+    void updateReflectionProbeCapture();
+    void applyReflectionProbeCaptureView(RenderViewInput &input,
+                                         std::string &cameraIdentity) const;
     void requestEditorSceneLoad(int index);
     void saveEditorScene();
     void executePendingEditorAction(bool saveFirst);
@@ -163,7 +169,11 @@ class Application final
     void setShaderVariant(const std::string &id);
     uint64_t setEnvironment(const std::string &id);
     uint64_t queueEnvironmentLoad(const CatalogEnvironment &environment,
-                                  bool stagedForNativeScene);
+                                  bool reload = false);
+    EnvironmentAssetHandle requestEnvironmentAsset(
+        const CatalogEnvironment &environment,
+        bool reload = false, bool *repositoryHit = nullptr,
+        bool *coalesced = nullptr);
     uint64_t reloadCurrentEnvironment();
     void applyRenderSettings(const RenderSettingsPatch &patch);
     int findSceneIndexByName(const std::string &name) const;
@@ -264,6 +274,32 @@ class Application final
     uint32_t viewportDisplayHeight_ = 0;
     bool viewportVisible_ = false;
     bool viewportHovered_ = false;
+    enum class ReflectionProbeCapturePhase {
+        AwaitingResize,
+        CapturingFaces,
+        Baking,
+        Loading,
+    };
+    struct ReflectionProbeCaptureState {
+        PersistentEntityId entityId;
+        ReflectionProbeCapturePhase phase =
+            ReflectionProbeCapturePhase::AwaitingResize;
+        std::string environmentId;
+        std::string profileId;
+        std::filesystem::path sourcePath;
+        std::filesystem::path backupPath;
+        std::filesystem::path temporaryDirectory;
+        std::array<std::filesystem::path, 6> faceRelativePaths{};
+        std::array<std::filesystem::path, 6> facePaths{};
+        VkExtent2D previousExtent{};
+        uint32_t faceSize = 256;
+        uint32_t faceIndex = 0;
+        uint64_t captureTaskId = 0;
+        uint64_t bakeTaskId = 0;
+        bool catalogEntryAdded = false;
+        std::string status;
+    };
+    std::optional<ReflectionProbeCaptureState> reflectionProbeCapture_;
 #endif
     std::unique_ptr<CaptureService>      captureService_;
     std::vector<RenderItem>              renderItems_;
@@ -286,11 +322,11 @@ class Application final
     std::optional<SceneLoadStats> lastSceneLoadStats_;
     std::unique_ptr<SceneLoadManager> sceneLoadManager_;
     std::shared_ptr<SceneLoadTask> latestSceneLoadTask_;
-    std::unique_ptr<EnvironmentLoadManager> environmentLoadManager_;
-    std::unique_ptr<EnvironmentGpuBuilder> environmentGpuBuilder_;
+    std::unique_ptr<EnvironmentAssetRepository>
+        environmentAssetRepository_;
     std::shared_ptr<EnvironmentLoadTask> latestEnvironmentLoadTask_;
-    uint64_t stagedEnvironmentTaskId_ = 0;
-    std::shared_ptr<EnvironmentGpuResources> stagedEnvironmentResources_;
+    std::unique_ptr<EnvironmentAssetHandle> pendingEnvironmentAsset_;
+    std::unique_ptr<EnvironmentAssetHandle> activeEnvironmentAsset_;
     std::string selectedEnvironmentId_;
     uint64_t lastFinalizedTaskId_ = 0;
     std::unique_ptr<AssetImportManager> assetImportManager_;

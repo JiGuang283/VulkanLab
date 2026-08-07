@@ -199,6 +199,7 @@ set(VKL_ENGINE_SOURCES
     scene/BoundsMath.cpp
     scene/Scene.cpp
     scene/AssetRepository.cpp
+    scene/EnvironmentAssetRepository.cpp
     scene/ModelGpuBuilder.cpp
     scene/ModelLight.cpp
     scene/ModelSourceResolver.cpp
@@ -242,6 +243,7 @@ if(VKL_ENABLE_EDITOR_UI)
         editor/EditorDockWorkspace.cpp
         editor/SceneEditorSession.cpp
         editor/SceneViewportController.cpp
+        editor/ReflectionProbeCapture.cpp
         editor/EditorTheme.cpp
         editor/EditorWidgets.cpp
         editor/panels/AssetsPanel.cpp

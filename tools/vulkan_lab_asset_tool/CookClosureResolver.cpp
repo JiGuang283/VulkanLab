@@ -49,9 +49,23 @@ CookClosure resolveCookClosure(
             modelIds.insert(modelId);
         }
         if (root.loaded.document.environment) {
-            root.environmentId =
-                root.loaded.document.environment->environmentId;
-            environmentIds.insert(*root.environmentId);
+            root.environmentIds.push_back(
+                root.loaded.document.environment->environmentId);
+            environmentIds.insert(root.environmentIds.back());
+        }
+        for (const SceneEntityDocument &entity :
+             root.loaded.document.entities) {
+            if (!entity.reflectionProbe ||
+                !entity.reflectionProbe->environmentId)
+                continue;
+            const std::string &environmentId =
+                *entity.reflectionProbe->environmentId;
+            if (std::find(root.environmentIds.begin(),
+                          root.environmentIds.end(), environmentId) ==
+                root.environmentIds.end()) {
+                root.environmentIds.push_back(environmentId);
+            }
+            environmentIds.insert(environmentId);
         }
         closure.scenes.push_back(std::move(root));
     }

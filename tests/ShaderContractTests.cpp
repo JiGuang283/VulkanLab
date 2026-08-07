@@ -283,6 +283,26 @@ void checkSceneLightBuffer(const SpvReflectDescriptorBinding &binding,
     }
 }
 
+void checkReflectionProbeBuffer(
+    const SpvReflectDescriptorBinding &binding, std::string_view path) {
+    requireShader(binding.block.member_count == 2,
+                  "ReflectionProbeBuffer member count mismatch in " +
+                      std::string(path));
+    const SpvReflectBlockVariable &counts = binding.block.members[0];
+    const SpvReflectBlockVariable &probes = binding.block.members[1];
+    requireShader(variableName(counts.name) == "counts" &&
+                      counts.offset ==
+                          offsetof(vkr::GpuReflectionProbeBuffer, counts),
+                  "ReflectionProbeBuffer.counts mismatch in " +
+                      std::string(path));
+    requireShader(variableName(probes.name) == "probes" &&
+                      probes.offset ==
+                          offsetof(vkr::GpuReflectionProbeBuffer, probes) &&
+                      probes.array.stride == sizeof(vkr::GpuReflectionProbe),
+                  "ReflectionProbeBuffer.probes mismatch in " +
+                      std::string(path));
+}
+
 void checkPushConstant(const SpvReflectShaderModule &module,
                        vkr::ShaderProgramContract contract,
                        bool expectsAtmosphere,
@@ -785,9 +805,11 @@ void checkDescriptors(const ReflectedModule &reflected,
     uint32_t screenSpaceBindingCount = 0;
 
     for (const SpvReflectDescriptorBinding *binding : bindings) {
-        requireShader(binding->count == 1,
-                      "descriptor array is not supported in " +
-                          reflected.path());
+        const bool reflectionProbeArray =
+            binding->set == 2 && binding->binding == 5 &&
+            binding->count == vkr::kMaxReflectionProbes;
+        requireShader(binding->count == 1 || reflectionProbeArray,
+                      "unexpected descriptor array in " + reflected.path());
         if (toneMap) {
             requireShader(
                 binding->set == 0 && binding->binding < 5 &&
@@ -856,6 +878,22 @@ void checkDescriptors(const ReflectedModule &reflected,
                     stage == VK_SHADER_STAGE_FRAGMENT_BIT,
                 "lighting descriptor contract mismatch in " +
                     reflected.path());
+        } else if (binding->set == 2 && binding->binding == 5) {
+            requireShader(
+                binding->count == vkr::kMaxReflectionProbes &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
+                    stage == VK_SHADER_STAGE_FRAGMENT_BIT,
+                "reflection probe cubemap contract mismatch in " +
+                    reflected.path());
+        } else if (binding->set == 2 && binding->binding == 6) {
+            requireShader(
+                binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER &&
+                    stage == VK_SHADER_STAGE_FRAGMENT_BIT,
+                "reflection probe buffer contract mismatch in " +
+                    reflected.path());
+            checkReflectionProbeBuffer(*binding, reflected.path());
         } else if (binding->set == 3 && binding->binding < 5) {
             const bool atmosphereUbo =
                 binding->binding == 0 &&

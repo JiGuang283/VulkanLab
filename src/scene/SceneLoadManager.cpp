@@ -129,6 +129,7 @@ void SceneLoadManager::refresh(const std::shared_ptr<SceneLoadTask> &task) {
         {
             std::lock_guard<std::mutex> lock(task->mutex);
             task->nativeModels.clear();
+            task->nativeEnvironments.clear();
         }
         task->state = SceneLoadState::Cancelled;
         task->phase = SceneLoadPhase::Complete;
@@ -210,6 +211,7 @@ void SceneLoadManager::shutdown() {
             pair.second->modelAsset.reset();
             std::lock_guard<std::mutex> taskLock(pair.second->mutex);
             pair.second->nativeModels.clear();
+            pair.second->nativeEnvironments.clear();
         }
         pendingNative_.reset();
         latest_.reset();
@@ -228,6 +230,7 @@ void SceneLoadManager::cancelTask(
     {
         std::lock_guard<std::mutex> lock(task->mutex);
         task->nativeModels.clear();
+        task->nativeEnvironments.clear();
     }
     task->state = SceneLoadState::Cancelled;
     task->phase = SceneLoadPhase::Complete;

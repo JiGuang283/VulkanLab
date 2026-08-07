@@ -63,7 +63,8 @@ const char *modelBindingStateName(ModelBindingState state) {
 
 std::unique_ptr<RuntimeWorld> RuntimeWorld::fromDocument(
     const SceneDocument &document,
-    const std::vector<ResolvedModelAsset> &assets) {
+    const std::vector<ResolvedModelAsset> &assets,
+    const std::vector<ResolvedEnvironmentAsset> &environments) {
     SceneDocumentService::validate(document);
     auto world = std::make_unique<RuntimeWorld>();
     world->id_ = document.id;
@@ -75,6 +76,10 @@ std::unique_ptr<RuntimeWorld> RuntimeWorld::fromDocument(
     std::unordered_map<std::string, const ResolvedModelAsset *> resolved;
     for (const ResolvedModelAsset &asset : assets)
         resolved[asset.modelId.value()] = &asset;
+    std::unordered_map<std::string, const ResolvedEnvironmentAsset *>
+        resolvedEnvironments;
+    for (const ResolvedEnvironmentAsset &environment : environments)
+        resolvedEnvironments[environment.environmentId] = &environment;
 
     for (const SceneEntityDocument &source : document.entities) {
         SceneEntityDocument entity = source;
@@ -90,14 +95,30 @@ std::unique_ptr<RuntimeWorld> RuntimeWorld::fromDocument(
             throw std::runtime_error("Could not restore scene hierarchy");
     }
     for (const SceneEntityDocument &source : document.entities) {
-        if (!source.modelInstance)
-            continue;
-        const auto found = resolved.find(source.modelInstance->model.value());
         RuntimeWorld::Slot *slot = world->slot(world->find(source.id));
-        if (found != resolved.end() && found->second->asset.asset()) {
-            slot->model->profileId = found->second->profileId;
-            slot->model->asset = found->second->asset;
-            slot->model->state = ModelBindingState::Ready;
+        if (source.modelInstance) {
+            const auto found =
+                resolved.find(source.modelInstance->model.value());
+            if (slot && slot->model && found != resolved.end() &&
+                found->second->asset.asset()) {
+                slot->model->profileId = found->second->profileId;
+                slot->model->asset = found->second->asset;
+                slot->model->state = ModelBindingState::Ready;
+            }
+        }
+        if (source.reflectionProbe &&
+            source.reflectionProbe->environmentId) {
+            const auto foundEnvironment = resolvedEnvironments.find(
+                *source.reflectionProbe->environmentId);
+            if (slot && slot->reflectionProbe &&
+                foundEnvironment != resolvedEnvironments.end() &&
+                foundEnvironment->second->asset.asset()) {
+                slot->reflectionProbe->profileId =
+                    foundEnvironment->second->profileId;
+                slot->reflectionProbe->asset =
+                    foundEnvironment->second->asset;
+                slot->reflectionProbe->state = ModelBindingState::Ready;
+            }
         }
     }
     world->rebuildDerivedState();
@@ -130,6 +151,8 @@ SceneDocument RuntimeWorld::toDocument() const {
         entity.light = entry->light;
         entity.camera = entry->camera;
         entity.atmosphere = entry->atmosphere;
+        if (entry->reflectionProbe)
+            entity.reflectionProbe = entry->reflectionProbe->document;
         document.entities.push_back(std::move(entity));
     }
     return document;
@@ -152,9 +175,33 @@ std::vector<ResolvedModelAsset> RuntimeWorld::resolvedModelAssets() const {
     return result;
 }
 
+std::vector<ResolvedEnvironmentAsset>
+RuntimeWorld::resolvedEnvironmentAssets() const {
+    std::vector<ResolvedEnvironmentAsset> result;
+    std::unordered_set<std::string> seen;
+    for (EntityHandle handle : order_) {
+        const Slot *entry = slot(handle);
+        if (!entry || !entry->reflectionProbe ||
+            !entry->reflectionProbe->document.environmentId ||
+            entry->reflectionProbe->state != ModelBindingState::Ready ||
+            !entry->reflectionProbe->asset.asset() ||
+            !seen.insert(
+                     *entry->reflectionProbe->document.environmentId)
+                 .second) {
+            continue;
+        }
+        result.push_back({
+            *entry->reflectionProbe->document.environmentId,
+            entry->reflectionProbe->profileId,
+            entry->reflectionProbe->asset});
+    }
+    return result;
+}
+
 void RuntimeWorld::replaceDocument(const SceneDocument &document) {
     std::unique_ptr<RuntimeWorld> replacement =
-        fromDocument(document, resolvedModelAssets());
+        fromDocument(document, resolvedModelAssets(),
+                     resolvedEnvironmentAssets());
     id_ = std::move(replacement->id_);
     displayName_ = std::move(replacement->displayName_);
     activeCamera_ = std::move(replacement->activeCamera_);
@@ -167,6 +214,7 @@ void RuntimeWorld::replaceDocument(const SceneDocument &document) {
     bounds_ = replacement->bounds_;
     lights_ = std::move(replacement->lights_);
     atmosphere_ = std::move(replacement->atmosphere_);
+    reflectionProbes_ = std::move(replacement->reflectionProbes_);
     materials_ = std::move(replacement->materials_);
     derivedDirty_ = true;
 }
@@ -231,6 +279,13 @@ EntityHandle RuntimeWorld::createEntity(SceneEntityDocument entity,
     entry.light = std::move(entity.light);
     entry.camera = std::move(entity.camera);
     entry.atmosphere = std::move(entity.atmosphere);
+    if (entity.reflectionProbe) {
+        RuntimeReflectionProbeComponent component;
+        component.document = std::move(*entity.reflectionProbe);
+        entry.reflectionProbe = std::move(component);
+    } else {
+        entry.reflectionProbe.reset();
+    }
     if (entity.modelInstance) {
         RuntimeModelInstanceComponent component;
         component.modelId = entity.modelInstance->model;
@@ -277,6 +332,7 @@ void RuntimeWorld::destroyOne(EntityHandle handle) {
     byId_.erase(entry->id);
     eraseHandle(order_, handle);
     entry->model.reset();
+    entry->reflectionProbe.reset();
     entry->children.clear();
     entry->alive = false;
     ++entry->generation;
@@ -445,6 +501,34 @@ bool RuntimeWorld::setAtmosphere(
     return true;
 }
 
+bool RuntimeWorld::setReflectionProbe(
+    EntityHandle handle,
+    std::optional<ReflectionProbeComponentDocument> component) {
+    Slot *entry = slot(handle);
+    if (!entry)
+        return false;
+    if (!component) {
+        entry->reflectionProbe.reset();
+    } else {
+        if (entry->reflectionProbe &&
+            entry->reflectionProbe->document.environmentId ==
+                component->environmentId) {
+            entry->reflectionProbe->document = std::move(*component);
+            derivedDirty_ = true;
+            return true;
+        }
+        RuntimeReflectionProbeComponent runtime;
+        runtime.document = std::move(*component);
+        if (entry->reflectionProbe) {
+            runtime.bindingRevision =
+                entry->reflectionProbe->bindingRevision + 1;
+        }
+        entry->reflectionProbe = std::move(runtime);
+    }
+    derivedDirty_ = true;
+    return true;
+}
+
 bool RuntimeWorld::setActiveCamera(const PersistentEntityId &id) {
     Slot *entry = slot(find(id));
     if (!entry || !entry->camera)
@@ -481,6 +565,35 @@ std::shared_ptr<const ModelAsset>
 RuntimeWorld::modelAsset(EntityHandle handle) const {
     const Slot *entry = slot(handle);
     return entry && entry->model ? entry->model->asset.asset() : nullptr;
+}
+
+bool RuntimeWorld::bindReflectionProbe(
+    EntityHandle handle, uint64_t expectedRevision,
+    std::string profileId, EnvironmentAssetHandle asset,
+    std::string error) {
+    Slot *entry = slot(handle);
+    if (!entry || !entry->reflectionProbe ||
+        entry->reflectionProbe->bindingRevision != expectedRevision)
+        return false;
+    entry->reflectionProbe->profileId = std::move(profileId);
+    entry->reflectionProbe->asset = std::move(asset);
+    entry->reflectionProbe->error = std::move(error);
+    entry->reflectionProbe->state =
+        !entry->reflectionProbe->error.empty()
+            ? ModelBindingState::Failed
+            : (entry->reflectionProbe->asset.asset()
+                   ? ModelBindingState::Ready
+                   : ModelBindingState::Loading);
+    derivedDirty_ = true;
+    return true;
+}
+
+uint64_t RuntimeWorld::reflectionProbeBindingRevision(
+    EntityHandle handle) const {
+    const Slot *entry = slot(handle);
+    return entry && entry->reflectionProbe
+               ? entry->reflectionProbe->bindingRevision
+               : 0;
 }
 
 void RuntimeWorld::setIdentity(SceneDocumentId id, std::string displayName) {
@@ -539,6 +652,7 @@ void RuntimeWorld::rebuildDerivedState() {
     bounds_ = {};
     lights_.clear();
     atmosphere_.reset();
+    reflectionProbes_.clear();
     materials_.clear();
     std::unordered_set<const MaterialInstance *> seenMaterials;
 
@@ -574,6 +688,31 @@ void RuntimeWorld::rebuildDerivedState() {
                 glm::vec3(0.0f, 0.0f, -1.0f));
         }
         lights_.push_back(std::move(light));
+    }
+
+    for (EntityHandle handle : order_) {
+        const Slot *entry = slot(handle);
+        if (!entry || !entry->effectiveEnabled ||
+            !entry->reflectionProbe ||
+            entry->reflectionProbe->state != ModelBindingState::Ready)
+            continue;
+        std::shared_ptr<EnvironmentGpuResources> environment =
+            entry->reflectionProbe->asset.asset();
+        if (!environment)
+            continue;
+        RenderWorldReflectionProbe probe;
+        probe.entityId = entry->id;
+        probe.world = entry->transform.world;
+        probe.worldToLocal = glm::inverse(entry->transform.world);
+        probe.capturePositionWS =
+            glm::vec3(entry->transform.world *
+                      glm::vec4(entry->reflectionProbe->document.captureOffset,
+                                1.0f));
+        probe.parameters = entry->reflectionProbe->document;
+        probe.environment = std::move(environment);
+        probe.environmentGeneration =
+            entry->reflectionProbe->asset.generation();
+        reflectionProbes_.push_back(std::move(probe));
     }
 
     for (EntityHandle handle : order_) {
@@ -637,8 +776,34 @@ void RuntimeWorld::refreshModelBindingStates() {
     }
 }
 
+void RuntimeWorld::refreshReflectionProbeBindingStates() {
+    for (EntityHandle handle : order_) {
+        Slot *entry = slot(handle);
+        if (!entry || !entry->reflectionProbe ||
+            entry->reflectionProbe->state != ModelBindingState::Loading)
+            continue;
+        const EnvironmentAssetHandleSnapshot snapshot =
+            entry->reflectionProbe->asset.snapshot();
+        if (snapshot.state == EnvironmentAssetState::Ready ||
+            snapshot.state == EnvironmentAssetState::Retiring) {
+            entry->reflectionProbe->state = ModelBindingState::Ready;
+            entry->reflectionProbe->error.clear();
+            derivedDirty_ = true;
+        } else if (snapshot.state == EnvironmentAssetState::Failed ||
+                   snapshot.state == EnvironmentAssetState::Cancelled) {
+            entry->reflectionProbe->state = ModelBindingState::Failed;
+            entry->reflectionProbe->error =
+                snapshot.error.empty()
+                    ? "Reflection probe environment loading failed"
+                    : snapshot.error;
+            derivedDirty_ = true;
+        }
+    }
+}
+
 void RuntimeWorld::update(float, float) {
     refreshModelBindingStates();
+    refreshReflectionProbeBindingStates();
     rebuildDerivedState();
 }
 
@@ -739,6 +904,12 @@ std::optional<RenderWorldAtmosphere> RuntimeWorld::worldAtmosphere() const {
     return atmosphere_;
 }
 
+const std::vector<RenderWorldReflectionProbe> &
+RuntimeWorld::reflectionProbes() const {
+    const_cast<RuntimeWorld *>(this)->rebuildDerivedState();
+    return reflectionProbes_;
+}
+
 std::vector<RuntimeEntitySnapshot> RuntimeWorld::entities() const {
     const_cast<RuntimeWorld *>(this)->rebuildDerivedState();
     std::vector<RuntimeEntitySnapshot> result;
@@ -778,6 +949,17 @@ RuntimeWorld::entity(EntityHandle handle) const {
     result.light = entry->light;
     result.camera = entry->camera;
     result.atmosphere = entry->atmosphere;
+    if (entry->reflectionProbe) {
+        result.reflectionProbe = entry->reflectionProbe->document;
+        result.reflectionProbeBindingState =
+            entry->reflectionProbe->state;
+        result.reflectionProbeBindingError =
+            entry->reflectionProbe->error;
+        result.reflectionProbeProfileId =
+            entry->reflectionProbe->profileId;
+        result.reflectionProbeBindingRevision =
+            entry->reflectionProbe->bindingRevision;
+    }
     return result;
 }
 

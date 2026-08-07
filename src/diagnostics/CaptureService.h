@@ -29,6 +29,7 @@ class CaptureService {
 
     uint64_t request(std::filesystem::path relativeOutputPath = {},
                      bool includeGui = false);
+    uint64_t requestHdr(std::filesystem::path relativeOutputPath);
     bool cancel(uint64_t taskId);
 
     std::optional<CaptureTaskSnapshot> task(uint64_t taskId) const;
@@ -36,7 +37,8 @@ class CaptureService {
 
     std::optional<CaptureFrameSelection>
     prepareFrame(const CaptureImageSource &viewport,
-                 const CaptureImageSource &workspace);
+                 const CaptureImageSource &workspace,
+                 const CaptureImageSource &hdr = {});
     void recordCopy(VkCommandBuffer commandBuffer);
     void frameSubmitted(uint64_t submissionSerial);
     void update(uint64_t completedSubmissionSerial);

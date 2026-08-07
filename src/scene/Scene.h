@@ -83,6 +83,10 @@ class Scene final : public IRenderWorld {
     std::optional<RenderWorldAtmosphere> worldAtmosphere() const override {
         return std::nullopt;
     }
+    const std::vector<RenderWorldReflectionProbe> &
+    reflectionProbes() const override {
+        return reflectionProbes_;
+    }
     std::optional<CameraPose> initialCamera;
 
   private:
@@ -96,6 +100,7 @@ class Scene final : public IRenderWorld {
     std::vector<SceneLight>                legacyLights_;
     std::vector<SceneLight>                lights_;
     Bounds                                 bounds_;
+    std::vector<RenderWorldReflectionProbe> reflectionProbes_;
     UpdateFn                               updateFn_;
 
     void rebuildDerivedState();

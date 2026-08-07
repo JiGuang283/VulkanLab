@@ -599,6 +599,22 @@ void ArtifactIndex::refreshSceneDocumentRecord(
             refs.emplace("Environment", environmentId,
                          environment->environmentProfile);
         }
+        for (const SceneEntityDocument &entity : loaded.document.entities) {
+            if (!entity.reflectionProbe ||
+                !entity.reflectionProbe->environmentId)
+                continue;
+            const std::string &environmentId =
+                *entity.reflectionProbe->environmentId;
+            const CatalogEnvironment *environment =
+                catalog.findEnvironment(environmentId);
+            if (!environment) {
+                throw std::runtime_error(
+                    "Unknown reflection probe environment reference: " +
+                    environmentId);
+            }
+            refs.emplace("Environment", environmentId,
+                         environment->environmentProfile);
+        }
         for (const auto &[kind, id, profile] : refs) {
             record.assetReferences.push_back(
                 {kind == "Environment" ? ArtifactKind::Environment

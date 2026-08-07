@@ -27,9 +27,12 @@ void main()
         clamp(mr.g * push.roughnessAlpha.x, 0.04, 1.0);
     float metallic =
         clamp(mr.b * push.emissiveMetallic.w, 0.0, 1.0);
-    vec3 color = ubo.environmentParams.x < 0.5
+    vec3 globalSpecular = ubo.environmentParams.x < 0.5
         ? vec3(0.0)
         : evaluateIblSpecular(n, v, albedo, roughness, metallic) *
           ubo.environmentParams.y;
+    vec3 color = evaluateReflectionProbeSpecular(
+        fragPositionWS, n, v, albedo, roughness, metallic,
+        globalSpecular);
     outColor = vec4(color, 1.0);
 }

@@ -12,6 +12,7 @@
 #include "render/RendererShaderPaths.h"
 #include "render/Atmosphere.h"
 #include "render/Visibility.h"
+#include "scene_data/SceneIds.h"
 
 #include <memory>
 #include <array>
@@ -48,11 +49,27 @@ struct RendererViewportOutput {
     std::array<VkImageView, MAX_FRAMES_IN_FLIGHT> imageViews{};
 };
 
+struct RendererHdrOutput {
+    VkExtent2D extent{};
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    std::array<VkImage, MAX_FRAMES_IN_FLIGHT> images{};
+};
+
 struct SceneLightBufferStatus {
     uint32_t limit = kMaxSceneLights;
     uint32_t activeLights = 0;
     std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> frameCapacities{};
     uint64_t allocatedBytes = 0;
+};
+
+struct ReflectionProbeRuntimeStatus {
+    uint32_t limit = kMaxReflectionProbes;
+    uint32_t sourceCount = 0;
+    uint32_t activeCount = 0;
+    uint32_t ignoredCount = 0;
+    uint64_t descriptorGeneration = 0;
+    uint64_t allocatedBytes = 0;
+    std::vector<PersistentEntityId> ignoredEntityIds;
 };
 
 struct OcclusionCullingStatus {
@@ -165,6 +182,7 @@ class Renderer {
     VkRenderPass renderPass() const;
     VkExtent2D viewportExtent() const;
     RendererViewportOutput viewportOutput() const;
+    RendererHdrOutput hdrOutput() const;
     const GpuPassTimings &gpuPassTimings() const;
     VkDescriptorSetLayout globalDescriptorSetLayout() const {
         return globalDescriptorSetLayout_;
@@ -181,6 +199,7 @@ class Renderer {
     bool bloomSupported() const;
     const std::string &bloomUnsupportedReason() const;
     SceneLightBufferStatus sceneLightBufferStatus() const;
+    ReflectionProbeRuntimeStatus reflectionProbeStatus() const;
     OcclusionCullingStatus occlusionCullingStatus() const;
     SurfaceDataStatus surfaceDataStatus() const;
     ScreenSpaceEffectsStatus screenSpaceEffectsStatus() const;
@@ -199,11 +218,15 @@ class Renderer {
     struct LightingDescriptorGeneration {
         std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> sets{};
         std::shared_ptr<EnvironmentGpuResources> environment;
+        std::vector<std::shared_ptr<EnvironmentGpuResources>>
+            reflectionProbeEnvironments;
+        uint64_t generation = 0;
         uint64_t retireAfterSerial = 0;
     };
 
     void createUniformBuffers();
     void createSceneLightBuffers();
+    void createReflectionProbeBuffers();
     void ensureSceneLightCapacity(uint32_t frameIndex,
                                   uint32_t requiredLights);
     void updateSceneLightDescriptor(uint32_t frameIndex);
@@ -222,7 +245,11 @@ class Renderer {
     void initializeAtmosphereImages();
     void createFallbackEnvironment();
     void createLightingGeneration(
-        std::shared_ptr<EnvironmentGpuResources> environment);
+        std::shared_ptr<EnvironmentGpuResources> environment,
+        std::vector<std::shared_ptr<EnvironmentGpuResources>>
+            reflectionProbeEnvironments = {});
+    void updateReflectionProbes(const RenderView &view,
+                                uint32_t frameIndex);
     void collectRetiredLightingGenerations();
     void freeLightingGeneration(
         LightingDescriptorGeneration &generation);
@@ -237,6 +264,8 @@ class Renderer {
     std::vector<std::unique_ptr<Buffer>> uniformBuffers_;
     std::array<FrameSceneLightStorage, MAX_FRAMES_IN_FLIGHT>
         sceneLightBuffers_{};
+    std::array<std::unique_ptr<Buffer>, MAX_FRAMES_IN_FLIGHT>
+        reflectionProbeBuffers_{};
     uint32_t activeSceneLightCount_ = 0;
     VkDeviceSize                         uniformBufferSize_ = 0;
     VkDescriptorSetLayout globalDescriptorSetLayout_ = VK_NULL_HANDLE;
@@ -255,6 +284,8 @@ class Renderer {
     std::unique_ptr<LightingDescriptorGeneration>
         currentLightingGeneration_;
     std::deque<LightingDescriptorGeneration> retiredLightingGenerations_;
+    ReflectionProbeRuntimeStatus reflectionProbeStatus_{};
+    uint64_t nextLightingDescriptorGeneration_ = 1;
     std::unique_ptr<RenderResourceRegistry> renderResources_;
     RendererResourceHandles resourceHandles_{};
     RendererShaderPaths shaderPaths_;

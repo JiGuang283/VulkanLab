@@ -128,6 +128,25 @@ const char *lightTypeName(SceneDocumentLightType type) {
     return "directional";
 }
 
+ReflectionProbeShape readReflectionProbeShape(
+    const std::string &value, const std::string &field) {
+    if (value == "box")
+        return ReflectionProbeShape::Box;
+    if (value == "sphere")
+        return ReflectionProbeShape::Sphere;
+    throw documentError(field, "expected box or sphere");
+}
+
+const char *reflectionProbeShapeName(ReflectionProbeShape shape) {
+    switch (shape) {
+    case ReflectionProbeShape::Box:
+        return "box";
+    case ReflectionProbeShape::Sphere:
+        return "sphere";
+    }
+    return "box";
+}
+
 bool pathWithin(const std::filesystem::path &root,
                 const std::filesystem::path &candidate) {
     std::error_code error;
@@ -321,6 +340,34 @@ AtmosphereComponentDocument parseAtmosphere(const Json &value,
     return atmosphere;
 }
 
+ReflectionProbeComponentDocument
+parseReflectionProbe(const Json &value, const std::string &field) {
+    requireOnlyKeys(value, field,
+                    {"environment", "shape", "boxExtents",
+                     "sphereRadius", "blendDistance", "priority",
+                     "intensity", "boxProjection", "captureOffset"});
+    ReflectionProbeComponentDocument probe;
+    if (value.contains("environment") &&
+        !value.at("environment").is_null()) {
+        probe.environmentId = value.at("environment").get<std::string>();
+    }
+    probe.shape = readReflectionProbeShape(
+        value.at("shape").get<std::string>(), field + ".shape");
+    probe.boxExtents =
+        readVec3(value.at("boxExtents"), field + ".boxExtents");
+    probe.sphereRadius = finiteFloat(value.at("sphereRadius"),
+                                     field + ".sphereRadius");
+    probe.blendDistance = finiteFloat(value.at("blendDistance"),
+                                      field + ".blendDistance");
+    probe.priority = value.at("priority").get<int32_t>();
+    probe.intensity =
+        finiteFloat(value.at("intensity"), field + ".intensity");
+    probe.boxProjection = value.at("boxProjection").get<bool>();
+    probe.captureOffset =
+        readVec3(value.at("captureOffset"), field + ".captureOffset");
+    return probe;
+}
+
 SceneEntityDocument parseEntity(const Json &value, size_t index,
                                 uint32_t sourceSchemaVersion) {
     const std::string field = "entities[" + std::to_string(index) + "]";
@@ -338,7 +385,11 @@ SceneEntityDocument parseEntity(const Json &value, size_t index,
 
     const Json &components = value.at("components");
     requireOnlyKeys(components, field + ".components",
-                    sourceSchemaVersion >= 3
+                    sourceSchemaVersion >= 4
+                        ? std::initializer_list<const char *>{
+                              "modelInstance", "light", "camera",
+                              "atmosphere", "reflectionProbe"}
+                    : sourceSchemaVersion >= 3
                         ? std::initializer_list<const char *>{
                               "modelInstance", "light", "camera",
                               "atmosphere"}
@@ -359,6 +410,12 @@ SceneEntityDocument parseEntity(const Json &value, size_t index,
     if (sourceSchemaVersion >= 3 && components.contains("atmosphere")) {
         entity.atmosphere = parseAtmosphere(
             components.at("atmosphere"), field + ".components.atmosphere");
+    }
+    if (sourceSchemaVersion >= 4 &&
+        components.contains("reflectionProbe")) {
+        entity.reflectionProbe = parseReflectionProbe(
+            components.at("reflectionProbe"),
+            field + ".components.reflectionProbe");
     }
     return entity;
 }
@@ -495,6 +552,22 @@ Json serializeDocument(const SceneDocument &document) {
                  a.aerialPerspectiveStartMeters},
                 {"aerialPerspectiveDistanceScale",
                  a.aerialPerspectiveDistanceScale}};
+        }
+        if (entity.reflectionProbe) {
+            const ReflectionProbeComponentDocument &probe =
+                *entity.reflectionProbe;
+            components["reflectionProbe"] = {
+                {"environment",
+                 probe.environmentId ? Json(*probe.environmentId)
+                                     : Json(nullptr)},
+                {"shape", reflectionProbeShapeName(probe.shape)},
+                {"boxExtents", writeVec3(probe.boxExtents)},
+                {"sphereRadius", probe.sphereRadius},
+                {"blendDistance", probe.blendDistance},
+                {"priority", probe.priority},
+                {"intensity", probe.intensity},
+                {"boxProjection", probe.boxProjection},
+                {"captureOffset", writeVec3(probe.captureOffset)}};
         }
 
         Json item = Json::object();
@@ -808,6 +881,48 @@ void SceneDocumentService::validate(
                                           glm::vec3(1.0f)))) {
                 throw documentError(field + ".components.atmosphere",
                                     "scattering must be non-negative and albedo must be in [0, 1]");
+            }
+        }
+        if (entity.reflectionProbe) {
+            const ReflectionProbeComponentDocument &probe =
+                *entity.reflectionProbe;
+            const std::string probeField =
+                field + ".components.reflectionProbe";
+            validateFiniteVec3(probe.boxExtents,
+                               probeField + ".boxExtents");
+            validateFiniteVec3(probe.captureOffset,
+                               probeField + ".captureOffset");
+            if (glm::any(glm::lessThanEqual(probe.boxExtents,
+                                            glm::vec3(kEpsilon)))) {
+                throw documentError(probeField + ".boxExtents",
+                                    "components must be positive");
+            }
+            if (!std::isfinite(probe.sphereRadius) ||
+                probe.sphereRadius <= kEpsilon) {
+                throw documentError(probeField + ".sphereRadius",
+                                    "must be finite and positive");
+            }
+            if (!std::isfinite(probe.blendDistance) ||
+                probe.blendDistance < 0.0f) {
+                throw documentError(probeField + ".blendDistance",
+                                    "must be finite and non-negative");
+            }
+            if (!std::isfinite(probe.intensity) ||
+                probe.intensity < 0.0f) {
+                throw documentError(probeField + ".intensity",
+                                    "must be finite and non-negative");
+            }
+            if (probe.environmentId) {
+                if (!isStableAssetId(*probe.environmentId)) {
+                    throw documentError(probeField + ".environment",
+                                        "invalid stable ID");
+                }
+                if (references &&
+                    references->environmentIds.count(
+                        *probe.environmentId) == 0) {
+                    throw documentError(probeField + ".environment",
+                                        "unknown Catalog environment");
+                }
             }
         }
     }

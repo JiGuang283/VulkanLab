@@ -273,7 +273,8 @@ void main()
 
     IndirectLightingComponents indirect =
         evaluateIndirectLightingComponents(
-            n, v, albedo, roughness, metallic, occlusion);
+            n, v, albedo, roughness, metallic, occlusion,
+            fragPositionWS);
     vec3 baselineSpecular = indirect.specular;
     vec3 baselineDiffuse = indirect.diffuse;
     vec3 color = applyTransmissionApprox(

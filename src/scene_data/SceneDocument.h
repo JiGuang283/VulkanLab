@@ -15,6 +15,7 @@
 namespace vkr {
 
 enum class SceneDocumentLightType { Directional, Point, Spot };
+enum class ReflectionProbeShape { Box, Sphere };
 
 struct SceneTransformDocument {
     glm::vec3 translation{0.0f};
@@ -56,6 +57,18 @@ struct AtmosphereComponentDocument {
     float aerialPerspectiveDistanceScale = 1.0f;
 };
 
+struct ReflectionProbeComponentDocument {
+    std::optional<std::string> environmentId;
+    ReflectionProbeShape shape = ReflectionProbeShape::Box;
+    glm::vec3 boxExtents{5.0f};
+    float sphereRadius = 5.0f;
+    float blendDistance = 1.0f;
+    int32_t priority = 0;
+    float intensity = 1.0f;
+    bool boxProjection = true;
+    glm::vec3 captureOffset{0.0f};
+};
+
 struct CameraComponentDocument {
     float verticalFovRadians = 1.04719755f;
     float nearPlane = 0.05f;
@@ -72,6 +85,7 @@ struct SceneEntityDocument {
     std::optional<LightComponentDocument> light;
     std::optional<CameraComponentDocument> camera;
     std::optional<AtmosphereComponentDocument> atmosphere;
+    std::optional<ReflectionProbeComponentDocument> reflectionProbe;
 };
 
 struct SceneAmbientDocument {
@@ -86,7 +100,7 @@ struct SceneEnvironmentDocument {
 };
 
 struct SceneDocument {
-    static constexpr uint32_t kSchemaVersion = 3;
+    static constexpr uint32_t kSchemaVersion = 4;
 
     uint32_t schemaVersion = kSchemaVersion;
     SceneDocumentId id;

@@ -19,7 +19,8 @@ class CaptureTaskQueue {
 
     uint64_t nextTaskId() const { return nextTaskId_; }
     uint64_t enqueue(std::filesystem::path relativeOutputPath,
-                     bool includeGui);
+                     bool includeGui,
+                     CaptureSourceKind source = CaptureSourceKind::Viewport);
     std::optional<uint64_t> beginNext();
     bool cancel(uint64_t taskId);
     void transition(uint64_t taskId, CaptureTaskState state);

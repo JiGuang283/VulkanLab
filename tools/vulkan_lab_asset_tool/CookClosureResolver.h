@@ -15,7 +15,7 @@ struct CookSceneRoot {
     const CatalogSceneDocument *catalogEntry = nullptr;
     LoadedSceneDocument loaded;
     std::vector<std::string> modelIds;
-    std::optional<std::string> environmentId;
+    std::vector<std::string> environmentIds;
 };
 
 struct CookClosure {

@@ -17,7 +17,8 @@ CaptureTaskQueue::CaptureTaskQueue(size_t maximumActiveTasks,
 }
 
 uint64_t CaptureTaskQueue::enqueue(std::filesystem::path relativeOutputPath,
-                                   bool includeGui) {
+                                   bool includeGui,
+                                   CaptureSourceKind source) {
     if (activeCount() >= maximumActiveTasks_)
         throw std::length_error("capture task queue is full");
     if (nextTaskId_ == std::numeric_limits<uint64_t>::max())
@@ -28,6 +29,7 @@ uint64_t CaptureTaskQueue::enqueue(std::filesystem::path relativeOutputPath,
     task.request.taskId = taskId;
     task.request.relativeOutputPath = std::move(relativeOutputPath);
     task.request.includeGui = includeGui;
+    task.request.source = source;
     tasks_.emplace(taskId, std::move(task));
     queuedTaskIds_.push_back(taskId);
     taskOrder_.push_back(taskId);

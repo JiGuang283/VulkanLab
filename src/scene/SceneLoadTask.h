@@ -2,6 +2,7 @@
 
 #include "diagnostics/SceneLoadStats.h"
 #include "ModelAssetHandle.h"
+#include "EnvironmentAssetHandle.h"
 #include "scene_data/SceneDocument.h"
 
 #include <atomic>
@@ -82,6 +83,13 @@ struct NativeSceneModelBinding {
     ModelAssetHandle asset;
 };
 
+struct NativeSceneEnvironmentBinding {
+    std::string environmentId;
+    std::string profileId;
+    bool globalEnvironment = false;
+    EnvironmentAssetHandle asset;
+};
+
 struct SceneLoadTask {
     uint64_t id = 0;
     uint64_t generation = 0;
@@ -108,12 +116,16 @@ struct SceneLoadTask {
     ModelAssetHandle modelAsset;
     std::optional<LoadedSceneDocument> loadedDocument;
     std::vector<NativeSceneModelBinding> nativeModels;
+    std::vector<NativeSceneEnvironmentBinding> nativeEnvironments;
     uint64_t uniqueModelCount = 0;
     uint64_t readyModelCount = 0;
     std::string failedModelId;
     std::string targetEnvironmentId;
     uint64_t environmentTaskId = 0;
     bool environmentReady = false;
+    uint64_t uniqueEnvironmentCount = 0;
+    uint64_t readyEnvironmentCount = 0;
+    std::string failedEnvironmentId;
     std::string error;
 };
 
