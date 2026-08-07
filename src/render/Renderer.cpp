@@ -27,6 +27,7 @@
 #include "render/pass/ScreenSpacePyramidPass.h"
 #include "render/pass/SsaoPass.h"
 #include "render/pass/SsrPass.h"
+#include "render/pass/SsgiPass.h"
 #include "render/pass/CacaoNormalAdapterPass.h"
 #include "render/pass/CacaoPass.h"
 #include "render/pass/GtaoPass.h"
@@ -231,6 +232,18 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
         view.settings.reflectionMode == ReflectionMode::Ssr;
     const bool ssrPassRequired = screenSupport.ssrAvailable &&
         (ssrShadingActive || ssrDebugRequested);
+    const bool ssgiDebugRequested =
+        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsgiRaw ||
+        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsgiTemporal ||
+        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsgiFiltered ||
+        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsgiConfidence ||
+        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsgiVariance ||
+        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsgiRejection;
+    const bool ssgiShadingActive =
+        screenSupport.ssgiAvailable && shaderVariant.supportsScreenSpace &&
+        view.settings.globalIlluminationMode == GlobalIlluminationMode::Ssgi;
+    const bool ssgiPassRequired = screenSupport.ssgiAvailable &&
+        (ssgiShadingActive || ssgiDebugRequested);
     const AmbientOcclusionMode activeAoMode =
         gtaoShadingActive
             ? AmbientOcclusionMode::Gtao
@@ -303,6 +316,7 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
           (device_->cacaoSupport().available && cacaoPassRequired) ||
           gtaoPassRequired ||
           ssrPassRequired ||
+          ssgiPassRequired ||
           taaPassRequired);
     renderFrame.features.hiZRequired =
         device_->occlusionCullingSupport().available &&
@@ -315,11 +329,12 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
              ScreenSpaceDebugView::NearestDepth ||
          gtaoPassRequired);
     renderFrame.features.screenDepthPyramidRequired =
-        renderFrame.features.screenDepthPyramidRequired || ssrPassRequired;
+        renderFrame.features.screenDepthPyramidRequired || ssrPassRequired ||
+        ssgiPassRequired;
     renderFrame.features.sceneColorPyramidRequired =
         screenSupport.colorPyramidAvailable &&
         (view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SceneColor ||
-         ssrPassRequired);
+         ssrPassRequired || ssgiPassRequired);
     renderFrame.features.ssaoRequired =
         screenSupport.ssaoAvailable && ssaoPassRequired;
     renderFrame.features.cacaoRequired = cacaoPassRequired;
@@ -328,10 +343,17 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.features.taaActive = taaShadingActive;
     renderFrame.features.ssrRequired = ssrPassRequired;
     renderFrame.features.ssrActive = ssrShadingActive;
+    renderFrame.features.ssgiRequired = ssgiPassRequired;
+    renderFrame.features.ssgiActive = ssgiShadingActive;
     lastSurfaceDataActive_ = renderFrame.features.surfaceDataRequired;
 
     screenSpaceStatus_.requestedMode = view.settings.ambientOcclusionMode;
     screenSpaceStatus_.activeMode = activeAoMode;
+    screenSpaceStatus_.requestedGiMode =
+        view.settings.globalIlluminationMode;
+    screenSpaceStatus_.activeGiMode =
+        ssgiShadingActive ? GlobalIlluminationMode::Ssgi
+                          : GlobalIlluminationMode::AmbientOrIbl;
     renderFrame.visibilityDrawStream =
         occlusionCullPass_
             ? &occlusionCullPass_->drawStream(frame.frameIndex)
@@ -369,6 +391,15 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
         screenSpaceStatus_.ssrHistoryGeneration = ssr.historyGeneration;
         screenSpaceStatus_.ssrLastFrameSerial = ssr.lastFrameSerial;
         screenSpaceStatus_.ssrLastResetReason = ssr.lastResetReason;
+    }
+    if (ssgiPass_) {
+        const SsgiPassStatus &ssgi = ssgiPass_->status();
+        screenSpaceStatus_.ssgiActive = ssgi.active;
+        screenSpaceStatus_.ssgiHistoryValid = ssgi.historyValid;
+        screenSpaceStatus_.ssgiExtent = ssgi.extent;
+        screenSpaceStatus_.ssgiHistoryGeneration = ssgi.historyGeneration;
+        screenSpaceStatus_.ssgiLastFrameSerial = ssgi.lastFrameSerial;
+        screenSpaceStatus_.ssgiLastResetReason = ssgi.lastResetReason;
     }
     if (atmosphereLutPass_)
         atmosphereStatus_ = atmosphereLutPass_->status();
@@ -1113,12 +1144,14 @@ ScreenSpaceEffectsStatus Renderer::screenSpaceEffectsStatus() const {
     status.gtaoSupported = support.gtaoAvailable;
     status.taaSupported = support.taaAvailable;
     status.ssrSupported = support.ssrAvailable;
+    status.ssgiSupported = support.ssgiAvailable;
     status.depthPyramidUnavailableReason = support.depthPyramidReason;
     status.colorPyramidUnavailableReason = support.colorPyramidReason;
     status.ssaoUnavailableReason = support.ssaoReason;
     status.gtaoUnavailableReason = support.gtaoReason;
     status.taaUnavailableReason = support.taaReason;
     status.ssrUnavailableReason = support.ssrReason;
+    status.ssgiUnavailableReason = support.ssgiReason;
     const CacaoSupport &cacaoSupport = device_->cacaoSupport();
     status.cacaoCompiled = cacaoSupport.compiled;
     status.cacaoSupported = cacaoSupport.available;
@@ -1207,6 +1240,17 @@ ScreenSpaceEffectsStatus Renderer::screenSpaceEffectsStatus() const {
             mipBytes(resourceHandles_.baselineSpecular, 8);
         status.estimatedMemoryBytes +=
             mipBytes(resourceHandles_.compositedHdrColor, 8);
+    }
+    if (resourceHandles_.ssgiRaw.valid()) {
+        status.ssgiExtent = renderResources_->extent(resourceHandles_.ssgiRaw);
+        const uint64_t imageBytes =
+            static_cast<uint64_t>(status.ssgiExtent.width) *
+            status.ssgiExtent.height * 8u * MAX_FRAMES_IN_FLIGHT;
+        status.estimatedMemoryBytes += imageBytes * 6u;
+        status.estimatedMemoryBytes +=
+            mipBytes(resourceHandles_.surfaceAlbedoMetallic, 4);
+        status.estimatedMemoryBytes +=
+            mipBytes(resourceHandles_.baselineDiffuse, 8);
     }
     return status;
 }
@@ -1336,6 +1380,16 @@ void Renderer::createRenderPipeline() {
         pipeline_.addPass(std::move(ssrPass));
     }
 
+    if (screenSupport.ssgiAvailable) {
+        auto ssgiPass = std::make_unique<SsgiPass>(
+            *device_, *renderResources_, resourceHandles_,
+            *descriptorAllocator_, globalDescriptorSetLayout_,
+            shaderPaths_.ssgiTraceComp, shaderPaths_.ssgiTemporalComp,
+            shaderPaths_.ssgiFilterComp);
+        ssgiPass_ = ssgiPass.get();
+        pipeline_.addPass(std::move(ssgiPass));
+    }
+
     RendererResourceHandles postProcessHandles = resourceHandles_;
     pipeline_.addPass(std::make_unique<HdrCompositePass>(
         *device_, *renderResources_, resourceHandles_,
@@ -1383,10 +1437,15 @@ void Renderer::createRenderPipeline() {
         resourceHandles_.ssrHistory,
         resourceHandles_.ssrFiltered,
         resourceHandles_.ssrDebug,
+        resourceHandles_.ssgiRaw,
+        resourceHandles_.ssgiHistory,
+        resourceHandles_.ssgiFiltered,
+        resourceHandles_.ssgiDebug,
         resourceHandles_.screenPyramidSampler,
         resourceHandles_.ssaoSampler,
         resourceHandles_.taaSampler,
         resourceHandles_.ssrSampler,
+        resourceHandles_.ssgiSampler,
         *descriptorAllocator_,
         shaderPaths_.fullscreenVert, shaderPaths_.toneMapFrag);
     toneMapPass_ = toneMapPass.get();

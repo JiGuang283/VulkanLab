@@ -410,13 +410,36 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                  VK_IMAGE_ASPECT_COLOR_BIT});
     }
+    if (screenSupport.ssgiAvailable) {
+        handles.baselineDiffuse = registry.registerImage(
+            {"Baseline Indirect Diffuse", RenderExtentPolicy::Viewport, {},
+             RenderResourceMultiplicity::PerFrame, hdrFormat,
+             VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL,
+             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                 VK_IMAGE_USAGE_SAMPLED_BIT,
+             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+             VK_IMAGE_ASPECT_COLOR_BIT});
+        if (samples != VK_SAMPLE_COUNT_1_BIT) {
+            handles.baselineDiffuseMsaa = registry.registerImage(
+                {"Baseline Indirect Diffuse MSAA",
+                 RenderExtentPolicy::Viewport, {},
+                 RenderResourceMultiplicity::PerFrame, hdrFormat, samples,
+                 VK_IMAGE_TILING_OPTIMAL,
+                 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                 VK_IMAGE_ASPECT_COLOR_BIT});
+        }
+    }
     handles.compositedHdrColor = registry.registerImage(
             {"Composited HDR Color", RenderExtentPolicy::Viewport, {},
              RenderResourceMultiplicity::PerFrame, hdrFormat,
              VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL,
              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                  VK_IMAGE_USAGE_SAMPLED_BIT |
-                 (screenSupport.ssrAvailable ? VK_IMAGE_USAGE_STORAGE_BIT : 0u) |
+                 ((screenSupport.ssrAvailable ||
+                   screenSupport.ssgiAvailable)
+                      ? VK_IMAGE_USAGE_STORAGE_BIT
+                      : 0u) |
                  VK_IMAGE_USAGE_TRANSFER_DST_BIT,
              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
              VK_IMAGE_ASPECT_COLOR_BIT});
@@ -481,6 +504,21 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
         motion.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
         motion.historyCapable = true;
         handles.surfaceMotion = registry.registerImage(std::move(motion));
+
+        if (device.surfaceDataSupport().albedoMetallicAvailable) {
+            RenderImageDesc albedoMetallic{};
+            albedoMetallic.name = "Surface Albedo Metallic";
+            albedoMetallic.extentPolicy = RenderExtentPolicy::Viewport;
+            albedoMetallic.multiplicity =
+                RenderResourceMultiplicity::PerFrame;
+            albedoMetallic.format =
+                device.surfaceDataSupport().albedoMetallicFormat;
+            albedoMetallic.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                                   VK_IMAGE_USAGE_SAMPLED_BIT;
+            albedoMetallic.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+            handles.surfaceAlbedoMetallic =
+                registry.registerImage(std::move(albedoMetallic));
+        }
     }
 
     if (device.occlusionCullingSupport().available) {
@@ -597,6 +635,28 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
         handles.ssrTemp = registerSsrImage("SSR Temp");
         handles.ssrFiltered = registerSsrImage("SSR Filtered");
         handles.ssrDebug = registerSsrImage("SSR Debug");
+    }
+    if (screenSupport.ssgiAvailable) {
+        const auto registerSsgiImage = [&](std::string name,
+                                           bool historyCapable = false) {
+            RenderImageDesc desc{};
+            desc.name = std::move(name);
+            desc.extentPolicy = RenderExtentPolicy::Viewport;
+            desc.extentDivisor = 2;
+            desc.multiplicity = RenderResourceMultiplicity::PerFrame;
+            desc.format = screenSupport.colorPyramidFormat;
+            desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                         VK_IMAGE_USAGE_STORAGE_BIT;
+            desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+            desc.historyCapable = historyCapable;
+            return registry.registerImage(std::move(desc));
+        };
+        handles.ssgiRaw = registerSsgiImage("SSGI Raw");
+        handles.ssgiHistory = registerSsgiImage("SSGI History", true);
+        handles.ssgiMoments = registerSsgiImage("SSGI Moments", true);
+        handles.ssgiTemp = registerSsgiImage("SSGI Temp");
+        handles.ssgiFiltered = registerSsgiImage("SSGI Filtered");
+        handles.ssgiDebug = registerSsgiImage("SSGI Debug");
     }
     if (device.cacaoSupport().available) {
         RenderImageDesc depth{};
@@ -774,6 +834,16 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
         ssrSampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         ssrSampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         handles.ssrSampler = registry.registerSampler(std::move(ssrSampler));
+    }
+    if (screenSupport.ssgiAvailable) {
+        RenderSamplerDesc ssgiSampler{};
+        ssgiSampler.name = "SSGI Sampler";
+        ssgiSampler.magFilter = VK_FILTER_LINEAR;
+        ssgiSampler.minFilter = VK_FILTER_LINEAR;
+        ssgiSampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        ssgiSampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        handles.ssgiSampler =
+            registry.registerSampler(std::move(ssgiSampler));
     }
 
     if (device.computeBloomSupport().available) {

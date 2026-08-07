@@ -1,15 +1,15 @@
 # AO、反射与全局光照算法路线
 
 > Status: Active
-> Last reviewed: 2026-08-06
-> Based on: Stage 0–3 plus optional FidelityFX CACAO comparison integration
+> Last reviewed: 2026-08-07
+> Based on: Stage 0–5 plus optional FidelityFX CACAO comparison integration
 > Current architecture: [渲染流程](../architecture/rendering.md)
 
 ## Summary
 
 本路线在现有 Forward + Compute 管线上逐步增加环境遮蔽、屏幕空间反射和间接漫反射，并为后续 Reflection Probe、DDGI 和可选硬件光追保留清晰边界。
 
-> Progress: Stage 0（共享屏幕空间基础）、Stage 1（SSAO）、FidelityFX CACAO comparison backend、Stage 2（TAA v1）、Stage 3（GTAO v1）和 Stage 4（SSR v1）已完成；下一阶段为 Stage 5 SSGI。
+> Progress: Stage 0（共享屏幕空间基础）、Stage 1（SSAO）、FidelityFX CACAO comparison backend、Stage 2（TAA v1）、Stage 3（GTAO v1）、Stage 4（SSR v1）和 Stage 5（SSGI v1）已完成；下一阶段为 Stage 6 Local Reflection Probes。
 
 三个问题必须分开处理：
 
@@ -597,18 +597,38 @@ opaque - baselineSpecular
 
 生成 composited HDR，最后 Transparent 使用 Surface Depth read-only 并对该结果做普通 back-to-front blending。SSR 关闭时不执行 trace/temporal/blur，Composite 只复制 opaque HDR，因此新增功能默认关闭且不改变原有能量结果。SSR history 独立于 TAA/GTAO，响应 camera cut、resize、scene generation、camera mode、projection、Shader variant、设置签名和执行序列中断。
 
-Editor、Runtime Control 与 `VulkanLabCtl` 提供 IBL Only/SSR、Low/Medium/High、Max Distance、Thickness、Max Roughness、Intensity、History Weight，以及 Raw、Temporal、Filtered、Confidence 和 Rejection 调试视图。GPU profiler、Tracy 和 RenderDoc 分别记录 `SSR`、`ReflectionComposite` 与拆分后的 Forward 阶段。
+Editor、Runtime Control 与 `VulkanLabCtl` 提供 IBL Only/SSR、Low/Medium/High、Max Distance、Thickness、Max Roughness、Intensity、History Weight，以及 Raw、Temporal、Filtered、Confidence 和 Rejection 调试视图。Stage 4 首次落地时 GPU profiler、Tracy 和 RenderDoc 使用 `SSR`、`ReflectionComposite` 与拆分后的 Forward 阶段；Stage 5 将后者泛化并重命名为 `ScreenSpaceLightingComposite`。
 
 实现参考本地 `screen_space_ray_tracing_2014.pdf` 和 FidelityFX SSSR 固定提交 `34dcacd1feefcfab2855b82e76c7d711f2020a75` 的 MIT 源码，用于核对层级深度搜索、confidence 和 temporal/denoise 职责。正式实现为项目内 Vulkan/GLSL 重写，不 include、link 或运行 FidelityFX SSSR；v1 使用固定步进加 depth-pyramid LOD，而不是移植其 SPD、tile classification、wave ops 与完整 hierarchical traversal。
 
 完成标准：ChronographWatch、CarConcept 和 Sponza 光滑表面获得可见反射，屏幕边缘和 miss 区域平滑回退 IBL。
 
-### Stage 5：SSGI
+### Stage 5：SSGI（已完成）
 
 - 输出 baseline indirect diffuse。
 - diffuse ray trace、confidence、temporal accumulation 和 denoise。
 - 按 confidence 混合 ambient/IBL fallback。
 - 明确避免 AO 双重变暗和 SSGI feedback。
+
+实际实现为半分辨率 SSGI。SurfacePrepass 增加线性 Albedo/Metallic MRT，Opaque PBR Forward 增加 baseline indirect diffuse MRT；trace 从每个 2x2 full-resolution block 选择最近表面，按 cosine-weighted hemisphere 发射 Low/Medium/High 对应 4/6/8 条射线，并查询 nearest-depth 与 opaque Scene Color pyramid。输出为 RGB incident diffuse radiance 与 alpha confidence，不采样本帧已经合成 SSGI 的结果。
+
+`SsgiPass` 使用 Raw、History、Moments、Temp、Filtered 和 Debug 六张半分辨率 `RGBA16F` per-frame image。Temporal resolve 使用 motion、previous depth/normal、3x3 neighborhood clamp、luminance moments 和独立 history generation；之后执行两轮基于 depth、normal 和 variance 的 A-Trous 风格滤波。camera cut、resize、scene generation、camera mode、projection、Shader variant、参数签名和执行序列中断只重置 SSGI 自身 history。
+
+原 `ReflectionComposite` 已泛化为 `ScreenSpaceLightingComposite`，按 confidence 同时替换间接镜面和漫反射：
+
+```text
+result = opaque - baselineSpecular - baselineDiffuse
+       + mix(baselineSpecular, ssrRadiance, ssrConfidence)
+       + mix(baselineDiffuse.rgb,
+             ssgiRadiance * baselineDiffuse.materialAo,
+             ssgiConfidence)
+```
+
+screen-space AO 只保留在 ambient/IBL fallback baseline 中；SSGI hit 不再次乘完整 screen AO，从而避免双重变暗。SSGI miss、低 confidence 和屏幕外区域自然回退当前 ambient/IBL。Direct Lighting、Shadow 和 Emissive 不进入替换项。Transparent 仍在合成后绘制，不参与 Surface Data、trace 或 history。
+
+Editor、Runtime Control 与 `VulkanLabCtl` 提供 Ambient or IBL/SSGI、Low/Medium/High、Max Distance、Thickness、Intensity、Radiance Clamp、History Weight，以及 Raw、Temporal、Filtered、Confidence、Variance 和 Rejection 调试视图。GPU profiler、Tracy 和 RenderDoc 使用独立 `SSGI` 与 `ScreenSpaceLightingComposite` 区域；requested/supported/active/fallback 和最近 history reset 原因通过统一状态报告。
+
+实现参考本地 `screen_space_indirect_lighting_bitmask_2023.pdf` 的屏幕空间可见性思路，以及 `svgf_2017.pdf` 的 moments、variance 和 edge-aware filtering 分工。v1 没有直接复制论文 bitmask trace 或完整 SVGF，也不 include、link 或运行 `references/` 中的代码；正式实现为项目内 Vulkan/GLSL 路径。
 
 完成标准：GI Stress 场景出现稳定的近场颜色反弹；镜头移动时没有大面积历史残影或场景颜色持续增亮。
 

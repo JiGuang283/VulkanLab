@@ -94,7 +94,7 @@ SSAO             -> 项目内实现；可选 FidelityFX CACAO backend 用于质�
 TAA              -> 项目内实现，TAA repo 用于 history 策略参考
 GTAO             -> 参考 XeGTAO 后移植为 Vulkan/GLSL
 SSR              -> 先固定本项目 contract，再决定是否接入 FidelityFX SSSR
-SSGI             -> 项目内实现，参考 visibility bitmask 论文
+SSGI             -> 已完成项目内 v1；参考 visibility bitmask 与 SVGF 论文，不直接依赖参考代码
 Reflection Probe -> 复用现有 KTX2/Environment 管线
 DDGI             -> 参考 RTXGI，等 Vulkan RT 基础完成后决定依赖方式
 RT Denoising     -> 优先评估 NRD，不从零开发生产级 denoiser

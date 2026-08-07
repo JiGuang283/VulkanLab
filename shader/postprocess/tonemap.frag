@@ -132,6 +132,17 @@ void main()
             debugColor = vec3(texture(screenDebugSource, fragUv).g);
         } else if (push.screenDebugMode == 18u) {
             debugColor = vec3(texture(screenDebugSource, fragUv).r);
+        } else if (push.screenDebugMode == 19u ||
+                   push.screenDebugMode == 20u ||
+                   push.screenDebugMode == 21u) {
+            debugColor = texture(screenDebugSource, fragUv).rgb;
+            allowToneMap = true;
+        } else if (push.screenDebugMode == 22u) {
+            debugColor = vec3(texture(screenDebugSource, fragUv).a);
+        } else if (push.screenDebugMode == 23u) {
+            debugColor = vec3(texture(screenDebugSource, fragUv).b);
+        } else if (push.screenDebugMode == 24u) {
+            debugColor = vec3(texture(screenDebugSource, fragUv).r);
         }
         outColor = vec4(applyDisplayTransform(debugColor, allowToneMap), 1.0);
         return;

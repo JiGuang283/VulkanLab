@@ -130,6 +130,7 @@ struct RendererResourceHandles {
     RenderImageHandle surfaceDepth{};
     RenderImageHandle surfaceNormalRoughness{};
     RenderImageHandle surfaceMotion{};
+    RenderImageHandle surfaceAlbedoMetallic{};
     RenderImageHandle visibilityHiZ{};
     RenderImageHandle screenDepthPyramid{};
     RenderImageHandle sceneColorPyramid{};
@@ -148,12 +149,20 @@ struct RendererResourceHandles {
     RenderImageHandle taaDebug{};
     RenderImageHandle baselineSpecular{};
     RenderImageHandle baselineSpecularMsaa{};
+    RenderImageHandle baselineDiffuse{};
+    RenderImageHandle baselineDiffuseMsaa{};
     RenderImageHandle compositedHdrColor{};
     RenderImageHandle ssrRaw{};
     RenderImageHandle ssrHistory{};
     RenderImageHandle ssrTemp{};
     RenderImageHandle ssrFiltered{};
     RenderImageHandle ssrDebug{};
+    RenderImageHandle ssgiRaw{};
+    RenderImageHandle ssgiHistory{};
+    RenderImageHandle ssgiMoments{};
+    RenderImageHandle ssgiTemp{};
+    RenderImageHandle ssgiFiltered{};
+    RenderImageHandle ssgiDebug{};
     std::array<RenderImageHandle, kBloomPyramidLevelCount> bloomLevels{};
     RenderSamplerHandle hdrSampler{};
     RenderSamplerHandle viewportSampler{};
@@ -165,6 +174,7 @@ struct RendererResourceHandles {
     RenderSamplerHandle ssaoSampler{};
     RenderSamplerHandle taaSampler{};
     RenderSamplerHandle ssrSampler{};
+    RenderSamplerHandle ssgiSampler{};
     RenderSamplerHandle bloomSampler{};
     RenderImageHandle atmosphereTransmittance{};
     RenderImageHandle atmosphereMultipleScattering{};

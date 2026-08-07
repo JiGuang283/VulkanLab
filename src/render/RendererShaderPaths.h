@@ -25,6 +25,9 @@ struct RendererShaderPaths {
     std::string ssrTraceComp;
     std::string ssrTemporalComp;
     std::string ssrBlurComp;
+    std::string ssgiTraceComp;
+    std::string ssgiTemporalComp;
+    std::string ssgiFilterComp;
     std::string reflectionCompositeComp;
     std::string taaResolveComp;
     std::string fullscreenVert;

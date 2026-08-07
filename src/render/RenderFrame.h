@@ -26,6 +26,8 @@ struct FrameRenderFeatures {
     bool taaActive = false;
     bool ssrRequired = false;
     bool ssrActive = false;
+    bool ssgiRequired = false;
+    bool ssgiActive = false;
 };
 
 struct RenderFrameContext {

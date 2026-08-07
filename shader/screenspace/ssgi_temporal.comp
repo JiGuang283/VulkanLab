@@ -1,0 +1,113 @@
+#version 450
+
+#extension GL_GOOGLE_include_directive : require
+#include "include/screen_temporal.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D currentRadiance;
+layout(set = 0, binding = 1) uniform sampler2D currentDepth;
+layout(set = 0, binding = 2) uniform sampler2D currentNormalRoughness;
+layout(set = 0, binding = 3) uniform sampler2D currentMotion;
+layout(set = 0, binding = 4) uniform sampler2D previousDepth;
+layout(set = 0, binding = 5) uniform sampler2D previousNormalRoughness;
+layout(set = 0, binding = 6) uniform sampler2D previousHistory;
+layout(set = 0, binding = 7) uniform sampler2D previousMoments;
+layout(set = 0, binding = 8, rgba16f) uniform writeonly image2D destinationHistory;
+layout(set = 0, binding = 9, rgba16f) uniform writeonly image2D destinationMoments;
+layout(set = 0, binding = 10, rgba16f) uniform writeonly image2D destinationDebug;
+
+layout(push_constant) uniform SsgiTemporalPush {
+    vec4 parameters; // history weight, depth threshold, normal threshold, clamp
+    uvec4 dimensions; // full width, full height, history valid, unused
+} push;
+
+vec3 octDecode(vec2 encoded)
+{
+    vec2 value = encoded * 2.0 - 1.0;
+    vec3 normal = vec3(value, 1.0 - abs(value.x) - abs(value.y));
+    if (normal.z < 0.0)
+        normal.xy = (1.0 - abs(normal.yx)) * sign(normal.xy);
+    return normalize(normal);
+}
+
+float luminance(vec3 color)
+{
+    return dot(color, vec3(0.2126, 0.7152, 0.0722));
+}
+
+void nearestSurface(ivec2 halfPixel, out ivec2 fullPixel, out float depth)
+{
+    ivec2 fullSize = ivec2(push.dimensions.xy);
+    ivec2 base = halfPixel * 2;
+    fullPixel = min(base, fullSize - ivec2(1));
+    depth = 1.0;
+    for (int y = 0; y < 2; ++y) for (int x = 0; x < 2; ++x) {
+        ivec2 p = min(base + ivec2(x, y), fullSize - ivec2(1));
+        float candidate = texelFetch(currentDepth, p, 0).r;
+        if (candidate < depth) { depth = candidate; fullPixel = p; }
+    }
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(destinationHistory);
+    if (any(greaterThanEqual(pixel, size)))
+        return;
+
+    vec4 current = texelFetch(currentRadiance, pixel, 0);
+    current.rgb = min(current.rgb, vec3(push.parameters.w));
+    ivec2 fullPixel;
+    float depth;
+    nearestSurface(pixel, fullPixel, depth);
+    vec2 uv = (vec2(fullPixel) + 0.5) / vec2(push.dimensions.xy);
+    vec2 previousUv = uv + texelFetch(currentMotion, fullPixel, 0).xy;
+    bool accepted = push.dimensions.z != 0u && depth < 1.0 &&
+                    screenUvInBounds(previousUv);
+    vec4 history = current;
+    vec2 moments = vec2(luminance(current.rgb));
+    moments.y *= moments.x;
+    if (accepted) {
+        float previousDepthValue = texture(previousDepth, previousUv).r;
+        vec3 normal = octDecode(texelFetch(currentNormalRoughness,
+                                           fullPixel, 0).rg);
+        vec3 previousNormal = octDecode(texture(previousNormalRoughness,
+                                                previousUv).rg);
+        accepted = previousDepthValue < 1.0 &&
+            abs(previousDepthValue - depth) <=
+                push.parameters.y * max(depth, 0.1) &&
+            dot(normal, previousNormal) >= push.parameters.z;
+        if (accepted) {
+            history = texture(previousHistory, previousUv);
+            moments = texture(previousMoments, previousUv).rg;
+        }
+    }
+
+    vec3 lo = current.rgb;
+    vec3 hi = current.rgb;
+    for (int y = -1; y <= 1; ++y) for (int x = -1; x <= 1; ++x) {
+        ivec2 p = clamp(pixel + ivec2(x, y), ivec2(0), size - 1);
+        vec3 sampleValue = texelFetch(currentRadiance, p, 0).rgb;
+        lo = min(lo, sampleValue);
+        hi = max(hi, sampleValue);
+    }
+    history.rgb = clamp(history.rgb, lo, hi);
+    float weight = accepted ? clamp(push.parameters.x, 0.0, 0.98) : 0.0;
+    vec4 resolved = mix(current, history, weight);
+    resolved.a = max(current.a, mix(current.a, history.a, weight));
+    float resolvedLuminance = luminance(resolved.rgb);
+    vec2 currentMoments = vec2(resolvedLuminance,
+                               resolvedLuminance * resolvedLuminance);
+    vec2 resolvedMoments = mix(currentMoments, moments, weight);
+    float variance = max(resolvedMoments.y -
+                         resolvedMoments.x * resolvedMoments.x, 0.0);
+
+    imageStore(destinationHistory, pixel, resolved);
+    imageStore(destinationMoments, pixel, vec4(resolvedMoments, 0.0, 0.0));
+    imageStore(destinationDebug, pixel,
+               vec4(accepted ? 0.0 : 1.0, resolved.a,
+                    clamp(sqrt(variance) / max(push.parameters.w, 1e-4),
+                          0.0, 1.0),
+                    weight));
+}

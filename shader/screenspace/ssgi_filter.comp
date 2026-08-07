@@ -1,0 +1,61 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D surfaceDepth;
+layout(set = 0, binding = 1) uniform sampler2D surfaceNormalRoughness;
+layout(set = 0, binding = 2) uniform sampler2D momentsTexture;
+layout(set = 0, binding = 3) uniform sampler2D sourceRadiance;
+layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D destination;
+
+layout(push_constant) uniform SsgiFilterPush {
+    uvec4 dimensions; // full width, full height, step width, unused
+} push;
+
+vec3 octDecode(vec2 encoded)
+{
+    vec2 value = encoded * 2.0 - 1.0;
+    vec3 normal = vec3(value, 1.0 - abs(value.x) - abs(value.y));
+    if (normal.z < 0.0)
+        normal.xy = (1.0 - abs(normal.yx)) * sign(normal.xy);
+    return normalize(normal);
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(destination);
+    if (any(greaterThanEqual(pixel, size)))
+        return;
+    ivec2 fullSize = ivec2(push.dimensions.xy);
+    ivec2 fullPixel = min(pixel * 2, fullSize - 1);
+    float centerDepth = texelFetch(surfaceDepth, fullPixel, 0).r;
+    vec3 centerNormal = octDecode(texelFetch(surfaceNormalRoughness,
+                                             fullPixel, 0).rg);
+    vec2 centerMoments = texelFetch(momentsTexture, pixel, 0).rg;
+    float variance = max(centerMoments.y - centerMoments.x *
+                         centerMoments.x, 0.0);
+    float phiColor = max(1.0 + sqrt(variance) * 8.0, 1.0);
+    int stepWidth = int(max(push.dimensions.z, 1u));
+    vec4 sum = vec4(0.0);
+    float total = 0.0;
+    for (int y = -2; y <= 2; ++y) for (int x = -2; x <= 2; ++x) {
+        ivec2 p = clamp(pixel + ivec2(x, y) * stepWidth,
+                        ivec2(0), size - 1);
+        ivec2 fp = min(p * 2, fullSize - 1);
+        float depth = texelFetch(surfaceDepth, fp, 0).r;
+        vec3 normal = octDecode(texelFetch(surfaceNormalRoughness,
+                                           fp, 0).rg);
+        vec4 sampleValue = texelFetch(sourceRadiance, p, 0);
+        float spatial = exp(-0.5 * float(x * x + y * y));
+        float depthWeight = exp(-abs(depth - centerDepth) * 500.0);
+        float normalWeight = pow(max(dot(centerNormal, normal), 0.0), 24.0);
+        float colorWeight = exp(-abs(dot(sampleValue.rgb,
+                                        vec3(0.2126, 0.7152, 0.0722)) -
+                                    centerMoments.x) / phiColor);
+        float weight = spatial * depthWeight * normalWeight * colorWeight;
+        sum += sampleValue * weight;
+        total += weight;
+    }
+    imageStore(destination, pixel, sum / max(total, 1e-5));
+}

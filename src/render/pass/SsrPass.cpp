@@ -182,6 +182,8 @@ void SsrPass::execute(const RenderFrameContext &frame,
         lastSettingsSignature_ == settingsSignature;
     const bool historyValid = visibility.history.globalValid && contiguous &&
         generationMatches && settingsMatch && historyWritten_[previous];
+    updateTemporalHistoryDescriptors(resources, current, previous,
+                                     historyValid);
     status_.historyValid = historyValid;
     status_.historyGeneration = visibility.history.historyGeneration;
     status_.lastFrameSerial = frame.submissionSerial;
@@ -493,6 +495,48 @@ void SsrPass::freeDescriptors() {
             set = VK_NULL_HANDLE;
         }
     }
+}
+
+void SsrPass::updateTemporalHistoryDescriptors(
+    const RenderResourceRegistry &registry, uint32_t current,
+    uint32_t previous, bool historyValid) {
+    const VkSampler depthSampler =
+        registry.sampler(resources_.surfaceDepthSampler);
+    const VkSampler surfaceSampler =
+        registry.sampler(resources_.surfaceDataSampler);
+    const VkSampler ssrSampler = registry.sampler(resources_.ssrSampler);
+    std::array<VkDescriptorImageInfo, 3> infos = {{
+        {depthSampler,
+         historyValid
+             ? registry.image(resources_.surfaceDepth, previous).imageView()
+             : registry.image(resources_.surfaceDepth, current).imageView(),
+         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
+        {surfaceSampler,
+         historyValid
+             ? registry.image(resources_.surfaceNormalRoughness, previous)
+                   .imageView()
+             : registry.image(resources_.surfaceNormalRoughness, current)
+                   .imageView(),
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {ssrSampler,
+         historyValid
+             ? registry.image(resources_.ssrHistory, previous).imageView()
+             : registry.image(resources_.ssrRaw, current).imageView(),
+         historyValid ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                      : VK_IMAGE_LAYOUT_GENERAL}}};
+    std::array<VkWriteDescriptorSet, 3> writes{};
+    for (uint32_t index = 0; index < writes.size(); ++index) {
+        writes[index] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        writes[index].dstSet = temporalSets_[current];
+        writes[index].dstBinding = index + 4u;
+        writes[index].descriptorType =
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[index].descriptorCount = 1;
+        writes[index].pImageInfo = &infos[index];
+    }
+    vkUpdateDescriptorSets(device_->logicalDevice(),
+                           static_cast<uint32_t>(writes.size()),
+                           writes.data(), 0, nullptr);
 }
 
 } // namespace vkr

@@ -15,6 +15,7 @@ layout(set = 1, binding = 2) uniform sampler2D metallicRoughnessTexture;
 
 layout(location = 0) out vec4 outNormalRoughness;
 layout(location = 1) out vec2 outMotion;
+layout(location = 2) out vec4 outAlbedoMetallic;
 
 vec2 octEncode(vec3 normal)
 {
@@ -39,10 +40,10 @@ vec3 materialNormal()
 
 void main()
 {
+    vec4 baseColor = texture(baseColorTexture, fragTexCoord) *
+                     push.baseColorFactor * fragColor;
 #if SURFACE_ALPHA_MASKED
-    float alpha = texture(baseColorTexture, fragTexCoord).a *
-                  push.baseColorFactor.a * fragColor.a;
-    if (alpha < push.roughnessAlpha.y)
+    if (baseColor.a < push.roughnessAlpha.y)
         discard;
 #endif
 
@@ -53,6 +54,11 @@ void main()
                             0.04, 1.0);
     outNormalRoughness = vec4(octEncode(normalWS), roughness,
                               fragHistoryValid != 0u ? 1.0 : 0.0);
+    float metallic = clamp(texture(metallicRoughnessTexture,
+                                   fragTexCoord).b *
+                               push.emissiveMetallic.w,
+                           0.0, 1.0);
+    outAlbedoMetallic = vec4(baseColor.rgb, metallic);
 
     outMotion = vec2(0.0);
     if (fragHistoryValid != 0u && fragCurrentClip.w > 1e-6 &&

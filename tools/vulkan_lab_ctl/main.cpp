@@ -86,7 +86,11 @@ void printUsage() {
            "[--ssr-max-distance N] [--ssr-thickness N] "
            "[--ssr-max-roughness N] [--ssr-intensity N] "
            "[--ssr-history-weight N] "
-           "[--screen-space-debug none|nearest-depth|scene-color|ssao-raw|ssao-filtered|cacao-output|gtao-raw|gtao-temporal|gtao-filtered|gtao-rejection|gtao-history-weight|taa-history|taa-rejection|taa-history-weight|ssr-raw|ssr-temporal|ssr-filtered|ssr-confidence|ssr-rejection] "
+           "[--gi ambient-or-ibl|ssgi] [--ssgi-quality low|medium|high] "
+           "[--ssgi-max-distance N] [--ssgi-thickness N] "
+           "[--ssgi-intensity N] [--ssgi-radiance-clamp N] "
+           "[--ssgi-history-weight N] "
+           "[--screen-space-debug none|nearest-depth|scene-color|ssao-raw|ssao-filtered|cacao-output|gtao-raw|gtao-temporal|gtao-filtered|gtao-rejection|gtao-history-weight|taa-history|taa-rejection|taa-history-weight|ssr-raw|ssr-temporal|ssr-filtered|ssr-confidence|ssr-rejection|ssgi-raw|ssgi-temporal|ssgi-filtered|ssgi-confidence|ssgi-variance|ssgi-rejection] "
            "[--screen-space-debug-mip N]\n"
         << "  VulkanLabCtl [--json] render wait [--stable-frames N] "
            "[--timeout-ms N]\n"
@@ -233,6 +237,13 @@ ParsedCommand parseCommand(int argc, char **argv) {
     std::optional<std::string> ssrMaxRoughness;
     std::optional<std::string> ssrIntensity;
     std::optional<std::string> ssrHistoryWeight;
+    std::optional<std::string> globalIlluminationMode;
+    std::optional<std::string> ssgiQuality;
+    std::optional<std::string> ssgiMaxDistance;
+    std::optional<std::string> ssgiThickness;
+    std::optional<std::string> ssgiIntensity;
+    std::optional<std::string> ssgiRadianceClamp;
+    std::optional<std::string> ssgiHistoryWeight;
     std::optional<std::string> screenSpaceDebug;
     std::optional<std::string> screenSpaceDebugMip;
     for (int i = 1; i < argc; ++i) {
@@ -302,6 +313,13 @@ ParsedCommand parseCommand(int argc, char **argv) {
                   argument == "--ssr-max-roughness" ||
                   argument == "--ssr-intensity" ||
                   argument == "--ssr-history-weight" ||
+                  argument == "--gi" ||
+                  argument == "--ssgi-quality" ||
+                  argument == "--ssgi-max-distance" ||
+                  argument == "--ssgi-thickness" ||
+                  argument == "--ssgi-intensity" ||
+                  argument == "--ssgi-radiance-clamp" ||
+                  argument == "--ssgi-history-weight" ||
                   argument == "--screen-space-debug" ||
                   argument == "--screen-space-debug-mip") {
             if (++i >= argc)
@@ -420,6 +438,20 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 ssrIntensity = argv[i];
             else if (argument == "--ssr-history-weight")
                 ssrHistoryWeight = argv[i];
+            else if (argument == "--gi")
+                globalIlluminationMode = argv[i];
+            else if (argument == "--ssgi-quality")
+                ssgiQuality = argv[i];
+            else if (argument == "--ssgi-max-distance")
+                ssgiMaxDistance = argv[i];
+            else if (argument == "--ssgi-thickness")
+                ssgiThickness = argv[i];
+            else if (argument == "--ssgi-intensity")
+                ssgiIntensity = argv[i];
+            else if (argument == "--ssgi-radiance-clamp")
+                ssgiRadianceClamp = argv[i];
+            else if (argument == "--ssgi-history-weight")
+                ssgiHistoryWeight = argv[i];
             else if (argument == "--screen-space-debug")
                 screenSpaceDebug = argv[i];
             else
@@ -803,6 +835,36 @@ ParsedCommand parseCommand(int argc, char **argv) {
         if (ssrHistoryWeight)
             parsed.params["ssrHistoryWeight"] = parseFiniteFloat(
                 *ssrHistoryWeight, "--ssr-history-weight");
+        if (globalIlluminationMode) {
+            if (*globalIlluminationMode != "ambient-or-ibl" &&
+                *globalIlluminationMode != "ssgi")
+                throw std::invalid_argument(
+                    "--gi must be ambient-or-ibl or ssgi");
+            parsed.params["globalIlluminationMode"] =
+                *globalIlluminationMode;
+        }
+        if (ssgiQuality) {
+            if (*ssgiQuality != "low" && *ssgiQuality != "medium" &&
+                *ssgiQuality != "high")
+                throw std::invalid_argument(
+                    "--ssgi-quality must be low, medium, or high");
+            parsed.params["ssgiQuality"] = *ssgiQuality;
+        }
+        if (ssgiMaxDistance)
+            parsed.params["ssgiMaxDistance"] = parseFiniteFloat(
+                *ssgiMaxDistance, "--ssgi-max-distance");
+        if (ssgiThickness)
+            parsed.params["ssgiThickness"] = parseFiniteFloat(
+                *ssgiThickness, "--ssgi-thickness");
+        if (ssgiIntensity)
+            parsed.params["ssgiIntensity"] = parseFiniteFloat(
+                *ssgiIntensity, "--ssgi-intensity");
+        if (ssgiRadianceClamp)
+            parsed.params["ssgiRadianceClamp"] = parseFiniteFloat(
+                *ssgiRadianceClamp, "--ssgi-radiance-clamp");
+        if (ssgiHistoryWeight)
+            parsed.params["ssgiHistoryWeight"] = parseFiniteFloat(
+                *ssgiHistoryWeight, "--ssgi-history-weight");
         if (screenSpaceDebug) {
             if (*screenSpaceDebug != "none" &&
                 *screenSpaceDebug != "nearest-depth" &&
@@ -822,14 +884,22 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 *screenSpaceDebug != "ssr-temporal" &&
                 *screenSpaceDebug != "ssr-filtered" &&
                 *screenSpaceDebug != "ssr-confidence" &&
-                *screenSpaceDebug != "ssr-rejection") {
+                *screenSpaceDebug != "ssr-rejection" &&
+                *screenSpaceDebug != "ssgi-raw" &&
+                *screenSpaceDebug != "ssgi-temporal" &&
+                *screenSpaceDebug != "ssgi-filtered" &&
+                *screenSpaceDebug != "ssgi-confidence" &&
+                *screenSpaceDebug != "ssgi-variance" &&
+                *screenSpaceDebug != "ssgi-rejection") {
                 throw std::invalid_argument(
                     "--screen-space-debug must be none, nearest-depth, "
                     "scene-color, ssao-raw, ssao-filtered, cacao-output, "
                     "gtao-raw, gtao-temporal, gtao-filtered, gtao-rejection, "
                     "gtao-history-weight, taa-history, taa-rejection, or "
                     "taa-history-weight, ssr-raw, ssr-temporal, "
-                    "ssr-filtered, ssr-confidence, or ssr-rejection");
+                    "ssr-filtered, ssr-confidence, ssr-rejection, ssgi-raw, "
+                    "ssgi-temporal, ssgi-filtered, ssgi-confidence, "
+                    "ssgi-variance, or ssgi-rejection");
             }
             parsed.params["screenSpaceDebugView"] = *screenSpaceDebug;
         }
@@ -1298,6 +1368,22 @@ void printHuman(const std::string &method, const Json &result) {
                   << result.value("ssrMaxRoughness", 0.0f) << "/"
                   << result.value("ssrIntensity", 0.0f) << "/"
                   << result.value("ssrHistoryWeight", 0.0f)
+                  << "\nSSGI active/available/history: "
+                  << (result.value("ssgiActive", false) ? "yes" : "no")
+                  << "/"
+                  << (result.value("ssgiAvailable", false) ? "yes" : "no")
+                  << "/"
+                  << (result.value("ssgiHistoryValid", false) ? "valid"
+                                                                 : "reset")
+                  << ", mode/quality/distance/thickness/intensity/clamp/history: "
+                  << result.value("globalIlluminationMode",
+                                  std::string{"ambient-or-ibl"}) << "/"
+                  << result.value("ssgiQuality", std::string{"medium"}) << "/"
+                  << result.value("ssgiMaxDistance", 0.0f) << "/"
+                  << result.value("ssgiThickness", 0.0f) << "/"
+                  << result.value("ssgiIntensity", 0.0f) << "/"
+                  << result.value("ssgiRadianceClamp", 0.0f) << "/"
+                  << result.value("ssgiHistoryWeight", 0.0f)
                   << "\nScreen-space debug: "
                   << result.at("screenSpaceDebugView").get<std::string>()
                   << ", mip: "

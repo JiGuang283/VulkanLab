@@ -26,6 +26,7 @@ layout(set = 2, binding = 0) uniform sampler2DShadow directionalShadowMap;
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outBaselineSpecular;
+layout(location = 2) out vec4 outBaselineDiffuse;
 
 bool isMaskAlphaMode()
 {
@@ -265,11 +266,12 @@ void main()
     vec4 mr = texture(metallicRoughnessTexture, fragTexCoord);
     float roughness = clamp(mr.g * push.roughnessAlpha.x, 0.04, 1.0);
     float metallic = clamp(mr.b * push.emissiveMetallic.w, 0.0, 1.0);
+    float materialAo = materialOcclusion();
     float screenAo =
         (!isBlendAlphaMode() && transmissionFactor() <= 0.0)
             ? screenSpaceAmbientOcclusion()
             : 1.0;
-    float occlusion = materialOcclusion() * screenAo;
+    float occlusion = materialAo * screenAo;
     vec3 emissive = texture(emissiveTexture, fragTexCoord).rgb *
                     push.emissiveMetallic.rgb;
 
@@ -286,6 +288,7 @@ void main()
         evaluateIndirectLightingComponents(
             n, v, albedo, roughness, metallic, occlusion);
     vec3 baselineSpecular = indirect.specular;
+    vec3 baselineDiffuse = indirect.diffuse;
     vec3 color = applyTransmissionApprox(
         indirect.diffuse + indirect.specular + direct + emissive, n, v,
                                          roughness);
@@ -297,7 +300,9 @@ void main()
                 atmosphere.sunColorIntensity.rgb *
                 atmosphere.sunColorIntensity.a;
         baselineSpecular *= aerial.a;
+        baselineDiffuse *= aerial.a;
     }
     outColor = vec4(color, materialAlpha(baseColor.a));
     outBaselineSpecular = vec4(baselineSpecular, 1.0);
+    outBaselineDiffuse = vec4(baselineDiffuse, materialAo);
 }

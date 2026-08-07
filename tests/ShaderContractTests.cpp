@@ -382,12 +382,26 @@ void checkPushConstant(const SpvReflectShaderModule &module,
                              "SsrTemporalPushConstants", path);
         } else if (path.find("screenspace/ssr_blur") !=
                        std::string_view::npos ||
+                   path.find("screenspace/ssgi_filter") !=
+                       std::string_view::npos ||
                    path.find("screenspace/reflection_composite") !=
                        std::string_view::npos) {
             static const std::vector<MemberLayout> members = {
                 {"dimensions", 0}};
             checkBlockLayout(*blocks[0], 16, members,
                              "SsrDimensionsPushConstants", path);
+        } else if (path.find("screenspace/ssgi_trace") !=
+                   std::string_view::npos) {
+            static const std::vector<MemberLayout> members = {
+                {"parameters", 0}, {"dimensions", 16}, {"sampling", 32}};
+            checkBlockLayout(*blocks[0], 48, members,
+                             "SsgiTracePushConstants", path);
+        } else if (path.find("screenspace/ssgi_temporal") !=
+                   std::string_view::npos) {
+            static const std::vector<MemberLayout> members = {
+                {"parameters", 0}, {"dimensions", 16}};
+            checkBlockLayout(*blocks[0], 32, members,
+                             "SsgiTemporalPushConstants", path);
         } else {
             static const std::vector<MemberLayout> members = {{"extents", 0}};
             checkBlockLayout(*blocks[0], 16, members,
@@ -445,6 +459,15 @@ void checkDescriptors(const ReflectedModule &reflected,
         const bool reflectionComposite =
             reflected.path().find("screenspace/reflection_composite") !=
             std::string::npos;
+        const bool ssgiTrace =
+            reflected.path().find("screenspace/ssgi_trace") !=
+            std::string::npos;
+        const bool ssgiTemporal =
+            reflected.path().find("screenspace/ssgi_temporal") !=
+            std::string::npos;
+        const bool ssgiFilter =
+            reflected.path().find("screenspace/ssgi_filter") !=
+            std::string::npos;
         const uint32_t expectedCount = expectsAtmosphere
                                            ? 6u
                                            : ssao ? 5u
@@ -454,7 +477,10 @@ void checkDescriptors(const ReflectedModule &reflected,
                                             : ssrTrace ? 6u
                                             : ssrTemporal ? 9u
                                             : ssrBlur ? 5u
-                                            : reflectionComposite ? 4u
+                                            : ssgiTrace ? 7u
+                                            : ssgiTemporal ? 11u
+                                            : ssgiFilter ? 5u
+                                            : reflectionComposite ? 6u
                                             : taa ? 10u
                                            : occlusion ? 4u
                                                        : 2u;
@@ -626,17 +652,67 @@ void checkDescriptors(const ReflectedModule &reflected,
             }
             if (reflectionComposite) {
                 const bool source =
-                    binding->set == 0 && binding->binding <= 2 &&
+                    binding->set == 0 && binding->binding <= 4 &&
                     binding->descriptor_type ==
                         SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 const bool destination =
-                    binding->set == 0 && binding->binding == 3 &&
+                    binding->set == 0 && binding->binding == 5 &&
                     binding->descriptor_type ==
                         SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 requireShader(binding->count == 1 &&
                                   (source || destination),
                               "reflection composite descriptor contract "
                               "mismatch in " + reflected.path());
+                continue;
+            }
+            if (ssgiTrace) {
+                const bool globalUbo =
+                    binding->set == 0 && binding->binding == 0 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                const bool source =
+                    binding->set == 1 && binding->binding <= 4 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                const bool destination =
+                    binding->set == 1 && binding->binding == 5 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                requireShader(binding->count == 1 &&
+                                  (globalUbo || source || destination),
+                              "SSGI trace descriptor contract mismatch in " +
+                                  reflected.path());
+                if (globalUbo)
+                    checkGlobalUbo(*binding, reflected.path());
+                continue;
+            }
+            if (ssgiTemporal) {
+                const bool source =
+                    binding->set == 0 && binding->binding <= 7 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                const bool destination =
+                    binding->set == 0 && binding->binding >= 8 &&
+                    binding->binding <= 10 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                requireShader(binding->count == 1 && (source || destination),
+                              "SSGI temporal descriptor contract mismatch in " +
+                                  reflected.path());
+                continue;
+            }
+            if (ssgiFilter) {
+                const bool source =
+                    binding->set == 0 && binding->binding <= 3 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                const bool destination =
+                    binding->set == 0 && binding->binding == 4 &&
+                    binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                requireShader(binding->count == 1 && (source || destination),
+                              "SSGI filter descriptor contract mismatch in " +
+                                  reflected.path());
                 continue;
             }
             if (taa) {

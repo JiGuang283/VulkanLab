@@ -17,7 +17,9 @@ class HdrCompositePass final : public IRenderPass {
                      std::string shaderPath);
     ~HdrCompositePass() override;
 
-    std::string_view name() const override { return "ReflectionComposite"; }
+    std::string_view name() const override {
+        return "ScreenSpaceLightingComposite";
+    }
     std::vector<RenderImageUsage> resourceUsages() const override;
     void releaseViewportResources() override;
     void onViewportResize(const RenderResourceRegistry &resources) override;
@@ -36,6 +38,9 @@ class HdrCompositePass final : public IRenderPass {
 
     void createLayout();
     void createDescriptors(const RenderResourceRegistry &resources);
+    void updateDescriptor(const RenderResourceRegistry &resources,
+                          uint32_t frameIndex, bool ssrActive,
+                          bool ssgiActive);
     void freeDescriptors();
 };
 

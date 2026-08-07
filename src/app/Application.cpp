@@ -951,6 +951,12 @@ void Application::init() {
         shaderRegistry_.program("screenspace.ssr-temporal");
     const ShaderProgram &ssrBlur =
         shaderRegistry_.program("screenspace.ssr-blur");
+    const ShaderProgram &ssgiTrace =
+        shaderRegistry_.program("screenspace.ssgi-trace");
+    const ShaderProgram &ssgiTemporal =
+        shaderRegistry_.program("screenspace.ssgi-temporal");
+    const ShaderProgram &ssgiFilter =
+        shaderRegistry_.program("screenspace.ssgi-filter");
     const ShaderProgram &reflectionComposite =
         shaderRegistry_.program("screenspace.reflection-composite");
     const ShaderProgram &taaResolve =
@@ -995,6 +1001,9 @@ void Application::init() {
     shaderPaths.ssrTraceComp = ssrTrace.computeSpvPath;
     shaderPaths.ssrTemporalComp = ssrTemporal.computeSpvPath;
     shaderPaths.ssrBlurComp = ssrBlur.computeSpvPath;
+    shaderPaths.ssgiTraceComp = ssgiTrace.computeSpvPath;
+    shaderPaths.ssgiTemporalComp = ssgiTemporal.computeSpvPath;
+    shaderPaths.ssgiFilterComp = ssgiFilter.computeSpvPath;
     shaderPaths.reflectionCompositeComp =
         reflectionComposite.computeSpvPath;
     shaderPaths.taaResolveComp = taaResolve.computeSpvPath;
@@ -2142,6 +2151,14 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
             "SSR is unavailable: " +
                 renderer_->screenSpaceEffectsStatus().ssrUnavailableReason);
     }
+    if (patch.globalIlluminationMode &&
+        *patch.globalIlluminationMode == GlobalIlluminationMode::Ssgi &&
+        renderer_ && !renderer_->screenSpaceEffectsStatus().ssgiSupported) {
+        throw RuntimeCommandError(
+            "ssgi_unsupported",
+            "SSGI is unavailable: " +
+                renderer_->screenSpaceEffectsStatus().ssgiUnavailableReason);
+    }
     if (patch.surfaceDebugView && patch.screenSpaceDebugView &&
         *patch.surfaceDebugView != SurfaceDebugView::None &&
         *patch.screenSpaceDebugView != ScreenSpaceDebugView::None) {
@@ -2179,7 +2196,14 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
               view == ScreenSpaceDebugView::SsrFiltered ||
               view == ScreenSpaceDebugView::SsrConfidence ||
               view == ScreenSpaceDebugView::SsrRejection) &&
-             status.ssrSupported);
+             status.ssrSupported) ||
+            ((view == ScreenSpaceDebugView::SsgiRaw ||
+              view == ScreenSpaceDebugView::SsgiTemporal ||
+              view == ScreenSpaceDebugView::SsgiFiltered ||
+              view == ScreenSpaceDebugView::SsgiConfidence ||
+              view == ScreenSpaceDebugView::SsgiVariance ||
+              view == ScreenSpaceDebugView::SsgiRejection) &&
+             status.ssgiSupported);
         if (!supported) {
             throw RuntimeCommandError(
                 "screen_space_unsupported",
@@ -2238,6 +2262,14 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
     next.ssrIntensity = glm::clamp(next.ssrIntensity, 0.0f, 4.0f);
     next.ssrHistoryWeight =
         glm::clamp(next.ssrHistoryWeight, 0.0f, 0.99f);
+    next.ssgiMaxDistance =
+        glm::clamp(next.ssgiMaxDistance, 0.05f, 1000.0f);
+    next.ssgiThickness = glm::clamp(next.ssgiThickness, 0.001f, 10.0f);
+    next.ssgiIntensity = glm::clamp(next.ssgiIntensity, 0.0f, 4.0f);
+    next.ssgiRadianceClamp =
+        glm::clamp(next.ssgiRadianceClamp, 0.1f, 100.0f);
+    next.ssgiHistoryWeight =
+        glm::clamp(next.ssgiHistoryWeight, 0.0f, 0.99f);
     next.screenSpaceDebugMip =
         std::min(next.screenSpaceDebugMip, 31u);
     next.culling.shadowDistance =
@@ -3653,6 +3685,10 @@ ControlJson Application::runtimeRenderStatus() {
                                 screenSpaceStatus.requestedMode)},
           {"activeMode", ambientOcclusionModeName(
                              screenSpaceStatus.activeMode)},
+          {"requestedGiMode", globalIlluminationModeName(
+                                  screenSpaceStatus.requestedGiMode)},
+          {"activeGiMode", globalIlluminationModeName(
+                               screenSpaceStatus.activeGiMode)},
           {"debugView", screenSpaceDebugViewName(
                             renderSettings_.screenSpaceDebugView)},
           {"debugMip", renderSettings_.screenSpaceDebugMip},
@@ -3689,6 +3725,24 @@ ControlJson Application::runtimeRenderStatus() {
             {{"width", screenSpaceStatus.gtaoExtent.width},
              {"height", screenSpaceStatus.gtaoExtent.height}}},
            {"gtaoLastResetReason", screenSpaceStatus.gtaoLastResetReason},
+          {"ssrSupported", screenSpaceStatus.ssrSupported},
+          {"ssrActive", screenSpaceStatus.ssrActive},
+          {"ssrHistoryValid", screenSpaceStatus.ssrHistoryValid},
+          {"ssrHistoryGeneration", screenSpaceStatus.ssrHistoryGeneration},
+          {"ssrLastFrameSerial", screenSpaceStatus.ssrLastFrameSerial},
+          {"ssrExtent",
+           {{"width", screenSpaceStatus.ssrExtent.width},
+            {"height", screenSpaceStatus.ssrExtent.height}}},
+          {"ssrLastResetReason", screenSpaceStatus.ssrLastResetReason},
+          {"ssgiSupported", screenSpaceStatus.ssgiSupported},
+          {"ssgiActive", screenSpaceStatus.ssgiActive},
+          {"ssgiHistoryValid", screenSpaceStatus.ssgiHistoryValid},
+          {"ssgiHistoryGeneration", screenSpaceStatus.ssgiHistoryGeneration},
+          {"ssgiLastFrameSerial", screenSpaceStatus.ssgiLastFrameSerial},
+          {"ssgiExtent",
+           {{"width", screenSpaceStatus.ssgiExtent.width},
+            {"height", screenSpaceStatus.ssgiExtent.height}}},
+          {"ssgiLastResetReason", screenSpaceStatus.ssgiLastResetReason},
           {"taaSupported", screenSpaceStatus.taaSupported},
           {"taaActive", screenSpaceStatus.taaActive},
           {"taaHistoryValid", screenSpaceStatus.taaHistoryValid},
@@ -3715,7 +3769,11 @@ ControlJson Application::runtimeRenderStatus() {
            {"gtaoUnavailableReason",
             screenSpaceStatus.gtaoUnavailableReason},
            {"taaUnavailableReason",
-            screenSpaceStatus.taaUnavailableReason}}},
+            screenSpaceStatus.taaUnavailableReason},
+           {"ssrUnavailableReason",
+            screenSpaceStatus.ssrUnavailableReason},
+           {"ssgiUnavailableReason",
+            screenSpaceStatus.ssgiUnavailableReason}}},
         {"frameSerial", frameSync_->lastSubmittedSerial()},
         {"completedSubmissionSerial",
          frameSync_->completedSubmissionSerial()},
@@ -3887,6 +3945,24 @@ ControlJson Application::runtimeRenderSettingsGet() {
              screenSpaceStatus.ssrLastResetReason},
             {"ssrUnavailableReason",
              screenSpaceStatus.ssrUnavailableReason},
+            {"globalIlluminationMode",
+             globalIlluminationModeName(
+                 renderSettings_.globalIlluminationMode)},
+            {"ssgiQuality", ssgiQualityName(renderSettings_.ssgiQuality)},
+            {"ssgiMaxDistance", renderSettings_.ssgiMaxDistance},
+            {"ssgiThickness", renderSettings_.ssgiThickness},
+            {"ssgiIntensity", renderSettings_.ssgiIntensity},
+            {"ssgiRadianceClamp", renderSettings_.ssgiRadianceClamp},
+            {"ssgiHistoryWeight", renderSettings_.ssgiHistoryWeight},
+            {"ssgiAvailable", screenSpaceStatus.ssgiSupported},
+            {"ssgiActive", screenSpaceStatus.ssgiActive},
+            {"ssgiHistoryValid", screenSpaceStatus.ssgiHistoryValid},
+            {"ssgiHistoryGeneration",
+             screenSpaceStatus.ssgiHistoryGeneration},
+            {"ssgiLastResetReason",
+             screenSpaceStatus.ssgiLastResetReason},
+            {"ssgiUnavailableReason",
+             screenSpaceStatus.ssgiUnavailableReason},
             {"screenSpaceDebugView",
              screenSpaceDebugViewName(
                  renderSettings_.screenSpaceDebugView)},
@@ -5517,6 +5593,86 @@ void Application::drawPostProcessingPanel() {
                                 screenStatus.ssrLastResetReason.c_str());
     }
 
+    ImGui::SeparatorText("Global Illumination");
+    constexpr const char *giModeLabels[] = {"Ambient / IBL", "SSGI"};
+    int giMode = static_cast<int>(renderSettings_.globalIlluminationMode);
+    ImGui::BeginDisabled(!screenStatus.ssgiSupported);
+    if (ImGui::Combo("Mode##GI", &giMode, giModeLabels,
+                     static_cast<int>(std::size(giModeLabels)))) {
+        RenderSettingsPatch patch;
+        patch.globalIlluminationMode =
+            static_cast<GlobalIlluminationMode>(giMode);
+        applyRenderSettings(patch);
+    }
+    const bool ssgiRequested =
+        renderSettings_.globalIlluminationMode == GlobalIlluminationMode::Ssgi;
+    ImGui::BeginDisabled(!ssgiRequested);
+    constexpr const char *ssgiQualityLabels[] = {"Low", "Medium", "High"};
+    int ssgiQuality = static_cast<int>(renderSettings_.ssgiQuality);
+    if (ImGui::Combo("Quality##SSGI", &ssgiQuality, ssgiQualityLabels,
+                     static_cast<int>(std::size(ssgiQualityLabels)))) {
+        RenderSettingsPatch patch;
+        patch.ssgiQuality = static_cast<SsgiQuality>(ssgiQuality);
+        applyRenderSettings(patch);
+    }
+    float ssgiDistance = renderSettings_.ssgiMaxDistance;
+    if (ImGui::DragFloat("Max Distance##SSGI", &ssgiDistance, 0.1f,
+                         0.05f, 1000.0f, "%.2f")) {
+        RenderSettingsPatch patch;
+        patch.ssgiMaxDistance = ssgiDistance;
+        applyRenderSettings(patch);
+    }
+    float ssgiThickness = renderSettings_.ssgiThickness;
+    if (ImGui::DragFloat("Thickness##SSGI", &ssgiThickness, 0.005f,
+                         0.001f, 10.0f, "%.3f")) {
+        RenderSettingsPatch patch;
+        patch.ssgiThickness = ssgiThickness;
+        applyRenderSettings(patch);
+    }
+    float ssgiIntensity = renderSettings_.ssgiIntensity;
+    if (ImGui::SliderFloat("Intensity##SSGI", &ssgiIntensity,
+                           0.0f, 4.0f, "%.2f")) {
+        RenderSettingsPatch patch;
+        patch.ssgiIntensity = ssgiIntensity;
+        applyRenderSettings(patch);
+    }
+    float ssgiClamp = renderSettings_.ssgiRadianceClamp;
+    if (ImGui::DragFloat("Radiance Clamp##SSGI", &ssgiClamp, 0.1f,
+                         0.1f, 100.0f, "%.1f")) {
+        RenderSettingsPatch patch;
+        patch.ssgiRadianceClamp = ssgiClamp;
+        applyRenderSettings(patch);
+    }
+    float ssgiHistory = renderSettings_.ssgiHistoryWeight;
+    if (ImGui::SliderFloat("History Weight##SSGI", &ssgiHistory,
+                           0.0f, 0.99f, "%.2f")) {
+        RenderSettingsPatch patch;
+        patch.ssgiHistoryWeight = ssgiHistory;
+        applyRenderSettings(patch);
+    }
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+    editor::statusIndicator(
+        screenStatus.ssgiActive ? "SSGI active" : "SSGI inactive",
+        screenStatus.ssgiActive ? editor::StatusTone::Success
+                                : editor::StatusTone::Neutral,
+        !screenStatus.ssgiSupported
+            ? screenStatus.ssgiUnavailableReason.c_str()
+            : (ssgiRequested && !currentShaderVariant().supportsScreenSpace
+                   ? "Selected Shader does not consume screen-space GI."
+                   : nullptr));
+    if (screenStatus.ssgiSupported && ssgiRequested) {
+        ImGui::TextDisabled("History: %s, generation %llu, %ux%u",
+                            screenStatus.ssgiHistoryValid ? "valid" : "reset",
+                            static_cast<unsigned long long>(
+                                screenStatus.ssgiHistoryGeneration),
+                            screenStatus.ssgiExtent.width,
+                            screenStatus.ssgiExtent.height);
+        if (!screenStatus.ssgiLastResetReason.empty())
+            ImGui::TextDisabled("Reset: %s",
+                                screenStatus.ssgiLastResetReason.c_str());
+    }
+
     ImGui::SeparatorText("Screen-Space Debug");
     constexpr const char *screenDebugLabels[] = {
         "None", "Nearest Depth", "Scene Color", "SSAO Raw",
@@ -5524,7 +5680,8 @@ void Application::drawPostProcessingPanel() {
         "GTAO Filtered", "GTAO Rejection", "GTAO History Weight",
         "TAA History", "TAA Rejection", "TAA History Weight",
         "SSR Raw", "SSR Temporal", "SSR Filtered", "SSR Confidence",
-        "SSR Rejection"};
+        "SSR Rejection", "SSGI Raw", "SSGI Temporal", "SSGI Filtered",
+        "SSGI Confidence", "SSGI Variance", "SSGI Rejection"};
     int screenDebug =
         static_cast<int>(renderSettings_.screenSpaceDebugView);
     const char *preview = screenDebugLabels[screenDebug];
@@ -5558,7 +5715,14 @@ void Application::drawPostProcessingPanel() {
                   view == ScreenSpaceDebugView::SsrFiltered ||
                   view == ScreenSpaceDebugView::SsrConfidence ||
                   view == ScreenSpaceDebugView::SsrRejection) &&
-                 screenStatus.ssrSupported);
+                 screenStatus.ssrSupported) ||
+                ((view == ScreenSpaceDebugView::SsgiRaw ||
+                  view == ScreenSpaceDebugView::SsgiTemporal ||
+                  view == ScreenSpaceDebugView::SsgiFiltered ||
+                  view == ScreenSpaceDebugView::SsgiConfidence ||
+                  view == ScreenSpaceDebugView::SsgiVariance ||
+                  view == ScreenSpaceDebugView::SsgiRejection) &&
+                 screenStatus.ssgiSupported);
             ImGui::BeginDisabled(!supported);
             const bool selected = index == screenDebug;
             if (ImGui::Selectable(screenDebugLabels[index], selected)) {

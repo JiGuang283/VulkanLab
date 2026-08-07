@@ -339,6 +339,16 @@ void Device::pickPhysicalDevice() {
         VKR_LOG_WARN("Device", "Surface data unavailable: {}",
                      surfaceDataSupport_.reason);
     }
+    if (!surfaceDataSupport_.available) {
+        surfaceDataSupport_.albedoMetallicReason =
+            surfaceDataSupport_.reason;
+    } else if (!supportsSurfaceColor(
+                   surfaceDataSupport_.albedoMetallicFormat)) {
+        surfaceDataSupport_.albedoMetallicReason =
+            "RGBA8 surface albedo-metallic attachment is unavailable";
+    } else {
+        surfaceDataSupport_.albedoMetallicAvailable = true;
+    }
 
     VkFormatProperties hiZProperties{};
     vkGetPhysicalDeviceFormatProperties(physicalDevice_,
@@ -472,6 +482,21 @@ void Device::pickPhysicalDevice() {
         screenSpaceEffectsSupport_.ssrAvailable = true;
     }
 
+    if (!surfaceDataSupport_.available) {
+        screenSpaceEffectsSupport_.ssgiReason = surfaceDataSupport_.reason;
+    } else if (!surfaceDataSupport_.albedoMetallicAvailable) {
+        screenSpaceEffectsSupport_.ssgiReason =
+            surfaceDataSupport_.albedoMetallicReason;
+    } else if (!screenSpaceEffectsSupport_.depthPyramidAvailable) {
+        screenSpaceEffectsSupport_.ssgiReason =
+            screenSpaceEffectsSupport_.depthPyramidReason;
+    } else if (!screenSpaceEffectsSupport_.colorPyramidAvailable) {
+        screenSpaceEffectsSupport_.ssgiReason =
+            screenSpaceEffectsSupport_.colorPyramidReason;
+    } else {
+        screenSpaceEffectsSupport_.ssgiAvailable = true;
+    }
+
     cacaoSupport_.compiled = build::kCacao;
     const auto supportsCacao2D = [&](VkFormat format, uint32_t arrayLayers,
                                      uint32_t mipLevels,
@@ -553,11 +578,14 @@ void Device::pickPhysicalDevice() {
     VKR_LOG_INFO(
         "Device",
         "Screen-space support: depth pyramid={}, color pyramid={}, SSAO={}, "
-        "TAA={}",
+        "GTAO={}, TAA={}, SSR={}, SSGI={}",
         screenSpaceEffectsSupport_.depthPyramidAvailable ? "yes" : "no",
         screenSpaceEffectsSupport_.colorPyramidAvailable ? "yes" : "no",
         screenSpaceEffectsSupport_.ssaoAvailable ? "yes" : "no",
-        screenSpaceEffectsSupport_.taaAvailable ? "yes" : "no");
+        screenSpaceEffectsSupport_.gtaoAvailable ? "yes" : "no",
+        screenSpaceEffectsSupport_.taaAvailable ? "yes" : "no",
+        screenSpaceEffectsSupport_.ssrAvailable ? "yes" : "no",
+        screenSpaceEffectsSupport_.ssgiAvailable ? "yes" : "no");
     if (cacaoSupport_.available) {
         VKR_LOG_INFO("Device", "FidelityFX CACAO FP32 is supported");
     } else if (cacaoSupport_.compiled) {

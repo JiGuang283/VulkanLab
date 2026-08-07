@@ -63,6 +63,16 @@ std::vector<RenderImageUsage> HdrCompositePass::resourceUsages() const {
                           RenderImageAccess::SampledRead,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    if (resources_.baselineDiffuse.valid())
+        usages.push_back({resources_.baselineDiffuse,
+                          RenderImageAccess::SampledRead,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    if (resources_.ssgiFiltered.valid())
+        usages.push_back({resources_.ssgiFiltered,
+                          RenderImageAccess::SampledRead,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
     return usages;
 }
 
@@ -79,20 +89,27 @@ void HdrCompositePass::onViewportResize(
 void HdrCompositePass::execute(const RenderFrameContext &frame,
                                const RenderResourceRegistry &resources,
                                const VisibilityFrame &) {
-    VKL_PROFILE_ZONE("Record HDR Composite");
+    VKL_PROFILE_ZONE("Record Screen-Space Lighting Composite");
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd,
-                         "ReflectionComposite");
+                         "ScreenSpaceLightingComposite");
+    const bool ssrActive = frame.features.ssrActive &&
+                           resources_.ssrFiltered.valid();
+    const bool ssgiActive = frame.features.ssgiActive &&
+                            resources_.ssgiFiltered.valid();
     ScopedGpuLabel label(device_->debugUtils(), frame.cmd,
-                         frame.features.ssrActive
-                             ? "ReflectionComposite/SSR"
-                             : "ReflectionComposite/CopyBaseline");
+                         ssrActive || ssgiActive
+                             ? "ScreenSpaceLightingComposite/ReplaceIndirect"
+                             : "ScreenSpaceLightingComposite/CopyBaseline");
     const Image &source = resources.image(resources_.hdrColor,
                                           frame.frameIndex);
     const Image &destination = resources.image(
         resources_.compositedHdrColor, frame.frameIndex);
+    if (!descriptorSets_.empty() &&
+        descriptorSets_[frame.frameIndex] != VK_NULL_HANDLE) {
+        updateDescriptor(resources, frame.frameIndex, ssrActive, ssgiActive);
+    }
     const auto range = colorRange();
-    if (frame.features.ssrActive && frame.pipelineCache &&
-        resources_.ssrFiltered.valid()) {
+    if ((ssrActive || ssgiActive) && frame.pipelineCache) {
         cmdImageBarrier(frame.cmd,
                         initialized_[frame.frameIndex]
                             ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
@@ -110,9 +127,11 @@ void HdrCompositePass::execute(const RenderFrameContext &frame,
                         VK_IMAGE_LAYOUT_GENERAL, range);
         struct CompositePush { glm::uvec4 dimensions{}; } push;
         const VkExtent2D extent = resources.extent(resources_.hdrColor);
-        push.dimensions = {1u, extent.width, extent.height, 0u};
+        push.dimensions = {ssrActive ? 1u : 0u,
+                           ssgiActive ? 1u : 0u,
+                           extent.width, extent.height};
         ComputePipelineConfig config{};
-        config.debugName = "Pipeline/ScreenSpace/ReflectionComposite";
+        config.debugName = "Pipeline/ScreenSpace/LightingComposite";
         config.computeShaderPath = shaderPath_;
         config.descriptorLayouts = {descriptorLayout_};
         config.pushConstants = {{VK_SHADER_STAGE_COMPUTE_BIT, 0,
@@ -194,11 +213,11 @@ void HdrCompositePass::execute(const RenderFrameContext &frame,
 }
 
 void HdrCompositePass::createLayout() {
-    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
-    for (uint32_t i = 0; i < 3; ++i)
+    std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
+    for (uint32_t i = 0; i < 5; ++i)
         bindings[i] = {i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                        VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-    bindings[3] = {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
+    bindings[5] = {5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
                    VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     VkDescriptorSetLayoutCreateInfo info{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
@@ -210,40 +229,64 @@ void HdrCompositePass::createLayout() {
 
 void HdrCompositePass::createDescriptors(
     const RenderResourceRegistry &registry) {
-    if (!resources_.ssrFiltered.valid())
+    if (!resources_.ssrFiltered.valid() && !resources_.ssgiFiltered.valid())
         return;
-    const VkSampler hdrSampler = registry.sampler(resources_.hdrSampler);
-    const VkSampler ssrSampler = registry.sampler(resources_.ssrSampler);
     for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
         descriptorSets_[frame] = descriptorAllocator_->allocate(
             descriptorLayout_,
-            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3},
+            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5},
              {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1}},
-            "ReflectionComposite/Frame" + std::to_string(frame));
-        std::array<VkDescriptorImageInfo, 4> infos = {{
-            {hdrSampler, registry.image(resources_.hdrColor, frame).imageView(),
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-            {hdrSampler, registry.image(resources_.baselineSpecular, frame).imageView(),
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-            {ssrSampler, registry.image(resources_.ssrFiltered, frame).imageView(),
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-            {VK_NULL_HANDLE,
-             registry.image(resources_.compositedHdrColor, frame).imageView(),
-             VK_IMAGE_LAYOUT_GENERAL}}};
-        std::array<VkWriteDescriptorSet, 4> writes{};
-        for (uint32_t i = 0; i < writes.size(); ++i) {
-            writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-            writes[i].dstSet = descriptorSets_[frame];
-            writes[i].dstBinding = i;
-            writes[i].descriptorCount = 1;
-            writes[i].descriptorType = i < 3
-                ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-                : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            writes[i].pImageInfo = &infos[i];
-        }
-        vkUpdateDescriptorSets(device_->logicalDevice(), uint32_t(writes.size()),
-                               writes.data(), 0, nullptr);
+            "ScreenSpaceLightingComposite/Frame" + std::to_string(frame));
+        updateDescriptor(registry, frame, false, false);
     }
+}
+
+void HdrCompositePass::updateDescriptor(
+    const RenderResourceRegistry &registry, uint32_t frame,
+    bool ssrActive, bool ssgiActive) {
+    const VkSampler hdrSampler = registry.sampler(resources_.hdrSampler);
+    const VkSampler ssrSampler = resources_.ssrSampler.valid()
+        ? registry.sampler(resources_.ssrSampler) : hdrSampler;
+    const VkSampler ssgiSampler = resources_.ssgiSampler.valid()
+        ? registry.sampler(resources_.ssgiSampler) : hdrSampler;
+    const VkImageView fallback =
+        registry.image(resources_.hdrColor, frame).imageView();
+    const VkImageView baselineSpecular = resources_.baselineSpecular.valid()
+        ? registry.image(resources_.baselineSpecular, frame).imageView()
+        : fallback;
+    const VkImageView ssr = ssrActive && resources_.ssrFiltered.valid()
+        ? registry.image(resources_.ssrFiltered, frame).imageView()
+        : fallback;
+    const VkImageView baselineDiffuse = resources_.baselineDiffuse.valid()
+        ? registry.image(resources_.baselineDiffuse, frame).imageView()
+        : fallback;
+    const VkImageView ssgi = ssgiActive && resources_.ssgiFiltered.valid()
+        ? registry.image(resources_.ssgiFiltered, frame).imageView()
+        : fallback;
+    std::array<VkDescriptorImageInfo, 6> infos = {{
+        {hdrSampler, fallback, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {hdrSampler, baselineSpecular, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {ssrActive ? ssrSampler : hdrSampler, ssr,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {hdrSampler, baselineDiffuse, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {ssgiActive ? ssgiSampler : hdrSampler, ssgi,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {VK_NULL_HANDLE,
+         registry.image(resources_.compositedHdrColor, frame).imageView(),
+         VK_IMAGE_LAYOUT_GENERAL}}};
+    std::array<VkWriteDescriptorSet, 6> writes{};
+    for (uint32_t index = 0; index < writes.size(); ++index) {
+        writes[index] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        writes[index].dstSet = descriptorSets_[frame];
+        writes[index].dstBinding = index;
+        writes[index].descriptorCount = 1;
+        writes[index].descriptorType = index < 5
+            ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+            : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[index].pImageInfo = &infos[index];
+    }
+    vkUpdateDescriptorSets(device_->logicalDevice(), uint32_t(writes.size()),
+                           writes.data(), 0, nullptr);
 }
 
 void HdrCompositePass::freeDescriptors() {

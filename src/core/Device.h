@@ -31,10 +31,13 @@ struct AtmosphereSupport {
 
 struct SurfaceDataSupport {
     bool available = false;
+    bool albedoMetallicAvailable = false;
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
     VkFormat normalRoughnessFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
     VkFormat motionFormat = VK_FORMAT_R16G16_SFLOAT;
+    VkFormat albedoMetallicFormat = VK_FORMAT_R8G8B8A8_UNORM;
     std::string reason;
+    std::string albedoMetallicReason;
 };
 
 struct OcclusionCullingSupport {
@@ -50,6 +53,7 @@ struct ScreenSpaceEffectsSupport {
     bool gtaoAvailable = false;
     bool taaAvailable = false;
     bool ssrAvailable = false;
+    bool ssgiAvailable = false;
     VkFormat depthPyramidFormat = VK_FORMAT_R32_SFLOAT;
     VkFormat colorPyramidFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
     VkFormat ssaoFormat = VK_FORMAT_R16_SFLOAT;
@@ -59,6 +63,7 @@ struct ScreenSpaceEffectsSupport {
     std::string gtaoReason;
     std::string taaReason;
     std::string ssrReason;
+    std::string ssgiReason;
 };
 
 struct CacaoSupport {

@@ -66,6 +66,47 @@ inline std::optional<SsrQuality> ssrQualityFromName(std::string_view name) {
     return std::nullopt;
 }
 
+enum class GlobalIlluminationMode {
+    AmbientOrIbl,
+    Ssgi,
+};
+
+inline const char *globalIlluminationModeName(GlobalIlluminationMode mode) {
+    return mode == GlobalIlluminationMode::Ssgi ? "ssgi"
+                                                : "ambient-or-ibl";
+}
+
+inline std::optional<GlobalIlluminationMode>
+globalIlluminationModeFromName(std::string_view name) {
+    if (name == "ambient-or-ibl")
+        return GlobalIlluminationMode::AmbientOrIbl;
+    if (name == "ssgi")
+        return GlobalIlluminationMode::Ssgi;
+    return std::nullopt;
+}
+
+enum class SsgiQuality {
+    Low,
+    Medium,
+    High,
+};
+
+inline const char *ssgiQualityName(SsgiQuality quality) {
+    switch (quality) {
+    case SsgiQuality::Low: return "low";
+    case SsgiQuality::Medium: return "medium";
+    case SsgiQuality::High: return "high";
+    }
+    return "medium";
+}
+
+inline std::optional<SsgiQuality> ssgiQualityFromName(std::string_view name) {
+    if (name == "low") return SsgiQuality::Low;
+    if (name == "medium") return SsgiQuality::Medium;
+    if (name == "high") return SsgiQuality::High;
+    return std::nullopt;
+}
+
 inline const char *
 temporalAntiAliasingModeName(TemporalAntiAliasingMode mode) {
     return mode == TemporalAntiAliasingMode::Taa ? "taa" : "off";
@@ -256,6 +297,12 @@ enum class ScreenSpaceDebugView {
     SsrFiltered,
     SsrConfidence,
     SsrRejection,
+    SsgiRaw,
+    SsgiTemporal,
+    SsgiFiltered,
+    SsgiConfidence,
+    SsgiVariance,
+    SsgiRejection,
 };
 
 inline const char *screenSpaceDebugViewName(ScreenSpaceDebugView view) {
@@ -298,6 +345,18 @@ inline const char *screenSpaceDebugViewName(ScreenSpaceDebugView view) {
         return "ssr-confidence";
     case ScreenSpaceDebugView::SsrRejection:
         return "ssr-rejection";
+    case ScreenSpaceDebugView::SsgiRaw:
+        return "ssgi-raw";
+    case ScreenSpaceDebugView::SsgiTemporal:
+        return "ssgi-temporal";
+    case ScreenSpaceDebugView::SsgiFiltered:
+        return "ssgi-filtered";
+    case ScreenSpaceDebugView::SsgiConfidence:
+        return "ssgi-confidence";
+    case ScreenSpaceDebugView::SsgiVariance:
+        return "ssgi-variance";
+    case ScreenSpaceDebugView::SsgiRejection:
+        return "ssgi-rejection";
     }
     return "none";
 }
@@ -342,6 +401,18 @@ screenSpaceDebugViewFromName(std::string_view name) {
         return ScreenSpaceDebugView::SsrConfidence;
     if (name == "ssr-rejection")
         return ScreenSpaceDebugView::SsrRejection;
+    if (name == "ssgi-raw")
+        return ScreenSpaceDebugView::SsgiRaw;
+    if (name == "ssgi-temporal")
+        return ScreenSpaceDebugView::SsgiTemporal;
+    if (name == "ssgi-filtered")
+        return ScreenSpaceDebugView::SsgiFiltered;
+    if (name == "ssgi-confidence")
+        return ScreenSpaceDebugView::SsgiConfidence;
+    if (name == "ssgi-variance")
+        return ScreenSpaceDebugView::SsgiVariance;
+    if (name == "ssgi-rejection")
+        return ScreenSpaceDebugView::SsgiRejection;
     return std::nullopt;
 }
 
@@ -452,6 +523,14 @@ struct RenderSettings {
     float ssrMaxRoughness = 0.8f;
     float ssrIntensity = 1.0f;
     float ssrHistoryWeight = 0.9f;
+    GlobalIlluminationMode globalIlluminationMode =
+        GlobalIlluminationMode::AmbientOrIbl;
+    SsgiQuality ssgiQuality = SsgiQuality::Medium;
+    float ssgiMaxDistance = 12.0f;
+    float ssgiThickness = 0.25f;
+    float ssgiIntensity = 1.0f;
+    float ssgiRadianceClamp = 10.0f;
+    float ssgiHistoryWeight = 0.9f;
     ScreenSpaceDebugView screenSpaceDebugView = ScreenSpaceDebugView::None;
     uint32_t screenSpaceDebugMip = 0;
     CullingSettings culling{};
@@ -501,6 +580,13 @@ struct RenderSettingsPatch {
     std::optional<float> ssrMaxRoughness;
     std::optional<float> ssrIntensity;
     std::optional<float> ssrHistoryWeight;
+    std::optional<GlobalIlluminationMode> globalIlluminationMode;
+    std::optional<SsgiQuality> ssgiQuality;
+    std::optional<float> ssgiMaxDistance;
+    std::optional<float> ssgiThickness;
+    std::optional<float> ssgiIntensity;
+    std::optional<float> ssgiRadianceClamp;
+    std::optional<float> ssgiHistoryWeight;
     std::optional<ScreenSpaceDebugView> screenSpaceDebugView;
     std::optional<uint32_t> screenSpaceDebugMip;
     std::optional<bool>  frustumCullingEnabled;
@@ -606,6 +692,20 @@ inline void applyRenderSettingsPatch(RenderSettings &settings,
         settings.ssrIntensity = *patch.ssrIntensity;
     if (patch.ssrHistoryWeight)
         settings.ssrHistoryWeight = *patch.ssrHistoryWeight;
+    if (patch.globalIlluminationMode)
+        settings.globalIlluminationMode = *patch.globalIlluminationMode;
+    if (patch.ssgiQuality)
+        settings.ssgiQuality = *patch.ssgiQuality;
+    if (patch.ssgiMaxDistance)
+        settings.ssgiMaxDistance = *patch.ssgiMaxDistance;
+    if (patch.ssgiThickness)
+        settings.ssgiThickness = *patch.ssgiThickness;
+    if (patch.ssgiIntensity)
+        settings.ssgiIntensity = *patch.ssgiIntensity;
+    if (patch.ssgiRadianceClamp)
+        settings.ssgiRadianceClamp = *patch.ssgiRadianceClamp;
+    if (patch.ssgiHistoryWeight)
+        settings.ssgiHistoryWeight = *patch.ssgiHistoryWeight;
     if (patch.screenSpaceDebugView)
         settings.screenSpaceDebugView = *patch.screenSpaceDebugView;
     if (patch.screenSpaceDebugMip)

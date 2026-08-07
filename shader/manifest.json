@@ -190,6 +190,21 @@
       "compute": "screenspace/ssr_blur.comp"
     },
     {
+      "id": "screenspace.ssgi-trace",
+      "contract": "compute",
+      "compute": "screenspace/ssgi_trace.comp"
+    },
+    {
+      "id": "screenspace.ssgi-temporal",
+      "contract": "compute",
+      "compute": "screenspace/ssgi_temporal.comp"
+    },
+    {
+      "id": "screenspace.ssgi-filter",
+      "contract": "compute",
+      "compute": "screenspace/ssgi_filter.comp"
+    },
+    {
       "id": "screenspace.reflection-composite",
       "contract": "compute",
       "compute": "screenspace/reflection_composite.comp"

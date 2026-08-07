@@ -210,6 +210,16 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         command, "ssrIntensity", 0.0f, 4.0f);
     patch.ssrHistoryWeight = optionalFiniteFloat(
         command, "ssrHistoryWeight", 0.0f, 0.99f);
+    patch.ssgiMaxDistance = optionalFiniteFloat(
+        command, "ssgiMaxDistance", 0.05f, 1000.0f);
+    patch.ssgiThickness = optionalFiniteFloat(
+        command, "ssgiThickness", 0.001f, 10.0f);
+    patch.ssgiIntensity = optionalFiniteFloat(
+        command, "ssgiIntensity", 0.0f, 4.0f);
+    patch.ssgiRadianceClamp = optionalFiniteFloat(
+        command, "ssgiRadianceClamp", 0.1f, 100.0f);
+    patch.ssgiHistoryWeight = optionalFiniteFloat(
+        command, "ssgiHistoryWeight", 0.0f, 0.99f);
     patch.screenSpaceDebugMip =
         optionalUint32(command, "screenSpaceDebugMip", 31u);
     if (const auto toneMapper = optionalString(command, "toneMapper")) {
@@ -297,6 +307,22 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
                 "Parameter 'ssrQuality' must be low, medium, or high.");
         }
     }
+    if (const auto mode = optionalString(command, "globalIlluminationMode")) {
+        patch.globalIlluminationMode = globalIlluminationModeFromName(*mode);
+        if (!patch.globalIlluminationMode) {
+            throw RuntimeCommandError(
+                "invalid_params",
+                "Parameter 'globalIlluminationMode' must be ambient-or-ibl or ssgi.");
+        }
+    }
+    if (const auto quality = optionalString(command, "ssgiQuality")) {
+        patch.ssgiQuality = ssgiQualityFromName(*quality);
+        if (!patch.ssgiQuality) {
+            throw RuntimeCommandError(
+                "invalid_params",
+                "Parameter 'ssgiQuality' must be low, medium, or high.");
+        }
+    }
     if (const auto debugView =
             optionalString(command, "screenSpaceDebugView")) {
         patch.screenSpaceDebugView = screenSpaceDebugViewFromName(*debugView);
@@ -308,7 +334,9 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
                 "cacao-output, gtao-raw, gtao-temporal, gtao-filtered, "
                 "gtao-rejection, gtao-history-weight, taa-history, "
                 "taa-rejection, taa-history-weight, ssr-raw, ssr-temporal, "
-                "ssr-filtered, ssr-confidence, or ssr-rejection.");
+                "ssr-filtered, ssr-confidence, ssr-rejection, ssgi-raw, "
+                "ssgi-temporal, ssgi-filtered, ssgi-confidence, "
+                "ssgi-variance, or ssgi-rejection.");
         }
     }
     if (!patch.shadowsEnabled && !patch.shadowReceiverBias &&
@@ -335,7 +363,10 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         !patch.taaSharpness && !patch.reflectionMode && !patch.ssrQuality &&
         !patch.ssrMaxDistance && !patch.ssrThickness &&
         !patch.ssrMaxRoughness && !patch.ssrIntensity &&
-        !patch.ssrHistoryWeight &&
+        !patch.ssrHistoryWeight && !patch.globalIlluminationMode &&
+        !patch.ssgiQuality && !patch.ssgiMaxDistance &&
+        !patch.ssgiThickness && !patch.ssgiIntensity &&
+        !patch.ssgiRadianceClamp && !patch.ssgiHistoryWeight &&
         !patch.screenSpaceDebugView && !patch.screenSpaceDebugMip) {
         throw RuntimeCommandError(
             "invalid_params",

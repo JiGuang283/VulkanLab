@@ -97,6 +97,18 @@ uint32_t screenDebugModeValue(ScreenSpaceDebugView view) {
         return 17;
     case ScreenSpaceDebugView::SsrRejection:
         return 18;
+    case ScreenSpaceDebugView::SsgiRaw:
+        return 19;
+    case ScreenSpaceDebugView::SsgiTemporal:
+        return 20;
+    case ScreenSpaceDebugView::SsgiFiltered:
+        return 21;
+    case ScreenSpaceDebugView::SsgiConfidence:
+        return 22;
+    case ScreenSpaceDebugView::SsgiVariance:
+        return 23;
+    case ScreenSpaceDebugView::SsgiRejection:
+        return 24;
     }
     return 0;
 }
@@ -128,10 +140,15 @@ ToneMapPass::ToneMapPass(Device &device,
                          RenderImageHandle ssrHistory,
                          RenderImageHandle ssrFiltered,
                          RenderImageHandle ssrDebug,
+                         RenderImageHandle ssgiRaw,
+                         RenderImageHandle ssgiHistory,
+                         RenderImageHandle ssgiFiltered,
+                         RenderImageHandle ssgiDebug,
                          RenderSamplerHandle screenPyramidSampler,
                          RenderSamplerHandle ssaoSampler,
                          RenderSamplerHandle taaSampler,
                          RenderSamplerHandle ssrSampler,
+                         RenderSamplerHandle ssgiSampler,
                          DescriptorAllocator &descriptorAllocator,
                          std::string fullscreenVertPath,
                          std::string toneMapFragPath)
@@ -148,9 +165,11 @@ ToneMapPass::ToneMapPass(Device &device,
       taaHistory_(taaHistory), taaDebug_(taaDebug),
       ssrRaw_(ssrRaw), ssrHistory_(ssrHistory),
       ssrFiltered_(ssrFiltered), ssrDebug_(ssrDebug),
+      ssgiRaw_(ssgiRaw), ssgiHistory_(ssgiHistory),
+      ssgiFiltered_(ssgiFiltered), ssgiDebug_(ssgiDebug),
       screenPyramidSampler_(screenPyramidSampler),
       ssaoSampler_(ssaoSampler), taaSampler_(taaSampler),
-      ssrSampler_(ssrSampler),
+      ssrSampler_(ssrSampler), ssgiSampler_(ssgiSampler),
       descriptorAllocator_(&descriptorAllocator),
       fullscreenVertPath_(std::move(fullscreenVertPath)),
       toneMapFragPath_(std::move(toneMapFragPath)) {
@@ -241,6 +260,14 @@ std::vector<RenderImageUsage> ToneMapPass::resourceUsages() const {
     if (ssrRaw_.valid()) {
         for (RenderImageHandle handle :
              {ssrRaw_, ssrHistory_, ssrFiltered_, ssrDebug_}) {
+            usages.push_back({handle, RenderImageAccess::SampledRead,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+        }
+    }
+    if (ssgiRaw_.valid()) {
+        for (RenderImageHandle handle :
+             {ssgiRaw_, ssgiHistory_, ssgiFiltered_, ssgiDebug_}) {
             usages.push_back({handle, RenderImageAccess::SampledRead,
                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
@@ -653,6 +680,24 @@ void ToneMapPass::updateScreenDescriptors(
     case ScreenSpaceDebugView::SsrRejection:
         if (features.ssrRequired && ssrDebug_.valid())
             debugInfo = sampled(ssrDebug_, ssrSampler_);
+        break;
+    case ScreenSpaceDebugView::SsgiRaw:
+        if (features.ssgiRequired && ssgiRaw_.valid())
+            debugInfo = sampled(ssgiRaw_, ssgiSampler_);
+        break;
+    case ScreenSpaceDebugView::SsgiTemporal:
+        if (features.ssgiRequired && ssgiHistory_.valid())
+            debugInfo = sampled(ssgiHistory_, ssgiSampler_);
+        break;
+    case ScreenSpaceDebugView::SsgiFiltered:
+    case ScreenSpaceDebugView::SsgiConfidence:
+        if (features.ssgiRequired && ssgiFiltered_.valid())
+            debugInfo = sampled(ssgiFiltered_, ssgiSampler_);
+        break;
+    case ScreenSpaceDebugView::SsgiVariance:
+    case ScreenSpaceDebugView::SsgiRejection:
+        if (features.ssgiRequired && ssgiDebug_.valid())
+            debugInfo = sampled(ssgiDebug_, ssgiSampler_);
         break;
     case ScreenSpaceDebugView::None:
         break;

@@ -25,6 +25,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace vkr {
 
@@ -91,7 +92,7 @@ SurfacePrepass::~SurfacePrepass() {
 }
 
 std::vector<RenderImageUsage> SurfacePrepass::resourceUsages() const {
-    return {
+    std::vector<RenderImageUsage> usages = {
         {resourceHandles_.surfaceNormalRoughness,
          RenderImageAccess::ColorAttachmentWrite,
          VK_IMAGE_LAYOUT_UNDEFINED,
@@ -104,6 +105,14 @@ std::vector<RenderImageUsage> SurfacePrepass::resourceUsages() const {
          RenderImageAccess::DepthAttachmentWrite,
          VK_IMAGE_LAYOUT_UNDEFINED,
          VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}};
+    if (resourceHandles_.surfaceAlbedoMetallic.valid()) {
+        usages.insert(usages.end() - 1,
+                      {resourceHandles_.surfaceAlbedoMetallic,
+                       RenderImageAccess::ColorAttachmentWrite,
+                       VK_IMAGE_LAYOUT_UNDEFINED,
+                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    }
+    return usages;
 }
 
 void SurfacePrepass::releaseViewportResources() {
@@ -127,16 +136,20 @@ void SurfacePrepass::execute(const RenderFrameContext &frame,
         resources.extent(resourceHandles_.surfaceDepth);
     prepareFrame(frame.frameIndex, visibility, extent);
 
-    std::array<VkClearValue, 3> clears{};
+    std::array<VkClearValue, 4> clears{};
     clears[0].color = {{0.5f, 0.5f, 1.0f, 0.0f}};
     clears[1].color = {{0.0f, 0.0f, 0.0f, 0.0f}};
-    clears[2].depthStencil = {1.0f, 0};
+    const bool hasAlbedoMetallic =
+        resourceHandles_.surfaceAlbedoMetallic.valid();
+    if (hasAlbedoMetallic)
+        clears[2].color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+    clears[hasAlbedoMetallic ? 3u : 2u].depthStencil = {1.0f, 0};
     VkRenderPassBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     begin.renderPass = renderPass_;
     begin.framebuffer = framebuffers_.at(frame.frameIndex);
     begin.renderArea = {{0, 0}, extent};
-    begin.clearValueCount = static_cast<uint32_t>(clears.size());
+    begin.clearValueCount = hasAlbedoMetallic ? 4u : 3u;
     begin.pClearValues = clears.data();
     vkCmdBeginRenderPass(frame.cmd, &begin, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -322,7 +335,8 @@ void SurfacePrepass::draw(const RenderFrameContext &frame,
                 .rasterization(cullMode,
                                materialTemplate.pipelineConfig().frontFace)
                 .depth(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
-                .colorAttachmentCount(2)
+                .colorAttachmentCount(
+                    resourceHandles_.surfaceAlbedoMetallic.valid() ? 3u : 2u)
                 .blending(false)
                 .msaa(VK_SAMPLE_COUNT_1_BIT)
                 .descriptorLayout(globalDescriptorSetLayout_)
@@ -360,6 +374,7 @@ void SurfacePrepass::draw(const RenderFrameContext &frame,
         GpuPushBlock block{};
         block.model = item.world;
         block.baseColorFactor = params.baseColorFactor;
+        block.emissiveMetallic.w = params.metallicFactor;
         block.roughnessAlpha.x = params.roughnessFactor;
         block.roughnessAlpha.y = params.alphaCutoff;
         block.reserved.z = params.normalScale;
@@ -374,12 +389,20 @@ void SurfacePrepass::draw(const RenderFrameContext &frame,
 
 void SurfacePrepass::createRenderPass(
     const RenderResourceRegistry &resources) {
-    std::array<VkAttachmentDescription, 3> attachments{};
+    const bool hasAlbedoMetallic =
+        resourceHandles_.surfaceAlbedoMetallic.valid();
+    std::vector<VkAttachmentDescription> attachments(
+        hasAlbedoMetallic ? 4u : 3u);
     attachments[0].format = resources.description(
         resourceHandles_.surfaceNormalRoughness).format;
     attachments[1].format =
         resources.description(resourceHandles_.surfaceMotion).format;
-    for (uint32_t index = 0; index < 2; ++index) {
+    const uint32_t colorCount = hasAlbedoMetallic ? 3u : 2u;
+    if (hasAlbedoMetallic) {
+        attachments[2].format = resources.description(
+            resourceHandles_.surfaceAlbedoMetallic).format;
+    }
+    for (uint32_t index = 0; index < colorCount; ++index) {
         attachments[index].samples = VK_SAMPLE_COUNT_1_BIT;
         attachments[index].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         attachments[index].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -389,22 +412,25 @@ void SurfacePrepass::createRenderPass(
         attachments[index].finalLayout =
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }
-    attachments[2].format =
+    const uint32_t depthIndex = colorCount;
+    attachments[depthIndex].format =
         resources.description(resourceHandles_.surfaceDepth).format;
-    attachments[2].samples = VK_SAMPLE_COUNT_1_BIT;
-    attachments[2].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachments[2].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachments[2].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachments[2].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachments[2].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachments[2].finalLayout =
+    attachments[depthIndex].samples = VK_SAMPLE_COUNT_1_BIT;
+    attachments[depthIndex].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachments[depthIndex].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    attachments[depthIndex].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachments[depthIndex].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[depthIndex].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachments[depthIndex].finalLayout =
         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
-    const std::array<VkAttachmentReference, 2> colorRefs{{
-        {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
-        {1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}}};
+    std::vector<VkAttachmentReference> colorRefs(colorCount);
+    for (uint32_t index = 0; index < colorCount; ++index) {
+        colorRefs[index] = {index,
+                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    }
     const VkAttachmentReference depthRef{
-        2, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+        depthIndex, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount =
@@ -456,14 +482,25 @@ void SurfacePrepass::createRenderPass(
 void SurfacePrepass::createFramebuffers(
     const RenderResourceRegistry &resources) {
     const VkExtent2D extent = resources.extent(resourceHandles_.surfaceDepth);
+    const bool hasAlbedoMetallic =
+        resourceHandles_.surfaceAlbedoMetallic.valid();
     for (uint32_t frame = 0; frame < framebuffers_.size(); ++frame) {
-        const std::array<VkImageView, 3> attachments{
+        std::vector<VkImageView> attachments;
+        attachments.reserve(hasAlbedoMetallic ? 4u : 3u);
+        attachments.push_back(
             resources.image(resourceHandles_.surfaceNormalRoughness, frame)
-                .imageView(),
+                .imageView());
+        attachments.push_back(
             resources.image(resourceHandles_.surfaceMotion, frame)
-                .imageView(),
+                .imageView());
+        if (hasAlbedoMetallic) {
+            attachments.push_back(
+                resources.image(resourceHandles_.surfaceAlbedoMetallic, frame)
+                    .imageView());
+        }
+        attachments.push_back(
             resources.image(resourceHandles_.surfaceDepth, frame)
-                .imageView()};
+                .imageView());
         VkFramebufferCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         info.renderPass = renderPass_;

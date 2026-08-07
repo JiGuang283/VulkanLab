@@ -24,6 +24,7 @@
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace vkr {
 
@@ -128,6 +129,18 @@ std::vector<RenderImageUsage> MainForwardPass::resourceUsages() const {
                       RenderImageAccess::ColorAttachmentWrite,
                       VK_IMAGE_LAYOUT_UNDEFINED,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    if (resourceHandles_.baselineDiffuseMsaa.valid()) {
+        usages.push_back({resourceHandles_.baselineDiffuseMsaa,
+                          RenderImageAccess::ColorAttachmentWrite,
+                          VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
+    }
+    if (resourceHandles_.baselineDiffuse.valid()) {
+        usages.push_back({resourceHandles_.baselineDiffuse,
+                          RenderImageAccess::ColorAttachmentWrite,
+                          VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    }
     return usages;
 }
 
@@ -155,10 +168,14 @@ void MainForwardPass::begin(VkCommandBuffer cmd, uint32_t frameIndex,
         phase_ == ForwardPhase::Opaque ? resourceHandles_.hdrColor
                                        : resourceHandles_.compositedHdrColor;
     const VkExtent2D extent = resources.extent(colorHandle);
-    std::array<VkClearValue, 3> clearValues{};
+    std::array<VkClearValue, 4> clearValues{};
     clearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
     clearValues[1].color = {{0.0f, 0.0f, 0.0f, 0.0f}};
-    clearValues[2].depthStencil = {1.0f, 0};
+    const bool hasBaselineDiffuse =
+        resourceHandles_.baselineDiffuse.valid();
+    if (hasBaselineDiffuse)
+        clearValues[2].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    clearValues[hasBaselineDiffuse ? 3u : 2u].depthStencil = {1.0f, 0};
 
     VkRenderPassBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -167,7 +184,7 @@ void MainForwardPass::begin(VkCommandBuffer cmd, uint32_t frameIndex,
     beginInfo.renderArea.offset = {0, 0};
     beginInfo.renderArea.extent = extent;
     beginInfo.clearValueCount = phase_ == ForwardPhase::Opaque
-                                   ? static_cast<uint32_t>(clearValues.size())
+                                   ? (hasBaselineDiffuse ? 4u : 3u)
                                    : 0u;
     beginInfo.pClearValues = clearValues.data();
     vkCmdBeginRenderPass(cmd, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
@@ -207,10 +224,18 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
             const VkCullModeFlags cullMode =
                 p.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
             auto pipelineConfig = materialTemplate.pipelineConfig();
-            pipelineConfig.colorBlendAttachments.resize(transparent ? 1u : 2u);
+            const uint32_t opaqueAttachmentCount =
+                resourceHandles_.baselineDiffuse.valid() ? 3u : 2u;
+            pipelineConfig.colorBlendAttachments.resize(
+                transparent ? 1u : opaqueAttachmentCount);
             pipelineConfig.colorBlendAttachments[0].blendEnable = transparent;
-            if (!transparent)
-                pipelineConfig.colorBlendAttachments[1].blendEnable = false;
+            if (!transparent) {
+                for (uint32_t attachment = 1;
+                     attachment < opaqueAttachmentCount; ++attachment) {
+                    pipelineConfig.colorBlendAttachments[attachment]
+                        .blendEnable = false;
+                }
+            }
             pipelineConfig.depthTest = true;
             pipelineConfig.depthWrite = !transparent;
             pipelineConfig.cullMode = cullMode;
@@ -390,6 +415,8 @@ void MainForwardPass::createRenderPass(
     const RenderImageDesc &depthDesc =
         resources.description(resourceHandles_.mainDepth);
     const bool multisampled = resourceHandles_.hdrMsaaColor.valid();
+    const bool hasBaselineDiffuse =
+        resourceHandles_.baselineDiffuse.valid();
 
     VkAttachmentDescription color{};
     color.format = hdrDesc.format;
@@ -405,9 +432,10 @@ void MainForwardPass::createRenderPass(
                             ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
                             : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    VkAttachmentDescription baseline = color;
-    baseline.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    baseline.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkAttachmentDescription baselineSpecular = color;
+    baselineSpecular.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    baselineSpecular.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkAttachmentDescription baselineDiffuse = baselineSpecular;
 
     VkAttachmentDescription depth{};
     depth.format = depthDesc.format;
@@ -431,18 +459,42 @@ void MainForwardPass::createRenderPass(
 
     VkAttachmentDescription baselineResolve = resolve;
 
-    const std::array<VkAttachmentReference, 2> colorRefs = {{
-        {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
-        {1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}}};
-    VkAttachmentReference depthRef{2,
-                                   VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
-    const std::array<VkAttachmentReference, 2> resolveRefs = {{
-        {3, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
-        {4, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}}};
+    std::vector<VkAttachmentDescription> attachments;
+    std::vector<VkAttachmentReference> colorRefs;
+    std::vector<VkAttachmentReference> resolveRefs;
+    const auto addColor = [&](const VkAttachmentDescription &attachment) {
+        const uint32_t index = static_cast<uint32_t>(attachments.size());
+        attachments.push_back(attachment);
+        colorRefs.push_back(
+            {index, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
+    };
+    addColor(color);
+    addColor(baselineSpecular);
+    if (hasBaselineDiffuse)
+        addColor(baselineDiffuse);
+    const uint32_t depthIndex = static_cast<uint32_t>(attachments.size());
+    attachments.push_back(depth);
+    const VkAttachmentReference depthRef{
+        depthIndex, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+    if (multisampled) {
+        const uint32_t resolveBase =
+            static_cast<uint32_t>(attachments.size());
+        attachments.push_back(resolve);
+        attachments.push_back(baselineResolve);
+        if (hasBaselineDiffuse)
+            attachments.push_back(baselineResolve);
+        for (uint32_t index = 0;
+             index < static_cast<uint32_t>(colorRefs.size()); ++index) {
+            resolveRefs.push_back(
+                {resolveBase + index,
+                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
+        }
+    }
 
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 2;
+    subpass.colorAttachmentCount =
+        static_cast<uint32_t>(colorRefs.size());
     subpass.pColorAttachments = colorRefs.data();
     subpass.pDepthStencilAttachment = &depthRef;
     subpass.pResolveAttachments = multisampled ? resolveRefs.data() : nullptr;
@@ -474,12 +526,10 @@ void MainForwardPass::createRenderPass(
     dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
-    const std::array<VkAttachmentDescription, 5> allAttachments = {
-        color, baseline, depth, resolve, baselineResolve};
     VkRenderPassCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    info.attachmentCount = multisampled ? 5u : 3u;
-    info.pAttachments = allAttachments.data();
+    info.attachmentCount = static_cast<uint32_t>(attachments.size());
+    info.pAttachments = attachments.data();
     info.subpassCount = 1;
     info.pSubpasses = &subpass;
     info.dependencyCount = static_cast<uint32_t>(dependencies.size());
@@ -522,37 +572,63 @@ void MainForwardPass::createFramebuffers(
     }
 
     const bool multisampled = resourceHandles_.hdrMsaaColor.valid();
+    const bool hasBaselineDiffuse =
+        resourceHandles_.baselineDiffuse.valid();
     const VkExtent2D extent = resources.extent(resourceHandles_.hdrColor);
     for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT;
          ++frameIndex) {
-        std::array<VkImageView, 5> attachments{};
-        attachments[0] =
+        std::vector<VkImageView> attachments;
+        attachments.reserve(multisampled
+                                ? (hasBaselineDiffuse ? 7u : 5u)
+                                : (hasBaselineDiffuse ? 4u : 3u));
+        attachments.push_back(
             multisampled
                 ? resources
                       .image(resourceHandles_.hdrMsaaColor, frameIndex)
                       .imageView()
                 : resources.image(resourceHandles_.hdrColor, frameIndex)
-                      .imageView();
-        attachments[1] =
+                      .imageView());
+        attachments.push_back(
             multisampled
                 ? resources.image(resourceHandles_.baselineSpecularMsaa,
                                   frameIndex).imageView()
                 : resources.image(resourceHandles_.baselineSpecular,
-                                  frameIndex).imageView();
-        attachments[2] =
+                                  frameIndex).imageView());
+        if (hasBaselineDiffuse) {
+            attachments.push_back(
+                multisampled
+                    ? resources
+                          .image(resourceHandles_.baselineDiffuseMsaa,
+                                 frameIndex)
+                          .imageView()
+                    : resources
+                          .image(resourceHandles_.baselineDiffuse,
+                                 frameIndex)
+                          .imageView());
+        }
+        attachments.push_back(
             resources.image(resourceHandles_.mainDepth, frameIndex)
-                .imageView();
-        attachments[3] =
-            resources.image(resourceHandles_.hdrColor, frameIndex)
-                .imageView();
-        attachments[4] =
-            resources.image(resourceHandles_.baselineSpecular, frameIndex)
-                .imageView();
+                .imageView());
+        if (multisampled) {
+            attachments.push_back(
+                resources.image(resourceHandles_.hdrColor, frameIndex)
+                    .imageView());
+            attachments.push_back(
+                resources.image(resourceHandles_.baselineSpecular,
+                                frameIndex)
+                    .imageView());
+            if (hasBaselineDiffuse) {
+                attachments.push_back(
+                    resources.image(resourceHandles_.baselineDiffuse,
+                                    frameIndex)
+                        .imageView());
+            }
+        }
 
         VkFramebufferCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         info.renderPass = renderPass_;
-        info.attachmentCount = multisampled ? 5u : 3u;
+        info.attachmentCount = static_cast<uint32_t>(attachments.size());
         info.pAttachments = attachments.data();
         info.width = extent.width;
         info.height = extent.height;

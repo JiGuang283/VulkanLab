@@ -265,6 +265,16 @@ Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模�
   --ssr-history-weight 0.9
 .\VulkanLabCtl.exe render-settings set `
   --screen-space-debug ssr-confidence
+.\VulkanLabCtl.exe render-settings set `
+  --gi ssgi `
+  --ssgi-quality medium `
+  --ssgi-max-distance 12 `
+  --ssgi-thickness 0.25 `
+  --ssgi-intensity 1.0 `
+  --ssgi-radiance-clamp 10 `
+  --ssgi-history-weight 0.9
+.\VulkanLabCtl.exe render-settings set `
+  --screen-space-debug ssgi-variance
 ```
 
 `render-settings set` 支持部分更新，并要求至少提供一个选项。`--shadows`、`--ibl`、`--skybox` 和 `--bloom` 接受 `on/off`，`--tone-mapper` 接受 `aces`、`reinhard` 或 `passthrough`。Receiver bias 范围为 `[0, 0.05]`，constant/slope bias 为 `[0, 10]`，exposure 为 `[-10, 10]` EV，environment intensity 为 `[0, 100]`；Bloom threshold、soft knee 和 intensity 分别为 `[0,20]`、`[0,1]` 和 `[0,5]`。CLI 用 degree 表示 rotation，协议字段 `environmentRotationRadians` 使用弧度；服务端将其规范化到一个完整旋转。
@@ -279,9 +289,11 @@ Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模�
 
 `--reflection` 接受 `ibl-only/ssr`，`--ssr-quality` 接受 `low/medium/high`；max distance、thickness、max roughness、intensity 和 history weight 的范围分别为 `[0.1,1000]`、`[0.001,5]`、`[0,1]`、`[0,4]` 和 `[0,0.99]`。SSR 默认关闭，只对两个 PBR variant 生效；miss 和低 confidence 区域回退当前 IBL/constant ambient baseline。SSR history 与 TAA/GTAO 独立，并响应相同的 camera cut、resize、scene/shader/camera mode 失效事件。
 
-`--screen-space-debug` 接受 `none`、`nearest-depth`、`scene-color`、`ssao-raw`、`ssao-filtered`、`cacao-output`、`gtao-raw`、`gtao-temporal`、`gtao-filtered`、`gtao-rejection`、`gtao-history-weight`、`taa-history`、`taa-rejection`、`taa-history-weight`、`ssr-raw`、`ssr-temporal`、`ssr-filtered`、`ssr-confidence` 和 `ssr-rejection`，mip 范围为 `[0,31]` 并在 shader 中限制到实际 mip。Surface 与 Screen-Space Debug 互斥；同一 patch 同时请求两个非 `none` 模式时返回 `conflicting_debug_views`，分开切换时新模式会关闭旧模式。
+`--gi` 接受 `ambient-or-ibl/ssgi`，`--ssgi-quality` 接受 `low/medium/high`；max distance、thickness、intensity、radiance clamp 和 history weight 的范围分别为 `[0.05,1000]`、`[0.001,10]`、`[0,4]`、`[0.1,100]` 和 `[0,0.99]`。SSGI 默认关闭，只对两个 PBR variant 生效；miss 与低 confidence 区域回退当前 ambient/IBL baseline。SSGI history 与 TAA、GTAO、SSR 分离，并响应相同的 camera cut、resize、scene/shader/camera mode 失效事件。
 
-`render.status.screenSpace` 返回 depth/color pyramid、SSAO、CACAO、GTAO、TAA 与 SSR 的支持状态、requested/active 状态、Debug View、资源 extent、mip 数、各 temporal effect 的 history generation/validity、最近 reset 原因、CACAO generation/precision 和估算显存。SSAO/CACAO/GTAO/TAA/SSR 不支持时尝试启用分别返回 `ssao_unsupported`、`cacao_unsupported`、`gtao_unsupported`、`taa_unsupported` 或 `ssr_unsupported`；请求不可用的调试资源时返回 `screen_space_unsupported`。
+`--screen-space-debug` 接受 `none`、`nearest-depth`、`scene-color`、`ssao-raw`、`ssao-filtered`、`cacao-output`、`gtao-raw`、`gtao-temporal`、`gtao-filtered`、`gtao-rejection`、`gtao-history-weight`、`taa-history`、`taa-rejection`、`taa-history-weight`、`ssr-raw`、`ssr-temporal`、`ssr-filtered`、`ssr-confidence`、`ssr-rejection`、`ssgi-raw`、`ssgi-temporal`、`ssgi-filtered`、`ssgi-confidence`、`ssgi-variance` 和 `ssgi-rejection`，mip 范围为 `[0,31]` 并在 shader 中限制到实际 mip。Surface 与 Screen-Space Debug 互斥；同一 patch 同时请求两个非 `none` 模式时返回 `conflicting_debug_views`，分开切换时新模式会关闭旧模式。
+
+`render.status.screenSpace` 返回 depth/color pyramid、SSAO、CACAO、GTAO、TAA、SSR 与 SSGI 的支持状态、AO/GI requested/active 状态、Debug View、资源 extent、mip 数、各 temporal effect 的 history generation/validity、最近 reset 原因、CACAO generation/precision 和估算显存。SSAO/CACAO/GTAO/TAA/SSR/SSGI 不支持时尝试启用分别返回 `ssao_unsupported`、`cacao_unsupported`、`gtao_unsupported`、`taa_unsupported`、`ssr_unsupported` 或 `ssgi_unsupported`；请求不可用的调试资源时返回 `screen_space_unsupported`。
 
 Tone Mapping policy 由 Shader Manifest 决定：两个 PBR-lite 和 `Debug IBL Diffuse/Specular` 可配置，Legacy 与其他 Debug variant 强制 PassThrough。Bloom compatibility 也由 Manifest 决定，目前只有两个 PBR-lite variant 支持；设置会保留，但其他 variant 下 `bloomActive=false`。`render-settings get` 返回 `bloomAvailable`、`bloomActive`、`bloomUnavailableReason` 和四个 Bloom 设置。设备不满足 compute/`RGBA16F` storage image 要求时，尝试开启会返回 `bloom_unsupported`。
 
