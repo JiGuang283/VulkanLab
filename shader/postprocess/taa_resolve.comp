@@ -111,7 +111,16 @@ void main()
     nearestSurfaceMotion(pixel, size, depth, surface, motion);
 
     bool sky = depth >= 0.999999;
-    vec2 previousUv = sky ? skyPreviousUv(uv) : uv + motion;
+    vec2 jitterUV_curr = taa.jitterCurrentPreviousPixels.xy * taa.viewportSizeInvSize.zw;
+    vec2 jitterUV_prev = taa.jitterCurrentPreviousPixels.zw * taa.viewportSizeInvSize.zw;
+    vec2 previousUv;
+    if (sky) {
+        vec2 jitteredUv = uv + jitterUV_curr;
+        vec2 jitteredPrevUv = skyPreviousUv(jitteredUv);
+        previousUv = jitteredPrevUv - jitterUV_prev;
+    } else {
+        previousUv = uv + motion - (jitterUV_prev - jitterUV_curr);
+    }
     bool valid = taa.flags.x != 0u && uvInBounds(previousUv);
     vec4 rawHistory = vec4(current, 1.0);
 
