@@ -21,21 +21,8 @@ glm::vec3 normalizeOrFallback(const glm::vec3 &value,
     return glm::normalize(value);
 }
 
-SceneLight makeDefaultSun(const DefaultSunSettings &settings) {
-    SceneLight light{};
-    light.debugName = "Fallback Sun";
-    light.stableKey = "fallback/sun";
-    light.source = SceneLightSource::Fallback;
-    light.castsShadow = true;
-    light.type = LightType::Directional;
-    light.directionWS = normalizeOrFallback(
-        settings.direction, glm::vec3(0.3f, 0.8f, 0.5f));
-    light.color = glm::max(settings.color, glm::vec3(0.0f));
-    light.intensity = std::max(settings.intensity, 0.0f);
-    return light;
-}
-
-GpuLight makeGpuLight(const SceneLight &light) {
+GpuLight makeGpuLight(const SceneLight &light, int32_t shadowSlot = -1,
+                      float shadowFar = 0.0f) {
     GpuLight gpu{};
     const glm::vec3 fallbackDirection =
         light.type == LightType::Directional
@@ -57,41 +44,9 @@ GpuLight makeGpuLight(const SceneLight &light) {
                   std::max(light.intensity, 0.0f));
     gpu.params =
         glm::vec4(static_cast<float>(static_cast<uint32_t>(light.type)),
-                  outerConeCos, 0.0f, 0.0f);
+                  outerConeCos, static_cast<float>(shadowSlot),
+                  std::max(shadowFar, 0.0f));
     return gpu;
-}
-
-uint32_t shadowPriority(SceneLightSource source) {
-    switch (source) {
-    case SceneLightSource::ExplicitEntity:
-        return 0;
-    case SceneLightSource::ImportedModel:
-        return 1;
-    case SceneLightSource::Legacy:
-        return 2;
-    case SceneLightSource::Fallback:
-        return 3;
-    }
-    return std::numeric_limits<uint32_t>::max();
-}
-
-std::string stableLightKey(const SceneLight &light, size_t worldIndex) {
-    if (!light.stableKey.empty())
-        return light.stableKey;
-    if (light.ownerEntity)
-        return "entity/" + light.ownerEntity->toString();
-    if (!light.debugName.empty())
-        return "legacy/" + light.debugName;
-    return "legacy/" + std::to_string(worldIndex);
-}
-
-bool isShadowCandidate(const SceneLight &light) {
-    if (light.type != LightType::Directional || !light.castsShadow)
-        return false;
-    return std::isfinite(light.directionWS.x) &&
-           std::isfinite(light.directionWS.y) &&
-           std::isfinite(light.directionWS.z) &&
-           glm::dot(light.directionWS, light.directionWS) > 1.0e-8f;
 }
 
 uint64_t atmosphereStaticLutKey(
@@ -127,23 +82,25 @@ uint64_t atmosphereStaticLutKey(
 
 } // namespace
 
-bool isEffectiveSceneLight(const SceneLight &light) {
-    constexpr float kMinimumContribution = 1.0e-5f;
-    if (!std::isfinite(light.intensity) ||
-        light.intensity <= kMinimumContribution) {
-        return false;
-    }
-    return std::isfinite(light.color.r) && std::isfinite(light.color.g) &&
-           std::isfinite(light.color.b) &&
-           (light.color.r > kMinimumContribution ||
-            light.color.g > kMinimumContribution ||
-            light.color.b > kMinimumContribution);
-}
-
-RenderView buildRenderView(const RenderViewInput &input) {
+RenderView buildRenderView(const RenderViewInput &input,
+                           const ShadowFramePlan &shadowPlan) {
     VKL_PROFILE_ZONE("Build RenderView");
     RenderView result{};
+    result.shadow = shadowPlan;
     result.settings = input.settings;
+    result.settings.maxPointShadowLights = std::min(
+        result.settings.maxPointShadowLights, kMaxPointShadowLights);
+    result.settings.maxSpotShadowLights = std::min(
+        result.settings.maxSpotShadowLights, kMaxSpotShadowLights);
+    result.settings.pointShadowDistance = glm::clamp(
+        result.settings.pointShadowDistance, kMinPunctualShadowDistance,
+        kMaxPunctualShadowDistance);
+    result.settings.spotShadowDistance = glm::clamp(
+        result.settings.spotShadowDistance, kMinPunctualShadowDistance,
+        kMaxPunctualShadowDistance);
+    result.settings.culling.shadowDistance = glm::clamp(
+        result.settings.culling.shadowDistance,
+        kMinDirectionalShadowDistance, kMaxDirectionalShadowDistance);
     result.cameraNearPlane = input.cameraNearPlane;
     result.cameraFarPlane = input.cameraFarPlane;
     result.stableProjection = input.projection;
@@ -170,7 +127,8 @@ RenderView buildRenderView(const RenderViewInput &input) {
         result.ddgi.probeCount = source.parameters.probeCounts.x *
                                  source.parameters.probeCounts.y *
                                  source.parameters.probeCounts.z;
-        const GlobalIlluminationMode mode = input.settings.globalIlluminationMode;
+        const GlobalIlluminationMode mode =
+            result.settings.globalIlluminationMode;
         result.ddgi.active = input.ddgiSupported &&
                              (mode == GlobalIlluminationMode::Ddgi ||
                               mode == GlobalIlluminationMode::SsgiDdgi);
@@ -234,38 +192,34 @@ RenderView buildRenderView(const RenderViewInput &input) {
             static_cast<uint32_t>(result.reflectionProbes.size());
     }
 
-    SceneLight fallbackSun{};
     std::vector<const SceneLight *> effectiveLights;
-    if (input.sceneLights) {
-        for (const SceneLight &light : *input.sceneLights) {
-            if (!isEffectiveSceneLight(light))
-                continue;
-            effectiveLights.push_back(&light);
-        }
-    }
-    if (effectiveLights.empty() && input.fallbackSunEnabled) {
-        fallbackSun = makeDefaultSun(input.defaultSun);
-        effectiveLights.push_back(&fallbackSun);
-    }
+    effectiveLights.reserve(result.shadow.effectiveLights.size());
+    for (const SceneLight &light : result.shadow.effectiveLights)
+        effectiveLights.push_back(&light);
     result.lightStats.effectiveLights =
         static_cast<uint32_t>(effectiveLights.size());
-
-    const SceneLight *shadowLight = nullptr;
-    size_t shadowWorldIndex = 0;
-    for (size_t index = 0; index < effectiveLights.size(); ++index) {
-        const SceneLight &candidate = *effectiveLights[index];
-        if (!isShadowCandidate(candidate))
-            continue;
-        if (!shadowLight ||
-            std::tuple{shadowPriority(candidate.source),
-                       stableLightKey(candidate, index), index} <
-                std::tuple{shadowPriority(shadowLight->source),
-                           stableLightKey(*shadowLight, shadowWorldIndex),
-                           shadowWorldIndex}) {
-            shadowLight = &candidate;
-            shadowWorldIndex = index;
-        }
+    result.lightStats.shadowContentRevision =
+        result.shadow.contentRevision;
+    result.lightStats.shadowReactiveFramesRemaining =
+        result.shadow.statistics.reactiveFramesRemaining;
+    result.lightStats.shadowTemporalReactive =
+        result.shadow.temporalReactive;
+    result.lightStats.shadowEvictions = result.shadow.statistics.evictions;
+    for (const ShadowAllocation &allocation : result.shadow.allocations) {
+        PunctualShadowSelection selection{
+            allocation.slot, allocation.entity, allocation.stableKey,
+            allocation.name, allocation.farPlane, allocation.policy,
+            allocation.score, allocation.age, allocation.retained,
+            allocation.focused};
+        if (allocation.type == LightType::Point)
+            result.lightStats.pointShadowSelections.push_back(selection);
+        else if (allocation.type == LightType::Spot)
+            result.lightStats.spotShadowSelections.push_back(selection);
     }
+    result.lightStats.pointShadowLights = static_cast<uint32_t>(
+        result.lightStats.pointShadowSelections.size());
+    result.lightStats.spotShadowLights = static_cast<uint32_t>(
+        result.lightStats.spotShadowSelections.size());
 
     const SceneLight *atmosphereSun = nullptr;
     size_t atmosphereSunWorldIndex = 0;
@@ -277,9 +231,9 @@ RenderView buildRenderView(const RenderViewInput &input) {
                 continue;
             }
             if (!atmosphereSun ||
-                std::tuple{stableLightKey(candidate, index), index} <
-                    std::tuple{stableLightKey(*atmosphereSun,
-                                              atmosphereSunWorldIndex),
+                std::tuple{sceneLightStableKey(candidate, index), index} <
+                    std::tuple{sceneLightStableKey(*atmosphereSun,
+                                                   atmosphereSunWorldIndex),
                                atmosphereSunWorldIndex}) {
                 atmosphereSun = &candidate;
                 atmosphereSunWorldIndex = index;
@@ -290,12 +244,35 @@ RenderView buildRenderView(const RenderViewInput &input) {
     std::vector<const SceneLight *> acceptedLights;
     acceptedLights.reserve(
         std::min(effectiveLights.size(), size_t{kMaxSceneLights}));
-    if (shadowLight)
-        acceptedLights.push_back(shadowLight);
-    if (atmosphereSun && atmosphereSun != shadowLight)
-        acceptedLights.push_back(atmosphereSun);
+    const auto keyFor = [&result](const SceneLight *light) {
+        const size_t index = static_cast<size_t>(
+            light - result.shadow.effectiveLights.data());
+        return sceneLightStableKey(*light, index);
+    };
+    const auto findLightByKey = [&effectiveLights, &keyFor](
+                                    const std::string &key) {
+        const auto found = std::find_if(
+            effectiveLights.begin(), effectiveLights.end(),
+            [&key, &keyFor](const SceneLight *light) {
+                return keyFor(light) == key;
+            });
+        return found != effectiveLights.end() ? *found : nullptr;
+    };
+    const auto appendUnique = [&acceptedLights](const SceneLight *light) {
+        if (light && std::find(acceptedLights.begin(),
+                               acceptedLights.end(), light) ==
+                         acceptedLights.end()) {
+            acceptedLights.push_back(light);
+        }
+    };
+
+    // Preserve every shadow-bound light before applying the scene light limit.
+    for (const ShadowAllocation &allocation : result.shadow.allocations)
+        appendUnique(findLightByKey(allocation.stableKey));
+    appendUnique(atmosphereSun);
     for (const SceneLight *light : effectiveLights) {
-        if (light == shadowLight || light == atmosphereSun)
+        if (std::find(acceptedLights.begin(), acceptedLights.end(), light) !=
+            acceptedLights.end())
             continue;
         if (acceptedLights.size() < kMaxSceneLights) {
             acceptedLights.push_back(light);
@@ -303,9 +280,10 @@ RenderView buildRenderView(const RenderViewInput &input) {
         }
         ++result.lightStats.ignoredLights;
         if (light->ownerEntity)
-            result.lightStats.ignoredEntityIds.push_back(*light->ownerEntity);
+            result.lightStats.ignoredEntityIds.push_back(
+                *light->ownerEntity);
         result.lightStats.ignoredStableKeys.push_back(
-            stableLightKey(*light, result.lightStats.ignoredLights - 1));
+            keyFor(light));
     }
 
     const auto appendType = [&](LightType type) {
@@ -314,9 +292,19 @@ RenderView buildRenderView(const RenderViewInput &input) {
                 continue;
             const int32_t bufferIndex =
                 static_cast<int32_t>(result.sceneLights.size());
-            result.sceneLights.push_back(makeGpuLight(*light));
-            if (light == shadowLight)
-                result.lightStats.shadowCasterBufferIndex = bufferIndex;
+            int32_t shadowSlot = -1;
+            float shadowFar = 0.0f;
+            const std::string key = keyFor(light);
+            const auto binding = result.shadow.lightBindings.find(key);
+            if (binding != result.shadow.lightBindings.end()) {
+                shadowSlot = binding->second.slot;
+                shadowFar = binding->second.farPlane;
+            }
+            result.sceneLights.push_back(
+                makeGpuLight(*light, shadowSlot, shadowFar));
+            if (key == result.shadow.directionalStableKey)
+                result.lightStats.shadowCasterBufferIndex =
+                    bufferIndex;
             if (light == atmosphereSun)
                 result.atmosphere.sunBufferIndex = bufferIndex;
             switch (type) {
@@ -341,41 +329,57 @@ RenderView buildRenderView(const RenderViewInput &input) {
     result.lightStats.totalLights =
         static_cast<uint32_t>(result.sceneLights.size());
 
-    if (shadowLight) {
-        result.lightStats.shadowCasterEntity = shadowLight->ownerEntity;
-        result.lightStats.shadowCasterKey =
-            stableLightKey(*shadowLight, shadowWorldIndex);
-        result.lightStats.shadowCasterName = shadowLight->debugName;
-    }
+    result.lightStats.shadowCasterEntity =
+        result.shadow.directionalEntity;
+    result.lightStats.shadowCasterKey =
+        result.shadow.directionalStableKey;
+    result.lightStats.shadowCasterName = result.shadow.directionalName;
 
     result.globalUbo.lightCounts =
         glm::uvec4(result.lightStats.directionalLights,
                    result.lightStats.pointLights,
                    result.lightStats.spotLights,
                    result.lightStats.totalLights);
-    const DirectionalShadowCameraData shadowCamera{
-        input.view, input.projection, input.cameraNearPlane,
-        input.cameraFarPlane, input.settings.culling.shadowDistance};
-    result.directionalShadow = buildDirectionalShadowFrameData(
-        input.sceneBounds, shadowLight, input.settings.shadowsEnabled,
-        &shadowCamera);
-    result.lightStats.shadowCasterActive = result.directionalShadow.enabled;
-    result.globalUbo.directionalShadowViewProj =
-        result.directionalShadow.lightViewProjection;
+    result.lightStats.shadowCasterActive = result.shadow.csm.enabled;
+
+    // Fill cascade view-projection matrices into UBO
+    for (uint32_t c = 0; c < kCsmCascadeCount; ++c) {
+        result.globalUbo.cascadeViewProj[c] =
+            result.shadow.csm.cascades[c].lightViewProjection;
+    }
+    // Pack cascade split depths (view-space Z) into vec4
+    result.globalUbo.cascadeSplits =
+        glm::vec4(result.shadow.csm.splitDepths[0],
+                  result.shadow.csm.splitDepths[1],
+                  result.shadow.csm.splitDepths[2],
+                  result.shadow.csm.splitDepths[3]);
     result.globalUbo.shadowParams =
-        glm::vec4(result.directionalShadow.enabled ? 1.0f : 0.0f,
-                   input.settings.shadowReceiverBias,
-                   result.directionalShadow.texelSize,
-                   result.directionalShadow.enabled
+        glm::vec4(result.shadow.csm.enabled ? 1.0f : 0.0f,
+                   result.settings.shadowReceiverBias,
+                   result.shadow.csm.cascades[0].texelSize,
+                   result.shadow.csm.enabled
                        ? static_cast<float>(
                              result.lightStats.shadowCasterBufferIndex)
                        : -1.0f);
+
+    result.globalUbo.punctualShadowCounts =
+        glm::ivec4(result.shadow.punctual.activePointCount,
+                   result.shadow.punctual.activeSpotCount,
+                   static_cast<int>(kPointShadowMapSize),
+                   static_cast<int>(kSpotShadowMapSize));
+    result.globalUbo.punctualShadowParams =
+        glm::vec4(result.settings.pointShadowReceiverBiasWorld,
+                  0.0f, 0.0f, 0.0f);
+    for (uint32_t s = 0;
+         s < result.shadow.punctual.activeSpotCount; ++s)
+        result.globalUbo.spotShadowViewProj[s] =
+            result.shadow.punctual.spots[s].viewProjection;
     result.globalUbo.environmentParams =
-        glm::vec4(input.settings.iblEnabled && input.environmentReady
+        glm::vec4(result.settings.iblEnabled && input.environmentReady
                       ? 1.0f
                       : 0.0f,
-                  std::max(input.settings.environmentIntensity, 0.0f),
-                   input.settings.environmentRotationRadians,
+                  std::max(result.settings.environmentIntensity, 0.0f),
+                   result.settings.environmentRotationRadians,
                    std::max(input.maxSpecularLod, 0.0f));
 
     if (input.atmosphere) {
@@ -386,7 +390,7 @@ RenderView buildRenderView(const RenderViewInput &input) {
         result.atmosphere.staticLutKey = atmosphereStaticLutKey(a);
         if (atmosphereSun) {
             result.atmosphere.sunEntity = atmosphereSun->ownerEntity;
-            result.atmosphere.sunStableKey = stableLightKey(
+            result.atmosphere.sunStableKey = sceneLightStableKey(
                 *atmosphereSun, atmosphereSunWorldIndex);
         }
 

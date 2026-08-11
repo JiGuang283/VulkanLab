@@ -80,6 +80,8 @@ ShaderProgramContract parseContract(const std::string &value,
         return ShaderProgramContract::MainForward;
     if (value == "shadow-depth")
         return ShaderProgramContract::ShadowDepth;
+    if (value == "punctual-shadow-depth")
+        return ShaderProgramContract::PunctualShadowDepth;
     if (value == "surface-prepass")
         return ShaderProgramContract::SurfacePrepass;
     if (value == "fullscreen")
@@ -153,6 +155,7 @@ void validateProgramStages(const ShaderProgram &program,
                              "this graphics contract requires a fragment stage");
         break;
     case ShaderProgramContract::ShadowDepth:
+    case ShaderProgramContract::PunctualShadowDepth:
         break;
     case ShaderProgramContract::Compute:
         throw fieldError(field, "compute contract requires a compute stage");
@@ -244,7 +247,9 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
                                  "scene lights");
             }
             if (program.usesAtmosphere &&
-                program.contract == ShaderProgramContract::ShadowDepth) {
+                (program.contract == ShaderProgramContract::ShadowDepth ||
+                 program.contract ==
+                     ShaderProgramContract::PunctualShadowDepth)) {
                 throw fieldError(field + ".atmosphere",
                                  "shadow-depth programs cannot consume "
                                  "atmosphere resources");
@@ -409,6 +414,8 @@ const char *shaderProgramContractName(ShaderProgramContract contract) {
         return "main-forward";
     case ShaderProgramContract::ShadowDepth:
         return "shadow-depth";
+    case ShaderProgramContract::PunctualShadowDepth:
+        return "punctual-shadow-depth";
     case ShaderProgramContract::SurfacePrepass:
         return "surface-prepass";
     case ShaderProgramContract::Fullscreen:

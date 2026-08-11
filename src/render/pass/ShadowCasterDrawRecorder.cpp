@@ -1,0 +1,102 @@
+#include "render/pass/ShadowCasterDrawRecorder.h"
+
+#include "core/Pipeline.h"
+#include "core/PipelineConfigBuilder.h"
+#include "render/GpuMaterialData.h"
+#include "render/MaterialInstance.h"
+#include "render/MaterialTemplate.h"
+#include "render/Mesh.h"
+#include "render/PipelineCache.h"
+#include "render/RenderFrame.h"
+#include "render/RenderView.h"
+#include "render/Visibility.h"
+
+#include <utility>
+
+namespace vkr {
+
+void ShadowCasterDrawRecorder::record(
+    const RenderFrameContext &frame, const VisibilityFrame &visibility,
+    const std::vector<RenderItemIndex> &casters,
+    const ShadowCasterDrawConfig &config) {
+    if (!frame.pipelineCache || !frame.view ||
+        config.renderPass == VK_NULL_HANDLE ||
+        config.sliceDescriptorLayout == VK_NULL_HANDLE ||
+        config.sliceDescriptorSet == VK_NULL_HANDLE) {
+        return;
+    }
+
+    Pipeline *boundPipeline = nullptr;
+    for (RenderItemIndex itemIndex : casters) {
+        const RenderItem &command = visibility.items.at(itemIndex);
+        if (!command.mesh || !command.material)
+            continue;
+
+        const MaterialParams &params = command.material->params();
+        const bool alphaMasked = params.alphaMode == AlphaMode::Mask;
+        const MaterialTemplate &materialTemplate =
+            command.material->materialTemplate();
+        const VkCullModeFlags cullMode =
+            params.doubleSided ? VK_CULL_MODE_NONE
+                               : VK_CULL_MODE_BACK_BIT;
+        const VkShaderStageFlags pushStages =
+            VK_SHADER_STAGE_VERTEX_BIT |
+            (alphaMasked ? VK_SHADER_STAGE_FRAGMENT_BIT : 0);
+
+        PipelineConfigBuilder builder;
+        builder
+            .shaders(config.vertexShader,
+                     alphaMasked ? config.maskFragmentShader
+                                 : config.opaqueFragmentShader)
+            .defaultVertexLayout()
+            .rasterization(
+                cullMode, materialTemplate.pipelineConfig().frontFace)
+            .depth(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
+            .depthBias(config.rasterDepthBias)
+            .colorAttachmentCount(0)
+            .msaa(VK_SAMPLE_COUNT_1_BIT)
+            .descriptorLayout(config.sliceDescriptorLayout)
+            .pushConstant({pushStages, 0, sizeof(GpuPushBlock)});
+        if (alphaMasked)
+            builder.descriptorLayout(
+                materialTemplate.descriptorSetLayout());
+        PipelineConfig pipelineConfig = builder.build();
+        pipelineConfig.debugName =
+            "Pipeline/" + config.pipelinePrefix + "/" +
+            (alphaMasked ? "Mask" : "Opaque") + "/" +
+            (cullMode == VK_CULL_MODE_NONE ? "CullNone" : "CullBack");
+
+        Pipeline &pipeline = frame.pipelineCache->getOrCreate(
+            config.renderPass, std::move(pipelineConfig));
+        if (boundPipeline != &pipeline) {
+            vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              pipeline.handle());
+            if (config.rasterDepthBias) {
+                vkCmdSetDepthBias(
+                    frame.cmd, frame.view->settings.shadowConstantBias,
+                    0.0f, frame.view->settings.shadowSlopeBias);
+            }
+            vkCmdBindDescriptorSets(
+                frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                pipeline.layout(), 0, 1, &config.sliceDescriptorSet, 1,
+                &config.dynamicOffset);
+            boundPipeline = &pipeline;
+        }
+        if (alphaMasked) {
+            command.material->bindDescriptors(
+                frame.cmd, pipeline.layout(), frame.frameIndex);
+        }
+
+        GpuPushBlock block{};
+        block.model = command.world;
+        block.baseColorFactor = params.baseColorFactor;
+        block.roughnessAlpha.y = params.alphaCutoff;
+        block.reserved.x = alphaMasked ? 1.0f : 0.0f;
+        vkCmdPushConstants(frame.cmd, pipeline.layout(), pushStages, 0,
+                           sizeof(block), &block);
+        command.mesh->bind(frame.cmd);
+        command.mesh->draw(frame.cmd, itemIndex);
+    }
+}
+
+} // namespace vkr

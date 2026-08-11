@@ -2,6 +2,9 @@
 
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 
+#include "render/DirectionalShadow.h"
+#include "render/PunctualShadow.h"
+
 #include <glm/glm.hpp>
 
 #include <cstddef>
@@ -69,8 +72,12 @@ struct alignas(16) GlobalFrameUbo {
     glm::vec4 cameraPosWS;
     glm::vec4 ambientColorIntensity;
     glm::uvec4 lightCounts;
-    glm::mat4 directionalShadowViewProj{1.0f};
+    glm::mat4 cascadeViewProj[kCsmCascadeCount];
+    glm::vec4 cascadeSplits{0.0f};
     glm::vec4 shadowParams{0.0f};
+    glm::ivec4 punctualShadowCounts{0};
+    glm::vec4 punctualShadowParams{0.0f};
+    glm::mat4 spotShadowViewProj[kMaxSpotShadowLights];
     glm::vec4 environmentParams{0.0f};
 };
 
@@ -151,7 +158,7 @@ static_assert(offsetof(GpuLight, positionRange) == 0);
 static_assert(offsetof(GpuLight, directionInnerCos) == 16);
 static_assert(offsetof(GpuLight, colorIntensity) == 32);
 static_assert(offsetof(GpuLight, params) == 48);
-static_assert(sizeof(GlobalFrameUbo) == 336);
+static_assert(sizeof(GlobalFrameUbo) == 832);
 static_assert(sizeof(AtmosphereGpuParams) == 192);
 static_assert(sizeof(SurfaceFrameUbo) == 96);
 static_assert(sizeof(ScreenSpaceLightingUbo) == 32);
@@ -176,9 +183,12 @@ static_assert(offsetof(GlobalFrameUbo, inverseViewProjection) == 128);
 static_assert(offsetof(GlobalFrameUbo, cameraPosWS) == 192);
 static_assert(offsetof(GlobalFrameUbo, ambientColorIntensity) == 208);
 static_assert(offsetof(GlobalFrameUbo, lightCounts) == 224);
-static_assert(offsetof(GlobalFrameUbo, directionalShadowViewProj) == 240);
-static_assert(offsetof(GlobalFrameUbo, shadowParams) == 304);
-static_assert(offsetof(GlobalFrameUbo, environmentParams) == 320);
+static_assert(offsetof(GlobalFrameUbo, cascadeViewProj) == 240);
+static_assert(offsetof(GlobalFrameUbo, cascadeSplits) == 496);
+static_assert(offsetof(GlobalFrameUbo, shadowParams) == 512);
+static_assert(offsetof(GlobalFrameUbo, punctualShadowCounts) == 528);
+static_assert(offsetof(GlobalFrameUbo, punctualShadowParams) == 544);
+static_assert(offsetof(GlobalFrameUbo, environmentParams) == 816);
 static_assert(sizeof(ToneMapPushConstants) == 48);
 static_assert(offsetof(ToneMapPushConstants, exposureEv) == 0);
 static_assert(offsetof(ToneMapPushConstants, bloomIntensity) == 4);

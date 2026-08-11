@@ -1,8 +1,8 @@
 # RenderDoc 与 Vulkan Validation
 
 > Status: Current
-> Last verified: 2026-07-26
-> Verified against: `c9462cd`
+> Last verified: 2026-08-09
+> Verified against: shared CSM and punctual shadow resources
 
 本文说明 VulkanLab 的 RenderDoc 外部抓帧工作流、GPU 事件标签、Vulkan 对象命名和 Validation Profiles。当前实现不链接 RenderDoc SDK，也不提供进程内触发抓帧；抓帧由 RenderDoc UI 启动程序或注入已运行进程。
 
@@ -82,12 +82,21 @@ cd build-debug\Debug
 ```text
 Frame N
   DirectionalShadow
-    ShadowCasters
+    Cascade 0..3
+  PointShadow
+    Light 0..3
+      Face 0..5
+  SpotShadow
+    Light 0..3
+  SurfacePrepass
+  HiZBuild
+  OcclusionCull
+  SkyBackground
   MainForward
     Opaque
     Transparent
-  ToneMap + UI
-    FullscreenToneMap
+  ToneMap
+  Present + UI
     ImGui
   ScreenshotCopy
 ```
@@ -100,7 +109,7 @@ ModelUpload model=<model-id> profile=<profile-id> batch=<n>
 SceneUpload task=<id> batch=<n>
 ```
 
-当前不会为每个 draw call 添加标签，避免 Main Sponza 的 Event Browser 被数百个重复节点淹没。
+Shadow label 只细分 cascade、light 和 cubemap face，不会为每个 draw call 添加标签，避免 Main Sponza 的 Event Browser 被数百个重复节点淹没。检查 Point Shadow 时，binding 7 应显示 24-layer cube-compatible depth image 的 Cube Array view；每个 attachment draw使用单 layer 2D view，fragment depth 是归一化径向距离。Spot binding 8 应显示四层 2D Array。
 
 主要 Vulkan 对象使用 `/` 分层命名，例如：
 

@@ -1,8 +1,8 @@
 # 渲染流程
 
 > Status: Current
-> Last verified: 2026-08-07
-> Verified against: Screen-space foundations, AO backends, TAA, GTAO, SSR, SSGI, Local Reflection Probes and DDGI v1
+> Last verified: 2026-08-09
+> Verified against: CSM, punctual shadows, screen-space effects, local reflection probes and DDGI v1
 
 ## 帧图与 Pass 顺序
 
@@ -12,7 +12,11 @@ Renderer 当前采用显式的 Forward + Compute 帧图，不依赖 RHI 或 Rend
 AtmosphereLutPass
         -> transmittance / multiple scattering / sky view / aerial perspective
 DirectionalShadowPass
-        -> shadow depth
+        -> shared 4-layer CSM depth
+PointShadowPass
+        -> shared 4-cube radial-depth array
+SpotShadowPass
+        -> shared 4-layer perspective-depth array
 SurfacePrepass
         -> sampled depth + normal/roughness + motion/history + albedo/metallic
 HiZBuildPass
@@ -49,11 +53,11 @@ PresentPass + ImGui
         -> swapchain / Workspace capture
 ```
 
-`RenderResourceRegistry` 使用稳定的类型化 handle 管理内部 render target 和 sampler。资源描述明确指定 fixed/viewport-relative extent、相对尺寸除数、single/per-frame multiplicity、format、sample count、usage、aspect、array layer、view type、history capability 和 fixed/full mip policy。当前注册 HDR resolve、可选 HDR MSAA、baseline indirect specular/diffuse 及其可选 MSAA resolve、composited HDR、main depth、2048x2048 directional shadow depth、Surface Depth、`RGBA16F` world normal/roughness/history validity、`RG16F` motion、`RGBA8_UNORM` linear albedo/metallic、用于遮挡剔除的 `R32_SFLOAT` max-depth Hi-Z、用于屏幕空间效果的 `R32_SFLOAT` nearest-depth pyramid、`RGBA16F` Scene Color pyramid、三张半分辨率 `R16_SFLOAT` SSAO 图像、五张半分辨率 GTAO 图像、五张半分辨率 `RGBA16F` SSR 图像、六张半分辨率 `RGBA16F` SSGI 图像、最多六级 Bloom 图像、LDR Viewport Color、`RGBA16F 8x8x2048` DDGI irradiance array、`RG16F 16x16x2048` DDGI distance-moments array，以及四张 Atmosphere LUT 和相关 sampler。每个 per-frame image 按 `MAX_FRAMES_IN_FLIGHT` 分配；DDGI atlas 是 graphics queue 串行访问的 Single 资源。HDR 优先使用 `R16G16B16A16_SFLOAT`，不满足 color attachment 与 sampled 要求时回退到 `R32G32B32A32_SFLOAT`。Viewport Color 使用 Swapchain format，以延续既有 sRGB/gamma 行为。HDR sample count 取 color/depth format 和设备能力的交集，Surface Data、Atmosphere、Shadow、屏幕空间效果、Bloom、ToneMap 与 Present 固定为 1x。
+`RenderResourceRegistry` 使用稳定的类型化 handle 管理内部 render target 和 sampler。资源描述明确指定 fixed/viewport-relative extent、相对尺寸除数、single/per-frame multiplicity、format、sample count、usage、aspect、array layer、view type、image create flags、history capability 和 fixed/full mip policy。阴影资源是跨 frame slot 共享的 Single 图像：Directional 为 `4 x 2048x2048` 2D array，Point 为带 `VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT` 的 `4 x 6 x 1024x1024` cube array，Spot 为 `4 x 1024x1024` 2D array。其余资源包括 HDR resolve、可选 HDR MSAA、baseline indirect specular/diffuse、composited HDR、main depth、Surface Data、Visibility/Screen-Space pyramids、AO/SSR/SSGI/Bloom、LDR Viewport Color、DDGI atlas 和 Atmosphere LUT。每个 per-frame image 按 `MAX_FRAMES_IN_FLIGHT` 分配；DDGI 与 Shadow 依赖单 graphics queue 的提交顺序串行访问。HDR 优先使用 `R16G16B16A16_SFLOAT`，不满足要求时回退到 `R32G32B32A32_SFLOAT`。Surface Data、Atmosphere、Shadow、屏幕空间效果、Bloom、ToneMap 与 Present 固定为 1x。
 
 每个 Pass 通过 `resourceUsages()` 声明 attachment write/read、sampled read、storage write/read-write、transfer read/write、required/final layout。`RenderPipeline` 在初始化和 resize 后验证 handle、usage flag、sample/aspect、read-before-write 与相邻 layout 契约。Registry 不插入 barrier、不推导 lifetime、不重排 Pass；`RenderPipeline` 仍按 Atmosphere LUT、Shadow、Surface Prepass、Visibility Hi-Z、Occlusion、Screen Depth Pyramid、SSAO/GTAO/CACAO、DDGI、Sky Background、Opaque Forward、Scene Color Pyramid、SSR、SSGI、Screen-Space Lighting Composite、Transparent Forward、TAA、Bloom、ToneMap、Present 顺序记录到同一个 frame command buffer。Render pass 之间使用 final/initial layout 和 dependency；compute pass 通过集中式经典 Vulkan barrier helper明确记录逐 mip、temporal resolve、probe atlas update 和逐滤波阶段的 image barrier，以及 Occlusion SSBO write 到 indirect-command read 的 buffer barrier。
 
-Application 每帧只组装 `RenderViewInput`。纯函数 `buildRenderView()` 负责默认 Sun 规则、灯光过滤与分组、稳定阴影 caster、Atmosphere Sun 选择、阴影矩阵和 Atmosphere GPU 参数，输出不可变 `RenderView`。Renderer 将 `GlobalFrameUbo`、variable-length `sceneLights` 和 `AtmosphereGpuParams` 上传到当前 frame slot；Pass 通过 `RenderFrameContext::view` 读取同一份 settings、shadow 和 atmosphere 数据。
+Application 在 UI 编辑完成后调用 `IRenderWorld::buildRenderSnapshot()`，得到同一时刻的 bounds、lights、render items、environment、atmosphere 和其他世界数据。持久化 `ShadowSystem` 从该快照生成唯一的 `ShadowFramePlan`；纯函数 `buildRenderView()` 只负责灯光分组、GPU packing、Atmosphere Sun 和 Atmosphere GPU 参数，不再自行选择阴影灯或分配 slot。Renderer 将 `GlobalFrameUbo`、variable-length `sceneLights` 和 `AtmosphereGpuParams` 上传到当前 frame slot；Visibility、Pass 与诊断均读取同一份 snapshot/plan，避免编辑后出现一帧旧矩阵或 slot 分叉。
 
 ## RenderQueue 与 Forward
 
@@ -73,7 +77,7 @@ SkyBackgroundPass 负责清空 HDR color，并按优先级绘制程序化 Atmosp
 
 ## 统一可见性与 Hi-Z 遮挡剔除
 
-`IRenderWorld` 只收集全量 RenderCommand，不感知相机。Application 随后用 `VisibilitySystem` 将 Mesh local bounds 变换为 world AABB，并按固定顺序执行 Vulkan `[0,1]` frustum、相机到 AABB 最近点距离和投影像素尺寸检查，生成 camera、shadow caster 与 depth-prepass 三套队列。bounds 无效、穿过 near plane 或投影不稳定的对象保守可见；Transparent 只参与 CPU 剔除并继续 back-to-front 排序。
+`IRenderWorld` 只收集全量 RenderCommand，不感知相机。Application 随后用 `VisibilitySystem` 将 Mesh local bounds 变换为 world AABB，并按固定顺序执行 Vulkan `[0,1]` frustum、相机到 AABB 最近点距离和投影像素尺寸检查。结果包含 camera queue、四个 CSM cascade queue、最多 `4 x 6` 个 Point face queue、四个 Spot queue 和 depth-prepass queue。CSM 使用各 cascade light frustum，Point 先做 light-range 检查再测试六个 face frustum，Spot 使用自己的投影视锥；不会用 camera frustum错误删除离屏 caster。bounds 无效时保守加入所有相关阴影视图；Transparent 只参与 CPU 剔除并继续 back-to-front 排序。
 
 GPU 遮挡链路只处理 CPU 可见的 Opaque/MASK：
 
@@ -177,24 +181,26 @@ SSGI confidence replacement -> DDGI -> global IBL / constant ambient
 
 TAA 默认关闭，要求 Surface Data 和 `RGBA16F` sampled/linear/storage 支持。Application 使用 8-phase Halton 2/3 序列生成亚像素 jitter；`RenderView` 保留 stable projection，同时将 jittered projection 写入 Global UBO。SurfacePrepass 因此输出包含 camera/object movement 和 jitter 差异的 motion vector，而 camera/shadow culling 不随 jitter 抖动。
 
-`TaaPass` 位于完整 MainForward 后，读取当前 HDR、当前/上一 frame slot 的 depth 与 normal、motion 和上一 slot 的 TAA History，并写入当前 slot 的全分辨率 `RGBA16F` History 与 Debug。Resolve 使用 nearest-depth motion、depth/normal/history-validity rejection、3x3 YCoCg variance clipping、自适应 history weight 和轻量 sharpening；天空通过 previous view-projection 重投影。BLEND/transmission 不进入 SurfacePrepass，v1 尚无 reactive mask，因此存在透明 draw 时保守限制 history weight。
+`TaaPass` 位于完整 MainForward 后，读取当前 HDR、当前/上一 frame slot 的 depth 与 normal、motion 和上一 slot 的 TAA History，并写入当前 slot 的全分辨率 `RGBA16F` History 与 Debug。SurfacePrepass motion 已经包含 current/previous jitter 差异，几何重投影直接使用 `previousUv = uv + motion`，不得再次补偿 jitter；天空继续通过 current inverse VP 与 previous VP 重投影。Resolve 还使用 nearest-depth motion、depth/normal/history-validity rejection、3x3 YCoCg variance clipping、自适应 history weight 和轻量 sharpening。BLEND/transmission 不进入 SurfacePrepass，v1 尚无 reactive mask，因此存在透明 draw 时保守限制 history weight。
 
 History 通过 Registry 的 `Previous` sampled-read 契约表达，且只在 scene generation、camera identity、stable projection、Shader variant、viewport 和提交序列连续时复用。resize 会等待现有 frame fences，释放 descriptor 后重建 per-frame history，不调用 device idle。TAA 激活时 Scene Color Pyramid、Bloom 和 ToneMap 直接读取 resolve History；关闭时读取 MainForward HDR，不产生额外全屏复制。History、Rejection 和 History Weight 可通过 ToneMap 调试，UI 仍只在 Present 阶段绘制，因此不经过 TAA。
 
-## 方向光阴影
+## 阴影系统
 
-`buildRenderView()` 只从 `castsShadow=true` 的有效 Directional 中选择 caster。显式 Light Entity 优先于 imported Directional，并使用 Entity UUID、Model Entity UUID 与 prototype index 组成的稳定 key 排序；被选中的 caster 保证进入 256 灯上限且位于 Directional 分段首位。零强度、零颜色或非有限参数的 Scene light 不上传到 GPU；场景没有实际贡献光照的灯时按兼容规则使用 fallback Sun。没有合格 Directional、无有效 bounds、无有效光方向或关闭 Shadows 时，ShadowPass 仍清除目标，但 Forward shader 不采样阴影贡献。
+`ShadowSystem` 只从 policy 非 `Disabled` 的有效 Directional 中选择 caster。SceneDocument 的 `castsShadow=true/false` 映射为 `Forced/Disabled`，glTF imported Point/Spot 映射为低优先级 `Auto`。显式 Light Entity 优先于 imported Directional，并使用 Entity UUID、Model Entity UUID 与 prototype index 组成的稳定 key 排序；被选中的 caster 保证进入 256 灯上限。零强度、零颜色或非有限参数的 Scene light 不上传到 GPU；场景没有实际贡献光照的灯时按兼容规则使用 fallback Sun。没有合格 Directional、无有效 bounds、无有效光方向或关闭 Shadows 时，ShadowPass 不执行有效绘制，Forward shader 不采样阴影贡献。任一 CSM cascade 构建失败会禁用整组 CSM，不把 identity matrix 当作有效 cascade。
 
-阴影相机优先拟合相机 near 到 `min(cameraFar, shadowDistance)` 的 receiver frustum slice：light-space XY 增加 5% padding并按 shadow texel snapping，Z 范围继续使用 Scene Bounds 且增加 10% padding，从而保留沿光线方向的离屏 caster。Shadow queue 以最终 light-space volume 对 Opaque/MASK AABB 做相交测试，不使用 camera frustum。无有效 receiver、bounds 或光源时回退原来的全 Scene Bounds 拟合。投影继续使用 Vulkan `[0,1]` 深度的正交 ZO 矩阵。
+方向光采用四级 CSM。每一级分别拟合自己的 camera frustum slice：light-space XY 增加 5% padding并按 shadow texel snapping，Z 范围继续使用 Scene Bounds且增加 padding，从而保留沿光线方向的离屏 caster。每个 cascade queue 以对应 light frustum 对 Opaque/MASK AABB 做相交测试，不使用 camera frustum。投影使用 Vulkan `[0,1]` 深度的正交 ZO 矩阵。
 
-DirectionalShadowPass 的 caster 规则为：
+三类 Shadow Pass 的 caster 规则为：
 
 - Opaque 使用 vertex-only depth pipeline。
 - MASK 使用 fragment shader，按 BaseColor texture/factor、vertex color 和 alpha cutoff 执行 discard。
 - BLEND 与 transmission 不投射阴影。
 - `doubleSided` 继续控制 back cull 或 no cull。
 
-PBR-lite Forward 与 PBR-lite NormalMapped 使用 comparison sampler 和 3x3 PCF。阴影只乘到被选中 Directional caster 的 direct contribution；ambient、emissive、Point 和 Spot lighting 不受影响。透明材质可以接收阴影。Raster constant/slope bias 与 shader receiver bias 均可通过 `VulkanLab -> Render -> Lighting` 或 Runtime Control 调节。
+Point/Spot 最多各持有四个跨帧稳定 slot。编辑器当前选中的显式灯优先，其次是 `Forced` 显式灯、已持有 slot 的 `Auto` 灯和其余 imported `Auto` 灯；同级候选必须至少高出 25% 贡献度才会替换现有 slot。贡献度综合 intensity、颜色亮度、range、相机距离和预计屏幕覆盖率，所有 tie-break 使用 stable key。Spot 使用独立透视矩阵；Point 使用 24-layer cube-compatible image，以六个 face写入归一化径向深度。Point comparison bias 使用世界单位 `pointShadowReceiverBiasWorld`，在除以 shadow far 前从接收距离扣除；Point raster pass 不使用 fixed-function depth bias，Directional/Spot 继续使用 constant/slope bias。
+
+`ShadowVisibilityBuilder` 独立生成 CSM cascade、Point face 和 Spot caster queues；`VisibilitySystem` 只负责 camera queues、Hi-Z 和 temporal history。Point/Spot Pass 共用 `PunctualShadowSliceBuffer` 和 `ShadowCasterDrawRecorder`，统一 dynamic UBO、MASK、double-sided cull、pipeline 与 draw 约定。`ShadowSystem` 对有效灯光参数、slot 和相关设置生成 content revision；变化后 TAA 将历史权重限制为 `0.1`，连续稳定两帧后恢复正常积累。
 
 `Debug Shadow` 输出最终 visibility 灰度，用于检查投影范围、bias 和 PCF；它使用 PassThrough tone mapping。
 
@@ -283,13 +289,15 @@ Forward descriptor 约定为：
 - `set=0, binding=1`：PBR fragment shader 使用的 Scene Light SSBO。
 - `set=1, binding=0..4`：五个材质纹理槽。
 - `set=2`：统一 Lighting descriptor。
-  - binding 0：当前 frame slot 的 comparison shadow map。
+  - binding 0：共享 Directional CSM 2D-array comparison map。
   - binding 1：Irradiance cubemap。
   - binding 2：Prefiltered Specular cubemap。
   - binding 3：BRDF LUT。
   - binding 4：Radiance cubemap。
   - binding 5：最多 8 个局部 Reflection Probe prefiltered cubemap。
   - binding 6：每帧 Reflection Probe metadata SSBO。
+  - binding 7：共享 Point cube-array comparison map。
+  - binding 8：共享 Spot 2D-array comparison map。
 - `set=3`：Atmosphere descriptor，仅 Atmosphere programs 和两个 PBR variants 声明。
   - binding 0：每帧 `AtmosphereGpuParams` UBO。
   - binding 1：Transmittance LUT。
@@ -306,7 +314,7 @@ Forward descriptor 约定为：
   - binding 3：Probe state SSBO。
 - 128 字节 push constant：model matrix 和材质因子。
 
-Lighting 的七个 binding 始终绑定真实资源或合法 fallback，不依赖 partially-bound descriptor。局部 Reflection Probe 按 priority 和 Entity UUID 稳定选择最多 8 个；Box/Sphere influence 与 box parallax correction 在 PBR fragment shader 中完成。SSR 使用 confidence 替换 `Local Probe -> Global IBL` 的 specular baseline，global diffuse irradiance 不被局部探针替换。sampler array 通过常量 switch 访问，因此不要求 sampled-image array dynamic indexing。ToneMap 使用固定五 binding 的 pass-local descriptor：当前 HDR、Bloom、Surface Normal-Roughness、Motion 和按当前 debug mode 选择的单一 Debug Source。Depth/Color pyramid、AO、TAA、GTAO、SSR 与 SSGI 调试图像都在 CPU 更新 descriptor 时映射到该动态 source，避免每新增一个算法就扩大 ToneMap descriptor ABI。未在本帧生成的输入绑定已初始化 fallback，push constant 禁止采样。Present 使用另一个 pass-local descriptor，只包含当前 frame slot 的 Viewport Color。
+Lighting 的九个 binding 始终绑定真实资源或合法 fallback，不依赖 partially-bound descriptor。Point/Spot Shadow Pass 另外使用 pass-local `UNIFORM_BUFFER_DYNAMIC`：每个 frame slot 预写 24 个 Point face slice 和 4 个 Spot slice，draw 只切换对齐后的 dynamic offset，不在录制期间覆盖同一 UBO 数据。局部 Reflection Probe 按 priority 和 Entity UUID 稳定选择最多 8 个；Box/Sphere influence 与 box parallax correction 在 PBR fragment shader 中完成。SSR 使用 confidence 替换 `Local Probe -> Global IBL` 的 specular baseline，global diffuse irradiance 不被局部探针替换。sampler array 通过常量 switch 访问，因此不要求 sampled-image array dynamic indexing。ToneMap 使用固定五 binding 的 pass-local descriptor：当前 HDR、Bloom、Surface Normal-Roughness、Motion 和按当前 debug mode 选择的单一 Debug Source。Depth/Color pyramid、AO、TAA、GTAO、SSR 与 SSGI 调试图像都在 CPU 更新 descriptor 时映射到该动态 source，避免每新增一个算法就扩大 ToneMap descriptor ABI。未在本帧生成的输入绑定已初始化 fallback，push constant 禁止采样。Present 使用另一个 pass-local descriptor，只包含当前 frame slot 的 Viewport Color。
 
 ## Shader Variant
 
@@ -328,13 +336,17 @@ SceneLight 支持 Directional、Point 和 Spot。glTF loader 解析 `KHR_lights_
 
 `GlobalFrameUbo` 只保存 `directional/point/spot/total` 计数，不再内嵌灯数组。`set=0 binding=1` 是 Fragment stage 的只读 `std430` Scene Light SSBO；`GpuLight` stride 固定 64 字节。Renderer 为每个 frame slot 分配持续映射的独立 buffer，容量从 16 按 2 的幂增长，最多 256 且不自动收缩；替换只发生在该 slot 的 fence 已完成后，不调用 `vkDeviceWaitIdle()`。
 
-PBR Forward 按 Directional、Point、Spot 三段遍历 SSBO，Point/Spot 在超出 range 时提前跳过。三类灯共享 256 灯上限，超出部分保留在 SceneDocument 并计入 ignored；Legacy 继续使用 baseline 光照且不读取 SSBO。存在任意有效场景灯光时不注入 fallback Sun；如果场景灯全部无效，则按兼容规则使用 fallback Sun。Point/Spot 当前不投射阴影。颜色和 intensity 保持 glTF 物理单位，不做自动缩放；高强度场景通过 Exposure EV 和 Tone Mapping 调整。没有可用 IBL 时，环境项由 ambient color/intensity 提供；AO 只影响间接项。
+PBR Forward 按 Directional、Point、Spot 三段遍历 SSBO，Point/Spot 在超出 range 时提前跳过。三类灯共享 256 灯上限，超出部分保留在 SceneDocument 并计入 ignored；Legacy 继续使用 baseline 光照且不读取 SSBO。存在任意有效场景灯光时不注入 fallback Sun；如果场景灯全部无效，则按兼容规则使用 fallback Sun。颜色和 intensity 保持 glTF 物理单位，不做自动缩放；高强度场景通过 Exposure EV 和 Tone Mapping 调整。没有可用 IBL 时，环境项由 ambient color/intensity 提供；AO 只影响间接项。
 
-当前支持一张全局环境、最多 8 个局部 Reflection Probe、一个最多 2048 probes 的 DDGI volume 和一张方向光 shadow map；没有 CSM、Point/Spot shadow、多个/滚动 DDGI volume、deferred rendering 或 auto exposure。Bloom 和 DDGI 都使用 graphics queue 上的同步 compute，不使用 async compute。
+Directional shadow 使用四级 CSM。split distance、receiver fit、scene-bounds Z range、5% XY padding 和 texel snapping 由 `ShadowSystem` 统一计算；每个 cascade只绘制对应的 caster queue。Point/Spot 使用持久 stable-key allocator 与 25% hysteresis，而不是每帧按相机距离重新编号。`GpuLight.params.z` 保存显式 shadow slot，`.w` 保存实际 shadow far plane，因此阴影灯无需位于对应类型数组前部。Spot 使用普通透视深度；Point 对六个 cubemap face写入 `distance(worldPosition, lightPosition) / shadowFar`，PBR 通过 `samplerCubeArrayShadow` 做方向空间 3x3 PCF。Opaque/MASK 投影，MASK 保留 alpha cutoff；BLEND/transmission 不投射实体阴影。
+
+三类 Shadow Map 初始化后始终处于 depth read-only 与 attachment write之间的受控转换。Render pass dependency覆盖前一帧 fragment sampled read 到当前 Early/Late depth write，以及当前 depth write 到后续 fragment sampled read。所有资源跨 frame slot 共享，按 32-bit depth 估算共约 176 MiB；Viewport resize 不重建它们。该设计依赖当前单 graphics queue，未来引入异步 shadow queue 时必须增加显式跨 queue 同步和所有权设计。
+
+当前还支持一张全局环境、最多 8 个局部 Reflection Probe 和一个最多 2048 probes 的 DDGI volume；没有 cascade blending、Point/Spot shadow atlas、静态阴影缓存、多个/滚动 DDGI volume、deferred rendering 或 auto exposure。Bloom 和 DDGI 都使用 graphics queue 上的同步 compute，不使用 async compute。
 
 ## GPU Pass 计时
 
-Renderer 持有一个 `GpuPassProfiler` 和 timestamp query pool。每个 frame slot 为 `Atmosphere LUTs`、`DirectionalShadow`、`SurfacePrepass`、`HiZBuild`、`OcclusionCull`、按需 `ScreenDepthPyramid`、`SSAO`、`GTAO`、可选 `CACAO Input Adapter/CACAO`、`DDGI`、`SkyBackground`、`MainForward Opaque`、按需 `SceneColorPyramid`、`SSR`、`SSGI`、`ScreenSpaceLightingComposite`、`MainForward Transparent`、`TAA`、可选 `Bloom`、`ToneMap` 和 `Present + UI` 分配 begin/end query。总时间从第一个 Pass begin 到最后一个 Pass end 计算。
+Renderer 持有一个 `GpuPassProfiler` 和 timestamp query pool。每个 frame slot 为 `Atmosphere LUTs`、`DirectionalShadow`、`PointShadow`、`SpotShadow`、`SurfacePrepass`、`HiZBuild`、`OcclusionCull`、按需 `ScreenDepthPyramid`、`SSAO`、`GTAO`、可选 `CACAO Input Adapter/CACAO`、`DDGI`、`SkyBackground`、`MainForward Opaque`、按需 `SceneColorPyramid`、`SSR`、`SSGI`、`ScreenSpaceLightingComposite`、`MainForward Transparent`、`TAA`、可选 `Bloom`、`ToneMap` 和 `Present + UI` 分配 begin/end query。总时间从第一个 Pass begin 到最后一个 Pass end 计算。
 
 `FrameSync::beginFrame()` 已等待对应 slot 的 fence 后，Profiler 才使用不带 `WAIT_BIT` 的 `vkGetQueryPoolResults()` 读取旧结果，然后在新 command buffer 中 reset 该 slot。计时不会增加 queue/device idle 或额外 fence wait。换算使用设备 `timestampPeriod`，并按 graphics queue 的 `timestampValidBits` 处理计数器回绕；不支持 timestamp 的设备返回 `available=false`，渲染继续运行。结果显示在 `VulkanLab -> Diagnostics -> Performance`，并由 `render.status.gpuTimings` 返回。
 
@@ -344,7 +356,7 @@ Renderer 持有一个 `GpuPassProfiler` 和 timestamp query pool。每个 frame 
 
 Tracy Vulkan context 使用 graphics queue 和独立 transient command pool完成初始化。各 Pass 在现有 frame command buffer 中写入嵌套 GPU zone；`ModelGpuBuilder` 的 `IncrementalUploadQueue` 写入 `ModelUpload model=<id> profile=<profile>` zone，环境和 legacy 同步 `UploadContext` 保留各自的上传 zone。所有 zone 结束后，每帧调用一次 `TracyVkCollect()`，没有增加 `WAIT_BIT`、queue idle、device idle 或额外 fence。
 
-GPU 层级覆盖 Atmosphere LUTs、DirectionalShadow/ShadowCasters、SkyBackground、MainForward/Opaque/Transparent、可选 Bloom Downsample/Upsample、ToneMap、Present/ImGui、ScreenshotCopy 和上传 batch。CPU 侧覆盖 Application frame、FrameSync、RenderView/RenderQueue、场景与环境 worker、glTF 各准备阶段、逐帧 GPU builder、资产工具监督、Capture encode 和 pipeline cache miss。单 draw、单纹理和单 mip 不创建 zone。
+Tracy GPU zone 覆盖 Atmosphere LUTs、DirectionalShadow、PointShadow、SpotShadow、SkyBackground、MainForward/Opaque/Transparent、可选 Bloom Downsample/Upsample、ToneMap、Present/ImGui、ScreenshotCopy 和上传 batch。RenderDoc label 在三类 Shadow Pass 内额外细分 Cascade、Light 和 Face，但不标记单 draw。CPU 侧覆盖 Application frame、FrameSync、RenderView/RenderQueue、场景与环境 worker、glTF 各准备阶段、逐帧 GPU builder、资产工具监督、Capture encode 和 pipeline cache miss。单 draw、单纹理和单 mip 不创建 zone。
 
 Tracy 与 `GpuPassProfiler` 并行存在：后者是普通开发构建中的低成本数值统计，前者是按需连接的跨线程时间线。Tracy 编译和连接状态通过 `system.info.diagnostics.tracy` 与 `Diagnostics -> Performance` 显示；完整操作见 [Tracy 性能分析](../guides/tracy_profiling.md)。
 

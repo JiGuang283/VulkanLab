@@ -131,14 +131,33 @@ void checkGlobalUbo(const SpvReflectDescriptorBinding &binding,
         {"ambientColorIntensity",
          offsetof(vkr::GlobalFrameUbo, ambientColorIntensity)},
         {"lightCounts", offsetof(vkr::GlobalFrameUbo, lightCounts)},
-        {"directionalShadowViewProj",
-         offsetof(vkr::GlobalFrameUbo, directionalShadowViewProj)},
+        {"cascadeViewProj",
+         offsetof(vkr::GlobalFrameUbo, cascadeViewProj)},
+        {"cascadeSplits", offsetof(vkr::GlobalFrameUbo, cascadeSplits)},
         {"shadowParams", offsetof(vkr::GlobalFrameUbo, shadowParams)},
+        {"punctualShadowCounts",
+         offsetof(vkr::GlobalFrameUbo, punctualShadowCounts)},
+        {"punctualShadowParams",
+         offsetof(vkr::GlobalFrameUbo, punctualShadowParams)},
+        {"spotShadowViewProj",
+         offsetof(vkr::GlobalFrameUbo, spotShadowViewProj)},
         {"environmentParams",
          offsetof(vkr::GlobalFrameUbo, environmentParams)},
     };
     checkBlockLayout(binding.block, sizeof(vkr::GlobalFrameUbo), members,
                      "GlobalFrameUbo", path);
+}
+
+void checkPunctualShadowUbo(
+    const SpvReflectDescriptorBinding &binding, std::string_view path) {
+    static const std::vector<MemberLayout> members = {
+        {"viewProjection",
+         offsetof(vkr::PunctualShadowSlice, viewProjection)},
+        {"lightPositionFar",
+         offsetof(vkr::PunctualShadowSlice, lightPositionFar)},
+    };
+    checkBlockLayout(binding.block, sizeof(vkr::PunctualShadowSlice),
+                     members, "PunctualShadowSlice", path);
 }
 
 void checkAtmosphereUbo(const SpvReflectDescriptorBinding &binding,
@@ -830,7 +849,16 @@ void checkDescriptors(const ReflectedModule &reflected,
             continue;
         }
 
-        if (binding->set == 0 && binding->binding == 0) {
+        if (contract ==
+                vkr::ShaderProgramContract::PunctualShadowDepth &&
+            binding->set == 0 && binding->binding == 0) {
+            requireShader(
+                binding->descriptor_type ==
+                    SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                "punctual shadow descriptor contract mismatch in " +
+                    reflected.path());
+            checkPunctualShadowUbo(*binding, reflected.path());
+        } else if (binding->set == 0 && binding->binding == 0) {
             requireShader(binding->descriptor_type ==
                               SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER &&
                               (stage & ~(VK_SHADER_STAGE_VERTEX_BIT |
@@ -894,6 +922,19 @@ void checkDescriptors(const ReflectedModule &reflected,
                 "reflection probe buffer contract mismatch in " +
                     reflected.path());
             checkReflectionProbeBuffer(*binding, reflected.path());
+        } else if (binding->set == 2 &&
+                   (binding->binding == 7 || binding->binding == 8)) {
+            const SpvDim expectedDimension =
+                binding->binding == 7 ? SpvDimCube : SpvDim2D;
+            requireShader(
+                binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
+                    stage == VK_SHADER_STAGE_FRAGMENT_BIT &&
+                    binding->image.dim == expectedDimension &&
+                    binding->image.arrayed == 1 &&
+                    binding->image.depth == 1,
+                "punctual shadow sampler contract mismatch in " +
+                    reflected.path());
         } else if (binding->set == 3 && binding->binding < 5) {
             const bool atmosphereUbo =
                 binding->binding == 0 &&
@@ -1037,7 +1078,8 @@ void checkFragmentOutputs(const ReflectedModule &reflected,
         return;
     const InterfaceMap outputs = userInterface(reflected, false);
     const bool depthOnly =
-        contract == vkr::ShaderProgramContract::ShadowDepth;
+        contract == vkr::ShaderProgramContract::ShadowDepth ||
+        contract == vkr::ShaderProgramContract::PunctualShadowDepth;
     if (depthOnly) {
         requireShader(outputs.empty(),
                       "depth-only fragment shader writes a color output");

@@ -141,6 +141,17 @@ void Scene::collectRenderItems(std::vector<RenderItem> &items) const {
     }
 }
 
+RenderWorldFrameSnapshot Scene::buildRenderSnapshot() const {
+    RenderWorldFrameSnapshot snapshot{};
+    snapshot.bounds = bounds_;
+    snapshot.lights = lights_;
+    snapshot.materials = materials_;
+    snapshot.reflectionProbes = reflectionProbes_;
+    snapshot.fallbackSunEnabled = true;
+    collectRenderItems(snapshot.renderItems);
+    return snapshot;
+}
+
 size_t Scene::renderableCount() const {
     size_t count = objects_.size();
     for (const ModelInstance &instance : modelInstances_) {

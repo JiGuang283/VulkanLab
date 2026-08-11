@@ -69,6 +69,7 @@ struct RenderImageDesc {
     VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
     RenderMipPolicy mipPolicy = RenderMipPolicy::Fixed;
     bool historyCapable = false;
+    VkImageCreateFlags createFlags = 0;
 };
 
 struct RenderSamplerDesc {
@@ -127,6 +128,8 @@ struct RendererResourceHandles {
     RenderImageHandle mainDepth{};
     RenderImageHandle viewportColor{};
     RenderImageHandle directionalShadowDepth{};
+    RenderImageHandle pointShadowDepth{};
+    RenderImageHandle spotShadowDepth{};
     RenderImageHandle surfaceDepth{};
     RenderImageHandle surfaceNormalRoughness{};
     RenderImageHandle surfaceMotion{};
@@ -167,6 +170,8 @@ struct RendererResourceHandles {
     RenderSamplerHandle hdrSampler{};
     RenderSamplerHandle viewportSampler{};
     RenderSamplerHandle shadowSampler{};
+    RenderSamplerHandle pointShadowSampler{};
+    RenderSamplerHandle spotShadowSampler{};
     RenderSamplerHandle surfaceDepthSampler{};
     RenderSamplerHandle surfaceDataSampler{};
     RenderSamplerHandle visibilityHiZSampler{};

@@ -718,7 +718,9 @@ void RuntimeWorld::rebuildDerivedState() {
         light.stableKey = "entity/" + entry->id.toString();
         light.source = SceneLightSource::ExplicitEntity;
         light.ownerEntity = entry->id;
-        light.castsShadow = source.castsShadow;
+        light.shadowPolicy = source.castsShadow
+                                 ? ShadowCastingPolicy::Forced
+                                 : ShadowCastingPolicy::Disabled;
         light.atmosphereSunIndex = source.atmosphereSunIndex;
         light.sourceAngularRadiusRadians =
             source.sourceAngularRadiusRadians;
@@ -868,6 +870,45 @@ void RuntimeWorld::update(float, float) {
     refreshModelBindingStates();
     refreshReflectionProbeBindingStates();
     rebuildDerivedState();
+}
+
+RenderWorldFrameSnapshot RuntimeWorld::buildRenderSnapshot() const {
+    auto *self = const_cast<RuntimeWorld *>(this);
+    self->rebuildDerivedState();
+
+    RenderWorldFrameSnapshot snapshot{};
+    snapshot.bounds = bounds_;
+    snapshot.lights = lights_;
+    snapshot.materials = materials_;
+    snapshot.reflectionProbes = reflectionProbes_;
+    snapshot.ambient = RenderWorldAmbient{ambient_.color,
+                                          ambient_.intensity};
+    if (environment_) {
+        snapshot.environment = RenderWorldEnvironment{
+            environment_->environmentId, environment_->intensity,
+            environment_->rotationRadians};
+    }
+    snapshot.atmosphere = atmosphere_;
+    snapshot.ddgiProbeVolume = ddgiProbeVolume_;
+    snapshot.fallbackSunEnabled = false;
+    collectRenderItems(snapshot.renderItems);
+    return snapshot;
+}
+
+const Bounds &RuntimeWorld::bounds() const {
+    const_cast<RuntimeWorld *>(this)->rebuildDerivedState();
+    return bounds_;
+}
+
+const std::vector<SceneLight> &RuntimeWorld::lights() const {
+    const_cast<RuntimeWorld *>(this)->rebuildDerivedState();
+    return lights_;
+}
+
+const std::vector<std::shared_ptr<MaterialInstance>> &
+RuntimeWorld::materials() const {
+    const_cast<RuntimeWorld *>(this)->rebuildDerivedState();
+    return materials_;
 }
 
 void RuntimeWorld::collectRenderItems(std::vector<RenderItem> &items) const {

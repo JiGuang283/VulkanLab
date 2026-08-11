@@ -252,6 +252,9 @@ void InspectorPanel::draw(const InspectorPanelSnapshot &snapshot,
                     case InspectorLightShadowStatus::Eligible:
                         shadowStatus = "Eligible";
                         break;
+                    case InspectorLightShadowStatus::BudgetExceeded:
+                        shadowStatus = "Budget Exceeded";
+                        break;
                     case InspectorLightShadowStatus::Disabled:
                         shadowStatus = "Disabled";
                         break;
@@ -266,22 +269,24 @@ void InspectorPanel::draw(const InspectorPanelSnapshot &snapshot,
                     if (ImGui::Combo("Type", &type, types, 3) &&
                         actions.setLight) {
                         light.type = static_cast<SceneDocumentLightType>(type);
-                        light.castsShadow =
-                            light.type ==
-                            SceneDocumentLightType::Directional;
                         if (light.type !=
                             SceneDocumentLightType::Directional) {
                             light.atmosphereSunIndex.reset();
                         }
                         actions.setLight(entity.id, light);
                     }
-                    if (light.type == SceneDocumentLightType::Directional) {
+                    {
+                        ImGui::TextDisabled(
+                            "Policy: %s",
+                            light.castsShadow ? "Forced" : "Disabled");
                         bool castsShadow = light.castsShadow;
                         if (ImGui::Checkbox("Casts Shadow", &castsShadow) &&
                             actions.setLight) {
                             light.castsShadow = castsShadow;
                             actions.setLight(entity.id, light);
                         }
+                    }
+                    if (light.type == SceneDocumentLightType::Directional) {
                         bool atmosphereSun =
                             light.atmosphereSunIndex == 0u;
                         ImGui::BeginDisabled(!snapshot.atmospherePresent);

@@ -179,11 +179,12 @@ class RuntimeWorld final : public IRenderWorld {
     void setEnvironment(std::optional<SceneEnvironmentDocument> environment);
 
     void update(float dt, float time) override;
+    RenderWorldFrameSnapshot buildRenderSnapshot() const override;
     void collectRenderItems(std::vector<RenderItem> &items) const override;
-    const Bounds &bounds() const override { return bounds_; }
-    const std::vector<SceneLight> &lights() const override { return lights_; }
+    const Bounds &bounds() const override;
+    const std::vector<SceneLight> &lights() const override;
     const std::vector<std::shared_ptr<MaterialInstance>> &
-    materials() const override { return materials_; }
+    materials() const override;
     size_t renderableCount() const override;
     bool allowsFallbackSun() const override { return false; }
     std::optional<CameraPose> initialEditorCamera() const override {

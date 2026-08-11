@@ -1,6 +1,8 @@
 #pragma once
 
 #include "SceneTypes.h"
+#include "render/RenderCommand.h"
+#include "scene/SceneLight.h"
 #include "scene_data/SceneDocument.h"
 
 #include <cstddef>
@@ -13,9 +15,6 @@ namespace vkr {
 
 class MaterialInstance;
 struct EnvironmentGpuResources;
-struct RenderItem;
-struct SceneLight;
-
 struct RuntimeCameraView {
     glm::mat4 view{1.0f};
     glm::mat4 projection{1.0f};
@@ -59,11 +58,25 @@ struct RenderWorldReflectionProbe {
     uint64_t environmentGeneration = 0;
 };
 
+struct RenderWorldFrameSnapshot {
+    Bounds bounds{};
+    std::vector<SceneLight> lights;
+    std::vector<RenderItem> renderItems;
+    std::vector<std::shared_ptr<MaterialInstance>> materials;
+    std::vector<RenderWorldReflectionProbe> reflectionProbes;
+    std::optional<RenderWorldAmbient> ambient;
+    std::optional<RenderWorldEnvironment> environment;
+    std::optional<RenderWorldAtmosphere> atmosphere;
+    std::optional<RenderWorldDdgiVolume> ddgiProbeVolume;
+    bool fallbackSunEnabled = false;
+};
+
 class IRenderWorld {
   public:
     virtual ~IRenderWorld() = default;
 
     virtual void update(float dt, float time) = 0;
+    virtual RenderWorldFrameSnapshot buildRenderSnapshot() const = 0;
     virtual void collectRenderItems(std::vector<RenderItem> &items) const = 0;
     virtual const Bounds &bounds() const = 0;
     virtual const std::vector<SceneLight> &lights() const = 0;

@@ -198,7 +198,7 @@ makeModelLight(const tg3_light &source, uint32_t lightIndex,
                      path, lightIndex, nodeIndex, toString(source.type));
         return std::nullopt;
     }
-    result.castsShadow = result.type == LightType::Directional;
+    result.castsShadow = true;
 
     std::string lightName = toString(source.name);
     if (lightName.empty())

@@ -2,6 +2,7 @@
 
 #include "IRenderPass.h"
 #include "core/FrameSync.h"
+#include "render/DirectionalShadow.h"
 
 #include <array>
 #include <string>
@@ -39,8 +40,10 @@ class DirectionalShadowPass final : public IRenderPass {
   private:
     void createRenderPass(const RenderResourceRegistry &resources);
     void createFramebuffers(const RenderResourceRegistry &resources);
+    void destroyFramebuffers();
     void drawCasters(const RenderFrameContext &frame,
-                     const VisibilityFrame &visibility);
+                     const VisibilityFrame &visibility,
+                     uint32_t cascadeIndex);
 
     Device *device_ = nullptr;
     RenderImageHandle shadowDepth_{};
@@ -48,7 +51,8 @@ class DirectionalShadowPass final : public IRenderPass {
     std::string shadowVertPath_;
     std::string shadowMaskFragPath_;
     VkRenderPass renderPass_ = VK_NULL_HANDLE;
-    std::array<VkFramebuffer, MAX_FRAMES_IN_FLIGHT> framebuffers_{};
+    std::array<VkFramebuffer, kCsmCascadeCount> framebuffers_{};
+    std::array<VkImageView, kCsmCascadeCount> cascadeViews_{};
 };
 
 } // namespace vkr

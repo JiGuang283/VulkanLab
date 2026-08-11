@@ -45,6 +45,7 @@
 #include "editor/EditorUiState.h"
 #include "render/GuiSystem.h"
 #include "render/DirectionalShadow.h"
+#include "render/PunctualShadow.h"
 #include "render/MaterialInstance.h"
 #include "render/MaterialTextureSlot.h"
 #include "render/PipelineCache.h"
@@ -946,6 +947,14 @@ void Application::init() {
     const ShaderProgram &shadowOpaque =
         shaderRegistry_.program("shadow.opaque");
     const ShaderProgram &shadowMask = shaderRegistry_.program("shadow.mask");
+    const ShaderProgram &shadowPointOpaque =
+        shaderRegistry_.program("shadow.point-opaque");
+    const ShaderProgram &shadowPointMask =
+        shaderRegistry_.program("shadow.point-mask");
+    const ShaderProgram &shadowSpotOpaque =
+        shaderRegistry_.program("shadow.spot-opaque");
+    const ShaderProgram &shadowSpotMask =
+        shaderRegistry_.program("shadow.spot-mask");
     const ShaderProgram &surfacePrepassOpaque =
         shaderRegistry_.program("surface.prepass-opaque");
     const ShaderProgram &surfacePrepassMask =
@@ -1016,6 +1025,16 @@ void Application::init() {
     RendererShaderPaths shaderPaths;
     shaderPaths.shadowVert = shadowOpaque.vertSpvPath;
     shaderPaths.shadowMaskFrag = shadowMask.fragSpvPath;
+    shaderPaths.shadowPunctualVert =
+        shadowPointOpaque.vertSpvPath;
+    shaderPaths.shadowPointFrag = shadowPointOpaque.fragSpvPath;
+    shaderPaths.shadowPointMaskFrag = shadowPointMask.fragSpvPath;
+    if (shadowSpotOpaque.vertSpvPath !=
+        shaderPaths.shadowPunctualVert) {
+        throw std::runtime_error(
+            "point and spot shadow programs must share the punctual vertex shader");
+    }
+    shaderPaths.shadowSpotMaskFrag = shadowSpotMask.fragSpvPath;
     shaderPaths.surfacePrepassVert = surfacePrepassOpaque.vertSpvPath;
     shaderPaths.surfacePrepassOpaqueFrag = surfacePrepassOpaque.fragSpvPath;
     shaderPaths.surfacePrepassMaskFrag = surfacePrepassMask.fragSpvPath;
@@ -1240,6 +1259,7 @@ void Application::loadScene(int index, bool replaceCurrent) {
 #endif
         currentSceneIndex_ = index;
         ++sceneGeneration_;
+        shadowSystem_.reset();
         if (const auto initialCamera = currentScene_->initialEditorCamera()) {
             const auto &p = *initialCamera;
             camera_.setPosition(p.position);
@@ -1645,6 +1665,7 @@ void Application::updateSceneLoading() {
 #endif
         currentSceneIndex_ = latestSceneLoadTask_->sceneIndex;
         ++sceneGeneration_;
+        shadowSystem_.reset();
         if (const auto initialCamera = currentScene_->initialEditorCamera()) {
             const auto &pose = *initialCamera;
             camera_.setPosition(pose.position);
@@ -2007,6 +2028,7 @@ void Application::publishNativeScene(
 #endif
     currentSceneIndex_ = task->sceneIndex;
     ++sceneGeneration_;
+    shadowSystem_.reset();
     applySceneCameraDefaults();
     task->stats.allocatorAfter = device_->allocatorMemorySnapshot();
     {
@@ -2333,9 +2355,21 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
     }
     next.shadowReceiverBias =
         glm::clamp(next.shadowReceiverBias, 0.0f, 0.05f);
+    next.pointShadowReceiverBiasWorld =
+        glm::clamp(next.pointShadowReceiverBiasWorld, 0.0f, 1.0f);
     next.shadowConstantBias =
         glm::clamp(next.shadowConstantBias, 0.0f, 10.0f);
     next.shadowSlopeBias = glm::clamp(next.shadowSlopeBias, 0.0f, 10.0f);
+    next.maxPointShadowLights =
+        std::min(next.maxPointShadowLights, kMaxPointShadowLights);
+    next.maxSpotShadowLights =
+        std::min(next.maxSpotShadowLights, kMaxSpotShadowLights);
+    next.pointShadowDistance =
+        glm::clamp(next.pointShadowDistance, kMinPunctualShadowDistance,
+                   kMaxPunctualShadowDistance);
+    next.spotShadowDistance =
+        glm::clamp(next.spotShadowDistance, kMinPunctualShadowDistance,
+                   kMaxPunctualShadowDistance);
     next.exposureEv = glm::clamp(next.exposureEv, -10.0f, 10.0f);
     next.bloomThreshold =
         glm::clamp(next.bloomThreshold, 0.0f, 20.0f);
@@ -2386,7 +2420,9 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
     next.screenSpaceDebugMip =
         std::min(next.screenSpaceDebugMip, 31u);
     next.culling.shadowDistance =
-        glm::clamp(next.culling.shadowDistance, 0.1f, 100000.0f);
+        glm::clamp(next.culling.shadowDistance,
+                   kMinDirectionalShadowDistance,
+                   kMaxDirectionalShadowDistance);
     next.culling.maxDrawDistance =
         glm::clamp(next.culling.maxDrawDistance, 0.1f, 1000000.0f);
     next.culling.minProjectedSizePixels = glm::clamp(
@@ -3989,6 +4025,70 @@ ControlJson Application::runtimeRenderStatus() {
             {"bufferIndex", lastLightStats_.shadowCasterBufferIndex},
             {"active", lastLightStats_.shadowCasterActive}};
     }
+    ControlJson pointShadowSelections = ControlJson::array();
+    for (const PunctualShadowSelection &selection :
+         lastLightStats_.pointShadowSelections) {
+        ControlJson faceDraws = ControlJson::array();
+        uint32_t casterDraws = 0;
+        for (uint32_t face = 0; face < kPointShadowFaceCount; ++face) {
+            const uint32_t drawCount =
+                visibilityFrame_.cpuStats.pointShadowDraws[
+                    selection.slot * kPointShadowFaceCount + face];
+            faceDraws.push_back(drawCount);
+            casterDraws += drawCount;
+        }
+        pointShadowSelections.push_back(
+            {{"slot", selection.slot},
+             {"key", selection.stableKey},
+             {"name", selection.name},
+             {"entityId",
+              selection.entity
+                  ? ControlJson(selection.entity->toString())
+                  : ControlJson(nullptr)},
+             {"farPlane", selection.farPlane},
+             {"policy", shadowCastingPolicyName(selection.policy)},
+             {"score", selection.score},
+             {"slotAge", selection.age},
+             {"retained", selection.retained},
+             {"focused", selection.focused},
+             {"casterDraws", casterDraws},
+             {"faceDraws", std::move(faceDraws)}});
+    }
+    ControlJson spotShadowSelections = ControlJson::array();
+    for (const PunctualShadowSelection &selection :
+         lastLightStats_.spotShadowSelections) {
+        const uint32_t casterDraws =
+            visibilityFrame_.cpuStats.spotShadowDraws[selection.slot];
+        spotShadowSelections.push_back(
+            {{"slot", selection.slot},
+             {"key", selection.stableKey},
+             {"name", selection.name},
+             {"entityId",
+              selection.entity
+                  ? ControlJson(selection.entity->toString())
+                  : ControlJson(nullptr)},
+             {"farPlane", selection.farPlane},
+             {"policy", shadowCastingPolicyName(selection.policy)},
+             {"score", selection.score},
+             {"slotAge", selection.age},
+             {"retained", selection.retained},
+             {"focused", selection.focused},
+             {"casterDraws", casterDraws}});
+    }
+    ControlJson shadowEvictions = ControlJson::array();
+    for (const ShadowEviction &eviction : lastLightStats_.shadowEvictions) {
+        shadowEvictions.push_back({{"key", eviction.stableKey},
+                                   {"reason", eviction.reason}});
+    }
+    constexpr uint64_t shadowTexelBytes = 4;
+    constexpr uint64_t shadowMapEstimatedBytes =
+        shadowTexelBytes *
+        (uint64_t{kCsmCascadeCount} * kDirectionalShadowMapSize *
+             kDirectionalShadowMapSize +
+         uint64_t{kPointShadowLayers} * kPointShadowMapSize *
+             kPointShadowMapSize +
+         uint64_t{kMaxSpotShadowLights} * kSpotShadowMapSize *
+             kSpotShadowMapSize);
     const AtmosphereRuntimeStatus atmosphereStatus =
         renderer_->atmosphereStatus();
     const OcclusionCullingStatus cullingStatus =
@@ -4185,6 +4285,24 @@ ControlJson Application::runtimeRenderStatus() {
           {"uploadedSpot", lastLightStats_.spotLights},
           {"uploadedPunctual", lastLightStats_.punctualLights},
           {"uploadedTotal", lastLightStats_.totalLights},
+          {"pointShadowLights", lastLightStats_.pointShadowLights},
+          {"spotShadowLights", lastLightStats_.spotShadowLights},
+          {"maxPointShadowLights", renderSettings_.maxPointShadowLights},
+          {"maxSpotShadowLights", renderSettings_.maxSpotShadowLights},
+          {"pointShadowDistance", renderSettings_.pointShadowDistance},
+          {"spotShadowDistance", renderSettings_.spotShadowDistance},
+          {"pointShadowReceiverBiasWorld",
+           renderSettings_.pointShadowReceiverBiasWorld},
+          {"shadowSystemRevision",
+           lastLightStats_.shadowContentRevision},
+          {"shadowTemporalReactive",
+           lastLightStats_.shadowTemporalReactive},
+          {"shadowReactiveFramesRemaining",
+           lastLightStats_.shadowReactiveFramesRemaining},
+           {"pointShadowSelections", std::move(pointShadowSelections)},
+           {"spotShadowSelections", std::move(spotShadowSelections)},
+           {"shadowEvictions", std::move(shadowEvictions)},
+           {"shadowMapEstimatedBytes", shadowMapEstimatedBytes},
           {"limit", lightBufferStatus.limit},
           {"frameCapacities", std::move(lightCapacities)},
           {"bufferBytes", lightBufferStatus.allocatedBytes},
@@ -4207,6 +4325,12 @@ ControlJson Application::runtimeRenderStatus() {
           {"shadowCandidates", visibilityFrame_.cpuStats.shadowCandidates},
           {"shadowCulled", visibilityFrame_.cpuStats.shadowCulled},
           {"shadowVisible", visibilityFrame_.cpuStats.shadowVisible},
+          {"directionalShadowDraws",
+           visibilityFrame_.cpuStats.directionalShadowDraws},
+          {"pointShadowDraws",
+           visibilityFrame_.cpuStats.pointShadowDraws},
+          {"spotShadowDraws",
+           visibilityFrame_.cpuStats.spotShadowDraws},
           {"depthPrepassDraws", visibilityFrame_.cpuStats.depthPrepassDraws},
           {"occlusionCandidates",
            cullingStatus.latestCandidates},
@@ -4399,8 +4523,18 @@ ControlJson Application::runtimeRenderSettingsGet() {
     return {{"shadowsEnabled", renderSettings_.shadowsEnabled},
             {"shadowMapSize", kDirectionalShadowMapSize},
             {"shadowReceiverBias", renderSettings_.shadowReceiverBias},
+            {"pointShadowReceiverBiasWorld",
+             renderSettings_.pointShadowReceiverBiasWorld},
             {"shadowConstantBias", renderSettings_.shadowConstantBias},
             {"shadowSlopeBias", renderSettings_.shadowSlopeBias},
+            {"maxPointShadowLights",
+             renderSettings_.maxPointShadowLights},
+            {"maxSpotShadowLights",
+             renderSettings_.maxSpotShadowLights},
+            {"pointShadowDistance",
+             renderSettings_.pointShadowDistance},
+            {"spotShadowDistance",
+             renderSettings_.spotShadowDistance},
             {"exposureEv", renderSettings_.exposureEv},
             {"toneMapper", toneMapperName(renderSettings_.toneMapper)},
             {"bloomEnabled", renderSettings_.bloomEnabled},
@@ -6510,8 +6644,9 @@ void Application::drawCullingPanel() {
     }
     ImGui::BeginDisabled(!renderSettings_.culling.shadowCullingEnabled);
     float shadowDistance = renderSettings_.culling.shadowDistance;
-    if (ImGui::DragFloat("Shadow Distance", &shadowDistance, 1.0f, 0.1f,
-                         100000.0f, "%.1f")) {
+    if (ImGui::DragFloat("Shadow Distance", &shadowDistance, 1.0f,
+                         kMinDirectionalShadowDistance,
+                         kMaxDirectionalShadowDistance, "%.1f")) {
         RenderSettingsPatch patch;
         patch.shadowDistance = shadowDistance;
         applyRenderSettings(patch);
@@ -6563,6 +6698,19 @@ void Application::drawCullingPanel() {
         ImGui::Text("Shadow: %u / %u visible, %u culled",
                     stats.shadowVisible, stats.shadowCandidates,
                     stats.shadowCulled);
+        ImGui::Text("CSM draws: %u / %u / %u / %u",
+                    stats.directionalShadowDraws[0],
+                    stats.directionalShadowDraws[1],
+                    stats.directionalShadowDraws[2],
+                    stats.directionalShadowDraws[3]);
+        uint32_t pointShadowDraws = 0;
+        for (uint32_t count : stats.pointShadowDraws)
+            pointShadowDraws += count;
+        uint32_t spotShadowDraws = 0;
+        for (uint32_t count : stats.spotShadowDraws)
+            spotShadowDraws += count;
+        ImGui::Text("Punctual shadow draws: %u point, %u spot",
+                    pointShadowDraws, spotShadowDraws);
         ImGui::Text("Depth draws: %u", stats.depthPrepassDraws);
         ImGui::Text("GPU occluded: %u / %u",
                     status.completed.occluded,
@@ -6642,7 +6790,7 @@ void Application::drawSceneLoadingPanel() {
 
 void Application::drawLightingPanel() {
     bool shadowsEnabled = renderSettings_.shadowsEnabled;
-    if (ImGui::Checkbox("Directional Shadows", &shadowsEnabled)) {
+    if (ImGui::Checkbox("Shadows", &shadowsEnabled)) {
         RenderSettingsPatch patch;
         patch.shadowsEnabled = shadowsEnabled;
         applyRenderSettings(patch);
@@ -6654,6 +6802,14 @@ void Application::drawLightingPanel() {
                              0.0f, 0.05f, "%.5f")) {
             RenderSettingsPatch patch;
             patch.shadowReceiverBias = receiverBias;
+            applyRenderSettings(patch);
+        }
+        float pointReceiverBias =
+            renderSettings_.pointShadowReceiverBiasWorld;
+        if (ImGui::DragFloat("Point Bias (World)", &pointReceiverBias,
+                             0.001f, 0.0f, 1.0f, "%.3f")) {
+            RenderSettingsPatch patch;
+            patch.pointShadowReceiverBiasWorld = pointReceiverBias;
             applyRenderSettings(patch);
         }
         float constantBias = renderSettings_.shadowConstantBias;
@@ -6673,6 +6829,106 @@ void Application::drawLightingPanel() {
         ImGui::TextDisabled("Shadow map %ux%u",
                             kDirectionalShadowMapSize,
                             kDirectionalShadowMapSize);
+        int maxPoint = static_cast<int>(
+            renderSettings_.maxPointShadowLights);
+        if (ImGui::SliderInt("Max Point Shadows", &maxPoint, 0,
+                             static_cast<int>(kMaxPointShadowLights))) {
+            RenderSettingsPatch patch;
+            patch.maxPointShadowLights =
+                static_cast<uint32_t>(maxPoint);
+            applyRenderSettings(patch);
+        }
+        float pointDistance = renderSettings_.pointShadowDistance;
+        if (ImGui::DragFloat("Point Shadow Distance", &pointDistance,
+                             1.0f, kMinPunctualShadowDistance,
+                             kMaxPunctualShadowDistance, "%.1f")) {
+            RenderSettingsPatch patch;
+            patch.pointShadowDistance = pointDistance;
+            applyRenderSettings(patch);
+        }
+        int maxSpot = static_cast<int>(
+            renderSettings_.maxSpotShadowLights);
+        if (ImGui::SliderInt("Max Spot Shadows", &maxSpot, 0,
+                             static_cast<int>(kMaxSpotShadowLights))) {
+            RenderSettingsPatch patch;
+            patch.maxSpotShadowLights =
+                static_cast<uint32_t>(maxSpot);
+            applyRenderSettings(patch);
+        }
+        float spotDistance = renderSettings_.spotShadowDistance;
+        if (ImGui::DragFloat("Spot Shadow Distance", &spotDistance,
+                             1.0f, kMinPunctualShadowDistance,
+                             kMaxPunctualShadowDistance, "%.1f")) {
+            RenderSettingsPatch patch;
+            patch.spotShadowDistance = spotDistance;
+            applyRenderSettings(patch);
+        }
+        ImGui::TextDisabled(
+            "Active: %u point, %u spot",
+            lastLightStats_.pointShadowLights,
+            lastLightStats_.spotShadowLights);
+        ImGui::TextDisabled(
+            "CSM casters: %u / %u / %u / %u",
+            visibilityFrame_.cpuStats.directionalShadowDraws[0],
+            visibilityFrame_.cpuStats.directionalShadowDraws[1],
+            visibilityFrame_.cpuStats.directionalShadowDraws[2],
+            visibilityFrame_.cpuStats.directionalShadowDraws[3]);
+        for (const PunctualShadowSelection &selection :
+             lastLightStats_.pointShadowSelections) {
+            uint32_t casterDraws = 0;
+            for (uint32_t face = 0; face < kPointShadowFaceCount; ++face) {
+                casterDraws += visibilityFrame_.cpuStats.pointShadowDraws[
+                    selection.slot * kPointShadowFaceCount + face];
+            }
+            const std::string &label = selection.name.empty()
+                                           ? selection.stableKey
+                                           : selection.name;
+            ImGui::BulletText(
+                "Point [%u] %s, %s, score %.2f, age %u, far %.1f, %u draws%s",
+                selection.slot, label.c_str(),
+                shadowCastingPolicyName(selection.policy), selection.score,
+                selection.age, selection.farPlane, casterDraws,
+                selection.focused ? ", selected" :
+                selection.retained ? ", retained" : "");
+        }
+        for (const PunctualShadowSelection &selection :
+             lastLightStats_.spotShadowSelections) {
+            const std::string &label = selection.name.empty()
+                                           ? selection.stableKey
+                                           : selection.name;
+            ImGui::BulletText(
+                "Spot [%u] %s, %s, score %.2f, age %u, far %.1f, %u draws%s",
+                selection.slot, label.c_str(),
+                shadowCastingPolicyName(selection.policy), selection.score,
+                selection.age, selection.farPlane,
+                visibilityFrame_.cpuStats.spotShadowDraws[selection.slot],
+                selection.focused ? ", selected" :
+                selection.retained ? ", retained" : "");
+        }
+        ImGui::TextDisabled("Shadow revision: %llu%s",
+                            static_cast<unsigned long long>(
+                                lastLightStats_.shadowContentRevision),
+                            lastLightStats_.shadowTemporalReactive
+                                ? " (TAA reactive)"
+                                : "");
+        for (const ShadowEviction &eviction :
+             lastLightStats_.shadowEvictions) {
+            ImGui::BulletText("Evicted %s: %s",
+                              eviction.stableKey.c_str(),
+                              eviction.reason.c_str());
+        }
+        constexpr uint64_t shadowTexelBytes = 4;
+        constexpr uint64_t shadowBytes =
+            shadowTexelBytes *
+            (uint64_t{kCsmCascadeCount} * kDirectionalShadowMapSize *
+                 kDirectionalShadowMapSize +
+             uint64_t{kPointShadowLayers} * kPointShadowMapSize *
+                 kPointShadowMapSize +
+             uint64_t{kMaxSpotShadowLights} * kSpotShadowMapSize *
+                 kSpotShadowMapSize);
+        ImGui::TextDisabled("Shared shadow storage: %.1f MiB",
+                            static_cast<double>(shadowBytes) /
+                                (1024.0 * 1024.0));
         ImGui::TreePop();
     }
     ImGui::EndDisabled();
@@ -7508,6 +7764,7 @@ void Application::executePendingEditorAction(bool saveFirst) {
             selectedEnvironmentId_.clear();
             currentSceneIndex_ = -1;
             ++sceneGeneration_;
+            shadowSystem_.reset();
             break;
         case EditorPendingActionKind::Quit:
             if (sceneEditorSession_)
@@ -8026,14 +8283,12 @@ void Application::drawOutlinerPanel() {
                 entity.name = "Point Light";
                 entity.light = LightComponentDocument{};
                 entity.light->type = SceneDocumentLightType::Point;
-                entity.light->castsShadow = false;
                 entity.light->range = 10.0f;
                 break;
             case OutlinerCreateKind::SpotLight:
                 entity.name = "Spot Light";
                 entity.light = LightComponentDocument{};
                 entity.light->type = SceneDocumentLightType::Spot;
-                entity.light->castsShadow = false;
                 entity.light->range = 10.0f;
                 break;
             case OutlinerCreateKind::Camera:
@@ -8197,13 +8452,10 @@ void Application::drawInspectorPanel() {
                     : contributes ? InspectorLightUploadStatus::Active
                                   : InspectorLightUploadStatus::Ineffective;
 
-        if (light.type != SceneDocumentLightType::Directional) {
-            snapshot.selectedLightShadowStatus =
-                InspectorLightShadowStatus::Unsupported;
-        } else if (!light.castsShadow) {
+        if (!light.castsShadow) {
             snapshot.selectedLightShadowStatus =
                 InspectorLightShadowStatus::Disabled;
-        } else {
+        } else if (light.type == SceneDocumentLightType::Directional) {
             const bool selectedCaster =
                 lastLightStats_.shadowCasterEntity &&
                 *lastLightStats_.shadowCasterEntity == entity.id;
@@ -8211,6 +8463,20 @@ void Application::drawInspectorPanel() {
                 selectedCaster && lastLightStats_.shadowCasterActive
                     ? InspectorLightShadowStatus::Active
                     : InspectorLightShadowStatus::Eligible;
+        } else {
+            const auto &selections =
+                light.type == SceneDocumentLightType::Point
+                    ? lastLightStats_.pointShadowSelections
+                    : lastLightStats_.spotShadowSelections;
+            const bool selected = std::any_of(
+                selections.begin(), selections.end(),
+                [&entity](const PunctualShadowSelection &selection) {
+                    return selection.entity &&
+                           *selection.entity == entity.id;
+                });
+            snapshot.selectedLightShadowStatus =
+                selected ? InspectorLightShadowStatus::Active
+                         : InspectorLightShadowStatus::BudgetExceeded;
         }
     }
     for (const CatalogModel &model : catalog_.models) {
@@ -9137,6 +9403,13 @@ void Application::mainLoop() {
                 viewportSource, workspaceSource, hdrSource);
         }
 
+        RenderWorldFrameSnapshot worldSnapshot{};
+        const bool hasWorldSnapshot = currentScene_ != nullptr;
+        if (currentScene_) {
+            VKL_PROFILE_ZONE("RenderWorld Snapshot");
+            worldSnapshot = currentScene_->buildRenderSnapshot();
+        }
+
         RenderViewInput viewInput{};
         viewInput.view = camera_.viewMatrix();
         viewInput.projection = camera_.projectionMatrix();
@@ -9157,20 +9430,18 @@ void Application::mainLoop() {
             renderer_->currentEnvironmentMaxSpecularLod();
         std::string cameraHistoryIdentity = "editor";
         if (currentScene_) {
-            viewInput.sceneBounds = currentScene_->bounds();
-            viewInput.sceneLights = &currentScene_->lights();
-            viewInput.reflectionProbes =
-                &currentScene_->reflectionProbes();
+            viewInput.sceneBounds = worldSnapshot.bounds;
+            viewInput.sceneLights = &worldSnapshot.lights;
+            viewInput.reflectionProbes = &worldSnapshot.reflectionProbes;
             viewInput.fallbackSunEnabled =
-                currentScene_->allowsFallbackSun();
-            viewInput.atmosphere = currentScene_->worldAtmosphere();
-            viewInput.ddgiProbeVolume = currentScene_->ddgiProbeVolume();
-            if (const auto ambient = currentScene_->worldAmbient()) {
+                worldSnapshot.fallbackSunEnabled;
+            viewInput.atmosphere = worldSnapshot.atmosphere;
+            viewInput.ddgiProbeVolume = worldSnapshot.ddgiProbeVolume;
+            if (const auto &ambient = worldSnapshot.ambient) {
                 viewInput.ambientColor = ambient->color;
                 viewInput.ambientIntensity = ambient->intensity;
             }
-            if (const auto environment =
-                    currentScene_->worldEnvironment()) {
+            if (const auto &environment = worldSnapshot.environment) {
                 viewInput.settings.environmentIntensity =
                     environment->intensity;
                 viewInput.settings.environmentRotationRadians =
@@ -9217,7 +9488,35 @@ void Application::mainLoop() {
             taaJitterEnabled);
         viewInput.projectionJitterNdc = jitter.ndc;
         viewInput.projectionJitterPixels = jitter.pixels;
-        const RenderView renderView = buildRenderView(viewInput);
+        ShadowBuildInput shadowInput{};
+        shadowInput.sceneLights = &worldSnapshot.lights;
+        shadowInput.sceneBounds = viewInput.sceneBounds;
+        shadowInput.cameraView = viewInput.view;
+        shadowInput.cameraProjection = viewInput.projection;
+        shadowInput.cameraPosition = viewInput.cameraPosition;
+        shadowInput.cameraNearPlane = viewInput.cameraNearPlane;
+        shadowInput.cameraFarPlane = viewInput.cameraFarPlane;
+        shadowInput.fallbackSunDirection = defaultSunDirection_;
+        shadowInput.fallbackSunColor = defaultSunColor_;
+        shadowInput.fallbackSunIntensity = defaultSunIntensity_;
+        shadowInput.fallbackSunEnabled =
+            hasWorldSnapshot && viewInput.fallbackSunEnabled;
+        shadowInput.settings = viewInput.settings;
+#if VKL_ENABLE_EDITOR_UI
+        if (sceneEditorSession_ && sceneEditorSession_->active() &&
+            sceneEditorSession_->selection()) {
+            const auto world = sceneEditorSession_->world();
+            const auto selected = world ? world->entity(world->find(
+                                         *sceneEditorSession_->selection()))
+                                        : std::nullopt;
+            if (selected && selected->light)
+                shadowInput.focusedLightEntity = selected->id;
+        }
+#endif
+        const ShadowFramePlan shadowPlan =
+            shadowSystem_.build(shadowInput);
+        const RenderView renderView =
+            buildRenderView(viewInput, shadowPlan);
         if (renderView.lightStats.ignoredLights !=
             lastLightStats_.ignoredLights) {
             if (renderView.lightStats.ignoredLights > 0) {
@@ -9230,9 +9529,7 @@ void Application::mainLoop() {
         lastLightStats_ = renderView.lightStats;
         {
             VKL_PROFILE_ZONE("RenderItem Collect");
-            renderItems_.clear();
-            if (currentScene_)
-                currentScene_->collectRenderItems(renderItems_);
+            renderItems_ = std::move(worldSnapshot.renderItems);
         }
         {
             VKL_PROFILE_ZONE("Visibility Build");

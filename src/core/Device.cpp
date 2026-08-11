@@ -749,6 +749,7 @@ void Device::createLogicalDevice() {
     VkPhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.samplerAnisotropy = VK_TRUE;
     deviceFeatures.sampleRateShading = VK_TRUE;
+    deviceFeatures.imageCubeArray = VK_TRUE;
     deviceFeatures.textureCompressionBC =
         textureTranscodeTarget_ == TextureTranscodeTarget::Bc7;
     deviceFeatures.shaderStorageImageExtendedFormats =
@@ -847,7 +848,8 @@ bool Device::isDeviceSuitable(VkPhysicalDevice device) {
     vkGetPhysicalDeviceFeatures(device, &supportedFeatures);
 
     return indices.isComplete() && extensionsSupported && swapChainAdequate &&
-           supportedFeatures.samplerAnisotropy;
+           supportedFeatures.samplerAnisotropy &&
+           supportedFeatures.imageCubeArray;
 }
 bool Device::checkDeviceExtensionSupport(VkPhysicalDevice device) {
     uint32_t extensionCount;

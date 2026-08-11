@@ -21,6 +21,24 @@ vkr::Bounds validBounds() {
     return bounds;
 }
 
+vkr::RenderView buildView(const vkr::RenderViewInput &input) {
+    vkr::ShadowBuildInput shadowInput{};
+    shadowInput.sceneLights = input.sceneLights;
+    shadowInput.sceneBounds = input.sceneBounds;
+    shadowInput.cameraView = input.view;
+    shadowInput.cameraProjection = input.projection;
+    shadowInput.cameraPosition = input.cameraPosition;
+    shadowInput.cameraNearPlane = input.cameraNearPlane;
+    shadowInput.cameraFarPlane = input.cameraFarPlane;
+    shadowInput.fallbackSunDirection = input.defaultSun.direction;
+    shadowInput.fallbackSunColor = input.defaultSun.color;
+    shadowInput.fallbackSunIntensity = input.defaultSun.intensity;
+    shadowInput.fallbackSunEnabled = input.fallbackSunEnabled;
+    shadowInput.settings = input.settings;
+    vkr::ShadowSystem shadowSystem;
+    return vkr::buildRenderView(input, shadowSystem.build(shadowInput));
+}
+
 void testDefaultSunAndFrameData() {
     vkr::RenderViewInput input{};
     input.sceneBounds = validBounds();
@@ -28,12 +46,12 @@ void testDefaultSunAndFrameData() {
     input.ambientIntensity = -1.0f;
     input.defaultSun.intensity = 4.0f;
 
-    const vkr::RenderView view = vkr::buildRenderView(input);
+    const vkr::RenderView view = buildView(input);
     requireView(view.lightStats.directionalLights == 1,
                 "default sun was not uploaded");
     requireView(view.lightStats.punctualLights == 0,
                 "default view uploaded a punctual light");
-    requireView(view.directionalShadow.enabled,
+    requireView(view.shadow.csm.enabled,
                 "default sun did not produce a shadow view");
     requireView(view.globalUbo.cameraPosWS == glm::vec4(1.0f, 2.0f, 3.0f,
                                                         1.0f),
@@ -51,13 +69,13 @@ void testSceneWithoutDirectionalLightDisablesShadow() {
     vkr::RenderViewInput input{};
     input.sceneBounds = validBounds();
     input.sceneLights = &lights;
-    const vkr::RenderView view = vkr::buildRenderView(input);
+    const vkr::RenderView view = buildView(input);
 
     requireView(view.lightStats.directionalLights == 0,
                 "a default sun was injected into a lit scene");
     requireView(view.lightStats.punctualLights == 1,
                 "scene point light was not uploaded");
-    requireView(!view.directionalShadow.enabled,
+    requireView(!view.shadow.csm.enabled,
                 "shadow stayed enabled without a directional light");
 }
 
@@ -65,7 +83,7 @@ void testGpuLightLimits() {
     std::vector<vkr::SceneLight> lights;
     vkr::SceneLight shadowLight{};
     shadowLight.type = vkr::LightType::Directional;
-    shadowLight.castsShadow = true;
+    shadowLight.shadowPolicy = vkr::ShadowCastingPolicy::Forced;
     shadowLight.source = vkr::SceneLightSource::ExplicitEntity;
     shadowLight.stableKey = "entity/shadow";
     lights.push_back(shadowLight);
@@ -78,7 +96,7 @@ void testGpuLightLimits() {
     vkr::RenderViewInput input{};
     input.sceneBounds = validBounds();
     input.sceneLights = &lights;
-    const vkr::RenderView view = vkr::buildRenderView(input);
+    const vkr::RenderView view = buildView(input);
 
     requireView(view.lightStats.directionalLights == 1,
                 "shadow-casting directional light was not retained");
@@ -99,12 +117,12 @@ void testEnvironmentFrameDataRequiresReadyResources() {
     input.settings.environmentRotationRadians = 0.75f;
     input.maxSpecularLod = 8.0f;
 
-    vkr::RenderView view = vkr::buildRenderView(input);
+    vkr::RenderView view = buildView(input);
     requireView(view.globalUbo.environmentParams.x == 0.0f,
                 "IBL was enabled before environment resources were ready");
 
     input.environmentReady = true;
-    view = vkr::buildRenderView(input);
+    view = buildView(input);
     requireView(
         view.globalUbo.environmentParams ==
             glm::vec4(1.0f, 2.5f, 0.75f, 8.0f),

@@ -29,6 +29,7 @@ enum class InspectorLightUploadStatus {
 enum class InspectorLightShadowStatus {
     Active,
     Eligible,
+    BudgetExceeded,
     Disabled,
     Unsupported,
 };

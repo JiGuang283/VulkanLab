@@ -3,6 +3,7 @@
 #include "diagnostics/Profiling.h"
 #include "render/MaterialInstance.h"
 #include "render/RenderView.h"
+#include "render/ShadowVisibilityBuilder.h"
 
 #include <algorithm>
 #include <cmath>
@@ -37,22 +38,6 @@ bool isDefaultKey(const RenderItemKey &key) {
     return key.ownerKind == RenderItemOwnerKind::LegacyObject &&
            key.entityId.empty() && key.assetGeneration == 0 &&
            key.primitiveIndex == 0 && key.fallbackOrdinal == 0;
-}
-
-bool intersectsDirectionalShadowVolume(
-    const Bounds &worldBounds,
-    const DirectionalShadowFrameData &shadow) {
-    if (!worldBounds.valid || !shadow.enabled)
-        return true;
-    const Bounds lightBounds = transformBounds(worldBounds, shadow.lightView);
-    if (!lightBounds.valid)
-        return true;
-    return lightBounds.max.x >= shadow.lightSpaceMin.x &&
-           lightBounds.min.x <= shadow.lightSpaceMax.x &&
-           lightBounds.max.y >= shadow.lightSpaceMin.y &&
-           lightBounds.min.y <= shadow.lightSpaceMax.y &&
-           lightBounds.max.z >= shadow.lightSpaceMin.z &&
-           lightBounds.min.z <= shadow.lightSpaceMax.z;
 }
 
 void sortOpaqueIndices(std::vector<RenderItemIndex> &indices,
@@ -184,8 +169,6 @@ VisibilityFrame VisibilitySystem::build(std::vector<RenderItem> source,
 
     result.cameraOpaque.reserve(result.items.size());
     result.cameraTransparent.reserve(result.items.size());
-    result.shadowCasters.reserve(result.items.size());
-
     for (uint32_t index = 0; index < result.items.size(); ++index) {
         RenderItem &item = result.items[index];
         if (item.sourceOrder == std::numeric_limits<uint32_t>::max())
@@ -238,24 +221,12 @@ VisibilityFrame VisibilitySystem::build(std::vector<RenderItem> source,
             }
         }
 
-        if (item.queue != RenderQueueType::Opaque)
-            continue;
-        ++result.cpuStats.shadowCandidates;
-        if (settings.shadowCullingEnabled &&
-            view.directionalShadow.enabled && item.worldBounds.valid &&
-            !intersectsDirectionalShadowVolume(
-                item.worldBounds, view.directionalShadow)) {
-            ++result.cpuStats.shadowCulled;
-            continue;
-        }
-        result.shadowCasters.push_back(index);
-        ++result.cpuStats.shadowVisible;
     }
 
     sortOpaqueIndices(result.cameraOpaque, result.items);
     sortTransparentIndices(result.cameraTransparent, result.items,
                            currentCameraPosition);
-    sortOpaqueIndices(result.shadowCasters, result.items);
+    ShadowVisibilityBuilder::build(result.items, view, settings, result);
     result.cpuStats.depthPrepassDraws =
         static_cast<uint32_t>(result.cameraOpaque.size());
     result.cpuStats.occlusionCandidates =

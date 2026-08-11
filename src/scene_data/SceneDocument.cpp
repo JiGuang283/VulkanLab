@@ -847,9 +847,11 @@ void SceneDocumentService::validate(
                 throw documentError(field + ".components.light",
                                     "cone angles must be finite");
             if (entity.light->castsShadow &&
-                entity.light->type != SceneDocumentLightType::Directional)
+                entity.light->type != SceneDocumentLightType::Directional &&
+                entity.light->type != SceneDocumentLightType::Point &&
+                entity.light->type != SceneDocumentLightType::Spot)
                 throw documentError(field + ".components.light.castsShadow",
-                                    "only directional lights can cast shadows");
+                                    "unsupported light type for shadow casting");
             if (!std::isfinite(entity.light->sourceAngularRadiusRadians) ||
                 entity.light->sourceAngularRadiusRadians <= 0.0f ||
                 entity.light->sourceAngularRadiusRadians > 0.1f) {

@@ -6,6 +6,13 @@
 
 namespace vkr {
 
+inline constexpr uint32_t kMaxPointShadowLights = 4;
+inline constexpr uint32_t kMaxSpotShadowLights = 4;
+inline constexpr float kMinDirectionalShadowDistance = 0.1f;
+inline constexpr float kMaxDirectionalShadowDistance = 1000.0f;
+inline constexpr float kMinPunctualShadowDistance = 0.1f;
+inline constexpr float kMaxPunctualShadowDistance = 1000.0f;
+
 enum class SurfaceDebugView {
     None,
     Normal,
@@ -532,8 +539,13 @@ inline std::optional<ToneMapper> toneMapperFromName(std::string_view name) {
 struct RenderSettings {
     bool       shadowsEnabled = true;
     float      shadowReceiverBias = 0.0015f;
+    float      pointShadowReceiverBiasWorld = 0.02f;
     float      shadowConstantBias = 1.25f;
     float      shadowSlopeBias = 1.75f;
+    uint32_t   maxPointShadowLights = 2;
+    uint32_t   maxSpotShadowLights = 2;
+    float      pointShadowDistance = 50.0f;
+    float      spotShadowDistance = 80.0f;
     float      exposureEv = 0.0f;
     ToneMapper toneMapper = ToneMapper::Aces;
     bool       bloomEnabled = false;
@@ -582,8 +594,13 @@ struct RenderSettings {
 struct RenderSettingsPatch {
     std::optional<bool>       shadowsEnabled;
     std::optional<float>      shadowReceiverBias;
+    std::optional<float>      pointShadowReceiverBiasWorld;
     std::optional<float>      shadowConstantBias;
     std::optional<float>      shadowSlopeBias;
+    std::optional<uint32_t>   maxPointShadowLights;
+    std::optional<uint32_t>   maxSpotShadowLights;
+    std::optional<float>      pointShadowDistance;
+    std::optional<float>      spotShadowDistance;
     std::optional<float>      exposureEv;
     std::optional<ToneMapper> toneMapper;
     std::optional<bool>       bloomEnabled;
@@ -651,10 +668,21 @@ inline void applyRenderSettingsPatch(RenderSettings &settings,
         settings.shadowsEnabled = *patch.shadowsEnabled;
     if (patch.shadowReceiverBias)
         settings.shadowReceiverBias = *patch.shadowReceiverBias;
+    if (patch.pointShadowReceiverBiasWorld)
+        settings.pointShadowReceiverBiasWorld =
+            *patch.pointShadowReceiverBiasWorld;
     if (patch.shadowConstantBias)
         settings.shadowConstantBias = *patch.shadowConstantBias;
     if (patch.shadowSlopeBias)
         settings.shadowSlopeBias = *patch.shadowSlopeBias;
+    if (patch.maxPointShadowLights)
+        settings.maxPointShadowLights = *patch.maxPointShadowLights;
+    if (patch.maxSpotShadowLights)
+        settings.maxSpotShadowLights = *patch.maxSpotShadowLights;
+    if (patch.pointShadowDistance)
+        settings.pointShadowDistance = *patch.pointShadowDistance;
+    if (patch.spotShadowDistance)
+        settings.spotShadowDistance = *patch.spotShadowDistance;
     if (patch.exposureEv)
         settings.exposureEv = *patch.exposureEv;
     if (patch.toneMapper)

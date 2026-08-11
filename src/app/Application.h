@@ -305,6 +305,7 @@ class Application final
     std::vector<RenderItem>              renderItems_;
     VisibilitySystem                    visibilitySystem_;
     VisibilityFrame                     visibilityFrame_;
+    ShadowSystem                        shadowSystem_;
     ShaderRegistry                       shaderRegistry_;
     std::string                          currentShaderVariantId_;
 

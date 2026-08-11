@@ -21,6 +21,8 @@
 #include "render/ShaderVariant.h"
 #include "render/Texture.h"
 #include "render/pass/DirectionalShadowPass.h"
+#include "render/pass/PointShadowPass.h"
+#include "render/pass/SpotShadowPass.h"
 #include "render/pass/SurfacePrepass.h"
 #include "render/pass/HiZBuildPass.h"
 #include "render/pass/HdrCompositePass.h"
@@ -98,6 +100,7 @@ Renderer::Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
     createScreenSpaceFallback();
     createScreenSpaceDescriptorSets();
     initializeAtmosphereImages();
+    initializeShadowImages();
     createLightingDescriptorSetLayout();
     createFallbackEnvironment();
     createLightingGeneration(fallbackEnvironment_);
@@ -785,7 +788,7 @@ void Renderer::updateScreenSpaceDescriptor(uint32_t frameIndex,
 }
 
 void Renderer::createLightingDescriptorSetLayout() {
-    std::array<VkDescriptorSetLayoutBinding, 7> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 9> bindings{};
     for (uint32_t binding = 0; binding < 5; ++binding) {
         bindings[binding].binding = binding;
         bindings[binding].descriptorType =
@@ -802,6 +805,18 @@ void Renderer::createLightingDescriptorSetLayout() {
     bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[6].descriptorCount = 1;
     bindings[6].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // Point shadow map array
+    bindings[7].binding = 7;
+    bindings[7].descriptorType =
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[7].descriptorCount = 1;
+    bindings[7].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // Spot shadow map array
+    bindings[8].binding = 8;
+    bindings[8].descriptorType =
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[8].descriptorCount = 1;
+    bindings[8].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     info.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -960,6 +975,36 @@ void Renderer::initializeAtmosphereImages() {
     upload.finish();
 }
 
+void Renderer::initializeShadowImages() {
+    UploadContext upload(*device_, nullptr, 64 * 1024,
+                         "ShadowLayouts");
+    VkCommandBuffer cmd = upload.commandBuffer();
+    const std::array<RenderImageHandle, 3> handles = {
+        resourceHandles_.directionalShadowDepth,
+        resourceHandles_.pointShadowDepth,
+        resourceHandles_.spotShadowDepth};
+    for (RenderImageHandle handle : handles) {
+        const RenderImageDesc &desc = renderResources_->description(handle);
+        const Image &image = renderResources_->image(handle, 0);
+        VkImageMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout =
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = image.handle();
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.layerCount = desc.arrayLayers;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                             0, nullptr, 0, nullptr, 1, &barrier);
+    }
+    upload.finish();
+}
+
 void Renderer::createFallbackEnvironment() {
     UploadContext upload(*device_, nullptr, 64 * 1024,
                          "EnvironmentFallback");
@@ -1044,7 +1089,7 @@ void Renderer::createLightingGeneration(
         VkDescriptorSet set = descriptorAllocator_->allocate(
             lightingDescriptorSetLayout_,
             {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-              5 + kMaxReflectionProbes},
+              7 + kMaxReflectionProbes},
              {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1}},
             "Lighting/DescriptorSet/Frame" +
                 std::to_string(frameIndex));
@@ -1104,7 +1149,7 @@ void Renderer::createLightingGeneration(
         probeBuffer.offset = 0;
         probeBuffer.range = sizeof(GpuReflectionProbeBuffer);
 
-        std::array<VkWriteDescriptorSet, 7> writes{};
+        std::array<VkWriteDescriptorSet, 9> writes{};
         for (uint32_t binding = 0; binding < 5; ++binding) {
             writes[binding].sType =
                 VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1128,6 +1173,40 @@ void Renderer::createLightingGeneration(
         writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[6].descriptorCount = 1;
         writes[6].pBufferInfo = &probeBuffer;
+        // Point shadow map array
+        VkDescriptorImageInfo pointShadowInfo{};
+        pointShadowInfo.sampler =
+            renderResources_->sampler(resourceHandles_.pointShadowSampler);
+        pointShadowInfo.imageView =
+            renderResources_
+                ->image(resourceHandles_.pointShadowDepth, frameIndex)
+                .imageView();
+        pointShadowInfo.imageLayout =
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        writes[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[7].dstSet = set;
+        writes[7].dstBinding = 7;
+        writes[7].descriptorType =
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[7].descriptorCount = 1;
+        writes[7].pImageInfo = &pointShadowInfo;
+        // Spot shadow map array
+        VkDescriptorImageInfo spotShadowInfo{};
+        spotShadowInfo.sampler =
+            renderResources_->sampler(resourceHandles_.spotShadowSampler);
+        spotShadowInfo.imageView =
+            renderResources_
+                ->image(resourceHandles_.spotShadowDepth, frameIndex)
+                .imageView();
+        spotShadowInfo.imageLayout =
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        writes[8].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[8].dstSet = set;
+        writes[8].dstBinding = 8;
+        writes[8].descriptorType =
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[8].descriptorCount = 1;
+        writes[8].pImageInfo = &spotShadowInfo;
         vkUpdateDescriptorSets(
             device_->logicalDevice(), static_cast<uint32_t>(writes.size()),
             writes.data(), 0, nullptr);
@@ -1485,6 +1564,17 @@ void Renderer::createRenderPipeline() {
         *device_, *renderResources_, resourceHandles_.directionalShadowDepth,
         globalDescriptorSetLayout_,
         shaderPaths_.shadowVert, shaderPaths_.shadowMaskFrag));
+    pipeline_.addPass(std::make_unique<PointShadowPass>(
+        *device_, *renderResources_, resourceHandles_.pointShadowDepth,
+        *descriptorAllocator_,
+        shaderPaths_.shadowPunctualVert,
+        shaderPaths_.shadowPointFrag,
+        shaderPaths_.shadowPointMaskFrag));
+    pipeline_.addPass(std::make_unique<SpotShadowPass>(
+        *device_, *renderResources_, resourceHandles_.spotShadowDepth,
+        *descriptorAllocator_,
+        shaderPaths_.shadowPunctualVert,
+        shaderPaths_.shadowSpotMaskFrag));
 
     if (device_->surfaceDataSupport().available) {
         auto surfacePass = std::make_unique<SurfacePrepass>(

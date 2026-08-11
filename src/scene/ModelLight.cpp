@@ -27,7 +27,9 @@ SceneLight instantiateModelLight(const ModelLightPrototype &prototype,
     light.stableKey = std::move(stableKey);
     light.source = SceneLightSource::ImportedModel;
     light.ownerEntity = std::move(ownerEntity);
-    light.castsShadow = prototype.castsShadow;
+    light.shadowPolicy = prototype.castsShadow
+                             ? ShadowCastingPolicy::Auto
+                             : ShadowCastingPolicy::Disabled;
     light.type = prototype.type;
     light.positionWS = glm::vec3(rootToWorld *
                                 glm::vec4(prototype.positionAS, 1.0f));

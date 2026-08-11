@@ -194,7 +194,7 @@ void TaaPass::execute(const RenderFrameContext &frame,
     ubo.flags = glm::uvec4(historyValid ? 1u : 0u,
                            static_cast<uint32_t>(
                                visibility.history.historyGeneration),
-                           frame.frameIndex,
+                           frame.view->shadow.temporalReactive ? 1u : 0u,
                            visibility.cameraTransparent.empty() ? 0u : 1u);
     std::memcpy(frameUbos_[frame.frameIndex]->mappedData(), &ubo,
                 sizeof(ubo));

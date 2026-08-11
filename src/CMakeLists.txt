@@ -162,6 +162,8 @@ set(VKL_ENGINE_SOURCES
     render/FallbackTextures.cpp
     render/EnvironmentGpuBuilder.cpp
     render/DirectionalShadow.cpp
+    render/PunctualShadow.cpp
+    render/PunctualShadowSliceBuffer.cpp
     render/GltfPreparer.cpp
     render/MaterialInstance.cpp
     render/MaterialTemplate.cpp
@@ -172,6 +174,8 @@ set(VKL_ENGINE_SOURCES
     render/RenderQueue.cpp
     render/RenderResourceRegistry.cpp
     render/RenderView.cpp
+    render/ShadowSystem.cpp
+    render/ShadowVisibilityBuilder.cpp
     render/RayTracingScene.cpp
     render/pass/DdgiPass.cpp
     render/TemporalAA.cpp
@@ -183,6 +187,9 @@ set(VKL_ENGINE_SOURCES
     render/pass/HdrCompositePass.cpp
     render/pass/AtmosphereLutPass.cpp
     render/pass/DirectionalShadowPass.cpp
+    render/pass/PointShadowPass.cpp
+    render/pass/SpotShadowPass.cpp
+    render/pass/ShadowCasterDrawRecorder.cpp
     render/pass/SurfacePrepass.cpp
     render/pass/HiZBuildPass.cpp
     render/pass/OcclusionCullPass.cpp

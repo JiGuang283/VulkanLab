@@ -5,6 +5,7 @@
 #include "core/Image.h"
 #include "core/VulkanCheck.h"
 #include "render/DirectionalShadow.h"
+#include "render/PunctualShadow.h"
 #include "render/FrameGpuData.h"
 
 #include <algorithm>
@@ -328,6 +329,7 @@ void RenderResourceRegistry::createImageEntry(uint32_t index) {
         imageInfo.tiling = desc.tiling;
         imageInfo.usage = desc.usage;
         imageInfo.memoryProperties = desc.memoryProperties;
+        imageInfo.flags = desc.createFlags;
         imageInfo.debugName = debugName;
         image = std::make_unique<Image>(*device_, imageInfo);
         image->createView(desc.format, desc.aspect, mipLevels,
@@ -458,14 +460,42 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
              VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, VK_IMAGE_ASPECT_COLOR_BIT});
-    handles.directionalShadowDepth = registry.registerImage(
-        {"Directional Shadow Depth", RenderExtentPolicy::Fixed,
-         {kDirectionalShadowMapSize, kDirectionalShadowMapSize},
-         RenderResourceMultiplicity::PerFrame, shadowDepthFormat,
-         VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_TILING_OPTIMAL,
-         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-             VK_IMAGE_USAGE_SAMPLED_BIT,
-         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, VK_IMAGE_ASPECT_DEPTH_BIT});
+    const auto registerShadowImage =
+        [&](std::string name, VkExtent2D extent, uint32_t layers,
+            VkImageViewType viewType,
+            VkImageCreateFlags createFlags = 0) {
+            RenderImageDesc desc{};
+            desc.name = std::move(name);
+            desc.extentPolicy = RenderExtentPolicy::Fixed;
+            desc.fixedExtent = extent;
+            desc.multiplicity = RenderResourceMultiplicity::Single;
+            desc.format = shadowDepthFormat;
+            desc.samples = VK_SAMPLE_COUNT_1_BIT;
+            desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                         VK_IMAGE_USAGE_SAMPLED_BIT;
+            desc.aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+            desc.externallyInitialized = true;
+            desc.initialLayout =
+                VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            desc.arrayLayers = layers;
+            desc.viewType = viewType;
+            desc.createFlags = createFlags;
+            return registry.registerImage(std::move(desc));
+        };
+
+    handles.directionalShadowDepth = registerShadowImage(
+        "Directional Shadow Depth",
+        {kDirectionalShadowMapSize, kDirectionalShadowMapSize},
+        kCsmCascadeCount, VK_IMAGE_VIEW_TYPE_2D_ARRAY);
+    handles.pointShadowDepth = registerShadowImage(
+        "Point Shadow Depth",
+        {kPointShadowMapSize, kPointShadowMapSize}, kPointShadowLayers,
+        VK_IMAGE_VIEW_TYPE_CUBE_ARRAY,
+        VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT);
+    handles.spotShadowDepth = registerShadowImage(
+        "Spot Shadow Depth",
+        {kSpotShadowMapSize, kSpotShadowMapSize}, kMaxSpotShadowLights,
+        VK_IMAGE_VIEW_TYPE_2D_ARRAY);
 
     if (device.surfaceDataSupport().available) {
         RenderImageDesc surfaceDepth{};
@@ -800,6 +830,28 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
     shadowSampler.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
     handles.shadowSampler =
         registry.registerSampler(std::move(shadowSampler));
+
+    RenderSamplerDesc pointShadowSampler{};
+    pointShadowSampler.name = "Point Shadow Sampler";
+    pointShadowSampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    pointShadowSampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    pointShadowSampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    pointShadowSampler.compareEnable = true;
+    pointShadowSampler.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    pointShadowSampler.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+    handles.pointShadowSampler =
+        registry.registerSampler(std::move(pointShadowSampler));
+
+    RenderSamplerDesc spotShadowSampler{};
+    spotShadowSampler.name = "Spot Shadow Sampler";
+    spotShadowSampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    spotShadowSampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    spotShadowSampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    spotShadowSampler.compareEnable = true;
+    spotShadowSampler.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    spotShadowSampler.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+    handles.spotShadowSampler =
+        registry.registerSampler(std::move(spotShadowSampler));
 
     if (device.surfaceDataSupport().available) {
         RenderSamplerDesc depthSampler{};

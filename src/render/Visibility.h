@@ -1,8 +1,11 @@
 #pragma once
 
 #include "render/RenderCommand.h"
+#include "render/DirectionalShadow.h"
+#include "render/PunctualShadow.h"
 #include "scene/BoundsMath.h"
 
+#include <array>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <string>
@@ -26,6 +29,9 @@ struct VisibilityCpuStatistics {
     uint32_t shadowCandidates = 0;
     uint32_t shadowCulled = 0;
     uint32_t shadowVisible = 0;
+    std::array<uint32_t, kCsmCascadeCount> directionalShadowDraws{};
+    std::array<uint32_t, kPointShadowLayers> pointShadowDraws{};
+    std::array<uint32_t, kMaxSpotShadowLights> spotShadowDraws{};
     uint32_t depthPrepassDraws = 0;
     uint32_t occlusionCandidates = 0;
     uint32_t gpuUncullable = 0;
@@ -69,7 +75,14 @@ struct VisibilityFrame {
     std::vector<RenderItem> items;
     std::vector<RenderItemIndex> cameraOpaque;
     std::vector<RenderItemIndex> cameraTransparent;
-    std::vector<RenderItemIndex> shadowCasters;
+    std::array<std::vector<RenderItemIndex>, kCsmCascadeCount>
+        directionalShadowCasters;
+    std::array<std::array<std::vector<RenderItemIndex>,
+                          kPointShadowFaceCount>,
+               kMaxPointShadowLights>
+        pointShadowCasters;
+    std::array<std::vector<RenderItemIndex>, kMaxSpotShadowLights>
+        spotShadowCasters;
     VisibilityCpuStatistics cpuStats{};
     TemporalFrameHistoryData history{};
 

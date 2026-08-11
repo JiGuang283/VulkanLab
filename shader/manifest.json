@@ -105,6 +105,29 @@
       "fragment": "shadow/depth_mask.frag"
     },
     {
+      "id": "shadow.point-opaque",
+      "contract": "punctual-shadow-depth",
+      "vertex": "shadow/depth_punctual.vert",
+      "fragment": "shadow/depth_point.frag"
+    },
+    {
+      "id": "shadow.point-mask",
+      "contract": "punctual-shadow-depth",
+      "vertex": "shadow/depth_punctual.vert",
+      "fragment": "shadow/depth_point_mask.frag"
+    },
+    {
+      "id": "shadow.spot-opaque",
+      "contract": "punctual-shadow-depth",
+      "vertex": "shadow/depth_punctual.vert"
+    },
+    {
+      "id": "shadow.spot-mask",
+      "contract": "punctual-shadow-depth",
+      "vertex": "shadow/depth_punctual.vert",
+      "fragment": "shadow/depth_mask.frag"
+    },
+    {
       "id": "surface.prepass-opaque",
       "contract": "surface-prepass",
       "vertex": "visibility/surface.vert",

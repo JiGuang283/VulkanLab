@@ -110,7 +110,7 @@ schema v1/v2 中的 `scenes[]` 仍按旧语义读取为 `CatalogModel`，旧 `ca
 
 解析为严格模式：未知顶层字段、未知 Entity 字段或未知 component 都会失败，避免读写后静默丢失未来数据。UUID 必须唯一；parent 必须存在且层级无环；active camera 必须引用 Camera entity；Transform、Light 和 Camera 数值必须有限且在有效范围内；scale 分量不能接近零。Quaternion 在加载时验证并规范化。
 
-schema v1-v4 仍可读取：旧 Directional 默认 `castsShadow=true`，Point/Spot 默认 `false`；旧文档不自动增加 Atmosphere、Reflection Probe 或 DDGI Probe Volume，也不把既有灯光绑定为 Sun。加载后内存文档规范化为 v5，下一次保存确定性写出 v5。当前只有 Directional 可以设置 `castsShadow=true` 或 `atmosphereSunIndex=0`，Point/Spot 设置这些字段会被验证器拒绝。
+schema v1-v4 仍可读取：旧 Directional 默认 `castsShadow=true`，Point/Spot 默认 `false`；旧文档不自动增加 Atmosphere、Reflection Probe 或 DDGI Probe Volume，也不把既有灯光绑定为 Sun。加载后内存文档规范化为 v5，下一次保存确定性写出 v5。Directional、Point 和 Spot 均可设置 `castsShadow=true`；只有 Directional 可以设置 `atmosphereSunIndex=0`。
 
 v3 最多允许一个 Atmosphere Component 和一个 Atmosphere Sun。Atmosphere Entity 必须位于 Scene Root，rotation 为 identity、scale 为 unit；translation 表示当前地面原点。被标记的 Sun 必须是 Directional Light，`sourceAngularRadiusRadians` 必须位于 `(0, 0.1]`。存在 Atmosphere Sun 时必须同时存在 Atmosphere Component。物理系数必须有限且非负，ground albedo 限制在 `[0,1]`。
 

@@ -249,6 +249,7 @@ class Renderer {
     void updateScreenSpaceDescriptor(uint32_t frameIndex,
                                      AmbientOcclusionMode mode);
     void initializeAtmosphereImages();
+    void initializeShadowImages();
     void createFallbackEnvironment();
     void createLightingGeneration(
         std::shared_ptr<EnvironmentGpuResources> environment,

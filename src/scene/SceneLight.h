@@ -23,12 +23,30 @@ enum class SceneLightSource : uint32_t {
     Fallback,
 };
 
+enum class ShadowCastingPolicy : uint32_t {
+    Disabled,
+    Auto,
+    Forced,
+};
+
+inline const char *shadowCastingPolicyName(ShadowCastingPolicy policy) {
+    switch (policy) {
+    case ShadowCastingPolicy::Disabled:
+        return "Disabled";
+    case ShadowCastingPolicy::Auto:
+        return "Auto";
+    case ShadowCastingPolicy::Forced:
+        return "Forced";
+    }
+    return "Disabled";
+}
+
 struct SceneLight {
     std::string debugName;
     std::string stableKey;
     SceneLightSource source = SceneLightSource::Legacy;
     std::optional<PersistentEntityId> ownerEntity;
-    bool castsShadow = false;
+    ShadowCastingPolicy shadowPolicy = ShadowCastingPolicy::Disabled;
     std::optional<uint32_t> atmosphereSunIndex;
     float sourceAngularRadiusRadians = 0.004675f;
     LightType type = LightType::Directional;

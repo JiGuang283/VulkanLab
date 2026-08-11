@@ -1,8 +1,8 @@
 # VulkanLab Runtime Control 使用说明
 
 > Status: Current
-> Last verified: 2026-08-04
-> Verified against: Visibility and Hi-Z occlusion implementation
+> Last verified: 2026-08-09
+> Verified against: CSM and punctual shadow correctness fixes
 
 Runtime Control 通过 Windows Named Pipe 控制已经运行的 VulkanLab。它面向本机开发、诊断和自动化，可以查询状态、加载模型预览或 Native Scene、设置环境、相机、Shader 与渲染参数、等待渲染稳定、异步截图并安全退出程序。`scene.list.entries[]` 同时返回 `kind: "modelPreview"` 和 `kind: "nativeScene"`；Native Scene 条目使用稳定 SceneDocument ID，模型预览继续返回兼容 `sceneId`、`modelId`、Catalog profile ID 和纹理限制。
 
@@ -116,11 +116,11 @@ cd build\windows-msvc-debug\Debug
 - 当前 scene、scene generation、最新 load operation，以及 Native RuntimeWorld 的 SceneDocument/entity/model/light/active camera 摘要；
 - package schema、是否为 Native Scene package 和 startup Scene；开发项目中该项显示未打包状态；
 - submitted/completed frame serial 与累计 presented frame 数；
-- 最近一个已完成 frame 的 `gpuTimings`，包含 available、frameSerial、Atmosphere LUTs/DirectionalShadow/SkyBackground/MainForward、可选 Bloom、ToneMap、Present + UI 分项与 totalMs；
+- 最近一个已完成 frame 的 `gpuTimings`，包含 available、frameSerial、Atmosphere LUTs/DirectionalShadow/PointShadow/SpotShadow/SkyBackground/MainForward、可选 Bloom、ToneMap、Present + UI 分项与 totalMs；
 - 待上传 texture/mesh、in-flight upload batch；
 - `modelAssetRepository` 的 Ready/Loading/Failed/Retiring 数量、prepare/build/hit/coalesced 计数和各 generation 的 consumer/资源摘要；
 - 当前选择和已发布的 environment，以及环境加载任务；
-- 当前 Scene 的 Directional/Point/Spot 数量、按类型与总计的实际上传数量、256 灯上限、每个 frame slot 的 SSBO capacity/总字节、超限数量与最多 32 个 ignored Entity ID，以及当前 Directional shadow caster；
+- 当前 Scene 的 Directional/Point/Spot 数量、按类型与总计的实际上传数量、256 灯上限、每个 frame slot 的 SSBO capacity/总字节、超限数量与最多 32 个 ignored Entity ID，以及 Directional caster、Point/Spot shadow slots、far plane、caster draws和共享 Shadow Map 显存估算；
 - `culling` 的 source/visible 数量、frustum/distance/small-object 计数、shadow candidates/culled、depth draws、GPU occluded、Hi-Z mip 数和 indirect capacity；
 - `ddgi` 的设备支持、Probe Volume Entity、active 状态、probe/update/ray 数量、更新 cursor、TLAS instance、generation/reset 和显存估算；
 - `atmosphere` 的设备 support、active 状态、component/Sun Entity、Sun buffer index、相机高度、静态 LUT ready/dirty、generation、更新时间和不可用原因；
@@ -199,6 +199,11 @@ Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模�
   --receiver-bias 0.0015 `
   --constant-bias 1.25 `
   --slope-bias 1.75
+.\VulkanLabCtl.exe render-settings set `
+  --max-point-shadows 4 `
+  --point-shadow-distance 50 `
+  --max-spot-shadows 4 `
+  --spot-shadow-distance 80
 .\VulkanLabCtl.exe render-settings set `
   --exposure 1.0 `
   --tone-mapper aces
@@ -284,9 +289,9 @@ Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模�
   --screen-space-debug ssgi-variance
 ```
 
-`render-settings set` 支持部分更新，并要求至少提供一个选项。`--shadows`、`--ibl`、`--skybox` 和 `--bloom` 接受 `on/off`，`--tone-mapper` 接受 `aces`、`reinhard` 或 `passthrough`。Receiver bias 范围为 `[0, 0.05]`，constant/slope bias 为 `[0, 10]`，exposure 为 `[-10, 10]` EV，environment intensity 为 `[0, 100]`；Bloom threshold、soft knee 和 intensity 分别为 `[0,20]`、`[0,1]` 和 `[0,5]`。CLI 用 degree 表示 rotation，协议字段 `environmentRotationRadians` 使用弧度；服务端将其规范化到一个完整旋转。
+`render-settings set` 支持部分更新，并要求至少提供一个选项。`--shadows`、`--ibl`、`--skybox` 和 `--bloom` 接受 `on/off`，`--tone-mapper` 接受 `aces`、`reinhard` 或 `passthrough`。Receiver bias 范围为 `[0, 0.05]`，`--point-receiver-bias`/`pointShadowReceiverBiasWorld` 使用世界单位且范围为 `[0,1]`，constant/slope bias 为 `[0, 10]`；Point/Spot shadow 数量范围均为 `[0,4]`，距离范围均为 `[0.1,1000]`。exposure 为 `[-10, 10]` EV，environment intensity 为 `[0, 100]`；Bloom threshold、soft knee 和 intensity 分别为 `[0,20]`、`[0,1]` 和 `[0,5]`。CLI 用 degree 表示 rotation，协议字段 `environmentRotationRadians` 使用弧度；服务端将其规范化到一个完整旋转。
 
-剔除开关同样只修改当前会话。Frustum、Shadow Culling 和受支持设备上的 Hi-Z Occlusion 默认开启；Distance 与 Small Object 默认关闭。`shadowDistance`、`maxDrawDistance`、`minProjectedSizePixels` 和 `occlusionDepthBias` 的协议范围分别为 `[0.1,100000]`、`[0.1,1000000]`、`[0,256]` 和 `[0,0.05]`。`render-settings get` 额外返回 `occlusionAvailable/Active/UnavailableReason`；不支持 compute、sampled depth 或 `R32_SFLOAT` storage 的设备尝试开启时返回 `occlusion_unsupported`。
+剔除开关同样只修改当前会话。Frustum、Shadow Culling 和受支持设备上的 Hi-Z Occlusion 默认开启；Distance 与 Small Object 默认关闭。`shadowDistance`、`maxDrawDistance`、`minProjectedSizePixels` 和 `occlusionDepthBias` 的协议范围分别为 `[0.1,1000]`、`[0.1,1000000]`、`[0,256]` 和 `[0,0.05]`。`render-settings get` 额外返回 `occlusionAvailable/Active/UnavailableReason`；不支持 compute、sampled depth 或 `R32_SFLOAT` storage 的设备尝试开启时返回 `occlusion_unsupported`。
 
 `--surface-debug` 接受 `none`、`normal`、`roughness`、`motion` 和 `history-validity`。Motion 显示比例由 `--surface-motion-scale` 控制，范围为 `[0.1,1024]`。Surface Data 不可用时启用非 `none` 调试视图会返回 `surface_data_unsupported`；`render-settings get` 和 `render status` 同时报告支持状态、激活状态、history generation、有效 item 数和最近失效原因。
 
@@ -306,7 +311,7 @@ Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模�
 
 Tone Mapping policy 由 Shader Manifest 决定：两个 PBR-lite 和 `Debug IBL Diffuse/Specular` 可配置，Legacy 与其他 Debug variant 强制 PassThrough。Bloom compatibility 也由 Manifest 决定，目前只有两个 PBR-lite variant 支持；设置会保留，但其他 variant 下 `bloomActive=false`。`render-settings get` 返回 `bloomAvailable`、`bloomActive`、`bloomUnavailableReason` 和四个 Bloom 设置。设备不满足 compute/`RGBA16F` storage image 要求时，尝试开启会返回 `bloom_unsupported`。
 
-阴影只影响被选中的 Directional shadow caster，但 `Debug Shadow` 可显示最终 visibility。IBL 只在环境已发布且开关开启时替代 PBR 的 constant ambient；Skybox 开关独立。Native Scene 的 Atmosphere 与 Atmosphere Sun 来自只读 SceneDocument/RuntimeWorld，Runtime Control v3 只报告状态，不提供大气参数 mutation。UI 的 `Render -> Common/Post Processing/Lighting/Culling` 与 Runtime Control 修改同一个 `RenderSettings` 对象。
+阴影会影响被选择的 Directional CSM caster，以及最多四盏 Point 和四盏 Spot。`render.status.lighting` 返回 ShadowSystem revision/reactive 状态，以及每盏 punctual shadow light 的 policy、稳定 key、Entity、slot、score、slot age、retained/selected、实际 far plane、caster draw 数和 Point 六个 face 分项；`render.status.culling` 返回四个 cascade、24 个 point face 和四个 spot slot 的 draw 统计。IBL 只在环境已发布且开关开启时替代 PBR 的 constant ambient；Skybox 开关独立。Native Scene 的 Atmosphere 与 Atmosphere Sun 来自只读 SceneDocument/RuntimeWorld，Runtime Control v3 只报告状态，不提供大气参数 mutation。UI 的 `Render -> Common/Post Processing/Lighting/Culling` 与 Runtime Control 修改同一个 `RenderSettings` 对象。
 
 ### 派生资产
 

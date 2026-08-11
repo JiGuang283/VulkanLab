@@ -61,6 +61,8 @@ void printUsage() {
         << "  VulkanLabCtl [--json] render-settings set "
            "[--shadows on|off] [--receiver-bias N] "
            "[--constant-bias N] [--slope-bias N] "
+           "[--max-point-shadows N] [--point-shadow-distance N] "
+           "[--max-spot-shadows N] [--spot-shadow-distance N] "
            "[--exposure N] [--tone-mapper passthrough|reinhard|aces] "
            "[--ibl on|off] [--skybox on|off] "
            "[--environment-intensity N] [--environment-rotation-deg N] "
@@ -190,8 +192,13 @@ ParsedCommand parseCommand(int argc, char **argv) {
     std::optional<std::string> timeoutMs;
     std::optional<std::string> shadows;
     std::optional<std::string> receiverBias;
+    std::optional<std::string> pointReceiverBias;
     std::optional<std::string> constantBias;
     std::optional<std::string> slopeBias;
+    std::optional<std::string> maxPointShadows;
+    std::optional<std::string> pointShadowDistance;
+    std::optional<std::string> maxSpotShadows;
+    std::optional<std::string> spotShadowDistance;
     std::optional<std::string> exposure;
     std::optional<std::string> toneMapper;
     std::optional<std::string> ibl;
@@ -268,8 +275,13 @@ ParsedCommand parseCommand(int argc, char **argv) {
                  argument == "--timeout-ms" ||
                  argument == "--shadows" ||
                  argument == "--receiver-bias" ||
+                 argument == "--point-receiver-bias" ||
                  argument == "--constant-bias" ||
                  argument == "--slope-bias" ||
+                 argument == "--max-point-shadows" ||
+                 argument == "--point-shadow-distance" ||
+                 argument == "--max-spot-shadows" ||
+                 argument == "--spot-shadow-distance" ||
                  argument == "--exposure" ||
                  argument == "--tone-mapper" ||
                  argument == "--ibl" ||
@@ -345,10 +357,20 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 shadows = argv[i];
             else if (argument == "--receiver-bias")
                 receiverBias = argv[i];
+            else if (argument == "--point-receiver-bias")
+                pointReceiverBias = argv[i];
             else if (argument == "--constant-bias")
                 constantBias = argv[i];
             else if (argument == "--slope-bias")
                 slopeBias = argv[i];
+            else if (argument == "--max-point-shadows")
+                maxPointShadows = argv[i];
+            else if (argument == "--point-shadow-distance")
+                pointShadowDistance = argv[i];
+            else if (argument == "--max-spot-shadows")
+                maxSpotShadows = argv[i];
+            else if (argument == "--spot-shadow-distance")
+                spotShadowDistance = argv[i];
             else if (argument == "--exposure")
                 exposure = argv[i];
             else if (argument == "--tone-mapper")
@@ -620,12 +642,28 @@ ParsedCommand parseCommand(int argc, char **argv) {
         if (receiverBias)
             parsed.params["shadowReceiverBias"] =
                 parseFiniteFloat(*receiverBias, "--receiver-bias");
+        if (pointReceiverBias)
+            parsed.params["pointShadowReceiverBiasWorld"] =
+                parseFiniteFloat(*pointReceiverBias,
+                                 "--point-receiver-bias");
         if (constantBias)
             parsed.params["shadowConstantBias"] =
                 parseFiniteFloat(*constantBias, "--constant-bias");
         if (slopeBias)
             parsed.params["shadowSlopeBias"] =
                 parseFiniteFloat(*slopeBias, "--slope-bias");
+        if (maxPointShadows)
+            parsed.params["maxPointShadowLights"] =
+                parseUint32(*maxPointShadows, "--max-point-shadows");
+        if (pointShadowDistance)
+            parsed.params["pointShadowDistance"] = parseFiniteFloat(
+                *pointShadowDistance, "--point-shadow-distance");
+        if (maxSpotShadows)
+            parsed.params["maxSpotShadowLights"] =
+                parseUint32(*maxSpotShadows, "--max-spot-shadows");
+        if (spotShadowDistance)
+            parsed.params["spotShadowDistance"] = parseFiniteFloat(
+                *spotShadowDistance, "--spot-shadow-distance");
         if (exposure)
             parsed.params["exposureEv"] =
                 parseFiniteFloat(*exposure, "--exposure");
@@ -1285,6 +1323,8 @@ void printHuman(const std::string &method, const Json &result) {
                   << result.at("shadowReceiverBias").get<float>() << "/"
                   << result.at("shadowConstantBias").get<float>() << "/"
                   << result.at("shadowSlopeBias").get<float>()
+                  << "\npoint world bias: "
+                  << result.at("pointShadowReceiverBiasWorld").get<float>()
                   << "\nexposure: " << result.at("exposureEv").get<float>()
                   << " EV, tone mapper: "
                   << result.at("toneMapper").get<std::string>()

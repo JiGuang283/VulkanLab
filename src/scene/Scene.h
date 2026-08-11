@@ -47,6 +47,7 @@ class Scene final : public IRenderWorld {
 
     // ---- 渲染提交 ----
     void collectRenderItems(std::vector<RenderItem> &items) const override;
+    RenderWorldFrameSnapshot buildRenderSnapshot() const override;
 
     // ---- 每帧 tick（可选） ----
     void setUpdateFn(UpdateFn fn) { updateFn_ = std::move(fn); }

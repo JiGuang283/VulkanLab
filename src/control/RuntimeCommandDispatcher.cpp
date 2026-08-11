@@ -1,6 +1,7 @@
 #include "RuntimeCommandDispatcher.h"
 
 #include "core/Log.h"
+#include "render/RenderSettings.h"
 
 #include <cmath>
 #include <limits>
@@ -133,10 +134,24 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
     patch.shadowsEnabled = optionalBoolValue(command, "shadowsEnabled");
     patch.shadowReceiverBias = optionalFiniteFloat(
         command, "shadowReceiverBias", 0.0f, 0.05f);
+    patch.pointShadowReceiverBiasWorld = optionalFiniteFloat(
+        command, "pointShadowReceiverBiasWorld", 0.0f, 1.0f);
     patch.shadowConstantBias = optionalFiniteFloat(
         command, "shadowConstantBias", 0.0f, 10.0f);
     patch.shadowSlopeBias = optionalFiniteFloat(
         command, "shadowSlopeBias", 0.0f, 10.0f);
+    patch.maxPointShadowLights =
+        optionalUint32(command, "maxPointShadowLights",
+                       kMaxPointShadowLights);
+    patch.maxSpotShadowLights =
+        optionalUint32(command, "maxSpotShadowLights",
+                       kMaxSpotShadowLights);
+    patch.pointShadowDistance = optionalFiniteFloat(
+        command, "pointShadowDistance", kMinPunctualShadowDistance,
+        kMaxPunctualShadowDistance);
+    patch.spotShadowDistance = optionalFiniteFloat(
+        command, "spotShadowDistance", kMinPunctualShadowDistance,
+        kMaxPunctualShadowDistance);
     patch.exposureEv =
         optionalFiniteFloat(command, "exposureEv", -10.0f, 10.0f);
     patch.iblEnabled = optionalBoolValue(command, "iblEnabled");
@@ -157,7 +172,8 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
     patch.shadowCullingEnabled =
         optionalBoolValue(command, "shadowCullingEnabled");
     patch.shadowDistance = optionalFiniteFloat(
-        command, "shadowDistance", 0.1f, 100000.0f);
+        command, "shadowDistance", kMinDirectionalShadowDistance,
+        kMaxDirectionalShadowDistance);
     patch.distanceCullingEnabled =
         optionalBoolValue(command, "distanceCullingEnabled");
     patch.maxDrawDistance = optionalFiniteFloat(
@@ -352,7 +368,10 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         }
     }
     if (!patch.shadowsEnabled && !patch.shadowReceiverBias &&
+        !patch.pointShadowReceiverBiasWorld &&
         !patch.shadowConstantBias && !patch.shadowSlopeBias &&
+        !patch.maxPointShadowLights && !patch.maxSpotShadowLights &&
+        !patch.pointShadowDistance && !patch.spotShadowDistance &&
         !patch.exposureEv && !patch.toneMapper && !patch.iblEnabled &&
         !patch.skyboxEnabled && !patch.environmentIntensity &&
         !patch.environmentRotationRadians && !patch.bloomEnabled &&
