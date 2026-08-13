@@ -15,17 +15,17 @@ void PipelineCache::clear() {
     pipelines_.clear();
 }
 
-Pipeline &PipelineCache::getOrCreate(VkRenderPass renderPass,
+Pipeline &PipelineCache::getOrCreate(PipelineRenderingSignature rendering,
                                      PipelineConfig config) {
-    PipelineKey key{renderPass, std::move(config)};
+    PipelineKey key{std::move(rendering), std::move(config)};
     auto it = pipelines_.find(key);
     if (it != pipelines_.end())
         return *it->second;
 
-    VKL_PROFILE_ZONE("Create Graphics Pipeline");
+    VKL_PROFILE_ZONE("Create Dynamic Graphics Pipeline");
     VKL_PROFILE_TEXT(key.config.debugName);
     auto pipeline =
-        std::make_unique<Pipeline>(*device_, key.renderPass, key.config);
+        std::make_unique<Pipeline>(*device_, key.rendering, key.config);
     auto *result = pipeline.get();
     pipelines_.emplace(std::move(key), std::move(pipeline));
     return *result;

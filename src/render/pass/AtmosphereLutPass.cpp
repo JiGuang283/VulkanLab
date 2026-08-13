@@ -11,6 +11,7 @@
 #include "diagnostics/TracyProfiler.h"
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
+#include "render/RenderGraph.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/RenderView.h"
 
@@ -59,32 +60,150 @@ AtmosphereLutPass::~AtmosphereLutPass() {
     }
 }
 
-std::vector<RenderImageUsage> AtmosphereLutPass::resourceUsages() const {
-    return {
+void AtmosphereLutPass::setup(
+    RenderGraphBuilder &builder,
+    const RenderGraphBuildContext &) const {
+    builder.addNode("Atmosphere/Transmittance", RgPassType::Compute,
+                    RgQueueClass::Compute, 0);
+    builder.useImage(
         {resourceHandles_.atmosphereTransmittance,
-         RenderImageAccess::StorageWrite, VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+         RenderImageAccess::StorageWrite, VK_IMAGE_LAYOUT_GENERAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+
+    builder.addNode("Atmosphere/MultipleScattering", RgPassType::Compute,
+                    RgQueueClass::Compute, 1);
+    builder.useImage(
         {resourceHandles_.atmosphereTransmittance,
          RenderImageAccess::SampledRead,
          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage(
         {resourceHandles_.atmosphereMultipleScattering,
-         RenderImageAccess::StorageWrite, VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+         RenderImageAccess::StorageWrite, VK_IMAGE_LAYOUT_GENERAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+
+    builder.addNode("Atmosphere/SkyView", RgPassType::Compute,
+                    RgQueueClass::Compute, 2);
+    builder.useImage(
         {resourceHandles_.atmosphereTransmittance,
          RenderImageAccess::SampledRead,
          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage(
         {resourceHandles_.atmosphereMultipleScattering,
          RenderImageAccess::SampledRead,
          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resourceHandles_.atmosphereSkyView, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage(
+        {resourceHandles_.atmosphereSkyView,
+         RenderImageAccess::StorageWrite, VK_IMAGE_LAYOUT_GENERAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+
+    builder.addNode("Atmosphere/AerialPerspective", RgPassType::Compute,
+                    RgQueueClass::Compute, 3);
+    builder.useImage(
+        {resourceHandles_.atmosphereTransmittance,
+         RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage(
+        {resourceHandles_.atmosphereMultipleScattering,
+         RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage(
         {resourceHandles_.atmosphereAerialPerspective,
-         RenderImageAccess::StorageWrite, VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+         RenderImageAccess::StorageWrite, VK_IMAGE_LAYOUT_GENERAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+}
+
+void AtmosphereLutPass::recordNode(
+    RenderGraphPassContext &context, uint32_t localNodeIndex,
+    const VisibilityFrame &) {
+    if (localNodeIndex == 0)
+        updateFrameState(context.frame);
+    recordStage(context.frame, context.resources, localNodeIndex);
+}
+
+void AtmosphereLutPass::updateFrameState(
+    const RenderFrameContext &frame) {
+    status_.componentPresent =
+        frame.view && frame.view->atmosphere.componentPresent;
+    status_.active = frame.view && frame.view->atmosphere.active;
+    buildStaticThisFrame_ = false;
+    if (!frame.view)
+        return;
+    status_.componentEntity = frame.view->atmosphere.componentEntity;
+    status_.sunEntity = frame.view->atmosphere.sunEntity;
+    status_.sunBufferIndex = frame.view->atmosphere.sunBufferIndex;
+    status_.cameraAltitudeKm = frame.view->atmosphere.cameraAltitudeKm;
+    if (!frame.view->atmosphere.active)
+        return;
+    const uint64_t requestedKey = frame.view->atmosphere.staticLutKey;
+    const auto now = std::chrono::steady_clock::now();
+    if (requestedKey == currentStaticLutKey_)
+        return;
+    status_.staticLutDirty = true;
+    if (pendingStaticLutKey_ != requestedKey) {
+        pendingStaticLutKey_ = requestedKey;
+        pendingSince_ = now;
+    }
+    if (now - pendingSince_ >= std::chrono::milliseconds(100)) {
+        buildStaticThisFrame_ = true;
+        staticBuildStarted_ = now;
+    }
+}
+
+void AtmosphereLutPass::recordStage(
+    const RenderFrameContext &frame,
+    const RenderResourceRegistry &resources, uint32_t stage) {
+    if (!frame.pipelineCache || !frame.view ||
+        !frame.view->atmosphere.active || stage > 3)
+        return;
+    if (stage < 2 && !buildStaticThisFrame_)
+        return;
+    if (stage >= 2 && !readyFor(frame.view->atmosphere.staticLutKey))
+        return;
+    switch (stage) {
+    case 0:
+        dispatch(frame, "Pipeline/Atmosphere/Transmittance",
+                 transmittanceShaderPath_, transmittanceStorageSet_,
+                 resources.extent(
+                     resourceHandles_.atmosphereTransmittance),
+                 1);
+        break;
+    case 1:
+        dispatch(frame, "Pipeline/Atmosphere/MultipleScattering",
+                 multipleScatteringShaderPath_,
+                 multipleScatteringStorageSet_,
+                 resources.extent(
+                     resourceHandles_.atmosphereMultipleScattering),
+                 1);
+        currentStaticLutKey_ = frame.view->atmosphere.staticLutKey;
+        pendingStaticLutKey_ = 0;
+        status_.staticLutReady = true;
+        status_.staticLutDirty = false;
+        ++status_.lutGeneration;
+        status_.lastUpdateMs =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - staticBuildStarted_)
+                .count();
+        break;
+    case 2:
+        dispatch(frame, "Pipeline/Atmosphere/SkyView", skyViewShaderPath_,
+                 skyViewStorageSets_.at(frame.frameIndex),
+                 resources.extent(resourceHandles_.atmosphereSkyView), 1);
+        break;
+    case 3:
+        dispatch(
+            frame, "Pipeline/Atmosphere/AerialPerspective",
+            aerialPerspectiveShaderPath_,
+            aerialStorageSets_.at(frame.frameIndex),
+            resources.extent(
+                resourceHandles_.atmosphereAerialPerspective),
+            32);
+        break;
+    }
 }
 
 bool AtmosphereLutPass::readyFor(uint64_t staticLutKey) const {
@@ -95,143 +214,9 @@ void AtmosphereLutPass::execute(const RenderFrameContext &frame,
                                 const RenderResourceRegistry &resources,
                                 const VisibilityFrame &) {
     VKL_PROFILE_ZONE("Record Atmosphere LUTs");
-    status_.componentPresent = frame.view &&
-                               frame.view->atmosphere.componentPresent;
-    status_.active = frame.view && frame.view->atmosphere.active;
-    if (frame.view) {
-        status_.componentEntity = frame.view->atmosphere.componentEntity;
-        status_.sunEntity = frame.view->atmosphere.sunEntity;
-        status_.sunBufferIndex = frame.view->atmosphere.sunBufferIndex;
-        status_.cameraAltitudeKm = frame.view->atmosphere.cameraAltitudeKm;
-    }
-    if (!frame.pipelineCache || !frame.view ||
-        !frame.view->atmosphere.active) {
-        return;
-    }
-
-    VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "Atmosphere LUTs");
-    const uint64_t requestedKey = frame.view->atmosphere.staticLutKey;
-    const auto now = std::chrono::steady_clock::now();
-    if (requestedKey != currentStaticLutKey_) {
-        status_.staticLutDirty = true;
-        if (pendingStaticLutKey_ != requestedKey) {
-            pendingStaticLutKey_ = requestedKey;
-            pendingSince_ = now;
-        }
-        if (now - pendingSince_ < std::chrono::milliseconds(100))
-            return;
-
-        const auto staticStart = now;
-        {
-            ScopedGpuLabel label(device_->debugUtils(), frame.cmd,
-                                 "Transmittance");
-            const Image &image = resources.image(
-                resourceHandles_.atmosphereTransmittance, frame.frameIndex);
-            transitionImage(
-                frame.cmd, image, 1,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_READ_BIT,
-                VK_ACCESS_SHADER_WRITE_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-            dispatch(frame, "Pipeline/Atmosphere/Transmittance",
-                     transmittanceShaderPath_, transmittanceStorageSet_,
-                     resources.extent(resourceHandles_.atmosphereTransmittance),
-                     1);
-            transitionImage(
-                frame.cmd, image, 1, VK_IMAGE_LAYOUT_GENERAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-        }
-        {
-            ScopedGpuLabel label(device_->debugUtils(), frame.cmd,
-                                 "Multiple Scattering");
-            const Image &image = resources.image(
-                resourceHandles_.atmosphereMultipleScattering,
-                frame.frameIndex);
-            transitionImage(
-                frame.cmd, image, 1,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_READ_BIT,
-                VK_ACCESS_SHADER_WRITE_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-            dispatch(
-                frame, "Pipeline/Atmosphere/MultipleScattering",
-                multipleScatteringShaderPath_, multipleScatteringStorageSet_,
-                resources.extent(
-                    resourceHandles_.atmosphereMultipleScattering),
-                1);
-            transitionImage(
-                frame.cmd, image, 1, VK_IMAGE_LAYOUT_GENERAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-        }
-        currentStaticLutKey_ = requestedKey;
-        pendingStaticLutKey_ = 0;
-        status_.staticLutReady = true;
-        status_.staticLutDirty = false;
-        ++status_.lutGeneration;
-        status_.lastUpdateMs =
-            std::chrono::duration<double, std::milli>(
-                std::chrono::steady_clock::now() - staticStart).count();
-    }
-
-    if (!readyFor(requestedKey))
-        return;
-
-    const Image &skyImage = resources.image(
-        resourceHandles_.atmosphereSkyView, frame.frameIndex);
-    const Image &aerialImage = resources.image(
-        resourceHandles_.atmosphereAerialPerspective, frame.frameIndex);
-    transitionImage(
-        frame.cmd, skyImage, 1, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_READ_BIT,
-        VK_ACCESS_SHADER_WRITE_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-    transitionImage(
-        frame.cmd, aerialImage, 32,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-        VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-    {
-        ScopedGpuLabel label(device_->debugUtils(), frame.cmd, "Sky View");
-        dispatch(frame, "Pipeline/Atmosphere/SkyView", skyViewShaderPath_,
-                 skyViewStorageSets_.at(frame.frameIndex),
-                 resources.extent(resourceHandles_.atmosphereSkyView), 1);
-    }
-    {
-        ScopedGpuLabel label(device_->debugUtils(), frame.cmd,
-                             "Aerial Perspective");
-        dispatch(
-            frame, "Pipeline/Atmosphere/AerialPerspective",
-            aerialPerspectiveShaderPath_,
-            aerialStorageSets_.at(frame.frameIndex),
-            resources.extent(resourceHandles_.atmosphereAerialPerspective),
-            32);
-    }
-    transitionImage(
-        frame.cmd, skyImage, 1, VK_IMAGE_LAYOUT_GENERAL,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
-    transitionImage(
-        frame.cmd, aerialImage, 32, VK_IMAGE_LAYOUT_GENERAL,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    updateFrameState(frame);
+    for (uint32_t stage = 0; stage < 4; ++stage)
+        recordStage(frame, resources, stage);
 }
 
 void AtmosphereLutPass::createStorageDescriptorLayout() {
@@ -303,29 +288,6 @@ void AtmosphereLutPass::freeStorageDescriptors() {
         free(set);
     for (VkDescriptorSet &set : aerialStorageSets_)
         free(set);
-}
-
-void AtmosphereLutPass::transitionImage(
-    VkCommandBuffer cmd, const Image &image, uint32_t arrayLayers,
-    VkImageLayout oldLayout, VkImageLayout newLayout,
-    VkAccessFlags sourceAccess, VkAccessFlags destinationAccess,
-    VkPipelineStageFlags sourceStage,
-    VkPipelineStageFlags destinationStage) const {
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.srcAccessMask = sourceAccess;
-    barrier.dstAccessMask = destinationAccess;
-    barrier.oldLayout = oldLayout;
-    barrier.newLayout = newLayout;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = image.handle();
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.levelCount = 1;
-    barrier.subresourceRange.layerCount = arrayLayers;
-    vkCmdPipelineBarrier(cmd, sourceStage, destinationStage,
-                         VK_DEPENDENCY_BY_REGION_BIT, 0, nullptr, 0, nullptr,
-                         1, &barrier);
 }
 
 void AtmosphereLutPass::dispatch(

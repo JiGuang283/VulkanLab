@@ -154,6 +154,10 @@ void VulkanContext::createInstance(
     environment.debugUtilsAvailable =
         hasInstanceExtension(nullptr, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     environment.loaderApiVersion = loaderApiVersion();
+    if (environment.loaderApiVersion < VK_API_VERSION_1_3) {
+        throw std::runtime_error(
+            "VulkanLab requires a Vulkan 1.3 loader (dynamic rendering and synchronization2)");
+    }
     validationStatus_ =
         resolveValidationStatus(options_.validationProfile, environment);
     instanceApiVersion_ = std::max(

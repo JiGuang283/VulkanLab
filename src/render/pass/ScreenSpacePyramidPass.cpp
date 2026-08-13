@@ -12,6 +12,7 @@
 #include "diagnostics/TracyProfiler.h"
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
+#include "render/RenderGraph.h"
 #include "render/RenderResourceRegistry.h"
 
 #include <array>
@@ -71,34 +72,61 @@ ScreenSpacePyramidPass::~ScreenSpacePyramidPass() {
     }
 }
 
-std::vector<RenderImageUsage>
-ScreenSpacePyramidPass::resourceUsages() const {
-    const VkImageLayout sourceLayout =
-        kind_ == ScreenSpacePyramidKind::NearestDepth
-            ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
-            : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    std::vector<RenderImageUsage> usages = {
-        {source_, RenderImageAccess::SampledRead, sourceLayout, sourceLayout},
-        {pyramid_, RenderImageAccess::StorageWrite, VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
-    if (alternateSource_.valid()) {
-        usages.insert(usages.begin() + 1,
-                      {alternateSource_, RenderImageAccess::SampledRead,
-                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-    }
-    return usages;
-}
-
 void ScreenSpacePyramidPass::releaseViewportResources() {
     freeDescriptors();
-    initialized_.fill(false);
 }
 
 void ScreenSpacePyramidPass::onViewportResize(
     const RenderResourceRegistry &resources) {
     createDescriptors(resources);
-    initialized_.fill(false);
+}
+
+void ScreenSpacePyramidPass::setup(
+    RenderGraphBuilder &builder,
+    const RenderGraphBuildContext &context) const {
+    const uint32_t mipCount = context.resources.mipLevelCount(pyramid_);
+    const VkImageLayout sourceLayout =
+        kind_ == ScreenSpacePyramidKind::NearestDepth
+            ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+            : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    for (uint32_t mip = 0; mip < mipCount; ++mip) {
+        builder.addNode(name_ + "/Mip" + std::to_string(mip),
+                        RgPassType::Compute, RgQueueClass::Compute, mip);
+        if (mip == 0) {
+            if (kind_ == ScreenSpacePyramidKind::SceneColor &&
+                context.features.taaActive && alternateSource_.valid()) {
+                builder.useImage(
+                    {alternateSource_, RenderImageAccess::SampledRead,
+                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+            } else {
+                builder.useImage({source_, RenderImageAccess::SampledRead,
+                                  sourceLayout, sourceLayout});
+            }
+        } else {
+            builder.useImage(
+                {pyramid_, RenderImageAccess::SampledRead,
+                 VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL},
+                {VK_IMAGE_ASPECT_COLOR_BIT, mip - 1u, 1, 0, 1});
+        }
+        builder.useImage(
+            {pyramid_, RenderImageAccess::StorageWrite,
+             VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL},
+            {VK_IMAGE_ASPECT_COLOR_BIT, mip, 1, 0, 1});
+    }
+    builder.addNode(name_ + "/Finalize", RgPassType::Compute,
+                    RgQueueClass::Compute, mipCount);
+    builder.useImage(
+        {pyramid_, RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_GENERAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+}
+
+void ScreenSpacePyramidPass::recordNode(
+    RenderGraphPassContext &context, uint32_t localNodeIndex,
+    const VisibilityFrame &) {
+    if (localNodeIndex < context.resources.mipLevelCount(pyramid_))
+        recordMip(context.frame, context.resources, localNodeIndex);
 }
 
 void ScreenSpacePyramidPass::execute(
@@ -119,83 +147,49 @@ void ScreenSpacePyramidPass::execute(
     VKL_PROFILE_ZONE("Record ScreenSpacePyramid");
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, name_.c_str());
     const uint32_t mipCount = resources.mipLevelCount(pyramid_);
-    const Image &pyramid = resources.image(pyramid_, frame.frameIndex);
-    const VkImageSubresourceRange allMips{
-        VK_IMAGE_ASPECT_COLOR_BIT, 0, mipCount, 0, 1};
-    cmdImageBarrier(
-        frame.cmd,
-        initialized_[frame.frameIndex]
-            ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
-            : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        initialized_[frame.frameIndex] ? VK_ACCESS_SHADER_READ_BIT : 0u,
-        VK_ACCESS_SHADER_WRITE_BIT, pyramid.handle(),
-        initialized_[frame.frameIndex]
-            ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-            : VK_IMAGE_LAYOUT_UNDEFINED,
-        VK_IMAGE_LAYOUT_GENERAL, allMips);
-    initialized_[frame.frameIndex] = true;
+    for (uint32_t mip = 0; mip < mipCount; ++mip) {
+        recordMip(frame, resources, mip);
+    }
+}
 
+void ScreenSpacePyramidPass::recordMip(
+    const RenderFrameContext &frame,
+    const RenderResourceRegistry &resources, uint32_t mip) {
+    if (!frame.pipelineCache || mip >= resources.mipLevelCount(pyramid_))
+        return;
+    const bool useAlternateSource =
+        kind_ == ScreenSpacePyramidKind::SceneColor &&
+        frame.features.taaActive && alternateSource_.valid();
+    if (mip == 0)
+        updateInitialSource(resources, frame.frameIndex,
+                            useAlternateSource);
     const VkPushConstantRange pushRange{
         VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PyramidPush)};
-    ComputePipelineConfig initConfig{};
-    initConfig.debugName = "Pipeline/" + name_ + "/Init";
-    initConfig.computeShaderPath = initShaderPath_;
-    initConfig.descriptorLayouts = {descriptorSetLayout_};
-    initConfig.pushConstants = {pushRange};
-    ComputePipelineConfig reduceConfig{};
-    reduceConfig.debugName = "Pipeline/" + name_ + "/Reduce";
-    reduceConfig.computeShaderPath = reduceShaderPath_;
-    reduceConfig.descriptorLayouts = {descriptorSetLayout_};
-    reduceConfig.pushConstants = {pushRange};
-    ComputePipeline &initPipeline =
-        frame.pipelineCache->getOrCreateCompute(std::move(initConfig));
-    ComputePipeline &reducePipeline =
-        frame.pipelineCache->getOrCreateCompute(std::move(reduceConfig));
-
-    for (uint32_t mip = 0; mip < mipCount; ++mip) {
-        ScopedGpuLabel label(device_->debugUtils(), frame.cmd,
-                             name_ + " Mip " + std::to_string(mip));
-        ComputePipeline &pipeline = mip == 0 ? initPipeline : reducePipeline;
-        vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                          pipeline.handle());
-        const VkDescriptorSet set = sets_[frame.frameIndex].at(mip);
-        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                pipeline.layout(), 0, 1, &set, 0, nullptr);
-        const VkExtent2D destination = resources.mipExtent(pyramid_, mip);
-        const RenderImageHandle initialSource =
-            useAlternateSource ? alternateSource_ : source_;
-        const VkExtent2D sourceExtent =
-            mip == 0 ? resources.extent(initialSource)
-                     : resources.mipExtent(pyramid_, mip - 1u);
-        const PyramidPush push{{sourceExtent.width, sourceExtent.height,
-                                destination.width, destination.height}};
-        vkCmdPushConstants(frame.cmd, pipeline.layout(),
-                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push),
-                           &push);
-        vkCmdDispatch(frame.cmd, dispatchCount(destination.width),
-                      dispatchCount(destination.height), 1);
-        if (mip + 1u < mipCount) {
-            const VkImageSubresourceRange writtenMip{
-                VK_IMAGE_ASPECT_COLOR_BIT, mip, 1, 0, 1};
-            cmdImageBarrier(frame.cmd,
-                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                            VK_ACCESS_SHADER_WRITE_BIT,
-                            VK_ACCESS_SHADER_READ_BIT, pyramid.handle(),
-                            VK_IMAGE_LAYOUT_GENERAL,
-                            VK_IMAGE_LAYOUT_GENERAL, writtenMip);
-        }
-    }
-
-    cmdImageBarrier(frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-                    VK_ACCESS_SHADER_READ_BIT, pyramid.handle(),
-                    VK_IMAGE_LAYOUT_GENERAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, allMips);
+    ComputePipelineConfig config{};
+    config.debugName = "Pipeline/" + name_ +
+                       (mip == 0 ? "/Init" : "/Reduce");
+    config.computeShaderPath = mip == 0 ? initShaderPath_ : reduceShaderPath_;
+    config.descriptorLayouts = {descriptorSetLayout_};
+    config.pushConstants = {pushRange};
+    ComputePipeline &pipeline =
+        frame.pipelineCache->getOrCreateCompute(std::move(config));
+    vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      pipeline.handle());
+    const VkDescriptorSet set = sets_[frame.frameIndex].at(mip);
+    vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            pipeline.layout(), 0, 1, &set, 0, nullptr);
+    const VkExtent2D destination = resources.mipExtent(pyramid_, mip);
+    const RenderImageHandle initialSource =
+        useAlternateSource ? alternateSource_ : source_;
+    const VkExtent2D sourceExtent =
+        mip == 0 ? resources.extent(initialSource)
+                 : resources.mipExtent(pyramid_, mip - 1u);
+    const PyramidPush push{{sourceExtent.width, sourceExtent.height,
+                            destination.width, destination.height}};
+    vkCmdPushConstants(frame.cmd, pipeline.layout(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+    vkCmdDispatch(frame.cmd, dispatchCount(destination.width),
+                  dispatchCount(destination.height), 1);
 }
 
 void ScreenSpacePyramidPass::updateInitialSource(

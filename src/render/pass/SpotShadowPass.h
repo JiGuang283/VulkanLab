@@ -35,23 +35,29 @@ class SpotShadowPass final : public IRenderPass {
     SpotShadowPass &operator=(const SpotShadowPass &) = delete;
 
     std::string_view name() const override { return "SpotShadow"; }
-    std::vector<RenderImageUsage> resourceUsages() const override;
+    RgPassCondition condition() const override {
+        return RgPassCondition::SpotShadow;
+    }
+    void setup(RenderGraphBuilder &builder,
+               const RenderGraphBuildContext &context) const override;
+    void recordNode(RenderGraphPassContext &context,
+                    uint32_t localNodeIndex,
+                    const VisibilityFrame &visibility) override;
     void execute(const RenderFrameContext &frame,
                  const RenderResourceRegistry &resources,
                  const VisibilityFrame &visibility) override;
 
   private:
-    void createRenderPass(const RenderResourceRegistry &resources);
-    void createFramebuffers(const RenderResourceRegistry &resources);
-    void destroyFramebuffers();
+    void writeSlices(const RenderFrameContext &frame);
+    void recordLight(const RenderFrameContext &frame,
+                     const VisibilityFrame &visibility,
+                     uint32_t lightIndex);
     Device *device_ = nullptr;
     RenderImageHandle shadowDepth_{};
     std::string vertPath_;
     std::string maskFragPath_;
-    VkRenderPass renderPass_ = VK_NULL_HANDLE;
+    VkFormat depthFormat_ = VK_FORMAT_UNDEFINED;
     std::unique_ptr<PunctualShadowSliceBuffer> sliceBuffer_;
-    std::array<VkFramebuffer, kMaxSpotShadowLights> framebuffers_{};
-    std::array<VkImageView, kMaxSpotShadowLights> layerViews_{};
 };
 
 } // namespace vkr

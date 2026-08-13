@@ -29,9 +29,14 @@ class SurfacePrepass final : public IRenderPass {
     ~SurfacePrepass() override;
 
     std::string_view name() const override { return "SurfacePrepass"; }
-    std::vector<RenderImageUsage> resourceUsages() const override;
-    void releaseViewportResources() override;
-    void onViewportResize(const RenderResourceRegistry &resources) override;
+    RgPassCondition condition() const override {
+        return RgPassCondition::SurfaceData;
+    }
+    void setup(RenderGraphBuilder &builder,
+               const RenderGraphBuildContext &context) const override;
+    void recordNode(RenderGraphPassContext &context,
+                    uint32_t localNodeIndex,
+                    const VisibilityFrame &visibility) override;
     void execute(const RenderFrameContext &frame,
                  const RenderResourceRegistry &resources,
                  const VisibilityFrame &visibility) override;
@@ -49,10 +54,8 @@ class SurfacePrepass final : public IRenderPass {
     void prepareFrame(uint32_t frameIndex,
                       const VisibilityFrame &visibility,
                       VkExtent2D extent);
-    void createRenderPass(const RenderResourceRegistry &resources);
-    void createFramebuffers(const RenderResourceRegistry &resources);
-    void destroyFramebuffers();
     void draw(const RenderFrameContext &frame,
+              const RenderResourceRegistry &resources,
               const VisibilityFrame &visibility);
 
     Device *device_ = nullptr;
@@ -63,8 +66,6 @@ class SurfacePrepass final : public IRenderPass {
     std::string vertexShaderPath_;
     std::string opaqueFragmentShaderPath_;
     std::string maskFragmentShaderPath_;
-    VkRenderPass renderPass_ = VK_NULL_HANDLE;
-    std::array<VkFramebuffer, MAX_FRAMES_IN_FLIGHT> framebuffers_{};
     std::array<std::unique_ptr<FrameStorage>, MAX_FRAMES_IN_FLIGHT> frames_{};
 };
 

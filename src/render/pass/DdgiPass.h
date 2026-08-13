@@ -45,7 +45,17 @@ class DdgiPass final : public IRenderPass {
     ~DdgiPass() override;
 
     std::string_view name() const override { return "DDGI"; }
-    std::vector<RenderImageUsage> resourceUsages() const override;
+    RgPassType passType() const override { return RgPassType::Compute; }
+    RgPassCondition condition() const override { return RgPassCondition::Ddgi; }
+    void prepareFrame(const RenderFrameContext &frame,
+                      const RenderResourceRegistry &resources,
+                      const VisibilityFrame &visibility) override;
+    void setup(RenderGraphBuilder &builder,
+               const RenderGraphBuildContext &context) const override;
+    void recordNode(RenderGraphPassContext &context,
+                    uint32_t localNodeIndex,
+                    const VisibilityFrame &visibility) override;
+    uint64_t topologySignature() const override;
     void execute(const RenderFrameContext &frame,
                  const RenderResourceRegistry &resources,
                  const VisibilityFrame &visibility) override;
@@ -75,6 +85,9 @@ class DdgiPass final : public IRenderPass {
                                  const RenderResourceRegistry &resources);
     void resetVolume(VkCommandBuffer cmd,
                      const RenderResourceRegistry &resources);
+    void recordTrace(const RenderFrameContext &frame);
+    void recordUpdate(const RenderFrameContext &frame);
+    void finishFrame(const RenderFrameContext &frame);
     void freeDescriptors();
 
     Device *device_ = nullptr;
@@ -93,6 +106,11 @@ class DdgiPass final : public IRenderPass {
     uint64_t volumeSignature_ = 0;
     uint32_t updateCursor_ = 0;
     bool resetPending_ = true;
+    uint32_t preparedFrameIndex_ = 0;
+    uint32_t preparedUpdateCount_ = 0;
+    uint32_t preparedRayCount_ = 0;
+    bool preparedActive_ = false;
+    bool preparedReset_ = false;
     DdgiRuntimeStatus status_{};
 };
 

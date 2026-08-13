@@ -24,7 +24,8 @@ class PipelineCache {
 
     void clear();
 
-    Pipeline &getOrCreate(VkRenderPass renderPass, PipelineConfig config);
+    Pipeline &getOrCreate(PipelineRenderingSignature rendering,
+                          PipelineConfig config);
     ComputePipeline &getOrCreateCompute(ComputePipelineConfig config);
     size_t graphicsPipelineCount() const { return pipelines_.size(); }
     size_t computePipelineCount() const { return computePipelines_.size(); }

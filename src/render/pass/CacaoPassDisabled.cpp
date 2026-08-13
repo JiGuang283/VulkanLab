@@ -1,6 +1,7 @@
 #include "render/pass/CacaoPass.h"
 
 #include "core/Device.h"
+#include "render/RenderGraph.h"
 #include "render/RenderResourceRegistry.h"
 
 namespace vkr {
@@ -20,7 +21,12 @@ CacaoPass::CacaoPass(Device &device, const RenderResourceRegistry &,
 
 CacaoPass::~CacaoPass() = default;
 
-std::vector<RenderImageUsage> CacaoPass::resourceUsages() const { return {}; }
+void CacaoPass::setup(RenderGraphBuilder &builder,
+                      const RenderGraphBuildContext &) const {
+    builder.addNode(std::string(name()), RgPassType::External,
+                    RgQueueClass::Graphics);
+    builder.setActive(false);
+}
 
 void CacaoPass::releaseViewportResources() {}
 

@@ -4,7 +4,6 @@
 #include "core/ComputePipelineConfig.h"
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
-#include "core/GpuBarrier.h"
 #include "core/GpuDebugUtils.h"
 #include "core/Image.h"
 #include "core/VulkanCheck.h"
@@ -12,6 +11,7 @@
 #include "diagnostics/TracyProfiler.h"
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
+#include "render/RenderGraph.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/RenderView.h"
 
@@ -80,33 +80,72 @@ SsaoPass::~SsaoPass() {
     }
 }
 
-std::vector<RenderImageUsage> SsaoPass::resourceUsages() const {
-    return {
-        {resourceHandles_.surfaceDepth, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
-        {resourceHandles_.surfaceNormalRoughness,
-         RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resourceHandles_.ssaoRaw, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resourceHandles_.ssaoTemp, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL},
-        {resourceHandles_.ssaoFiltered, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
-}
-
 void SsaoPass::releaseViewportResources() {
     freeDescriptors();
-    initialized_.fill(false);
 }
 
 void SsaoPass::onViewportResize(const RenderResourceRegistry &resources) {
     createDescriptors(resources);
-    initialized_.fill(false);
+}
+
+void SsaoPass::setup(RenderGraphBuilder &builder,
+                     const RenderGraphBuildContext &) const {
+    const auto readSurface = [&] {
+        builder.useImage(
+            {resourceHandles_.surfaceDepth, RenderImageAccess::SampledRead,
+             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL});
+        builder.useImage(
+            {resourceHandles_.surfaceNormalRoughness,
+             RenderImageAccess::SampledRead,
+             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    };
+
+    builder.addNode("SSAO/Trace", RgPassType::Compute,
+                    RgQueueClass::Compute, 0);
+    readSurface();
+    builder.useImage(
+        {resourceHandles_.ssaoRaw, RenderImageAccess::StorageWrite,
+         VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+
+    builder.addNode("SSAO/BilateralHorizontal", RgPassType::Compute,
+                    RgQueueClass::Compute, 1);
+    readSurface();
+    builder.useImage(
+        {resourceHandles_.ssaoRaw, RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+    builder.useImage(
+        {resourceHandles_.ssaoTemp, RenderImageAccess::StorageWrite,
+         VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+
+    builder.addNode("SSAO/BilateralVertical", RgPassType::Compute,
+                    RgQueueClass::Compute, 2);
+    readSurface();
+    builder.useImage(
+        {resourceHandles_.ssaoTemp, RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+    builder.useImage(
+        {resourceHandles_.ssaoFiltered, RenderImageAccess::StorageWrite,
+         VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+
+    builder.addNode("SSAO/Finalize", RgPassType::Compute,
+                    RgQueueClass::Compute, 3);
+    builder.useImage(
+        {resourceHandles_.ssaoRaw, RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_GENERAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage(
+        {resourceHandles_.ssaoFiltered, RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_GENERAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+}
+
+void SsaoPass::recordNode(RenderGraphPassContext &context,
+                          uint32_t localNodeIndex,
+                          const VisibilityFrame &) {
+    if (localNodeIndex < 3)
+        recordStage(context.frame, context.resources, localNodeIndex);
 }
 
 void SsaoPass::execute(const RenderFrameContext &frame,
@@ -117,54 +156,29 @@ void SsaoPass::execute(const RenderFrameContext &frame,
 
     VKL_PROFILE_ZONE("Record SSAO");
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "SSAO");
+    for (uint32_t stage = 0; stage < 3; ++stage)
+        recordStage(frame, resources, stage);
+}
+
+void SsaoPass::recordStage(const RenderFrameContext &frame,
+                           const RenderResourceRegistry &resources,
+                           uint32_t stage) {
+    if (!frame.pipelineCache || !frame.view || stage > 2)
+        return;
     const uint32_t frameIndex = frame.frameIndex;
-    const std::array<RenderImageHandle, 3> handles = {
-        resourceHandles_.ssaoRaw, resourceHandles_.ssaoTemp,
-        resourceHandles_.ssaoFiltered};
-    for (uint32_t index = 0; index < handles.size(); ++index) {
-        const Image &image = resources.image(handles[index], frameIndex);
-        const bool shaderReadImage = index != 1;
-        cmdImageBarrier(
-            frame.cmd,
-            initialized_[frameIndex]
-                ? (shaderReadImage ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                                   : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)
-                : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            initialized_[frameIndex]
-                ? (shaderReadImage ? VK_ACCESS_SHADER_READ_BIT
-                                   : VK_ACCESS_SHADER_READ_BIT |
-                                         VK_ACCESS_SHADER_WRITE_BIT)
-                : 0u,
-            VK_ACCESS_SHADER_WRITE_BIT, image.handle(),
-            initialized_[frameIndex]
-                ? (shaderReadImage
-                       ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                       : VK_IMAGE_LAYOUT_GENERAL)
-                : VK_IMAGE_LAYOUT_UNDEFINED,
-            VK_IMAGE_LAYOUT_GENERAL,
-            {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1});
-    }
-    initialized_[frameIndex] = true;
 
     const VkPushConstantRange pushRange{
         VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(SsaoPush)};
-    ComputePipelineConfig traceConfig{};
-    traceConfig.debugName = "Pipeline/ScreenSpace/SSAO/Trace";
-    traceConfig.computeShaderPath = traceShaderPath_;
-    traceConfig.descriptorLayouts = {globalDescriptorSetLayout_,
-                                     descriptorSetLayout_};
-    traceConfig.pushConstants = {pushRange};
-    ComputePipelineConfig blurConfig{};
-    blurConfig.debugName = "Pipeline/ScreenSpace/SSAO/Blur";
-    blurConfig.computeShaderPath = blurShaderPath_;
-    blurConfig.descriptorLayouts = {globalDescriptorSetLayout_,
-                                    descriptorSetLayout_};
-    blurConfig.pushConstants = {pushRange};
-    ComputePipeline &tracePipeline =
-        frame.pipelineCache->getOrCreateCompute(std::move(traceConfig));
-    ComputePipeline &blurPipeline =
-        frame.pipelineCache->getOrCreateCompute(std::move(blurConfig));
+    ComputePipelineConfig config{};
+    config.debugName = stage == 0
+                           ? "Pipeline/ScreenSpace/SSAO/Trace"
+                           : "Pipeline/ScreenSpace/SSAO/Blur";
+    config.computeShaderPath = stage == 0 ? traceShaderPath_ : blurShaderPath_;
+    config.descriptorLayouts = {globalDescriptorSetLayout_,
+                                descriptorSetLayout_};
+    config.pushConstants = {pushRange};
+    ComputePipeline &pipeline =
+        frame.pipelineCache->getOrCreateCompute(std::move(config));
 
     const VkExtent2D fullExtent =
         resources.extent(resourceHandles_.surfaceDepth);
@@ -179,61 +193,22 @@ void SsaoPass::execute(const RenderFrameContext &frame,
         glm::uvec4(sampleCount(frame.view->settings.ssaoQuality),
                    fullExtent.width, fullExtent.height, 0u);
 
-    const auto bindAndDispatch = [&](ComputePipeline &pipeline,
-                                     VkDescriptorSet localSet,
-                                     uint32_t axis,
-                                     std::string_view label) {
-        ScopedGpuLabel gpuLabel(device_->debugUtils(), frame.cmd, label);
-        vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                          pipeline.handle());
-        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                pipeline.layout(), 0, 1,
-                                &frame.globalDescriptorSet, 0, nullptr);
-        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                pipeline.layout(), 1, 1, &localSet, 0,
-                                nullptr);
-        push.dimensions.w = axis;
-        vkCmdPushConstants(frame.cmd, pipeline.layout(),
-                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push),
-                           &push);
-        vkCmdDispatch(frame.cmd, dispatchCount(aoExtent.width),
-                      dispatchCount(aoExtent.height), 1);
-    };
-
-    bindAndDispatch(tracePipeline, traceSets_[frameIndex], 0u, "Trace");
-    const Image &raw = resources.image(resourceHandles_.ssaoRaw, frameIndex);
-    cmdImageBarrier(frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-                    raw.handle(), VK_IMAGE_LAYOUT_GENERAL,
-                    VK_IMAGE_LAYOUT_GENERAL,
-                    {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1});
-
-    bindAndDispatch(blurPipeline, horizontalSets_[frameIndex], 0u,
-                    "Bilateral Horizontal");
-    const Image &temp =
-        resources.image(resourceHandles_.ssaoTemp, frameIndex);
-    cmdImageBarrier(frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-                    temp.handle(), VK_IMAGE_LAYOUT_GENERAL,
-                    VK_IMAGE_LAYOUT_GENERAL,
-                    {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1});
-
-    bindAndDispatch(blurPipeline, verticalSets_[frameIndex], 1u,
-                    "Bilateral Vertical");
-    const Image &filtered =
-        resources.image(resourceHandles_.ssaoFiltered, frameIndex);
-    for (const Image *image : {&raw, &filtered}) {
-        cmdImageBarrier(frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                        VK_ACCESS_SHADER_WRITE_BIT |
-                            VK_ACCESS_SHADER_READ_BIT,
-                        VK_ACCESS_SHADER_READ_BIT, image->handle(),
-                        VK_IMAGE_LAYOUT_GENERAL,
-                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1});
-    }
+    const std::array<VkDescriptorSet, 3> sets = {
+        traceSets_[frameIndex], horizontalSets_[frameIndex],
+        verticalSets_[frameIndex]};
+    vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      pipeline.handle());
+    vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            pipeline.layout(), 0, 1,
+                            &frame.globalDescriptorSet, 0, nullptr);
+    vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            pipeline.layout(), 1, 1, &sets[stage], 0,
+                            nullptr);
+    push.dimensions.w = stage == 2 ? 1u : 0u;
+    vkCmdPushConstants(frame.cmd, pipeline.layout(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+    vkCmdDispatch(frame.cmd, dispatchCount(aoExtent.width),
+                  dispatchCount(aoExtent.height), 1);
 }
 
 void SsaoPass::createDescriptorSetLayout() {

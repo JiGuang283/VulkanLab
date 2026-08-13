@@ -4,6 +4,7 @@
 #include "core/Device.h"
 #include "core/FrameSync.h"
 #include "core/GpuDebugUtils.h"
+#include "core/GpuBarrier.h"
 #include "core/Image.h"
 #include "core/SwapChain.h"
 #include "core/UploadContext.h"
@@ -21,6 +22,7 @@
 #include "render/ShaderVariant.h"
 #include "render/Texture.h"
 #include "render/pass/DirectionalShadowPass.h"
+#include "render/pass/FrameGraphExternalPasses.h"
 #include "render/pass/PointShadowPass.h"
 #include "render/pass/SpotShadowPass.h"
 #include "render/pass/SurfacePrepass.h"
@@ -107,9 +109,10 @@ Renderer::Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
     createAtmosphereUniformBuffers();
     createAtmosphereDescriptorSetLayout();
     createAtmosphereDescriptorSets();
-    createRenderPipeline();
+    createRenderGraph();
     gpuPassProfiler_ =
-        std::make_unique<GpuPassProfiler>(device, pipeline_.passNames());
+        std::make_unique<GpuPassProfiler>(device,
+                                          renderGraph_.passProfiles());
 }
 
 Renderer::~Renderer() {
@@ -154,7 +157,9 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
                            PipelineCache &pipelineCache,
                            GuiSystem *gui,
                            const ShaderVariant &shaderVariant,
-                           const RenderView &view) {
+                           const RenderView &view,
+                           std::optional<FrameCaptureSource> captureSource,
+                           std::function<void(VkCommandBuffer)> screenshotCopy) {
     VKL_PROFILE_ZONE("Renderer::renderFrame");
     atmosphereStatus_.supported = device_->atmosphereSupport().available;
     atmosphereStatus_.unavailableReason = device_->atmosphereSupport().reason;
@@ -293,6 +298,9 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.cmd = frame.cmd;
     renderFrame.frameIndex = frame.frameIndex;
     renderFrame.imageIndex = frame.imageIndex;
+    renderFrame.swapchainImage = swapChain_->image(frame.imageIndex);
+    renderFrame.swapchainImageView =
+        swapChain_->imageViews().at(frame.imageIndex);
     renderFrame.submissionSerial =
         frameSync_->lastSubmittedSerial() + 1u;
     renderFrame.viewportExtent = renderResources_->viewportExtent();
@@ -325,6 +333,20 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.atmosphereReady =
         atmosphereLutPass_ &&
         atmosphereLutPass_->readyFor(view.atmosphere.staticLutKey);
+    renderFrame.features.atmosphereRequired =
+        view.atmosphere.active && atmosphereLutPass_;
+    renderFrame.features.directionalShadowRequired =
+        view.shadow.csm.enabled;
+    renderFrame.features.pointShadowRequired =
+        view.shadow.punctual.activePointCount > 0;
+    renderFrame.features.spotShadowRequired =
+        view.shadow.punctual.activeSpotCount > 0;
+    renderFrame.features.directionalShadowCascadeCount =
+        view.shadow.csm.enabled ? kCsmCascadeCount : 0;
+    renderFrame.features.pointShadowLightCount =
+        view.shadow.punctual.activePointCount;
+    renderFrame.features.spotShadowLightCount =
+        view.shadow.punctual.activeSpotCount;
     renderFrame.features.surfaceDataRequired =
         device_->surfaceDataSupport().available &&
         (view.settings.culling.occlusionEnabled ||
@@ -356,8 +378,11 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
          ssrPassRequired || ssgiPassRequired);
     renderFrame.features.ssaoRequired =
         screenSupport.ssaoAvailable && ssaoPassRequired;
+    renderFrame.features.ssaoActive = ssaoShadingActive;
     renderFrame.features.cacaoRequired = cacaoPassRequired;
+    renderFrame.features.cacaoActive = cacaoShadingActive;
     renderFrame.features.gtaoRequired = gtaoPassRequired;
+    renderFrame.features.gtaoActive = gtaoShadingActive;
     renderFrame.features.taaRequired = taaPassRequired;
     renderFrame.features.taaActive = taaShadingActive;
     renderFrame.features.ssrRequired = ssrPassRequired;
@@ -366,6 +391,13 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.features.ssgiActive = ssgiShadingActive;
     renderFrame.features.ddgiRequired = ddgiPassRequired;
     renderFrame.features.ddgiActive = ddgiShadingActive;
+    renderFrame.features.bloomRequired =
+        view.settings.bloomEnabled && shaderVariant.supportsBloom;
+    renderFrame.features.captureRequired =
+        static_cast<bool>(screenshotCopy);
+    renderFrame.features.captureSource =
+        renderFrame.features.captureRequired ? captureSource : std::nullopt;
+    renderFrame.screenshotCopy = std::move(screenshotCopy);
     if (!ddgiShadingActive)
         ddgiPass_->disableSampling(frame.frameIndex);
     lastSurfaceDataActive_ = renderFrame.features.surfaceDataRequired;
@@ -390,10 +422,8 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     gpuPassProfiler_->collect(frame.frameIndex);
     gpuPassProfiler_->beginFrame(frame.cmd, frame.frameIndex,
                                  frameSync_->lastSubmittedSerial() + 1);
-    if (ddgiPassRequired)
-        rayTracingScene_->build(frame.cmd, frame.frameIndex, visibility);
-    pipeline_.execute(renderFrame, *renderResources_, visibility,
-                      gpuPassProfiler_.get());
+    renderGraph_.execute(renderFrame, *renderResources_, visibility,
+                         gpuPassProfiler_.get());
     const bool ddgiActuallyActive = ddgiPass_ && ddgiPass_->status().active;
     screenSpaceStatus_.activeGiMode =
         ssgiShadingActive && ddgiActuallyActive
@@ -447,9 +477,9 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
 void Renderer::recreateSwapChain() {
     vkDeviceWaitIdle(device_->logicalDevice());
 
-    pipeline_.releaseSwapChainResources();
+    renderGraph_.releaseSwapChainResources();
     swapChain_->recreate();
-    pipeline_.onSwapChainResize(*swapChain_);
+    renderGraph_.onSwapChainResize(*swapChain_);
 }
 
 void Renderer::resizeViewport(VkExtent2D extent) {
@@ -465,16 +495,11 @@ void Renderer::resizeViewport(VkExtent2D extent) {
 
     for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
         updateScreenSpaceDescriptor(frame, AmbientOcclusionMode::Off);
-    pipeline_.releaseViewportResources();
+    renderGraph_.releaseViewportResources();
     renderResources_->recreateViewportDependent(extent);
     for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
         updateScreenSpaceDescriptor(frame, AmbientOcclusionMode::Off);
-    pipeline_.validateResources(*renderResources_);
-    pipeline_.onViewportResize(*renderResources_);
-}
-
-VkRenderPass Renderer::renderPass() const {
-    return presentPass_ ? presentPass_->renderPass() : VK_NULL_HANDLE;
+    renderGraph_.onViewportResize(*renderResources_);
 }
 
 VkExtent2D Renderer::viewportExtent() const {
@@ -948,7 +973,7 @@ void Renderer::initializeAtmosphereImages() {
             toClear.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             toClear.subresourceRange.levelCount = 1;
             toClear.subresourceRange.layerCount = desc.arrayLayers;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            cmdPipelineBarrier2Compat(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                                  VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
                                  nullptr, 0, nullptr, 1, &toClear);
             VkClearColorValue clear{};
@@ -965,7 +990,7 @@ void Renderer::initializeAtmosphereImages() {
             toSample.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
             toSample.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
             toSample.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            vkCmdPipelineBarrier(
+            cmdPipelineBarrier2Compat(
                 cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
@@ -998,7 +1023,7 @@ void Renderer::initializeShadowImages() {
         barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
         barrier.subresourceRange.levelCount = 1;
         barrier.subresourceRange.layerCount = desc.arrayLayers;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        cmdPipelineBarrier2Compat(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
                              0, nullptr, 0, nullptr, 1, &barrier);
     }
@@ -1548,7 +1573,7 @@ bool Renderer::reconfigureCacao(CacaoResolution resolution,
     return cacaoPass_->reconfigure(*renderResources_, resolution, error);
 }
 
-void Renderer::createRenderPipeline() {
+void Renderer::createRenderGraph() {
     if (device_->atmosphereSupport().available) {
         auto atmospherePass = std::make_unique<AtmosphereLutPass>(
             *device_, *renderResources_, resourceHandles_,
@@ -1558,19 +1583,19 @@ void Renderer::createRenderPipeline() {
             shaderPaths_.atmosphereSkyViewComp,
             shaderPaths_.atmosphereAerialPerspectiveComp);
         atmosphereLutPass_ = atmospherePass.get();
-        pipeline_.addPass(std::move(atmospherePass));
+        renderGraph_.addPass(std::move(atmospherePass));
     }
-    pipeline_.addPass(std::make_unique<DirectionalShadowPass>(
+    renderGraph_.addPass(std::make_unique<DirectionalShadowPass>(
         *device_, *renderResources_, resourceHandles_.directionalShadowDepth,
         globalDescriptorSetLayout_,
         shaderPaths_.shadowVert, shaderPaths_.shadowMaskFrag));
-    pipeline_.addPass(std::make_unique<PointShadowPass>(
+    renderGraph_.addPass(std::make_unique<PointShadowPass>(
         *device_, *renderResources_, resourceHandles_.pointShadowDepth,
         *descriptorAllocator_,
         shaderPaths_.shadowPunctualVert,
         shaderPaths_.shadowPointFrag,
         shaderPaths_.shadowPointMaskFrag));
-    pipeline_.addPass(std::make_unique<SpotShadowPass>(
+    renderGraph_.addPass(std::make_unique<SpotShadowPass>(
         *device_, *renderResources_, resourceHandles_.spotShadowDepth,
         *descriptorAllocator_,
         shaderPaths_.shadowPunctualVert,
@@ -1584,10 +1609,10 @@ void Renderer::createRenderPipeline() {
             shaderPaths_.surfacePrepassOpaqueFrag,
             shaderPaths_.surfacePrepassMaskFrag);
         surfacePrepass_ = surfacePass.get();
-        pipeline_.addPass(std::move(surfacePass));
+        renderGraph_.addPass(std::move(surfacePass));
     }
     if (device_->occlusionCullingSupport().available) {
-        pipeline_.addPass(std::make_unique<HiZBuildPass>(
+        renderGraph_.addPass(std::make_unique<HiZBuildPass>(
             *device_, *renderResources_, resourceHandles_,
             *descriptorAllocator_, shaderPaths_.visibilityHiZInitComp,
             shaderPaths_.visibilityHiZReduceComp));
@@ -1595,13 +1620,13 @@ void Renderer::createRenderPipeline() {
             *device_, *renderResources_, resourceHandles_,
             *descriptorAllocator_, shaderPaths_.visibilityOcclusionComp);
         occlusionCullPass_ = occlusionPass.get();
-        pipeline_.addPass(std::move(occlusionPass));
+        renderGraph_.addPass(std::move(occlusionPass));
     }
 
     const ScreenSpaceEffectsSupport &screenSupport =
         device_->screenSpaceEffectsSupport();
     if (screenSupport.depthPyramidAvailable) {
-        pipeline_.addPass(std::make_unique<ScreenSpacePyramidPass>(
+        renderGraph_.addPass(std::make_unique<ScreenSpacePyramidPass>(
             *device_, *renderResources_,
             ScreenSpacePyramidKind::NearestDepth,
             resourceHandles_.surfaceDepth,
@@ -1613,7 +1638,7 @@ void Renderer::createRenderPipeline() {
             shaderPaths_.screenDepthReduceComp));
     }
     if (screenSupport.ssaoAvailable) {
-        pipeline_.addPass(std::make_unique<SsaoPass>(
+        renderGraph_.addPass(std::make_unique<SsaoPass>(
             *device_, *renderResources_, resourceHandles_,
             *descriptorAllocator_, globalDescriptorSetLayout_,
             shaderPaths_.ssaoTraceComp, shaderPaths_.ssaoBlurComp));
@@ -1625,10 +1650,10 @@ void Renderer::createRenderPipeline() {
             shaderPaths_.gtaoTraceComp, shaderPaths_.gtaoTemporalComp,
             shaderPaths_.ssaoBlurComp);
         gtaoPass_ = gtaoPass.get();
-        pipeline_.addPass(std::move(gtaoPass));
+        renderGraph_.addPass(std::move(gtaoPass));
     }
     if (device_->cacaoSupport().available) {
-        pipeline_.addPass(std::make_unique<CacaoNormalAdapterPass>(
+        renderGraph_.addPass(std::make_unique<CacaoNormalAdapterPass>(
             *device_, *renderResources_, resourceHandles_,
             *descriptorAllocator_, globalDescriptorSetLayout_,
             shaderPaths_.cacaoNormalAdapterComp));
@@ -1636,7 +1661,7 @@ void Renderer::createRenderPipeline() {
             *device_, *renderResources_, resourceHandles_,
             CacaoResolution::Half);
         cacaoPass_ = cacaoPass.get();
-        pipeline_.addPass(std::move(cacaoPass));
+        renderGraph_.addPass(std::move(cacaoPass));
     }
 
     auto ddgiPass = std::make_unique<DdgiPass>(
@@ -1645,9 +1670,11 @@ void Renderer::createRenderPipeline() {
         *rayTracingScene_, shaderPaths_.ddgiTraceComp,
         shaderPaths_.ddgiUpdateComp);
     ddgiPass_ = ddgiPass.get();
-    pipeline_.addPass(std::move(ddgiPass));
+    renderGraph_.addPass(
+        std::make_unique<RayTracingSceneBuildPass>(*rayTracingScene_));
+    renderGraph_.addPass(std::move(ddgiPass));
 
-    pipeline_.addPass(std::make_unique<SkyBackgroundPass>(
+    renderGraph_.addPass(std::make_unique<SkyBackgroundPass>(
         *device_, *renderResources_, resourceHandles_,
         globalDescriptorSetLayout_, lightingDescriptorSetLayout_,
         atmosphereDescriptorSetLayout_, shaderPaths_.fullscreenVert,
@@ -1659,10 +1686,10 @@ void Renderer::createRenderPipeline() {
         lightingDescriptorSetLayout_, atmosphereDescriptorSetLayout_,
         ddgiPass_->samplingDescriptorSetLayout());
     mainForwardPass_ = mainPass.get();
-    pipeline_.addPass(std::move(mainPass));
+    renderGraph_.addPass(std::move(mainPass));
 
     if (screenSupport.colorPyramidAvailable) {
-        pipeline_.addPass(std::make_unique<ScreenSpacePyramidPass>(
+        renderGraph_.addPass(std::make_unique<ScreenSpacePyramidPass>(
             *device_, *renderResources_, ScreenSpacePyramidKind::SceneColor,
             resourceHandles_.hdrColor, resourceHandles_.hdrSampler,
             RenderImageHandle{}, RenderSamplerHandle{},
@@ -1679,7 +1706,7 @@ void Renderer::createRenderPipeline() {
             shaderPaths_.ssrTraceComp, shaderPaths_.ssrTemporalComp,
             shaderPaths_.ssrBlurComp);
         ssrPass_ = ssrPass.get();
-        pipeline_.addPass(std::move(ssrPass));
+        renderGraph_.addPass(std::move(ssrPass));
     }
 
     if (screenSupport.ssgiAvailable) {
@@ -1689,14 +1716,14 @@ void Renderer::createRenderPipeline() {
             shaderPaths_.ssgiTraceComp, shaderPaths_.ssgiTemporalComp,
             shaderPaths_.ssgiFilterComp);
         ssgiPass_ = ssgiPass.get();
-        pipeline_.addPass(std::move(ssgiPass));
+        renderGraph_.addPass(std::move(ssgiPass));
     }
 
     RendererResourceHandles postProcessHandles = resourceHandles_;
-    pipeline_.addPass(std::make_unique<HdrCompositePass>(
+    renderGraph_.addPass(std::make_unique<HdrCompositePass>(
         *device_, *renderResources_, resourceHandles_,
         *descriptorAllocator_, shaderPaths_.reflectionCompositeComp));
-    pipeline_.addPass(std::make_unique<MainForwardPass>(
+    renderGraph_.addPass(std::make_unique<MainForwardPass>(
         *device_, *renderResources_, resourceHandles_,
         ForwardPhase::Transparent,
         lightingDescriptorSetLayout_, atmosphereDescriptorSetLayout_,
@@ -1708,11 +1735,11 @@ void Renderer::createRenderPipeline() {
             *device_, *renderResources_, postProcessHandles,
             *descriptorAllocator_, shaderPaths_.taaResolveComp);
         taaPass_ = taaPass.get();
-        pipeline_.addPass(std::move(taaPass));
+        renderGraph_.addPass(std::move(taaPass));
     }
 
     if (device_->computeBloomSupport().available) {
-        pipeline_.addPass(std::make_unique<BloomPass>(
+        renderGraph_.addPass(std::make_unique<BloomPass>(
             *device_, *renderResources_, postProcessHandles,
             *descriptorAllocator_, shaderPaths_.bloomDownsampleComp,
             shaderPaths_.bloomUpsampleComp));
@@ -1752,7 +1779,7 @@ void Renderer::createRenderPipeline() {
         *descriptorAllocator_,
         shaderPaths_.fullscreenVert, shaderPaths_.toneMapFrag);
     toneMapPass_ = toneMapPass.get();
-    pipeline_.addPass(std::move(toneMapPass));
+    renderGraph_.addPass(std::move(toneMapPass));
 
     auto presentPass = std::make_unique<PresentPass>(
         *device_, *swapChain_, *renderResources_,
@@ -1760,8 +1787,9 @@ void Renderer::createRenderPipeline() {
         *descriptorAllocator_, shaderPaths_.fullscreenVert,
         shaderPaths_.presentFrag);
     presentPass_ = presentPass.get();
-    pipeline_.addPass(std::move(presentPass));
-    pipeline_.validateResources(*renderResources_);
+    renderGraph_.addPass(std::move(presentPass));
+    renderGraph_.addPass(
+        std::make_unique<ScreenshotCopyPass>(resourceHandles_));
 }
 
 const GpuPassTimings &Renderer::gpuPassTimings() const {

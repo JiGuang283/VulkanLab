@@ -28,7 +28,13 @@ class BloomPass final : public IRenderPass {
     BloomPass &operator=(const BloomPass &) = delete;
 
     std::string_view name() const override { return "Bloom"; }
-    std::vector<RenderImageUsage> resourceUsages() const override;
+    RgPassType passType() const override { return RgPassType::Compute; }
+    RgPassCondition condition() const override { return RgPassCondition::Bloom; }
+    void setup(RenderGraphBuilder &builder,
+               const RenderGraphBuildContext &context) const override;
+    void recordNode(RenderGraphPassContext &context,
+                    uint32_t localNodeIndex,
+                    const VisibilityFrame &visibility) override;
     void releaseViewportResources() override;
     void onViewportResize(
         const RenderResourceRegistry &resources) override;
@@ -54,6 +60,12 @@ class BloomPass final : public IRenderPass {
         const RenderResourceRegistry &resources) const;
     uint32_t activeLevelCount(
         const RenderResourceRegistry &resources) const;
+    void recordDownsample(const RenderFrameContext &frame,
+                          const RenderResourceRegistry &resources,
+                          uint32_t level);
+    void recordUpsample(const RenderFrameContext &frame,
+                        const RenderResourceRegistry &resources,
+                        uint32_t destinationLevel);
 
     Device *device_ = nullptr;
     RendererResourceHandles resourceHandles_{};

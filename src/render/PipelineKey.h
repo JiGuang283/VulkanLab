@@ -154,18 +154,32 @@ inline size_t hash(const PipelineConfig &config) {
     return seed;
 }
 
+inline size_t hash(const PipelineRenderingSignature &signature) {
+    size_t seed = 0;
+    combineVector(seed, signature.colorAttachmentFormats,
+                  [](size_t &target, VkFormat format) {
+                      combine(target, format);
+                  });
+    combine(seed, signature.depthAttachmentFormat);
+    combine(seed, signature.stencilAttachmentFormat);
+    combine(seed, signature.samples);
+    combine(seed, signature.viewMask);
+    return seed;
+}
+
 } // namespace pipeline_key_detail
 
 struct PipelineKey {
-    VkRenderPass renderPass = VK_NULL_HANDLE;
+    PipelineRenderingSignature rendering{};
     PipelineConfig config{};
 
     PipelineKey() = default;
-    PipelineKey(VkRenderPass pass, PipelineConfig pipelineConfig)
-        : renderPass(pass), config(std::move(pipelineConfig)) {}
+    PipelineKey(PipelineRenderingSignature signature,
+                PipelineConfig pipelineConfig)
+        : rendering(std::move(signature)), config(std::move(pipelineConfig)) {}
 
     bool operator==(const PipelineKey &rhs) const {
-        return renderPass == rhs.renderPass &&
+        return rendering == rhs.rendering &&
                pipeline_key_detail::equal(config, rhs.config);
     }
 };
@@ -173,7 +187,8 @@ struct PipelineKey {
 struct PipelineKeyHash {
     size_t operator()(const PipelineKey &key) const {
         size_t seed = pipeline_key_detail::hash(key.config);
-        pipeline_key_detail::combine(seed, key.renderPass);
+        pipeline_key_detail::combine(seed,
+                                     pipeline_key_detail::hash(key.rendering));
         return seed;
     }
 };

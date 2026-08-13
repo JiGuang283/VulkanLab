@@ -12,6 +12,7 @@
 #include "diagnostics/TracyProfiler.h"
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
+#include "render/RenderGraph.h"
 #include "render/RenderView.h"
 #include "render/Visibility.h"
 
@@ -119,51 +120,6 @@ GtaoPass::~GtaoPass() {
     }
 }
 
-std::vector<RenderImageUsage> GtaoPass::resourceUsages() const {
-    return {
-        {resourceHandles_.surfaceDepth, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
-        {resourceHandles_.surfaceNormalRoughness,
-         RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resourceHandles_.surfaceMotion, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resourceHandles_.screenDepthPyramid, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resourceHandles_.surfaceDepth, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-         RenderImageFrame::Previous},
-        {resourceHandles_.surfaceNormalRoughness,
-         RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         RenderImageFrame::Previous},
-        {resourceHandles_.gtaoHistory, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         RenderImageFrame::Previous},
-        {resourceHandles_.gtaoRaw, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resourceHandles_.gtaoHistory, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resourceHandles_.gtaoTemp, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL},
-        {resourceHandles_.gtaoFiltered, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resourceHandles_.gtaoDebug, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-    };
-}
-
 void GtaoPass::releaseViewportResources() {
     freeDescriptors();
     initialized_.fill(false);
@@ -172,6 +128,263 @@ void GtaoPass::releaseViewportResources() {
     status_.active = false;
     status_.historyValid = false;
     status_.lastResetReason = "viewport resized";
+}
+
+void GtaoPass::setup(RenderGraphBuilder &builder,
+                     const RenderGraphBuildContext &) const {
+    const auto surfaceReads = [&] {
+        builder.useImage(
+            {resourceHandles_.surfaceDepth, RenderImageAccess::SampledRead,
+             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL});
+        builder.useImage(
+            {resourceHandles_.surfaceNormalRoughness,
+             RenderImageAccess::SampledRead,
+             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    };
+    builder.addNode("GTAO/Trace", RgPassType::Compute,
+                    RgQueueClass::Compute, 0);
+    surfaceReads();
+    builder.useImage(
+        {resourceHandles_.screenDepthPyramid,
+         RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage({resourceHandles_.gtaoRaw, RenderImageAccess::StorageWrite,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+
+    builder.addNode("GTAO/Temporal", RgPassType::Compute,
+                    RgQueueClass::Compute, 1);
+    surfaceReads();
+    builder.useImage(
+        {resourceHandles_.surfaceMotion, RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage(
+        {resourceHandles_.surfaceDepth, RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+         RenderImageFrame::Previous});
+    builder.useImage(
+        {resourceHandles_.surfaceNormalRoughness,
+         RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+         RenderImageFrame::Previous});
+    builder.useImage(
+        {resourceHandles_.gtaoHistory, RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+         RenderImageFrame::Previous});
+    builder.useImage({resourceHandles_.gtaoRaw, RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+    builder.useImage(
+        {resourceHandles_.gtaoHistory, RenderImageAccess::StorageWrite,
+         VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+    builder.useImage(
+        {resourceHandles_.gtaoDebug, RenderImageAccess::StorageWrite,
+         VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+
+    builder.addNode("GTAO/BilateralHorizontal", RgPassType::Compute,
+                    RgQueueClass::Compute, 2);
+    surfaceReads();
+    builder.useImage(
+        {resourceHandles_.gtaoHistory, RenderImageAccess::SampledRead,
+         VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+    builder.useImage({resourceHandles_.gtaoTemp, RenderImageAccess::StorageWrite,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+
+    builder.addNode("GTAO/BilateralVertical", RgPassType::Compute,
+                    RgQueueClass::Compute, 3);
+    surfaceReads();
+    builder.useImage({resourceHandles_.gtaoTemp, RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+    builder.useImage(
+        {resourceHandles_.gtaoFiltered, RenderImageAccess::StorageWrite,
+         VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+
+    builder.addNode("GTAO/Finalize", RgPassType::Compute,
+                    RgQueueClass::Compute, 4);
+    for (RenderImageHandle handle :
+         {resourceHandles_.gtaoRaw, resourceHandles_.gtaoHistory,
+          resourceHandles_.gtaoFiltered, resourceHandles_.gtaoDebug}) {
+        builder.useImage({handle, RenderImageAccess::SampledRead,
+                          VK_IMAGE_LAYOUT_GENERAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    }
+}
+
+void GtaoPass::recordNode(RenderGraphPassContext &context,
+                          uint32_t localNodeIndex,
+                          const VisibilityFrame &visibility) {
+    if (localNodeIndex == 0)
+        beginFrame(context.frame, context.resources, visibility);
+    if (localNodeIndex < 4)
+        recordStage(context.frame, context.resources, localNodeIndex);
+    else if (localNodeIndex == 4)
+        finishFrame(context.frame, visibility);
+}
+
+void GtaoPass::beginFrame(const RenderFrameContext &frame,
+                          const RenderResourceRegistry &resources,
+                          const VisibilityFrame &visibility) {
+    status_.active = frame.view &&
+                     frame.view->settings.ambientOcclusionMode ==
+                         AmbientOcclusionMode::Gtao;
+    if (!frame.view)
+        return;
+    const uint32_t previousFrame =
+        (frame.frameIndex + resources.frameCount() - 1u) %
+        resources.frameCount();
+    currentSettingsSignature_ = settingsSignature(frame.view->settings.gtao);
+    const bool contiguous = lastExecutionSerial_ != 0 &&
+                            lastExecutionSerial_ + 1u ==
+                                frame.submissionSerial;
+    const bool generationMatches =
+        lastExecutionSerial_ != 0 &&
+        lastHistoryGeneration_ == visibility.history.historyGeneration;
+    const bool settingsMatch = lastExecutionSerial_ != 0 &&
+                               lastSettingsSignature_ ==
+                                   currentSettingsSignature_;
+    currentHistoryValid_ = visibility.history.globalValid && contiguous &&
+                           generationMatches && settingsMatch &&
+                           historyWritten_[previousFrame];
+    if (!currentHistoryValid_) {
+        if (!visibility.history.invalidationReason.empty())
+            status_.lastResetReason = visibility.history.invalidationReason;
+        else if (!contiguous)
+            status_.lastResetReason = "GTAO was not executed continuously";
+        else if (!generationMatches)
+            status_.lastResetReason = "temporal generation changed";
+        else if (!settingsMatch)
+            status_.lastResetReason = "GTAO settings changed";
+        else
+            status_.lastResetReason = "history is unavailable";
+    } else {
+        status_.lastResetReason.clear();
+    }
+    status_.historyValid = currentHistoryValid_;
+    status_.historyGeneration = visibility.history.historyGeneration;
+    status_.lastFrameSerial = frame.submissionSerial;
+    status_.extent = resources.extent(resourceHandles_.gtaoFiltered);
+}
+
+void GtaoPass::recordStage(const RenderFrameContext &frame,
+                           const RenderResourceRegistry &resources,
+                           uint32_t stage) {
+    if (!frame.pipelineCache || !frame.view || stage > 3)
+        return;
+    const uint32_t frameIndex = frame.frameIndex;
+    const VkExtent2D fullExtent =
+        resources.extent(resourceHandles_.surfaceDepth);
+    const VkExtent2D aoExtent =
+        resources.extent(resourceHandles_.gtaoFiltered);
+
+    if (stage == 0) {
+        const auto [sliceCount, stepCount] =
+            qualitySamples(frame.view->settings.gtao.quality);
+        GtaoTracePush push{};
+        push.parameters =
+            glm::vec4(frame.view->settings.gtao.radius,
+                      frame.view->settings.gtao.falloff,
+                      frame.view->settings.gtao.intensity,
+                      frame.view->settings.gtao.power);
+        push.dimensions = glm::uvec4(sliceCount, stepCount, fullExtent.width,
+                                     fullExtent.height);
+        push.sampling = glm::vec4(
+            static_cast<float>(resources.mipLevelCount(
+                resourceHandles_.screenDepthPyramid) - 1u),
+            static_cast<float>(frame.submissionSerial & 7u), 0.0f, 0.0f);
+        ComputePipelineConfig config{};
+        config.debugName = "Pipeline/ScreenSpace/GTAO/Trace";
+        config.computeShaderPath = traceShaderPath_;
+        config.descriptorLayouts = {globalDescriptorSetLayout_,
+                                    sampleStorageLayout_};
+        config.pushConstants = {
+            {VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push)}};
+        ComputePipeline &pipeline =
+            frame.pipelineCache->getOrCreateCompute(std::move(config));
+        vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          pipeline.handle());
+        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                pipeline.layout(), 0, 1,
+                                &frame.globalDescriptorSet, 0, nullptr);
+        const VkDescriptorSet set = traceSets_[frameIndex];
+        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                pipeline.layout(), 1, 1, &set, 0, nullptr);
+        vkCmdPushConstants(frame.cmd, pipeline.layout(),
+                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push),
+                           &push);
+        vkCmdDispatch(frame.cmd, dispatchCount(aoExtent.width),
+                      dispatchCount(aoExtent.height), 1);
+        return;
+    }
+
+    if (stage == 1) {
+        GtaoTemporalPush push{};
+        push.parameters =
+            glm::vec4(frame.view->settings.gtao.temporalWeight, 0.01f, 0.8f,
+                      0.0f);
+        const ScreenSpaceDebugView debugView =
+            frame.view->settings.screenSpaceDebugView;
+        push.dimensions = glm::uvec4(
+            fullExtent.width, fullExtent.height,
+            currentHistoryValid_ ? 1u : 0u,
+            debugView == ScreenSpaceDebugView::GtaoHistoryWeight ? 1u : 0u);
+        ComputePipelineConfig config{};
+        config.debugName = "Pipeline/ScreenSpace/GTAO/Temporal";
+        config.computeShaderPath = temporalShaderPath_;
+        config.descriptorLayouts = {temporalLayout_};
+        config.pushConstants = {
+            {VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push)}};
+        ComputePipeline &pipeline =
+            frame.pipelineCache->getOrCreateCompute(std::move(config));
+        vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          pipeline.handle());
+        const VkDescriptorSet set = temporalSets_[frameIndex];
+        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                pipeline.layout(), 0, 1, &set, 0, nullptr);
+        vkCmdPushConstants(frame.cmd, pipeline.layout(),
+                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push),
+                           &push);
+        vkCmdDispatch(frame.cmd, dispatchCount(aoExtent.width),
+                      dispatchCount(aoExtent.height), 1);
+        return;
+    }
+
+    BlurPush push{};
+    push.dimensions = glm::uvec4(0u, fullExtent.width, fullExtent.height,
+                                 stage == 3 ? 1u : 0u);
+    ComputePipelineConfig config{};
+    config.debugName = "Pipeline/ScreenSpace/GTAO/Blur";
+    config.computeShaderPath = blurShaderPath_;
+    config.descriptorLayouts = {globalDescriptorSetLayout_,
+                                sampleStorageLayout_};
+    config.pushConstants = {{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push)}};
+    ComputePipeline &pipeline =
+        frame.pipelineCache->getOrCreateCompute(std::move(config));
+    vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      pipeline.handle());
+    vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            pipeline.layout(), 0, 1,
+                            &frame.globalDescriptorSet, 0, nullptr);
+    const VkDescriptorSet set = stage == 2 ? horizontalSets_[frameIndex]
+                                           : verticalSets_[frameIndex];
+    vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            pipeline.layout(), 1, 1, &set, 0, nullptr);
+    vkCmdPushConstants(frame.cmd, pipeline.layout(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+    vkCmdDispatch(frame.cmd, dispatchCount(aoExtent.width),
+                  dispatchCount(aoExtent.height), 1);
+}
+
+void GtaoPass::finishFrame(const RenderFrameContext &frame,
+                           const VisibilityFrame &visibility) {
+    historyWritten_[frame.frameIndex] = true;
+    lastExecutionSerial_ = frame.submissionSerial;
+    lastHistoryGeneration_ = visibility.history.historyGeneration;
+    lastSettingsSignature_ = currentSettingsSignature_;
 }
 
 void GtaoPass::onViewportResize(const RenderResourceRegistry &resources) {

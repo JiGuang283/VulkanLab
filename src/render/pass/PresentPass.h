@@ -32,22 +32,18 @@ class PresentPass final : public IRenderPass {
     PresentPass &operator=(const PresentPass &) = delete;
 
     std::string_view name() const override { return "Present + UI"; }
-    std::vector<RenderImageUsage> resourceUsages() const override;
+    void setup(RenderGraphBuilder &builder,
+               const RenderGraphBuildContext &context) const override;
     void releaseViewportResources() override {}
     void onViewportResize(
         const RenderResourceRegistry &resources) override;
-    void releaseSwapChainResources() override;
-    void onSwapChainResize(const SwapChain &swapChain) override;
+    void releaseSwapChainResources() override {}
+    void onSwapChainResize(const SwapChain &) override {}
     void execute(const RenderFrameContext &frame,
                  const RenderResourceRegistry &resources,
                  const VisibilityFrame &visibility) override;
 
-    VkRenderPass renderPass() const { return renderPass_; }
-
   private:
-    void createRenderPass();
-    void createFramebuffers();
-    void destroyFramebuffers();
     void createDescriptors(const RenderResourceRegistry &resources);
     void updateDescriptors(const RenderResourceRegistry &resources);
 
@@ -58,8 +54,6 @@ class PresentPass final : public IRenderPass {
     DescriptorAllocator *descriptorAllocator_ = nullptr;
     std::string fullscreenVertPath_;
     std::string presentFragPath_;
-    VkRenderPass renderPass_ = VK_NULL_HANDLE;
-    std::vector<VkFramebuffer> framebuffers_;
     VkDescriptorSetLayout sourceDescriptorSetLayout_ = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> sourceDescriptorSets_{};
 };

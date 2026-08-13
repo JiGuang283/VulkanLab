@@ -781,6 +781,12 @@ void Device::createLogicalDevice() {
         rayQuerySupport_.available ? VK_TRUE : VK_FALSE;
     bufferAddress.pNext = &acceleration;
 
+    VkPhysicalDeviceVulkan13Features vulkan13{};
+    vulkan13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    vulkan13.dynamicRendering = VK_TRUE;
+    vulkan13.synchronization2 = VK_TRUE;
+    vulkan13.pNext = rayQuerySupport_.available ? &bufferAddress : nullptr;
+
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
 
@@ -792,7 +798,7 @@ void Device::createLogicalDevice() {
     createInfo.enabledExtensionCount =
         static_cast<uint32_t>(enabledDeviceExtensions_.size());
     createInfo.ppEnabledExtensionNames = enabledDeviceExtensions_.data();
-    createInfo.pNext = rayQuerySupport_.available ? &bufferAddress : nullptr;
+    createInfo.pNext = &vulkan13;
 
     VK_CHECK(vkCreateDevice(physicalDevice_, &createInfo, nullptr, &device_));
 
@@ -832,6 +838,11 @@ void Device::createLogicalDevice() {
 }
 
 bool Device::isDeviceSuitable(VkPhysicalDevice device) {
+    VkPhysicalDeviceProperties properties{};
+    vkGetPhysicalDeviceProperties(device, &properties);
+    if (properties.apiVersion < VK_API_VERSION_1_3)
+        return false;
+
     QueueFamilyIndices indices = findQueueFamilies(device);
 
     bool extensionsSupported = checkDeviceExtensionSupport(device);
@@ -844,12 +855,17 @@ bool Device::isDeviceSuitable(VkPhysicalDevice device) {
                             !swapChainSupport.presentModes.empty();
     }
 
-    VkPhysicalDeviceFeatures supportedFeatures;
-    vkGetPhysicalDeviceFeatures(device, &supportedFeatures);
+    VkPhysicalDeviceVulkan13Features vulkan13{};
+    vulkan13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    VkPhysicalDeviceFeatures2 supportedFeatures{};
+    supportedFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    supportedFeatures.pNext = &vulkan13;
+    vkGetPhysicalDeviceFeatures2(device, &supportedFeatures);
 
     return indices.isComplete() && extensionsSupported && swapChainAdequate &&
-           supportedFeatures.samplerAnisotropy &&
-           supportedFeatures.imageCubeArray;
+           supportedFeatures.features.samplerAnisotropy &&
+           supportedFeatures.features.imageCubeArray &&
+           vulkan13.dynamicRendering && vulkan13.synchronization2;
 }
 bool Device::checkDeviceExtensionSupport(VkPhysicalDevice device) {
     uint32_t extensionCount;

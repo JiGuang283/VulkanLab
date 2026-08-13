@@ -12,6 +12,7 @@
 #include "diagnostics/TracyProfiler.h"
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
+#include "render/RenderGraph.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/RenderView.h"
 #include "render/Visibility.h"
@@ -62,28 +63,49 @@ HiZBuildPass::~HiZBuildPass() {
     }
 }
 
-std::vector<RenderImageUsage> HiZBuildPass::resourceUsages() const {
-    return {
-        {resourceHandles_.surfaceDepth, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
-        {resourceHandles_.visibilityHiZ,
-         RenderImageAccess::StorageWrite, VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_GENERAL},
-        {resourceHandles_.visibilityHiZ,
-         RenderImageAccess::StorageReadWrite, VK_IMAGE_LAYOUT_GENERAL,
-         VK_IMAGE_LAYOUT_GENERAL}};
-}
-
 void HiZBuildPass::releaseViewportResources() {
     freeDescriptors();
-    initialized_.fill(false);
 }
 
 void HiZBuildPass::onViewportResize(
     const RenderResourceRegistry &resources) {
     createDescriptors(resources);
-    initialized_.fill(false);
+}
+
+void HiZBuildPass::setup(
+    RenderGraphBuilder &builder,
+    const RenderGraphBuildContext &context) const {
+    const uint32_t mipCount = context.resources.mipLevelCount(
+        resourceHandles_.visibilityHiZ);
+    for (uint32_t mip = 0; mip < mipCount; ++mip) {
+        builder.addNode("HiZBuild/Mip" + std::to_string(mip),
+                        RgPassType::Compute, RgQueueClass::Compute, mip);
+        if (mip == 0) {
+            builder.useImage(
+                {resourceHandles_.surfaceDepth,
+                 RenderImageAccess::SampledRead,
+                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL});
+        } else {
+            builder.useImage(
+                {resourceHandles_.visibilityHiZ,
+                 RenderImageAccess::SampledRead, VK_IMAGE_LAYOUT_GENERAL,
+                 VK_IMAGE_LAYOUT_GENERAL},
+                {VK_IMAGE_ASPECT_COLOR_BIT, mip - 1u, 1, 0, 1});
+        }
+        builder.useImage(
+            {resourceHandles_.visibilityHiZ,
+             RenderImageAccess::StorageWrite, VK_IMAGE_LAYOUT_GENERAL,
+             VK_IMAGE_LAYOUT_GENERAL},
+            {VK_IMAGE_ASPECT_COLOR_BIT, mip, 1, 0, 1});
+    }
+}
+
+void HiZBuildPass::recordNode(
+    RenderGraphPassContext &context, uint32_t localNodeIndex,
+    const VisibilityFrame &visibility) {
+    recordMip(context.frame, context.resources, visibility,
+              localNodeIndex);
 }
 
 void HiZBuildPass::execute(const RenderFrameContext &frame,
@@ -98,74 +120,46 @@ void HiZBuildPass::execute(const RenderFrameContext &frame,
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "HiZBuild");
     const uint32_t mipCount =
         resources.mipLevelCount(resourceHandles_.visibilityHiZ);
-    const Image &hiZ = resources.image(resourceHandles_.visibilityHiZ,
-                                       frame.frameIndex);
-    const VkImageSubresourceRange allMips{
-        VK_IMAGE_ASPECT_COLOR_BIT, 0, mipCount, 0, 1};
-    cmdImageBarrier(
-        frame.cmd,
-        initialized_[frame.frameIndex] ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
-                                       : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        initialized_[frame.frameIndex]
-            ? VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT
-            : 0u,
-        VK_ACCESS_SHADER_WRITE_BIT, hiZ.handle(),
-        initialized_[frame.frameIndex] ? VK_IMAGE_LAYOUT_GENERAL
-                                       : VK_IMAGE_LAYOUT_UNDEFINED,
-        VK_IMAGE_LAYOUT_GENERAL, allMips);
-    initialized_[frame.frameIndex] = true;
+    for (uint32_t mip = 0; mip < mipCount; ++mip)
+        recordMip(frame, resources, visibility, mip);
+}
 
+void HiZBuildPass::recordMip(
+    const RenderFrameContext &frame,
+    const RenderResourceRegistry &resources,
+    const VisibilityFrame &visibility, uint32_t mip) {
+    if (!frame.pipelineCache || !frame.view ||
+        !frame.features.hiZRequired ||
+        visibility.cpuStats.occlusionCandidates == 0 ||
+        mip >= resources.mipLevelCount(resourceHandles_.visibilityHiZ))
+        return;
     const VkPushConstantRange pushRange{
         VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(HiZPush)};
-    ComputePipelineConfig initConfig{};
-    initConfig.debugName = "Pipeline/Visibility/HiZInit";
-    initConfig.computeShaderPath = initShaderPath_;
-    initConfig.descriptorLayouts = {descriptorSetLayout_};
-    initConfig.pushConstants = {pushRange};
-    ComputePipelineConfig reduceConfig{};
-    reduceConfig.debugName = "Pipeline/Visibility/HiZReduce";
-    reduceConfig.computeShaderPath = reduceShaderPath_;
-    reduceConfig.descriptorLayouts = {descriptorSetLayout_};
-    reduceConfig.pushConstants = {pushRange};
-    ComputePipeline &initPipeline =
-        frame.pipelineCache->getOrCreateCompute(std::move(initConfig));
-    ComputePipeline &reducePipeline =
-        frame.pipelineCache->getOrCreateCompute(std::move(reduceConfig));
-
-    for (uint32_t mip = 0; mip < mipCount; ++mip) {
-        ScopedGpuLabel label(device_->debugUtils(), frame.cmd,
-                             "HiZ Mip " + std::to_string(mip));
-        ComputePipeline &pipeline = mip == 0 ? initPipeline : reducePipeline;
-        vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                          pipeline.handle());
-        const VkDescriptorSet set = sets_[frame.frameIndex].at(mip);
-        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                pipeline.layout(), 0, 1, &set, 0, nullptr);
-        const VkExtent2D destination =
-            resources.mipExtent(resourceHandles_.visibilityHiZ, mip);
-        const VkExtent2D source =
-            mip == 0
-                ? resources.extent(resourceHandles_.surfaceDepth)
-                : resources.mipExtent(resourceHandles_.visibilityHiZ,
-                                      mip - 1u);
-        const HiZPush push{{source.width, source.height,
-                            destination.width, destination.height}};
-        vkCmdPushConstants(frame.cmd, pipeline.layout(),
-                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push),
-                           &push);
-        vkCmdDispatch(frame.cmd, dispatchCount(destination.width),
-                      dispatchCount(destination.height), 1);
-
-        const VkImageSubresourceRange writtenMip{
-            VK_IMAGE_ASPECT_COLOR_BIT, mip, 1, 0, 1};
-        cmdImageBarrier(frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                        VK_ACCESS_SHADER_WRITE_BIT,
-                        VK_ACCESS_SHADER_READ_BIT, hiZ.handle(),
-                        VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
-                        writtenMip);
-    }
+    ComputePipelineConfig config{};
+    config.debugName = mip == 0 ? "Pipeline/Visibility/HiZInit"
+                                : "Pipeline/Visibility/HiZReduce";
+    config.computeShaderPath = mip == 0 ? initShaderPath_ : reduceShaderPath_;
+    config.descriptorLayouts = {descriptorSetLayout_};
+    config.pushConstants = {pushRange};
+    ComputePipeline &pipeline =
+        frame.pipelineCache->getOrCreateCompute(std::move(config));
+    vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      pipeline.handle());
+    const VkDescriptorSet set = sets_[frame.frameIndex].at(mip);
+    vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            pipeline.layout(), 0, 1, &set, 0, nullptr);
+    const VkExtent2D destination =
+        resources.mipExtent(resourceHandles_.visibilityHiZ, mip);
+    const VkExtent2D source =
+        mip == 0 ? resources.extent(resourceHandles_.surfaceDepth)
+                 : resources.mipExtent(resourceHandles_.visibilityHiZ,
+                                       mip - 1u);
+    const HiZPush push{{source.width, source.height, destination.width,
+                        destination.height}};
+    vkCmdPushConstants(frame.cmd, pipeline.layout(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+    vkCmdDispatch(frame.cmd, dispatchCount(destination.width),
+                  dispatchCount(destination.height), 1);
 }
 
 void HiZBuildPass::createDescriptorSetLayout() {

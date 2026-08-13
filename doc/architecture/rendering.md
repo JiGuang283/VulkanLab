@@ -1,12 +1,12 @@
 # 渲染流程
 
 > Status: Current
-> Last verified: 2026-08-09
-> Verified against: CSM, punctual shadows, screen-space effects, local reflection probes and DDGI v1
+> Last verified: 2026-08-13
+> Verified against: Vulkan 1.3 RenderGraph, Dynamic Rendering, CSM/punctual shadows, screen-space effects, reflection probes and DDGI v1
 
 ## 帧图与 Pass 顺序
 
-Renderer 当前采用显式的 Forward + Compute 帧图，不依赖 RHI 或 RenderGraph：
+Renderer 当前使用 Vulkan 1.3 RenderGraph 描述 Forward、Compute 与 Transfer 工作。Graph 负责依赖分析、稳定拓扑排序、资源版本校验和 Synchronization2 barrier；v1 仍在单 Graphics Queue、单 primary command buffer 中顺序执行，不是 RHI，也不启用异步 Compute：
 
 ```text
 AtmosphereLutPass
@@ -51,11 +51,19 @@ ToneMapPass
         -> per-frame Viewport Color
 PresentPass + ImGui
         -> swapchain / Workspace capture
+ScreenshotCopyPass (conditional)
+        -> Workspace / Viewport / HDR readback
 ```
 
-`RenderResourceRegistry` 使用稳定的类型化 handle 管理内部 render target 和 sampler。资源描述明确指定 fixed/viewport-relative extent、相对尺寸除数、single/per-frame multiplicity、format、sample count、usage、aspect、array layer、view type、image create flags、history capability 和 fixed/full mip policy。阴影资源是跨 frame slot 共享的 Single 图像：Directional 为 `4 x 2048x2048` 2D array，Point 为带 `VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT` 的 `4 x 6 x 1024x1024` cube array，Spot 为 `4 x 1024x1024` 2D array。其余资源包括 HDR resolve、可选 HDR MSAA、baseline indirect specular/diffuse、composited HDR、main depth、Surface Data、Visibility/Screen-Space pyramids、AO/SSR/SSGI/Bloom、LDR Viewport Color、DDGI atlas 和 Atmosphere LUT。每个 per-frame image 按 `MAX_FRAMES_IN_FLIGHT` 分配；DDGI 与 Shadow 依赖单 graphics queue 的提交顺序串行访问。HDR 优先使用 `R16G16B16A16_SFLOAT`，不满足要求时回退到 `R32G32B32A32_SFLOAT`。Surface Data、Atmosphere、Shadow、屏幕空间效果、Bloom、ToneMap 与 Present 固定为 1x。
+`RenderGraphBuilder` 在每帧根据 `FrameRenderFeatures` 注册实际节点、逻辑资源版本、mip/layer subresource 和 read/write 语义。`RenderGraphCompiler` 裁剪 inactive 节点，检查 cycle、非法 handle、read-before-write、未初始化 Load、attachment extent/sample 不一致、history 约定和 Present writer，再用注册顺序作为无依赖节点的稳定 tie-break。编译结果由 `RenderGraphTopologyKey` 缓存；feature bits、设备能力、MSAA、viewport/swapchain format 或 attachment contract 改变时才重编译，曝光、bias 等普通数值参数不改变拓扑。
 
-每个 Pass 通过 `resourceUsages()` 声明 attachment write/read、sampled read、storage write/read-write、transfer read/write、required/final layout。`RenderPipeline` 在初始化和 resize 后验证 handle、usage flag、sample/aspect、read-before-write 与相邻 layout 契约。Registry 不插入 barrier、不推导 lifetime、不重排 Pass；`RenderPipeline` 仍按 Atmosphere LUT、Shadow、Surface Prepass、Visibility Hi-Z、Occlusion、Screen Depth Pyramid、SSAO/GTAO/CACAO、DDGI、Sky Background、Opaque Forward、Scene Color Pyramid、SSR、SSGI、Screen-Space Lighting Composite、Transparent Forward、TAA、Bloom、ToneMap、Present 顺序记录到同一个 frame command buffer。Render pass 之间使用 final/initial layout 和 dependency；compute pass 通过集中式经典 Vulkan barrier helper明确记录逐 mip、temporal resolve、probe atlas update 和逐滤波阶段的 image barrier，以及 Occlusion SSBO write 到 indirect-command read 的 buffer barrier。
+`RenderResourceRegistry` 现作为 Graph 的物理资源池，继续用稳定类型化 handle 管理 image、view 和 sampler。资源描述明确指定 fixed/viewport-relative extent、相对尺寸除数、single/per-frame multiplicity、format、sample count、usage、aspect、array layer、view type、image create flags、history capability 和 fixed/full mip policy。Graph 在逻辑层记录 `Transient / PerFrame / History / Persistent / Imported` lifetime 和资源版本；v1 不做按活动拓扑延迟实例化或 transient aliasing，Renderer 初始化时已经注册且设备支持的图像会保持 resident。诊断中的 active bytes 是当前拓扑引用量，resident bytes 是物理池实际持有量，因此关闭效果会减少 Pass 和 GPU 工作，但不会立即释放对应图像。
+
+阴影资源是跨 frame slot 共享的 Single 图像：Directional 为 `4 x 2048x2048` 2D array，Point 为带 `VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT` 的 `4 x 6 x 1024x1024` cube array，Spot 为 `4 x 1024x1024` 2D array。其余资源包括 HDR resolve、可选 HDR MSAA、baseline indirect specular/diffuse、composited HDR、main depth、Surface Data、Visibility/Screen-Space pyramids、AO/SSR/SSGI/Bloom、LDR Viewport Color、DDGI atlas 和 Atmosphere LUT。每个 per-frame image 按 `MAX_FRAMES_IN_FLIGHT` 分配；DDGI 与 Shadow 依赖单 graphics queue 的提交顺序串行访问。HDR 优先使用 `R16G16B16A16_SFLOAT`，不满足要求时回退到 `R32G32B32A32_SFLOAT`。Surface Data、Atmosphere、Shadow、屏幕空间效果、Bloom、ToneMap 与 Present 固定为 1x。
+
+`RenderGraphExecutor` 按物理 image/frame/mip/layer/aspect 和 buffer range 持久跟踪 `stageMask2 + accessMask2 + layout + initialized`。RAW、WAR、WAW、layout change、history current/previous、共享 Shadow、compute-write 到 indirect-read，以及 swapchain `PRESENT -> attachment -> PRESENT` 都由 Graph 生成 `vkCmdPipelineBarrier2()`。相同 layout 的只读到只读不会生成 barrier。逐 mip pyramid、Bloom、Atmosphere、AO/SSR/SSGI/TAA 和 Shadow cascade/light/face 都拆成独立节点；Capture 是条件 Transfer 节点。DDGI RayTracingScene 是声明 side effect 的 External 节点，AS build 内部所需 barrier 仍由 RayTracingScene 管理。
+
+所有 Graphics 节点使用 Dynamic Rendering。Graph 根据 attachment 声明组装 `VkRenderingInfo` 并调用 `vkCmdBeginRendering()`/`vkCmdEndRendering()`；Pipeline Cache 使用 color/depth/stencil format、sample count、view mask 和 blend attachment 数量组成的 `PipelineRenderingSignature`，不再以 `VkRenderPass/subpass` 为 key。Pass 不持有 `VkRenderPass` 或 `VkFramebuffer`，viewport resize 只重建尺寸相关物理资源和 descriptor 引用。
 
 Application 在 UI 编辑完成后调用 `IRenderWorld::buildRenderSnapshot()`，得到同一时刻的 bounds、lights、render items、environment、atmosphere 和其他世界数据。持久化 `ShadowSystem` 从该快照生成唯一的 `ShadowFramePlan`；纯函数 `buildRenderView()` 只负责灯光分组、GPU packing、Atmosphere Sun 和 Atmosphere GPU 参数，不再自行选择阴影灯或分配 slot。Renderer 将 `GlobalFrameUbo`、variable-length `sceneLights` 和 `AtmosphereGpuParams` 上传到当前 frame slot；Visibility、Pass 与诊断均读取同一份 snapshot/plan，避免编辑后出现一帧旧矩阵或 slot 分叉。
 
@@ -279,7 +287,7 @@ SkyBackgroundPass 在 Atmosphere 未接管背景时，使用 fullscreen triangle
 
 MaterialTemplate 保存基础 PipelineConfig 和材质 descriptor layout。MaterialInstance 保存材质参数及 BaseColor、Normal、MetallicRoughness、Occlusion、Emissive 五个纹理槽。缺失槽由 fallback texture 填充，因此 `VulkanLab -> Materials` 中的 Bound 只表示 descriptor 已绑定。
 
-PipelineConfig 支持零或多个 color blend attachment、零 vertex binding、可选 fragment shader、topology、subpass 和 depth bias。`PipelineCache::getOrCreate()` 只接收 render pass 与完整 `PipelineConfig`，由 cache 内部规范化并生成 key。Key 覆盖 shader 路径、vertex layout、topology、raster/depth/blend/MSAA 状态、descriptor layouts、push ranges、render pass 和 subpass；不再包含 pass、材质指针、ShaderVariant、queue 或 alpha-masked 等语义标签。Pipeline 创建直接使用 key 内保存的 config，因此不存在手工 key 与实际 Vulkan 状态分叉。
+PipelineConfig 支持零或多个 color blend attachment、零 vertex binding、可选 fragment shader、topology 和 depth bias。`PipelineCache::getOrCreate()` 接收完整 `PipelineConfig` 和 Graph 提供的 `PipelineRenderingSignature`，由 cache 内部规范化并生成 key。Key 覆盖 shader 路径、vertex layout、topology、raster/depth/blend/MSAA 状态、descriptor layouts、push ranges，以及 Dynamic Rendering 的 color/depth/stencil formats、sample count、view mask 和 blend attachment 数量；不再包含 pass、材质指针、ShaderVariant、queue 或 alpha-masked 等语义标签，也不依赖 `VkRenderPass/subpass`。Pipeline 创建直接使用 key 内保存的 config，因此不存在手工 key 与实际 Vulkan 状态分叉。
 
 Compute 使用独立的 `ComputePipelineConfig`、`ComputePipelineKey` 和 `PipelineCache::getOrCreateCompute()`。Compute key 覆盖 compute shader、descriptor layouts 和 push ranges；与 graphics pipeline 一样，`debugName` 只用于对象命名，不参与缓存身份。`PipelineCache::clear()` 会同时销毁 graphics 和 compute pipelines。
 
@@ -362,7 +370,7 @@ Tracy 与 `GpuPassProfiler` 并行存在：后者是普通开发构建中的低�
 
 ## Workspace 与 Viewport 截图
 
-开发运行时提供异步 PNG 截图，入口为 `VulkanLab -> Diagnostics -> Capture`、F12 或 Runtime Control v3。`includeGui=true` 选择最终 Swapchain，输出完整 Workspace；`includeGui=false` 选择当前 frame slot 的 Viewport Color，输出实际 Viewport 原生分辨率。两种来源都在同一个 frame command buffer 中转换到 `TRANSFER_SRC`、执行 image-to-buffer copy，并恢复为 present 或 shader-read layout。
+开发运行时提供异步 PNG 截图，入口为 `VulkanLab -> Diagnostics -> Capture`、F12 或 Runtime Control v3。`includeGui=true` 选择最终 Swapchain，输出完整 Workspace；`includeGui=false` 选择当前 frame slot 的 Viewport Color，输出实际 Viewport 原生分辨率。两种来源都由条件 `ScreenshotCopy` Transfer Graph 节点声明 source image。RenderGraph 自动转换到 `TRANSFER_SRC`、执行 image-to-buffer copy，并恢复为 present 或 shader-read layout；CaptureService 不再自行记录 layout barrier。
 
 FrameSync 使用单调 submission serial 和正常 frame fence 管理 readback 生命周期。CPU worker 只处理 RGBA bytes、PNG 和 SHA-256，不访问 Vulkan、GLFW、ImGui 或 Scene。截图路径不调用 `vkQueueWaitIdle()` 或 `vkDeviceWaitIdle()`。
 
@@ -370,8 +378,8 @@ FrameSync 使用单调 submission serial 和正常 frame fence 管理 readback �
 
 Viewport 内容区变化与操作系统窗口 resize 使用两条独立生命周期。
 
-Viewport resize 采用 120 ms debounce；首次有效尺寸立即在下一帧应用。Application 调用 `FrameSync::waitForAllFrames()` 后移除 ImGui viewport descriptors，Pass 释放 viewport-dependent framebuffer/descriptor，Screen-Space descriptor 临时切回 white/HDR fallback，Registry 重建 HDR、baseline indirect specular/diffuse、composited HDR、MSAA、depth、screen pyramid、SSAO、GTAO、SSR、SSGI、可选 CACAO adapter/output、Bloom 与 Viewport Color，随后 Pass、CACAO contexts 和 ImGui descriptors 重新绑定。TAA、GTAO、SSR 与 SSGI history 在新 extent 上分别重置。该路径不重建 Swapchain、不清空 PipelineCache，也不调用 `vkDeviceWaitIdle()`。
+Viewport resize 采用 120 ms debounce；首次有效尺寸立即在下一帧应用。Application 调用 `FrameSync::waitForAllFrames()` 后移除 ImGui viewport descriptors，Pass 释放 viewport-dependent descriptor 引用，Screen-Space descriptor 临时切回 white/HDR fallback，物理资源池重建 HDR、baseline indirect specular/diffuse、composited HDR、MSAA、depth、screen pyramid、SSAO、GTAO、SSR、SSGI、可选 CACAO adapter/output、Bloom 与 Viewport Color，随后 descriptor、CACAO contexts 和 ImGui descriptors 重新绑定。TAA、GTAO、SSR 与 SSGI history 在新 extent 上分别重置，RenderGraph 的物理状态跟踪同步失效并从新资源初始状态继续。该路径不重建 Swapchain、不清空 PipelineCache，也不调用 `vkDeviceWaitIdle()`。
 
-Swapchain resize 只释放 PresentPass 的 swapchain framebuffer，重建 Swapchain、FrameSync 和 Present framebuffer；无 GUI 路径同时把 viewport extent 更新为新的 Swapchain extent。窗口最小化导致 framebuffer extent 为 0 时会延迟重建，并以短暂 sleep 保持主循环和 Runtime Control 可响应。
+Swapchain resize 重建 Swapchain、FrameSync 和 Present 的 descriptor/image-view 引用；Dynamic Rendering 不创建或销毁 framebuffer。无 GUI 路径同时把 viewport extent 更新为新的 Swapchain extent。窗口最小化导致 framebuffer extent 为 0 时会延迟重建，并以短暂 sleep 保持主循环和 Runtime Control 可响应。
 
 Fixed shadow map和 Environment cubemap/LUT 不属于 viewport-relative Registry，Viewport 或窗口 resize 时都不会重建。

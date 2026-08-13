@@ -36,7 +36,17 @@ class ScreenSpacePyramidPass final : public IRenderPass {
     ~ScreenSpacePyramidPass() override;
 
     std::string_view name() const override { return name_; }
-    std::vector<RenderImageUsage> resourceUsages() const override;
+    RgPassType passType() const override { return RgPassType::Compute; }
+    RgPassCondition condition() const override {
+        return kind_ == ScreenSpacePyramidKind::NearestDepth
+                   ? RgPassCondition::ScreenDepthPyramid
+                   : RgPassCondition::SceneColorPyramid;
+    }
+    void setup(RenderGraphBuilder &builder,
+               const RenderGraphBuildContext &context) const override;
+    void recordNode(RenderGraphPassContext &context,
+                    uint32_t localNodeIndex,
+                    const VisibilityFrame &visibility) override;
     void releaseViewportResources() override;
     void onViewportResize(const RenderResourceRegistry &resources) override;
     void execute(const RenderFrameContext &frame,
@@ -50,6 +60,9 @@ class ScreenSpacePyramidPass final : public IRenderPass {
                              uint32_t frameIndex,
                              bool useAlternateSource);
     void freeDescriptors();
+    void recordMip(const RenderFrameContext &frame,
+                   const RenderResourceRegistry &resources,
+                   uint32_t mip);
 
     Device *device_ = nullptr;
     ScreenSpacePyramidKind kind_ = ScreenSpacePyramidKind::NearestDepth;
@@ -65,7 +78,6 @@ class ScreenSpacePyramidPass final : public IRenderPass {
     std::string reduceShaderPath_;
     VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
     std::array<std::vector<VkDescriptorSet>, MAX_FRAMES_IN_FLIGHT> sets_{};
-    std::array<bool, MAX_FRAMES_IN_FLIGHT> initialized_{};
 };
 
 } // namespace vkr

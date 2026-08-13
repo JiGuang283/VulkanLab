@@ -4,7 +4,8 @@
 #include "core/Device.h"
 #include "core/FrameSync.h"
 #include "core/SwapChain.h"
-#include "render/RenderPipeline.h"
+#include "render/RenderGraph.h"
+#include "render/RenderFrame.h"
 #include "render/FrameGpuData.h"
 #include "render/GpuPassProfiler.h"
 #include "render/RenderResourceRegistry.h"
@@ -17,7 +18,9 @@
 #include <memory>
 #include <array>
 #include <deque>
+#include <functional>
 #include <string>
+#include <optional>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -176,18 +179,24 @@ class Renderer {
                      const VisibilityFrame &visibility,
                      PipelineCache &pipelineCache,
                      GuiSystem *gui, const ShaderVariant &shaderVariant,
-                     const RenderView &view);
+                     const RenderView &view,
+                     std::optional<FrameCaptureSource> captureSource = {},
+                     std::function<void(VkCommandBuffer)> screenshotCopy = {});
 
     // ---- 交换链重建 ----
     void recreateSwapChain();
     void resizeViewport(VkExtent2D extent);
 
     // ---- 访问器 ----
-    VkRenderPass renderPass() const;
     VkExtent2D viewportExtent() const;
     RendererViewportOutput viewportOutput() const;
     RendererHdrOutput hdrOutput() const;
     const GpuPassTimings &gpuPassTimings() const;
+    const RenderGraphDiagnostics &renderGraphDiagnostics() const {
+        return renderGraph_.diagnostics();
+    }
+    std::string renderGraphJson() const { return renderGraph_.toJson(); }
+    std::string renderGraphDot() const { return renderGraph_.toDot(); }
     VkDescriptorSetLayout globalDescriptorSetLayout() const {
         return globalDescriptorSetLayout_;
     }
@@ -260,7 +269,7 @@ class Renderer {
     void collectRetiredLightingGenerations();
     void freeLightingGeneration(
         LightingDescriptorGeneration &generation);
-    void createRenderPipeline();
+    void createRenderGraph();
     VkDescriptorSet globalDescriptorSet(uint32_t frameIndex) const;
 
     Device    *device_;
@@ -297,7 +306,7 @@ class Renderer {
     std::unique_ptr<RenderResourceRegistry> renderResources_;
     RendererResourceHandles resourceHandles_{};
     RendererShaderPaths shaderPaths_;
-    RenderPipeline pipeline_;
+    RenderGraph renderGraph_;
     std::unique_ptr<GpuPassProfiler> gpuPassProfiler_;
     MainForwardPass *mainForwardPass_ = nullptr;
     SurfacePrepass *surfacePrepass_ = nullptr;

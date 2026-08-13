@@ -30,7 +30,15 @@ class AtmosphereLutPass final : public IRenderPass {
     ~AtmosphereLutPass() override;
 
     std::string_view name() const override { return "Atmosphere LUTs"; }
-    std::vector<RenderImageUsage> resourceUsages() const override;
+    RgPassType passType() const override { return RgPassType::Compute; }
+    RgPassCondition condition() const override {
+        return RgPassCondition::Atmosphere;
+    }
+    void setup(RenderGraphBuilder &builder,
+               const RenderGraphBuildContext &context) const override;
+    void recordNode(RenderGraphPassContext &context,
+                    uint32_t localNodeIndex,
+                    const VisibilityFrame &visibility) override;
     void execute(const RenderFrameContext &frame,
                  const RenderResourceRegistry &resources,
                  const VisibilityFrame &visibility) override;
@@ -42,12 +50,10 @@ class AtmosphereLutPass final : public IRenderPass {
     void createStorageDescriptorLayout();
     void createStorageDescriptors(const RenderResourceRegistry &resources);
     void freeStorageDescriptors();
-    void transitionImage(VkCommandBuffer cmd, const Image &image,
-                         uint32_t arrayLayers, VkImageLayout oldLayout,
-                         VkImageLayout newLayout, VkAccessFlags sourceAccess,
-                         VkAccessFlags destinationAccess,
-                         VkPipelineStageFlags sourceStage,
-                         VkPipelineStageFlags destinationStage) const;
+    void updateFrameState(const RenderFrameContext &frame);
+    void recordStage(const RenderFrameContext &frame,
+                     const RenderResourceRegistry &resources,
+                     uint32_t stage);
     void dispatch(const RenderFrameContext &frame, std::string_view debugName,
                   const std::string &shaderPath, VkDescriptorSet storageSet,
                   VkExtent2D extent, uint32_t layers) const;
@@ -68,6 +74,8 @@ class AtmosphereLutPass final : public IRenderPass {
     uint64_t currentStaticLutKey_ = 0;
     uint64_t pendingStaticLutKey_ = 0;
     std::chrono::steady_clock::time_point pendingSince_{};
+    bool buildStaticThisFrame_ = false;
+    std::chrono::steady_clock::time_point staticBuildStarted_{};
     AtmosphereRuntimeStatus status_{};
 };
 

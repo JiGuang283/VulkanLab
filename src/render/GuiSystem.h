@@ -17,7 +17,7 @@ class Device;
 /// endRenderPass, so no extra pass or attachment is required.
 class GuiSystem {
   public:
-    GuiSystem(VkInstance instance, Device &device, VkRenderPass renderPass,
+    GuiSystem(VkInstance instance, Device &device, VkFormat colorFormat,
               GLFWwindow *window, uint32_t minImageCount, uint32_t imageCount);
     ~GuiSystem();
 

@@ -11,7 +11,7 @@ class Device;
 
 class Pipeline {
   public:
-    Pipeline(Device &device, VkRenderPass renderPass,
+    Pipeline(Device &device, const PipelineRenderingSignature &rendering,
              const PipelineConfig &config);
     ~Pipeline();
 

@@ -149,7 +149,7 @@ Viewport 图像上方保留一行只读状态，显示当前 render extent；资
 期间显示 `Resizing...`。
 
 拖动 Dock 分隔线时，ImGui 临时缩放上一张有效图像。尺寸稳定 120 ms 后，Renderer
-等待全部 frame fence，重新创建 viewport-dependent image、framebuffer 和 descriptor；
+等待全部 frame fence，重新创建 viewport-dependent image 和 descriptor 引用；Dynamic Rendering 不创建 framebuffer；
 该过程不重建 Swapchain、不清空 Pipeline Cache，也不调用 `vkDeviceWaitIdle()`。
 首次出现有效尺寸会在下一帧立即应用。隐藏、折叠或零尺寸时继续使用最后一个
 有效 render extent。

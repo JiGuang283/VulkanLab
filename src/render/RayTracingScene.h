@@ -35,8 +35,13 @@ class RayTracingScene {
 
     void build(VkCommandBuffer commandBuffer, uint32_t frameIndex,
                const VisibilityFrame &visibility);
+    void prepareFrame(uint32_t frameIndex,
+                      const VisibilityFrame &visibility);
     VkAccelerationStructureKHR handle(uint32_t frameIndex) const;
+    VkAccelerationStructureKHR allocatedHandle(uint32_t frameIndex) const;
     VkBuffer metadataBuffer(uint32_t frameIndex) const;
+    VkBuffer allocatedMetadataBuffer(uint32_t frameIndex) const;
+    uint32_t preparedInstanceCount(uint32_t frameIndex) const;
     uint32_t instanceCount(uint32_t frameIndex) const;
     const RayTracingSceneStatus &status() const { return status_; }
 
@@ -55,6 +60,7 @@ class RayTracingScene {
 
     Device *device_ = nullptr;
     std::array<FrameStorage, MAX_FRAMES_IN_FLIGHT> frames_{};
+    std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> preparedCounts_{};
     RayTracingSceneStatus status_{};
 };
 

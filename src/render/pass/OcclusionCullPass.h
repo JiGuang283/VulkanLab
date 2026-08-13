@@ -30,7 +30,16 @@ class OcclusionCullPass final : public IRenderPass {
     ~OcclusionCullPass() override;
 
     std::string_view name() const override { return "OcclusionCull"; }
-    std::vector<RenderImageUsage> resourceUsages() const override;
+    RgPassType passType() const override { return RgPassType::Compute; }
+    RgPassCondition condition() const override {
+        return RgPassCondition::Occlusion;
+    }
+    void setup(RenderGraphBuilder &builder,
+               const RenderGraphBuildContext &context) const override;
+    void recordNode(RenderGraphPassContext &context,
+                    uint32_t localNodeIndex,
+                    const VisibilityFrame &visibility) override;
+    uint64_t topologySignature() const override;
     void releaseViewportResources() override;
     void onViewportResize(const RenderResourceRegistry &resources) override;
     void execute(const RenderFrameContext &frame,
@@ -56,6 +65,8 @@ class OcclusionCullPass final : public IRenderPass {
     void updateDescriptor(uint32_t frameIndex,
                           const RenderResourceRegistry &resources);
     void ensureCapacity(uint32_t frameIndex, uint32_t required);
+    void recordCull(const RenderFrameContext &frame,
+                    const RenderResourceRegistry &resources);
 
     Device *device_ = nullptr;
     RendererResourceHandles resourceHandles_{};

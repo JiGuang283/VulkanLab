@@ -170,7 +170,7 @@ set(VKL_ENGINE_SOURCES
     render/Mesh.cpp
     render/PipelineCache.cpp
     render/Renderer.cpp
-    render/RenderPipeline.cpp
+    render/RenderGraph.cpp
     render/RenderQueue.cpp
     render/RenderResourceRegistry.cpp
     render/RenderView.cpp
@@ -187,6 +187,7 @@ set(VKL_ENGINE_SOURCES
     render/pass/HdrCompositePass.cpp
     render/pass/AtmosphereLutPass.cpp
     render/pass/DirectionalShadowPass.cpp
+    render/pass/FrameGraphExternalPasses.cpp
     render/pass/PointShadowPass.cpp
     render/pass/SpotShadowPass.cpp
     render/pass/ShadowCasterDrawRecorder.cpp

@@ -1,6 +1,7 @@
 #include "Texture.h"
 #include "TextureData.h"
 #include "core/GpuDebugUtils.h"
+#include "core/GpuBarrier.h"
 #include "core/Log.h"
 #include "core/UploadRecorder.h"
 #include "core/VulkanCheck.h"
@@ -417,7 +418,7 @@ void Texture::transitionImageLayout(VkCommandBuffer cmd, VkImage image,
         throw std::invalid_argument("unsupported layout transition!");
     }
 
-    vkCmdPipelineBarrier(cmd, sourceStage, destinationStage, 0, 0, nullptr, 0,
+    cmdPipelineBarrier2Compat(cmd, sourceStage, destinationStage, 0, 0, nullptr, 0,
                          nullptr, 1, &barrier);
 }
 
@@ -514,7 +515,7 @@ void Texture::generateMipmaps(VkCommandBuffer commandBuffer, VkImage image,
         barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
 
-        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        cmdPipelineBarrier2Compat(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
                              nullptr, 1, &barrier);
 
@@ -542,7 +543,7 @@ void Texture::generateMipmaps(VkCommandBuffer commandBuffer, VkImage image,
         barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
-        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        cmdPipelineBarrier2Compat(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0,
                              nullptr, 0, nullptr, 1, &barrier);
 
@@ -558,7 +559,7 @@ void Texture::generateMipmaps(VkCommandBuffer commandBuffer, VkImage image,
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
-    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+    cmdPipelineBarrier2Compat(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
                          0, nullptr, 1, &barrier);
 

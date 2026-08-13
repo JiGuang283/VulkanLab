@@ -13,6 +13,7 @@
 #include "render/GuiSystem.h"
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
+#include "render/RenderGraph.h"
 #include "render/RenderResourceRegistry.h"
 
 #include <utility>
@@ -31,38 +32,33 @@ PresentPass::PresentPass(Device &device, SwapChain &swapChain,
       descriptorAllocator_(&descriptorAllocator),
       fullscreenVertPath_(std::move(fullscreenVertPath)),
       presentFragPath_(std::move(presentFragPath)) {
-    createRenderPass();
     createDescriptors(resources);
-    createFramebuffers();
 }
 
 PresentPass::~PresentPass() {
-    destroyFramebuffers();
     for (VkDescriptorSet set : sourceDescriptorSets_)
         descriptorAllocator_->free(set);
     if (sourceDescriptorSetLayout_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(device_->logicalDevice(),
                                      sourceDescriptorSetLayout_, nullptr);
     }
-    if (renderPass_ != VK_NULL_HANDLE)
-        vkDestroyRenderPass(device_->logicalDevice(), renderPass_, nullptr);
 }
 
-std::vector<RenderImageUsage> PresentPass::resourceUsages() const {
-    return {{viewportColor_, RenderImageAccess::SampledRead,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+void PresentPass::setup(RenderGraphBuilder &builder,
+                        const RenderGraphBuildContext &) const {
+    builder.addNode(std::string(name()), RgPassType::Graphics,
+                    RgQueueClass::Graphics);
+    builder.useImage({viewportColor_, RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.addSwapchainColorAttachment(
+        VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE,
+        VkClearColorValue{{0.025f, 0.025f, 0.03f, 1.0f}});
 }
-
-void PresentPass::releaseSwapChainResources() { destroyFramebuffers(); }
 
 void PresentPass::onViewportResize(
     const RenderResourceRegistry &resources) {
     updateDescriptors(resources);
-}
-
-void PresentPass::onSwapChainResize(const SwapChain &) {
-    createFramebuffers();
 }
 
 void PresentPass::execute(const RenderFrameContext &frame,
@@ -72,17 +68,6 @@ void PresentPass::execute(const RenderFrameContext &frame,
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "Present + UI");
     if (!frame.pipelineCache)
         return;
-
-    VkClearValue clear{};
-    clear.color = {{0.025f, 0.025f, 0.03f, 1.0f}};
-    VkRenderPassBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    beginInfo.renderPass = renderPass_;
-    beginInfo.framebuffer = framebuffers_.at(frame.imageIndex);
-    beginInfo.renderArea = {{0, 0}, frame.swapchainExtent};
-    beginInfo.clearValueCount = 1;
-    beginInfo.pClearValues = &clear;
-    vkCmdBeginRenderPass(frame.cmd, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
     VkViewport viewport{};
     viewport.width = static_cast<float>(frame.swapchainExtent.width);
@@ -113,8 +98,10 @@ void PresentPass::execute(const RenderFrameContext &frame,
                 .descriptorLayout(sourceDescriptorSetLayout_)
                 .build();
         config.debugName = "Pipeline/Present/Fullscreen";
-        Pipeline &pipeline =
-            frame.pipelineCache->getOrCreate(renderPass_, std::move(config));
+        PipelineRenderingSignature signature{};
+        signature.colorAttachmentFormats = {swapChain_->imageFormat()};
+        Pipeline &pipeline = frame.pipelineCache->getOrCreate(
+            std::move(signature), std::move(config));
         vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           pipeline.handle());
         const VkDescriptorSet sourceSet =
@@ -125,77 +112,6 @@ void PresentPass::execute(const RenderFrameContext &frame,
         vkCmdDraw(frame.cmd, 3, 1, 0, 0);
     }
 
-    vkCmdEndRenderPass(frame.cmd);
-}
-
-void PresentPass::createRenderPass() {
-    VkAttachmentDescription color{};
-    color.format = swapChain_->imageFormat();
-    color.samples = VK_SAMPLE_COUNT_1_BIT;
-    color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    color.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-    const VkAttachmentReference colorRef{
-        0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-    VkSubpassDescription subpass{};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorRef;
-
-    VkSubpassDependency dependency{};
-    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependency.dstSubpass = 0;
-    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    dependency.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
-                               VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    dependency.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-
-    VkRenderPassCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    info.attachmentCount = 1;
-    info.pAttachments = &color;
-    info.subpassCount = 1;
-    info.pSubpasses = &subpass;
-    info.dependencyCount = 1;
-    info.pDependencies = &dependency;
-    VK_CHECK(vkCreateRenderPass(device_->logicalDevice(), &info, nullptr,
-                                &renderPass_));
-    device_->debugUtils().setObjectName(VK_OBJECT_TYPE_RENDER_PASS,
-                                        renderPass_,
-                                        "Pass/Present/RenderPass");
-}
-
-void PresentPass::createFramebuffers() {
-    framebuffers_.resize(swapChain_->imageViews().size());
-    for (size_t index = 0; index < framebuffers_.size(); ++index) {
-        const VkImageView attachment = swapChain_->imageViews()[index];
-        VkFramebufferCreateInfo info{};
-        info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        info.renderPass = renderPass_;
-        info.attachmentCount = 1;
-        info.pAttachments = &attachment;
-        info.width = swapChain_->extent().width;
-        info.height = swapChain_->extent().height;
-        info.layers = 1;
-        VK_CHECK(vkCreateFramebuffer(device_->logicalDevice(), &info, nullptr,
-                                     &framebuffers_[index]));
-        device_->debugUtils().setObjectName(
-            VK_OBJECT_TYPE_FRAMEBUFFER, framebuffers_[index],
-            "Pass/Present/Framebuffer/Image" + std::to_string(index));
-    }
-}
-
-void PresentPass::destroyFramebuffers() {
-    for (VkFramebuffer framebuffer : framebuffers_)
-        vkDestroyFramebuffer(device_->logicalDevice(), framebuffer, nullptr);
-    framebuffers_.clear();
 }
 
 void PresentPass::createDescriptors(

@@ -21,7 +21,7 @@ static void imguiCheckVkResult(VkResult err) {
 }
 
 GuiSystem::GuiSystem(VkInstance instance, Device &device,
-                     VkRenderPass renderPass, GLFWwindow *window,
+                     VkFormat colorFormat, GLFWwindow *window,
                      uint32_t minImageCount, uint32_t imageCount)
     : device_(&device) {
     // --- descriptor pool just for ImGui ---
@@ -53,7 +53,7 @@ GuiSystem::GuiSystem(VkInstance instance, Device &device,
     // --- Vulkan backend (post-2025/09/26 API: RenderPass in PipelineInfoMain)
     // ---
     ImGui_ImplVulkan_InitInfo initInfo{};
-    initInfo.ApiVersion = VK_API_VERSION_1_0;
+    initInfo.ApiVersion = VK_API_VERSION_1_3;
     initInfo.Instance = instance;
     initInfo.PhysicalDevice = device.physicalDevice();
     initInfo.Device = device.logicalDevice();
@@ -64,8 +64,13 @@ GuiSystem::GuiSystem(VkInstance instance, Device &device,
     initInfo.ImageCount = imageCount;
     initInfo.CheckVkResultFn = imguiCheckVkResult;
 
-    initInfo.PipelineInfoMain.RenderPass = renderPass;
-    initInfo.PipelineInfoMain.Subpass = 0;
+    initInfo.UseDynamicRendering = true;
+    initInfo.PipelineInfoMain.PipelineRenderingCreateInfo.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    initInfo.PipelineInfoMain.PipelineRenderingCreateInfo
+        .colorAttachmentCount = 1;
+    initInfo.PipelineInfoMain.PipelineRenderingCreateInfo
+        .pColorAttachmentFormats = &colorFormat;
     initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 
     if (!ImGui_ImplVulkan_Init(&initInfo))

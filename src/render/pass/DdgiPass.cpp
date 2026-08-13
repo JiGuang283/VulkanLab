@@ -15,6 +15,7 @@
 #include "render/PipelineCache.h"
 #include "render/RayTracingScene.h"
 #include "render/RenderFrame.h"
+#include "render/RenderGraph.h"
 #include "render/RenderView.h"
 #include "render/Visibility.h"
 
@@ -98,16 +99,166 @@ DdgiPass::~DdgiPass() {
                                      samplingDescriptorSetLayout_, nullptr);
 }
 
-std::vector<RenderImageUsage> DdgiPass::resourceUsages() const {
-    if (!status_.supported)
-        return {};
-    return {
-        {handles_.ddgiIrradiance, RenderImageAccess::StorageReadWrite,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {handles_.ddgiDistance, RenderImageAccess::StorageReadWrite,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+void DdgiPass::prepareFrame(const RenderFrameContext &frame,
+                            const RenderResourceRegistry &resources,
+                            const VisibilityFrame &visibility) {
+    status_.componentPresent = frame.view && frame.view->ddgi.componentPresent;
+    status_.componentEntity = status_.componentPresent
+                                  ? frame.view->ddgi.componentEntity
+                                  : PersistentEntityId{};
+    status_.probeCount = status_.componentPresent
+                             ? frame.view->ddgi.probeCount
+                             : 0u;
+    status_.raysPerProbe = status_.componentPresent
+                               ? frame.view->ddgi.parameters.raysPerProbe
+                               : 0u;
+    preparedActive_ = status_.supported && frame.features.ddgiRequired &&
+                      frame.view && frame.pipelineCache &&
+                      rayTracingScene_->preparedInstanceCount(
+                          frame.frameIndex) > 0;
+    status_.active = false;
+    if (!preparedActive_) {
+        disableSampling(frame.frameIndex);
+        status_.tracedInstanceCount = 0;
+        preparedUpdateCount_ = 0;
+        preparedRayCount_ = 0;
+        return;
+    }
+
+    const DdgiFrameData &volume = frame.view->ddgi;
+    const auto &settings = volume.parameters;
+    const uint64_t signature =
+        volumeSignature(volume, visibility.history.sceneGeneration);
+    if (volumeSignature_ != signature) {
+        volumeEntity_ = volume.componentEntity;
+        volumeSignature_ = signature;
+        resetPending_ = true;
+    }
+    preparedFrameIndex_ = frame.frameIndex;
+    preparedUpdateCount_ =
+        std::min(settings.probesUpdatedPerFrame, volume.probeCount);
+    preparedRayCount_ = preparedUpdateCount_ * settings.raysPerProbe;
+    ensureRayCapacity(frame.frameIndex, preparedRayCount_);
+    preparedReset_ = resetPending_;
+
+    DdgiGpuParams gpu{};
+    gpu.localToWorld = volume.localToWorld;
+    gpu.worldToLocal = volume.worldToLocal;
+    gpu.probeCounts = glm::uvec4(settings.probeCounts, volume.probeCount);
+    gpu.probeSpacingMaxDistance =
+        glm::vec4(settings.probeSpacing, settings.maxRayDistance);
+    gpu.updateParameters =
+        glm::vec4(settings.hysteresis, settings.normalBias,
+                  settings.viewBias, settings.intensity);
+    gpu.runtimeParameters =
+        glm::uvec4(settings.raysPerProbe, preparedUpdateCount_,
+                   settings.relocationEnabled ? 1u : 0u,
+                   settings.classificationEnabled ? 1u : 0u);
+    gpu.updateWindow =
+        glm::uvec4(updateCursor_, preparedUpdateCount_,
+                   static_cast<uint32_t>(frame.submissionSerial),
+                   static_cast<uint32_t>(frame.view->settings.ddgi.debugView));
+    gpu.traceParameters =
+        glm::vec4(frame.view->settings.ddgi.radianceClamp,
+                  preparedReset_ ? 1.0f : 0.0f, 0.0f, 0.0f);
+    std::memcpy(frames_[frame.frameIndex].parameters->mappedData(), &gpu,
+                sizeof(gpu));
+    updateComputeDescriptor(frame.frameIndex, resources);
+}
+
+uint64_t DdgiPass::topologySignature() const {
+    uint64_t value = preparedActive_ ? 1u : 0u;
+    value ^= preparedReset_ ? 0x100u : 0u;
+    if (preparedActive_) {
+        value ^= reinterpret_cast<uint64_t>(
+            frames_[preparedFrameIndex_].rayResults->handle());
+        value ^= reinterpret_cast<uint64_t>(probeStates_->handle()) << 1u;
+        value ^= reinterpret_cast<uint64_t>(
+            rayTracingScene_->allocatedMetadataBuffer(preparedFrameIndex_))
+                 << 2u;
+    }
+    return value;
+}
+
+void DdgiPass::setup(RenderGraphBuilder &builder,
+                     const RenderGraphBuildContext &) const {
+    if (preparedReset_) {
+        builder.addNode("DDGI/Reset", RgPassType::Transfer,
+                        RgQueueClass::Transfer, 0);
+        builder.setActive(preparedActive_);
+        builder.useBuffer(probeStates_->handle(),
+                          RgBufferAccess::TransferWrite);
+        for (RenderImageHandle handle :
+             {handles_.ddgiIrradiance, handles_.ddgiDistance}) {
+            builder.useImage({handle, RenderImageAccess::TransferWrite,
+                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                              VK_IMAGE_LAYOUT_GENERAL});
+        }
+    }
+
+    builder.addNode("DDGI/Trace", RgPassType::Compute,
+                    RgQueueClass::Compute, 1);
+    builder.setActive(preparedActive_);
+    if (preparedActive_) {
+        const FrameStorage &storage = frames_[preparedFrameIndex_];
+        builder.useBuffer(
+            rayTracingScene_->allocatedMetadataBuffer(preparedFrameIndex_),
+            RgBufferAccess::StorageRead, 0, VK_WHOLE_SIZE,
+            preparedFrameIndex_);
+        builder.useBuffer(storage.rayResults->handle(),
+                          RgBufferAccess::StorageWrite, 0, VK_WHOLE_SIZE,
+                          preparedFrameIndex_);
+        builder.useBuffer(probeStates_->handle(), RgBufferAccess::StorageRead);
+        builder.useBuffer(storage.parameters->handle(),
+                          RgBufferAccess::UniformRead, 0,
+                          sizeof(DdgiGpuParams), preparedFrameIndex_);
+    }
+
+    builder.addNode("DDGI/Update", RgPassType::Compute,
+                    RgQueueClass::Compute, 2);
+    builder.setActive(preparedActive_);
+    if (preparedActive_) {
+        const FrameStorage &storage = frames_[preparedFrameIndex_];
+        builder.useBuffer(storage.rayResults->handle(),
+                          RgBufferAccess::StorageRead, 0, VK_WHOLE_SIZE,
+                          preparedFrameIndex_);
+        builder.useBuffer(probeStates_->handle(),
+                          RgBufferAccess::StorageReadWrite);
+        builder.useBuffer(storage.parameters->handle(),
+                          RgBufferAccess::UniformRead, 0,
+                          sizeof(DdgiGpuParams), preparedFrameIndex_);
+        for (RenderImageHandle handle :
+             {handles_.ddgiIrradiance, handles_.ddgiDistance}) {
+            builder.useImage({handle, RenderImageAccess::StorageReadWrite,
+                              VK_IMAGE_LAYOUT_GENERAL,
+                              VK_IMAGE_LAYOUT_GENERAL});
+        }
+    }
+
+    builder.addNode("DDGI/Finalize", RgPassType::Compute,
+                    RgQueueClass::Compute, 3);
+    builder.setActive(preparedActive_);
+    if (preparedActive_) {
+        builder.useBuffer(probeStates_->handle(), RgBufferAccess::StorageRead);
+        for (RenderImageHandle handle :
+             {handles_.ddgiIrradiance, handles_.ddgiDistance}) {
+            builder.useImage({handle, RenderImageAccess::SampledRead,
+                              VK_IMAGE_LAYOUT_GENERAL,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+        }
+    }
+}
+
+void DdgiPass::recordNode(RenderGraphPassContext &context,
+                          uint32_t localNodeIndex,
+                          const VisibilityFrame &) {
+    switch (localNodeIndex) {
+    case 0: resetVolume(context.frame.cmd, context.resources); break;
+    case 1: recordTrace(context.frame); break;
+    case 2: recordUpdate(context.frame); break;
+    case 3: finishFrame(context.frame); break;
+    default: break;
+    }
 }
 
 void DdgiPass::createDescriptorLayouts() {
@@ -199,7 +350,7 @@ void DdgiPass::createPersistentResources(
         barrier.image = image.handle();
         barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0,
                                     desc.arrayLayers};
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        cmdPipelineBarrier2Compat(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
                              0, nullptr, 1, &barrier);
         VkClearColorValue clear{};
@@ -210,7 +361,7 @@ void DdgiPass::createPersistentResources(
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        cmdPipelineBarrier2Compat(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0,
                              nullptr, 0, nullptr, 1, &barrier);
     }
@@ -296,14 +447,16 @@ void DdgiPass::updateComputeDescriptor(
              {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}},
             "DDGI/Frame" + std::to_string(frameIndex) + "/ComputeSet");
     }
-    VkAccelerationStructureKHR tlas = rayTracingScene_->handle(frameIndex);
+    VkAccelerationStructureKHR tlas =
+        rayTracingScene_->allocatedHandle(frameIndex);
     VkWriteDescriptorSetAccelerationStructureKHR acceleration{};
     acceleration.sType =
         VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
     acceleration.accelerationStructureCount = 1;
     acceleration.pAccelerationStructures = &tlas;
     VkDescriptorBufferInfo metadata{
-        rayTracingScene_->metadataBuffer(frameIndex), 0, VK_WHOLE_SIZE};
+        rayTracingScene_->allocatedMetadataBuffer(frameIndex), 0,
+        VK_WHOLE_SIZE};
     VkDescriptorBufferInfo rays{storage.rayResults->handle(), 0,
                                 VK_WHOLE_SIZE};
     VkDescriptorBufferInfo states{probeStates_->handle(), 0,
@@ -358,32 +511,103 @@ void DdgiPass::resetVolume(VkCommandBuffer cmd,
          {handles_.ddgiIrradiance, handles_.ddgiDistance}) {
         const Image &image = resources.image(handle, 0);
         const RenderImageDesc &desc = resources.description(handle);
-        cmdImageBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                        VK_PIPELINE_STAGE_TRANSFER_BIT,
-                        VK_ACCESS_SHADER_READ_BIT,
-                        VK_ACCESS_TRANSFER_WRITE_BIT, image.handle(),
-                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0,
-                         desc.arrayLayers});
         VkClearColorValue clear{};
         VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0,
                                       desc.arrayLayers};
         vkCmdClearColorImage(cmd, image.handle(),
                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear,
                              1, &range);
-        cmdImageBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                        VK_ACCESS_TRANSFER_WRITE_BIT,
-                        VK_ACCESS_SHADER_READ_BIT |
-                            VK_ACCESS_SHADER_WRITE_BIT,
-                        image.handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        VK_IMAGE_LAYOUT_GENERAL, range);
     }
     updateCursor_ = 0;
     ++status_.generation;
     ++status_.resetCount;
     resetPending_ = false;
+}
+
+void DdgiPass::recordTrace(const RenderFrameContext &frame) {
+    if (!preparedActive_ || !frame.pipelineCache || !frame.view)
+        return;
+    VkMemoryBarrier2 memory{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    memory.srcStageMask =
+        VK_PIPELINE_STAGE_2_HOST_BIT |
+        VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+    memory.srcAccessMask =
+        VK_ACCESS_2_HOST_WRITE_BIT |
+        VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+    memory.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    memory.dstAccessMask =
+        VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+        VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+    VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dependency.memoryBarrierCount = 1;
+    dependency.pMemoryBarriers = &memory;
+    vkCmdPipelineBarrier2(frame.cmd, &dependency);
+
+    ComputePipelineConfig config{};
+    config.debugName = "Pipeline/DDGI/Trace";
+    config.computeShaderPath = traceShaderPath_;
+    config.descriptorLayouts = {globalDescriptorSetLayout_,
+                                computeDescriptorSetLayout_};
+    ComputePipeline &pipeline =
+        frame.pipelineCache->getOrCreateCompute(std::move(config));
+    vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      pipeline.handle());
+    const std::array<VkDescriptorSet, 2> sets = {
+        frame.globalDescriptorSet,
+        frames_[frame.frameIndex].computeSet};
+    vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            pipeline.layout(), 0,
+                            static_cast<uint32_t>(sets.size()), sets.data(),
+                            0, nullptr);
+    const uint32_t raysPerProbe =
+        frame.view->ddgi.parameters.raysPerProbe;
+    vkCmdDispatch(frame.cmd, (raysPerProbe + 63u) / 64u,
+                  preparedUpdateCount_, 1);
+}
+
+void DdgiPass::recordUpdate(const RenderFrameContext &frame) {
+    if (!preparedActive_ || !frame.pipelineCache)
+        return;
+    ComputePipelineConfig config{};
+    config.debugName = "Pipeline/DDGI/Update";
+    config.computeShaderPath = updateShaderPath_;
+    config.descriptorLayouts = {globalDescriptorSetLayout_,
+                                computeDescriptorSetLayout_};
+    ComputePipeline &pipeline =
+        frame.pipelineCache->getOrCreateCompute(std::move(config));
+    vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      pipeline.handle());
+    const std::array<VkDescriptorSet, 2> sets = {
+        frame.globalDescriptorSet,
+        frames_[frame.frameIndex].computeSet};
+    vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            pipeline.layout(), 0,
+                            static_cast<uint32_t>(sets.size()), sets.data(),
+                            0, nullptr);
+    vkCmdDispatch(frame.cmd, 1, 1, preparedUpdateCount_);
+}
+
+void DdgiPass::finishFrame(const RenderFrameContext &frame) {
+    if (!preparedActive_ || !frame.view)
+        return;
+    updateCursor_ = (updateCursor_ + preparedUpdateCount_) %
+                    frame.view->ddgi.probeCount;
+    status_.active = true;
+    status_.probeCount = frame.view->ddgi.probeCount;
+    status_.raysPerProbe = frame.view->ddgi.parameters.raysPerProbe;
+    status_.probesUpdatedPerFrame = preparedUpdateCount_;
+    status_.updateCursor = updateCursor_;
+    status_.tracedInstanceCount =
+        rayTracingScene_->instanceCount(frame.frameIndex);
+    status_.allocatedBytes = probeStates_->size();
+    for (const FrameStorage &storage : frames_) {
+        status_.allocatedBytes += storage.parameters->size();
+        status_.allocatedBytes += storage.rayResults->size();
+    }
+    status_.allocatedBytes +=
+        static_cast<uint64_t>(8u * 8u * kMaxDdgiProbes * 8u) +
+        static_cast<uint64_t>(16u * 16u * kMaxDdgiProbes * 4u);
+    preparedReset_ = false;
 }
 
 void DdgiPass::execute(const RenderFrameContext &frame,
@@ -488,7 +712,7 @@ void DdgiPass::execute(const RenderFrameContext &frame,
     hostAndAs.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
                               VK_ACCESS_SHADER_WRITE_BIT |
                               VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-    vkCmdPipelineBarrier(
+    cmdPipelineBarrier2Compat(
         frame.cmd,
         VK_PIPELINE_STAGE_HOST_BIT |
             VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
@@ -531,7 +755,7 @@ void DdgiPass::execute(const RenderFrameContext &frame,
     rayBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     rayBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     rayBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+    cmdPipelineBarrier2Compat(frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
                          &rayBarrier, 0, nullptr, 0, nullptr);
     {
@@ -557,7 +781,7 @@ void DdgiPass::execute(const RenderFrameContext &frame,
     stateBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     stateBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     stateBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+    cmdPipelineBarrier2Compat(frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1,
                          &stateBarrier, 0, nullptr, 0, nullptr);
 

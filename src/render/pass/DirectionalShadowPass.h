@@ -32,27 +32,32 @@ class DirectionalShadowPass final : public IRenderPass {
     std::string_view name() const override {
         return "DirectionalShadow";
     }
-    std::vector<RenderImageUsage> resourceUsages() const override;
+    RgPassCondition condition() const override {
+        return RgPassCondition::DirectionalShadow;
+    }
+    void setup(RenderGraphBuilder &builder,
+               const RenderGraphBuildContext &context) const override;
+    void recordNode(RenderGraphPassContext &context,
+                    uint32_t localNodeIndex,
+                    const VisibilityFrame &visibility) override;
     void execute(const RenderFrameContext &frame,
                  const RenderResourceRegistry &resources,
                  const VisibilityFrame &visibility) override;
 
   private:
-    void createRenderPass(const RenderResourceRegistry &resources);
-    void createFramebuffers(const RenderResourceRegistry &resources);
-    void destroyFramebuffers();
     void drawCasters(const RenderFrameContext &frame,
                      const VisibilityFrame &visibility,
                      uint32_t cascadeIndex);
+    void recordCascade(const RenderFrameContext &frame,
+                       const VisibilityFrame &visibility,
+                       uint32_t cascadeIndex);
 
     Device *device_ = nullptr;
     RenderImageHandle shadowDepth_{};
     VkDescriptorSetLayout globalDescriptorSetLayout_ = VK_NULL_HANDLE;
     std::string shadowVertPath_;
     std::string shadowMaskFragPath_;
-    VkRenderPass renderPass_ = VK_NULL_HANDLE;
-    std::array<VkFramebuffer, kCsmCascadeCount> framebuffers_{};
-    std::array<VkImageView, kCsmCascadeCount> cascadeViews_{};
+    VkFormat depthFormat_ = VK_FORMAT_UNDEFINED;
 };
 
 } // namespace vkr

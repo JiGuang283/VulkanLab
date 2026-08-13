@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 #include <vulkan/vulkan.h>
@@ -218,6 +219,12 @@ class RenderResourceRegistry {
                                uint32_t frameIndex) const;
     VkImageView mipView(RenderImageHandle handle, uint32_t frameIndex,
                         uint32_t mipLevel) const;
+    VkImageView attachmentView(RenderImageHandle handle,
+                               uint32_t frameIndex,
+                               uint32_t mipLevel,
+                               uint32_t baseArrayLayer,
+                               uint32_t layerCount,
+                               VkImageAspectFlags aspect) const;
     uint32_t mipLevelCount(RenderImageHandle handle) const;
     VkExtent2D mipExtent(RenderImageHandle handle,
                          uint32_t mipLevel) const;
@@ -225,8 +232,23 @@ class RenderResourceRegistry {
     VkExtent2D extent(RenderImageHandle handle) const;
     VkExtent2D viewportExtent() const { return viewportExtent_; }
     uint32_t frameCount() const { return frameCount_; }
+    uint64_t estimatedResidentBytes() const;
+    uint64_t estimatedBytes(RenderImageHandle handle) const;
 
   private:
+    struct AttachmentView {
+        uint32_t imageIndex = 0;
+        VkImage image = VK_NULL_HANDLE;
+        uint32_t frameIndex = 0;
+        uint32_t mipLevel = 0;
+        uint32_t baseArrayLayer = 0;
+        uint32_t layerCount = 0;
+        VkImageAspectFlags aspect = 0;
+        VkImageView view = VK_NULL_HANDLE;
+    };
+
+    void destroyAttachmentViews(
+        std::optional<uint32_t> imageIndex = std::nullopt);
     void createImageEntry(uint32_t index);
     void createSamplerEntry(uint32_t index);
 
@@ -236,6 +258,7 @@ class RenderResourceRegistry {
     bool realized_ = false;
     std::vector<RenderImageDesc> imageDescriptions_;
     std::vector<std::vector<std::unique_ptr<Image>>> images_;
+    mutable std::vector<AttachmentView> attachmentViews_;
     std::vector<uint32_t> realizedMipLevels_;
     std::vector<RenderSamplerDesc> samplerDescriptions_;
     std::vector<VkSampler> samplers_;
@@ -248,6 +271,7 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
 
 void validateRenderResourceContracts(
     const std::vector<RenderImageDesc> &descriptions,
-    const std::vector<RenderPassResourceUsage> &passes);
+    const std::vector<RenderPassResourceUsage> &passes,
+    bool requireCompatibleLayouts = true);
 
 } // namespace vkr

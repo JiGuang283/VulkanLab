@@ -12,6 +12,7 @@
 #include "diagnostics/TracyProfiler.h"
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
+#include "render/RenderGraph.h"
 #include "render/RenderView.h"
 #include "render/Visibility.h"
 
@@ -103,60 +104,261 @@ SsgiPass::~SsgiPass() {
     }
 }
 
-std::vector<RenderImageUsage> SsgiPass::resourceUsages() const {
-    return {
-        {resources_.surfaceDepth, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
-        {resources_.surfaceNormalRoughness, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resources_.surfaceAlbedoMetallic, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resources_.surfaceMotion, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resources_.screenDepthPyramid, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resources_.sceneColorPyramid, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resources_.surfaceDepth, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-         RenderImageFrame::Previous},
-        {resources_.surfaceNormalRoughness, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         RenderImageFrame::Previous},
-        {resources_.ssgiHistory, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         RenderImageFrame::Previous},
-        {resources_.ssgiMoments, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         RenderImageFrame::Previous},
-        {resources_.ssgiRaw, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resources_.ssgiHistory, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resources_.ssgiMoments, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resources_.ssgiTemp, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL},
-        {resources_.ssgiFiltered, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resources_.ssgiDebug, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+void SsgiPass::setup(RenderGraphBuilder &builder,
+                     const RenderGraphBuildContext &) const {
+    const auto surfaceReads = [&] {
+        builder.useImage({resources_.surfaceDepth,
+                          RenderImageAccess::SampledRead,
+                          VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                          VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL});
+        builder.useImage({resources_.surfaceNormalRoughness,
+                          RenderImageAccess::SampledRead,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
     };
+
+    builder.addNode("SSGI/Trace", RgPassType::Compute,
+                    RgQueueClass::Compute, 0);
+    surfaceReads();
+    builder.useImage({resources_.surfaceAlbedoMetallic,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage({resources_.screenDepthPyramid,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage({resources_.sceneColorPyramid,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage({resources_.ssgiRaw, RenderImageAccess::StorageWrite,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+
+    builder.addNode("SSGI/Temporal", RgPassType::Compute,
+                    RgQueueClass::Compute, 1);
+    surfaceReads();
+    builder.useImage({resources_.surfaceMotion,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage({resources_.surfaceDepth,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                      RenderImageFrame::Previous});
+    builder.useImage({resources_.surfaceNormalRoughness,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      RenderImageFrame::Previous});
+    builder.useImage({resources_.ssgiHistory,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      RenderImageFrame::Previous});
+    builder.useImage({resources_.ssgiMoments,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      RenderImageFrame::Previous});
+    builder.useImage({resources_.ssgiRaw, RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+    for (RenderImageHandle handle :
+         {resources_.ssgiHistory, resources_.ssgiMoments,
+          resources_.ssgiDebug}) {
+        builder.useImage({handle, RenderImageAccess::StorageWrite,
+                          VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+    }
+
+    builder.addNode("SSGI/BilateralHorizontal", RgPassType::Compute,
+                    RgQueueClass::Compute, 2);
+    surfaceReads();
+    builder.useImage({resources_.ssgiMoments,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+    builder.useImage({resources_.ssgiHistory,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+    builder.useImage({resources_.ssgiTemp, RenderImageAccess::StorageWrite,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+
+    builder.addNode("SSGI/BilateralVertical", RgPassType::Compute,
+                    RgQueueClass::Compute, 3);
+    surfaceReads();
+    builder.useImage({resources_.ssgiMoments,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+    builder.useImage({resources_.ssgiTemp, RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+    builder.useImage({resources_.ssgiFiltered,
+                      RenderImageAccess::StorageWrite,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+
+    builder.addNode("SSGI/Finalize", RgPassType::Compute,
+                    RgQueueClass::Compute, 4);
+    for (RenderImageHandle handle :
+         {resources_.ssgiRaw, resources_.ssgiHistory,
+          resources_.ssgiMoments, resources_.ssgiFiltered,
+          resources_.ssgiDebug}) {
+        builder.useImage({handle, RenderImageAccess::SampledRead,
+                          VK_IMAGE_LAYOUT_GENERAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    }
+}
+
+void SsgiPass::recordNode(RenderGraphPassContext &context,
+                          uint32_t localNodeIndex,
+                          const VisibilityFrame &visibility) {
+    if (localNodeIndex == 0)
+        beginFrame(context.frame, context.resources, visibility);
+    if (localNodeIndex < 4)
+        recordStage(context.frame, context.resources, localNodeIndex);
+    else if (localNodeIndex == 4)
+        finishFrame(context.frame, visibility);
+}
+
+void SsgiPass::beginFrame(const RenderFrameContext &frame,
+                          const RenderResourceRegistry &resources,
+                          const VisibilityFrame &visibility) {
+    status_.active = frame.features.ssgiActive;
+    if (!frame.view)
+        return;
+    const uint32_t previous =
+        (frame.frameIndex + resources.frameCount() - 1u) %
+        resources.frameCount();
+    currentSettingsSignature_ = signature(frame.view->settings);
+    const bool contiguous = lastExecutionSerial_ != 0 &&
+                            lastExecutionSerial_ + 1u ==
+                                frame.submissionSerial;
+    const bool generationMatches =
+        lastExecutionSerial_ != 0 &&
+        lastHistoryGeneration_ == visibility.history.historyGeneration;
+    const bool settingsMatch =
+        lastExecutionSerial_ != 0 &&
+        lastSettingsSignature_ == currentSettingsSignature_;
+    currentHistoryValid_ = visibility.history.globalValid && contiguous &&
+                           generationMatches && settingsMatch &&
+                           historyWritten_[previous];
+    updateTemporalHistoryDescriptors(resources, frame.frameIndex, previous,
+                                     currentHistoryValid_);
+    status_.historyValid = currentHistoryValid_;
+    status_.historyGeneration = visibility.history.historyGeneration;
+    status_.lastFrameSerial = frame.submissionSerial;
+    if (!currentHistoryValid_) {
+        if (!visibility.history.invalidationReason.empty())
+            status_.lastResetReason = visibility.history.invalidationReason;
+        else if (!contiguous)
+            status_.lastResetReason = "SSGI was not executed continuously";
+        else if (!generationMatches)
+            status_.lastResetReason = "temporal generation changed";
+        else if (!settingsMatch)
+            status_.lastResetReason = "SSGI settings changed";
+        else
+            status_.lastResetReason = "history is unavailable";
+    } else {
+        status_.lastResetReason.clear();
+    }
+    status_.extent = resources.extent(resources_.ssgiFiltered);
+}
+
+void SsgiPass::recordStage(const RenderFrameContext &frame,
+                           const RenderResourceRegistry &resources,
+                           uint32_t stage) {
+    if (!frame.pipelineCache || !frame.view || stage > 3)
+        return;
+    const uint32_t current = frame.frameIndex;
+    const VkExtent2D full = resources.extent(resources_.surfaceDepth);
+    const VkExtent2D half = resources.extent(resources_.ssgiFiltered);
+
+    if (stage == 0) {
+        const glm::uvec2 budget =
+            samplingBudget(frame.view->settings.ssgiQuality);
+        TracePush push{};
+        push.parameters = {frame.view->settings.ssgiMaxDistance,
+                           frame.view->settings.ssgiThickness,
+                           frame.view->settings.ssgiIntensity,
+                           frame.view->settings.ssgiRadianceClamp};
+        push.dimensions = {budget.x, budget.y, full.width, full.height};
+        push.sampling = {
+            float(resources.mipLevelCount(resources_.screenDepthPyramid) - 1u),
+            float(resources.mipLevelCount(resources_.sceneColorPyramid) - 1u),
+            float(frame.submissionSerial & 7u), 0.0f};
+        ComputePipelineConfig config{};
+        config.debugName = "Pipeline/ScreenSpace/SSGI/Trace";
+        config.computeShaderPath = traceShaderPath_;
+        config.descriptorLayouts = {globalLayout_, traceLayout_};
+        config.pushConstants = {{VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                 sizeof(push)}};
+        ComputePipeline &pipeline =
+            frame.pipelineCache->getOrCreateCompute(std::move(config));
+        vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          pipeline.handle());
+        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                pipeline.layout(), 0, 1,
+                                &frame.globalDescriptorSet, 0, nullptr);
+        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                pipeline.layout(), 1, 1,
+                                &traceSets_[current], 0, nullptr);
+        vkCmdPushConstants(frame.cmd, pipeline.layout(),
+                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push),
+                           &push);
+        vkCmdDispatch(frame.cmd, groups(half.width), groups(half.height), 1);
+        return;
+    }
+
+    if (stage == 1) {
+        TemporalPush push{};
+        push.parameters = {frame.view->settings.ssgiHistoryWeight,
+                           0.01f, 0.8f,
+                           frame.view->settings.ssgiRadianceClamp};
+        push.dimensions = {full.width, full.height,
+                           currentHistoryValid_ ? 1u : 0u, 0u};
+        ComputePipelineConfig config{};
+        config.debugName = "Pipeline/ScreenSpace/SSGI/Temporal";
+        config.computeShaderPath = temporalShaderPath_;
+        config.descriptorLayouts = {temporalLayout_};
+        config.pushConstants = {{VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                 sizeof(push)}};
+        ComputePipeline &pipeline =
+            frame.pipelineCache->getOrCreateCompute(std::move(config));
+        vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          pipeline.handle());
+        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                pipeline.layout(), 0, 1,
+                                &temporalSets_[current], 0, nullptr);
+        vkCmdPushConstants(frame.cmd, pipeline.layout(),
+                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push),
+                           &push);
+        vkCmdDispatch(frame.cmd, groups(half.width), groups(half.height), 1);
+        return;
+    }
+
+    FilterPush push{{full.width, full.height, stage == 2 ? 1u : 2u, 0u}};
+    ComputePipelineConfig config{};
+    config.debugName = "Pipeline/ScreenSpace/SSGI/Filter";
+    config.computeShaderPath = filterShaderPath_;
+    config.descriptorLayouts = {filterLayout_};
+    config.pushConstants = {{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push)}};
+    ComputePipeline &pipeline =
+        frame.pipelineCache->getOrCreateCompute(std::move(config));
+    vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      pipeline.handle());
+    const VkDescriptorSet set = stage == 2 ? firstFilterSets_[current]
+                                           : secondFilterSets_[current];
+    vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            pipeline.layout(), 0, 1, &set, 0, nullptr);
+    vkCmdPushConstants(frame.cmd, pipeline.layout(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+    vkCmdDispatch(frame.cmd, groups(half.width), groups(half.height), 1);
+}
+
+void SsgiPass::finishFrame(const RenderFrameContext &frame,
+                           const VisibilityFrame &visibility) {
+    historyWritten_[frame.frameIndex] = true;
+    lastExecutionSerial_ = frame.submissionSerial;
+    lastHistoryGeneration_ = visibility.history.historyGeneration;
+    lastSettingsSignature_ = currentSettingsSignature_;
 }
 
 void SsgiPass::releaseViewportResources() {

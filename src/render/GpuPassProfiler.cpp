@@ -27,11 +27,18 @@ double gpuTimestampTicksToMilliseconds(
 }
 
 GpuPassProfiler::GpuPassProfiler(Device &device,
-                                 std::vector<std::string> passNames)
-    : device_(&device), passNames_(std::move(passNames)) {
-    if (passNames_.empty() ||
-        passNames_.size() > std::numeric_limits<uint32_t>::max() / 2)
+                                 std::vector<GpuPassProfile> passes)
+    : device_(&device), passes_(std::move(passes)) {
+    if (passes_.empty() ||
+        passes_.size() > std::numeric_limits<uint32_t>::max() / 2)
         return;
+    for (uint32_t index = 0; index < passes_.size(); ++index) {
+        if (passes_[index].id == 0 ||
+            !passSlots_.emplace(passes_[index].id, index).second) {
+            throw std::invalid_argument(
+                "GPU profiler pass IDs must be non-zero and unique");
+        }
+    }
 
     const QueueFamilyIndices indices = device.queueFamilies();
     if (!indices.graphicsFamily)
@@ -52,7 +59,7 @@ GpuPassProfiler::GpuPassProfiler(Device &device,
     if (timestampValidBits_ == 0 || timestampPeriodNanoseconds_ <= 0.0)
         return;
 
-    queriesPerFrame_ = static_cast<uint32_t>(passNames_.size()) * 2;
+    queriesPerFrame_ = static_cast<uint32_t>(passes_.size()) * 2;
     VkQueryPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
     info.queryType = VK_QUERY_TYPE_TIMESTAMP;
@@ -73,32 +80,47 @@ void GpuPassProfiler::collect(uint32_t frameIndex) {
         !frameSlots_[frameIndex].recorded)
         return;
 
-    std::vector<uint64_t> values(queriesPerFrame_);
-    const VkResult result = vkGetQueryPoolResults(
-        device_->logicalDevice(), queryPool_, frameQueryBase(frameIndex),
-        queriesPerFrame_, values.size() * sizeof(uint64_t), values.data(),
-        sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+    FrameSlot &slot = frameSlots_[frameIndex];
+    std::vector<std::array<uint64_t, 2>> values(passes_.size());
+    for (uint32_t passIndex = 0; passIndex < passes_.size(); ++passIndex) {
+        if (passIndex >= slot.activePasses.size() ||
+            slot.activePasses[passIndex] == 0)
+            continue;
+        const VkResult result = vkGetQueryPoolResults(
+            device_->logicalDevice(), queryPool_,
+            passQuery(frameIndex, passIndex, false), 2,
+            sizeof(values[passIndex]), values[passIndex].data(),
+            sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+        if (result == VK_NOT_READY)
+            return;
+        VK_CHECK(result);
+    }
     frameSlots_[frameIndex].recorded = false;
-    if (result == VK_NOT_READY)
-        return;
-    VK_CHECK(result);
 
     GpuPassTimings timings{};
     timings.available = true;
     timings.frameSerial = frameSlots_[frameIndex].frameSerial;
-    timings.passes.reserve(passNames_.size());
-    for (uint32_t passIndex = 0; passIndex < passNames_.size(); ++passIndex) {
+    timings.passes.reserve(passes_.size());
+    for (uint32_t passIndex = 0; passIndex < passes_.size(); ++passIndex) {
+        if (passIndex >= slot.activePasses.size() ||
+            slot.activePasses[passIndex] == 0)
+            continue;
         const uint64_t ticks = gpuTimestampDeltaTicks(
-            values[passIndex * 2], values[passIndex * 2 + 1],
+            values[passIndex][0], values[passIndex][1],
             timestampValidBits_);
         timings.passes.push_back(
-            {passNames_[passIndex], gpuTimestampTicksToMilliseconds(
+            {passes_[passIndex].name, gpuTimestampTicksToMilliseconds(
                                         ticks, timestampPeriodNanoseconds_)});
     }
-    const uint64_t totalTicks = gpuTimestampDeltaTicks(
-        values.front(), values.back(), timestampValidBits_);
-    timings.totalMs = gpuTimestampTicksToMilliseconds(
-        totalTicks, timestampPeriodNanoseconds_);
+    if (slot.firstStartedPass != UINT32_MAX &&
+        slot.lastCompletedPass != UINT32_MAX) {
+        const uint64_t totalTicks = gpuTimestampDeltaTicks(
+            values[slot.firstStartedPass][0],
+            values[slot.lastCompletedPass][1],
+            timestampValidBits_);
+        timings.totalMs = gpuTimestampTicksToMilliseconds(
+            totalTicks, timestampPeriodNanoseconds_);
+    }
     latest_ = std::move(timings);
 }
 
@@ -111,26 +133,40 @@ void GpuPassProfiler::beginFrame(VkCommandBuffer commandBuffer,
         throw std::out_of_range("GPU profiler frame index is out of range");
     vkCmdResetQueryPool(commandBuffer, queryPool_,
                         frameQueryBase(frameIndex), queriesPerFrame_);
-    frameSlots_[frameIndex] = {true, frameSerial};
+    FrameSlot &slot = frameSlots_[frameIndex];
+    slot.recorded = true;
+    slot.frameSerial = frameSerial;
+    slot.activePasses.assign(passes_.size(), 0);
+    slot.firstStartedPass = UINT32_MAX;
+    slot.lastCompletedPass = UINT32_MAX;
 }
 
 void GpuPassProfiler::beginPass(VkCommandBuffer commandBuffer,
                                 uint32_t frameIndex,
-                                uint32_t passIndex) const {
+                                RenderGraphPassId passId) {
     if (!supported())
         return;
+    if (frameIndex >= frameSlots_.size())
+        throw std::out_of_range("GPU profiler query index is out of range");
+    const uint32_t passSlot = passIndex(passId);
+    FrameSlot &slot = frameSlots_[frameIndex];
+    if (slot.firstStartedPass == UINT32_MAX)
+        slot.firstStartedPass = passSlot;
+    slot.activePasses[passSlot] = 1;
     vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                         queryPool_,
-                        passQuery(frameIndex, passIndex, false));
+                        passQuery(frameIndex, passSlot, false));
 }
 
 void GpuPassProfiler::endPass(VkCommandBuffer commandBuffer,
                               uint32_t frameIndex,
-                              uint32_t passIndex) const {
+                              RenderGraphPassId passId) {
     if (!supported())
         return;
+    const uint32_t passSlot = passIndex(passId);
+    frameSlots_.at(frameIndex).lastCompletedPass = passSlot;
     vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                        queryPool_, passQuery(frameIndex, passIndex, true));
+                        queryPool_, passQuery(frameIndex, passSlot, true));
 }
 
 uint32_t GpuPassProfiler::frameQueryBase(uint32_t frameIndex) const {
@@ -139,9 +175,16 @@ uint32_t GpuPassProfiler::frameQueryBase(uint32_t frameIndex) const {
 
 uint32_t GpuPassProfiler::passQuery(uint32_t frameIndex,
                                     uint32_t passIndex, bool end) const {
-    if (frameIndex >= frameSlots_.size() || passIndex >= passNames_.size())
+    if (frameIndex >= frameSlots_.size() || passIndex >= passes_.size())
         throw std::out_of_range("GPU profiler query index is out of range");
     return frameQueryBase(frameIndex) + passIndex * 2 + (end ? 1u : 0u);
+}
+
+uint32_t GpuPassProfiler::passIndex(RenderGraphPassId passId) const {
+    const auto it = passSlots_.find(passId);
+    if (it == passSlots_.end())
+        throw std::out_of_range("GPU profiler received an unknown pass ID");
+    return it->second;
 }
 
 } // namespace vkr

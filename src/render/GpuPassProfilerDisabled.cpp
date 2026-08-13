@@ -22,8 +22,8 @@ double gpuTimestampTicksToMilliseconds(
 }
 
 GpuPassProfiler::GpuPassProfiler(Device &,
-                                 std::vector<std::string> passNames)
-    : passNames_(std::move(passNames)) {}
+                                 std::vector<GpuPassProfile> passes)
+    : passes_(std::move(passes)) {}
 
 GpuPassProfiler::~GpuPassProfiler() = default;
 
@@ -33,14 +33,18 @@ void GpuPassProfiler::beginFrame(VkCommandBuffer, uint32_t, uint64_t) {
     latest_.available = false;
 }
 
-void GpuPassProfiler::beginPass(VkCommandBuffer, uint32_t, uint32_t) const {}
+void GpuPassProfiler::beginPass(VkCommandBuffer, uint32_t,
+                                RenderGraphPassId) {}
 
-void GpuPassProfiler::endPass(VkCommandBuffer, uint32_t, uint32_t) const {}
+void GpuPassProfiler::endPass(VkCommandBuffer, uint32_t,
+                              RenderGraphPassId) {}
 
 uint32_t GpuPassProfiler::frameQueryBase(uint32_t) const { return 0; }
 
 uint32_t GpuPassProfiler::passQuery(uint32_t, uint32_t, bool) const {
     return 0;
 }
+
+uint32_t GpuPassProfiler::passIndex(RenderGraphPassId) const { return 0; }
 
 } // namespace vkr

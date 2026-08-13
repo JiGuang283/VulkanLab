@@ -63,8 +63,8 @@ class ToneMapPass final : public IRenderPass {
     ToneMapPass &operator=(const ToneMapPass &) = delete;
 
     std::string_view name() const override { return "ToneMap"; }
-    std::vector<RenderImageUsage> resourceUsages() const override;
-    void releaseViewportResources() override;
+    void setup(RenderGraphBuilder &builder,
+               const RenderGraphBuildContext &context) const override;
     void onViewportResize(
         const RenderResourceRegistry &resources) override;
     void execute(const RenderFrameContext &frame,
@@ -72,9 +72,6 @@ class ToneMapPass final : public IRenderPass {
                  const VisibilityFrame &visibility) override;
 
   private:
-    void createRenderPass(const RenderResourceRegistry &resources);
-    void createFramebuffers(const RenderResourceRegistry &resources);
-    void destroyFramebuffers();
     void createDescriptors(const RenderResourceRegistry &resources);
     void updateDescriptors(const RenderResourceRegistry &resources);
     void updateScreenDescriptors(const RenderResourceRegistry &resources,
@@ -119,8 +116,6 @@ class ToneMapPass final : public IRenderPass {
     std::string fullscreenVertPath_;
     std::string toneMapFragPath_;
 
-    VkRenderPass renderPass_ = VK_NULL_HANDLE;
-    std::vector<VkFramebuffer> framebuffers_;
     VkDescriptorSetLayout sourceDescriptorSetLayout_ = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> sourceDescriptorSets_{};
 };

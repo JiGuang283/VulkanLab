@@ -20,7 +20,7 @@ void ShadowCasterDrawRecorder::record(
     const std::vector<RenderItemIndex> &casters,
     const ShadowCasterDrawConfig &config) {
     if (!frame.pipelineCache || !frame.view ||
-        config.renderPass == VK_NULL_HANDLE ||
+        config.rendering.depthAttachmentFormat == VK_FORMAT_UNDEFINED ||
         config.sliceDescriptorLayout == VK_NULL_HANDLE ||
         config.sliceDescriptorSet == VK_NULL_HANDLE) {
         return;
@@ -67,7 +67,7 @@ void ShadowCasterDrawRecorder::record(
             (cullMode == VK_CULL_MODE_NONE ? "CullNone" : "CullBack");
 
         Pipeline &pipeline = frame.pipelineCache->getOrCreate(
-            config.renderPass, std::move(pipelineConfig));
+            config.rendering, std::move(pipelineConfig));
         if (boundPipeline != &pipeline) {
             vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                               pipeline.handle());

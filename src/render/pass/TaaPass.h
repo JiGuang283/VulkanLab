@@ -35,7 +35,10 @@ class TaaPass final : public IRenderPass {
     ~TaaPass() override;
 
     std::string_view name() const override { return "TAA"; }
-    std::vector<RenderImageUsage> resourceUsages() const override;
+    RgPassType passType() const override { return RgPassType::Compute; }
+    RgPassCondition condition() const override { return RgPassCondition::Taa; }
+    void setup(RenderGraphBuilder &builder,
+               const RenderGraphBuildContext &context) const override;
     void releaseViewportResources() override;
     void onViewportResize(const RenderResourceRegistry &resources) override;
     void execute(const RenderFrameContext &frame,
@@ -49,9 +52,6 @@ class TaaPass final : public IRenderPass {
     void createFrameBuffers();
     void createDescriptors(const RenderResourceRegistry &resources);
     void freeDescriptors();
-    void prepareImages(const RenderFrameContext &frame,
-                       const RenderResourceRegistry &resources,
-                       bool historyValid);
 
     Device *device_ = nullptr;
     RendererResourceHandles resourceHandles_{};
@@ -60,8 +60,6 @@ class TaaPass final : public IRenderPass {
     VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
     std::array<std::unique_ptr<Buffer>, MAX_FRAMES_IN_FLIGHT> frameUbos_{};
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> descriptorSets_{};
-    std::array<bool, MAX_FRAMES_IN_FLIGHT> historyLayoutInitialized_{};
-    std::array<bool, MAX_FRAMES_IN_FLIGHT> debugLayoutInitialized_{};
     std::array<bool, MAX_FRAMES_IN_FLIGHT> historyWritten_{};
     uint64_t lastExecutionSerial_ = 0;
     uint64_t lastHistoryGeneration_ = 0;

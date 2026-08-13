@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/PipelineConfig.h"
 #include "render/RenderCommand.h"
 
 #include <string>
@@ -12,7 +13,7 @@ struct RenderFrameContext;
 struct VisibilityFrame;
 
 struct ShadowCasterDrawConfig {
-    VkRenderPass renderPass = VK_NULL_HANDLE;
+    PipelineRenderingSignature rendering;
     VkDescriptorSetLayout sliceDescriptorLayout = VK_NULL_HANDLE;
     VkDescriptorSet sliceDescriptorSet = VK_NULL_HANDLE;
     uint32_t dynamicOffset = 0;

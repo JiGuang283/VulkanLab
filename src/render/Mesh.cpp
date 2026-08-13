@@ -2,6 +2,7 @@
 #include "TangentGenerator.h"
 #include "Vertex.h"
 #include "core/Device.h"
+#include "core/GpuBarrier.h"
 #include "core/AccelerationStructure.h"
 #include "core/Log.h"
 #include "core/UploadRecorder.h"
@@ -126,7 +127,7 @@ void Mesh::buildBottomLevelAccelerationStructure(
     }
     barriers[0].buffer = vertexBuffer_->handle();
     barriers[1].buffer = indexBuffer_->handle();
-    vkCmdPipelineBarrier(
+    cmdPipelineBarrier2Compat(
         commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
         VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 0,
         nullptr, static_cast<uint32_t>(barriers.size()), barriers.data(), 0,

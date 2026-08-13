@@ -122,6 +122,7 @@ RenderResourceRegistry::RenderResourceRegistry(Device &device,
 }
 
 RenderResourceRegistry::~RenderResourceRegistry() {
+    destroyAttachmentViews();
     images_.clear();
     for (VkSampler sampler : samplers_) {
         if (sampler != VK_NULL_HANDLE)
@@ -181,6 +182,7 @@ void RenderResourceRegistry::releaseViewportDependent() {
     for (uint32_t i = 0; i < imageDescriptions_.size(); ++i) {
         if (imageDescriptions_[i].extentPolicy ==
             RenderExtentPolicy::Viewport) {
+            destroyAttachmentViews(i);
             images_[i].clear();
         }
     }
@@ -248,6 +250,68 @@ VkImageView RenderResourceRegistry::mipView(RenderImageHandle handle,
     return image(handle, frameIndex).mipView(mipLevel);
 }
 
+VkImageView RenderResourceRegistry::attachmentView(
+    RenderImageHandle handle, uint32_t frameIndex, uint32_t mipLevel,
+    uint32_t baseArrayLayer, uint32_t layerCount,
+    VkImageAspectFlags aspect) const {
+    const RenderImageDesc &desc = description(handle);
+    if (mipLevel >= mipLevelCount(handle) || layerCount == 0 ||
+        baseArrayLayer + layerCount > desc.arrayLayers ||
+        (aspect & desc.aspect) != aspect) {
+        throw std::out_of_range("invalid render attachment subresource");
+    }
+    const uint32_t physicalFrame =
+        desc.multiplicity == RenderResourceMultiplicity::Single
+            ? 0u
+            : frameIndex;
+    const Image &physicalImage = image(handle, physicalFrame);
+    if (mipLevel == 0 && baseArrayLayer == 0 &&
+        layerCount == desc.arrayLayers && aspect == desc.aspect) {
+        return physicalImage.imageView();
+    }
+    for (const AttachmentView &entry : attachmentViews_) {
+        if (entry.imageIndex == handle.index &&
+            entry.image == physicalImage.handle() &&
+            entry.frameIndex == physicalFrame &&
+            entry.mipLevel == mipLevel &&
+            entry.baseArrayLayer == baseArrayLayer &&
+            entry.layerCount == layerCount && entry.aspect == aspect) {
+            return entry.view;
+        }
+    }
+    VkImageViewCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    info.image = physicalImage.handle();
+    info.viewType = layerCount == 1 ? VK_IMAGE_VIEW_TYPE_2D
+                                    : VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    info.format = desc.format;
+    info.subresourceRange = {aspect, mipLevel, 1, baseArrayLayer,
+                             layerCount};
+    VkImageView view = VK_NULL_HANDLE;
+    VK_CHECK(vkCreateImageView(device_->logicalDevice(), &info, nullptr,
+                               &view));
+    device_->debugUtils().setObjectName(
+        VK_OBJECT_TYPE_IMAGE_VIEW, view,
+        desc.name + "/Attachment/Mip" + std::to_string(mipLevel) +
+            "/Layer" + std::to_string(baseArrayLayer));
+    attachmentViews_.push_back(
+        {handle.index, physicalImage.handle(), physicalFrame, mipLevel,
+         baseArrayLayer, layerCount, aspect, view});
+    return view;
+}
+
+void RenderResourceRegistry::destroyAttachmentViews(
+    std::optional<uint32_t> imageIndex) {
+    auto it = attachmentViews_.begin();
+    while (it != attachmentViews_.end()) {
+        if (!imageIndex || it->imageIndex == *imageIndex) {
+            vkDestroyImageView(device_->logicalDevice(), it->view, nullptr);
+            it = attachmentViews_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 uint32_t
 RenderResourceRegistry::mipLevelCount(RenderImageHandle handle) const {
     if (!valid(handle))
@@ -279,6 +343,58 @@ VkExtent2D RenderResourceRegistry::extent(RenderImageHandle handle) const {
     return {
         std::max(1u, (viewportExtent_.width + divisor - 1u) / divisor),
         std::max(1u, (viewportExtent_.height + divisor - 1u) / divisor)};
+}
+
+uint64_t RenderResourceRegistry::estimatedBytes(
+    RenderImageHandle handle) const {
+    const RenderImageDesc &desc = description(handle);
+    const VkExtent2D base = extent(handle);
+    uint64_t texels = 0;
+    const uint32_t mipCount = mipLevelCount(handle);
+    for (uint32_t mip = 0; mip < mipCount; ++mip) {
+        texels += uint64_t{std::max(1u, base.width >> mip)} *
+                  std::max(1u, base.height >> mip) * desc.arrayLayers;
+    }
+    uint32_t bytesPerTexel = 4;
+    switch (desc.format) {
+    case VK_FORMAT_R16_SFLOAT:
+    case VK_FORMAT_D16_UNORM:
+    case VK_FORMAT_R8G8_UNORM:
+        bytesPerTexel = 2;
+        break;
+    case VK_FORMAT_R16G16_SFLOAT:
+    case VK_FORMAT_R32_SFLOAT:
+    case VK_FORMAT_D32_SFLOAT:
+    case VK_FORMAT_R8G8B8A8_UNORM:
+    case VK_FORMAT_R8G8B8A8_SRGB:
+    case VK_FORMAT_B8G8R8A8_UNORM:
+    case VK_FORMAT_B8G8R8A8_SRGB:
+        bytesPerTexel = 4;
+        break;
+    case VK_FORMAT_R16G16B16A16_SFLOAT:
+        bytesPerTexel = 8;
+        break;
+    case VK_FORMAT_R32G32B32A32_SFLOAT:
+        bytesPerTexel = 16;
+        break;
+    default:
+        break;
+    }
+    const uint64_t samples = static_cast<uint64_t>(desc.samples);
+    const uint64_t multiplicity =
+        desc.multiplicity == RenderResourceMultiplicity::PerFrame
+            ? frameCount_
+            : 1u;
+    return texels * bytesPerTexel * samples * multiplicity;
+}
+
+uint64_t RenderResourceRegistry::estimatedResidentBytes() const {
+    uint64_t bytes = 0;
+    for (uint32_t index = 0; index < imageDescriptions_.size(); ++index) {
+        if (!images_[index].empty())
+            bytes += estimatedBytes({index});
+    }
+    return bytes;
 }
 
 void RenderResourceRegistry::createImageEntry(uint32_t index) {
@@ -962,7 +1078,8 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
 
 void validateRenderResourceContracts(
     const std::vector<RenderImageDesc> &descriptions,
-    const std::vector<RenderPassResourceUsage> &passes) {
+    const std::vector<RenderPassResourceUsage> &passes,
+    bool requireCompatibleLayouts) {
     std::unordered_set<uint32_t> written;
     std::unordered_map<uint32_t, VkImageLayout> layouts;
     for (uint32_t i = 0; i < descriptions.size(); ++i) {
@@ -1013,7 +1130,8 @@ void validateRenderResourceContracts(
                                              desc.name + " before a writer");
                 }
                 const auto layout = layouts.find(use.image.index);
-                if (use.requiredLayout != VK_IMAGE_LAYOUT_UNDEFINED &&
+                if (requireCompatibleLayouts &&
+                    use.requiredLayout != VK_IMAGE_LAYOUT_UNDEFINED &&
                     (layout == layouts.end() ||
                      layout->second != use.requiredLayout)) {
                     throw std::runtime_error(pass.passName + " reads " +

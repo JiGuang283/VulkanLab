@@ -5,7 +5,6 @@
 #include "core/ComputePipelineConfig.h"
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
-#include "core/GpuBarrier.h"
 #include "core/GpuDebugUtils.h"
 #include "core/Image.h"
 #include "core/VulkanCheck.h"
@@ -14,6 +13,7 @@
 #include "render/FrameGpuData.h"
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
+#include "render/RenderGraph.h"
 #include "render/RenderView.h"
 #include "render/Visibility.h"
 
@@ -76,47 +76,45 @@ TaaPass::~TaaPass() {
     }
 }
 
-std::vector<RenderImageUsage> TaaPass::resourceUsages() const {
-    return {
-        {resourceHandles_.hdrColor, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resourceHandles_.surfaceDepth, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
-        {resourceHandles_.surfaceNormalRoughness,
-         RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resourceHandles_.surfaceMotion, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resourceHandles_.surfaceDepth, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-         RenderImageFrame::Previous},
-        {resourceHandles_.surfaceNormalRoughness,
-         RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         RenderImageFrame::Previous},
-        {resourceHandles_.taaHistory, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         RenderImageFrame::Previous},
-        {resourceHandles_.taaHistory, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resourceHandles_.taaDebug, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+void TaaPass::setup(RenderGraphBuilder &builder,
+                    const RenderGraphBuildContext &) const {
+    builder.addNode(std::string(name()), RgPassType::Compute,
+                    RgQueueClass::Graphics);
+    const auto sampled = [&](RenderImageHandle image, VkImageLayout layout,
+                             RenderImageFrame frame =
+                                 RenderImageFrame::Current) {
+        builder.useImage({image, RenderImageAccess::SampledRead, layout,
+                          layout, frame});
     };
+    sampled(resourceHandles_.hdrColor,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    sampled(resourceHandles_.surfaceDepth,
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+    sampled(resourceHandles_.surfaceNormalRoughness,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    sampled(resourceHandles_.surfaceMotion,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    sampled(resourceHandles_.surfaceDepth,
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+            RenderImageFrame::Previous);
+    sampled(resourceHandles_.surfaceNormalRoughness,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            RenderImageFrame::Previous);
+    sampled(resourceHandles_.taaHistory,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            RenderImageFrame::Previous);
+    builder.useImage({resourceHandles_.taaHistory,
+                      RenderImageAccess::StorageWrite,
+                      VK_IMAGE_LAYOUT_GENERAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage({resourceHandles_.taaDebug,
+                      RenderImageAccess::StorageWrite,
+                      VK_IMAGE_LAYOUT_GENERAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
 }
 
 void TaaPass::releaseViewportResources() {
     freeDescriptors();
-    historyLayoutInitialized_.fill(false);
-    debugLayoutInitialized_.fill(false);
     historyWritten_.fill(false);
     lastExecutionSerial_ = 0;
     status_.active = false;
@@ -169,8 +167,6 @@ void TaaPass::execute(const RenderFrameContext &frame,
     status_.historyGeneration = visibility.history.historyGeneration;
     status_.lastFrameSerial = frame.submissionSerial;
 
-    prepareImages(frame, resources, historyValid);
-
     TaaFrameUbo ubo{};
     ubo.currentInverseViewProjection =
         frame.view->globalUbo.inverseViewProjection;
@@ -213,20 +209,6 @@ void TaaPass::execute(const RenderFrameContext &frame,
     vkCmdDispatch(frame.cmd, dispatchCount(extent.width),
                   dispatchCount(extent.height), 1);
 
-    for (RenderImageHandle handle : {resourceHandles_.taaHistory,
-                                     resourceHandles_.taaDebug}) {
-        const Image &image = resources.image(handle, frame.frameIndex);
-        cmdImageBarrier(
-            frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-            image.handle(), VK_IMAGE_LAYOUT_GENERAL,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, colorRange());
-    }
-
-    historyLayoutInitialized_[frame.frameIndex] = true;
-    debugLayoutInitialized_[frame.frameIndex] = true;
     historyWritten_[frame.frameIndex] = true;
     lastExecutionSerial_ = frame.submissionSerial;
     lastHistoryGeneration_ = visibility.history.historyGeneration;
@@ -362,79 +344,6 @@ void TaaPass::freeDescriptors() {
             descriptorAllocator_->free(set);
         set = VK_NULL_HANDLE;
     }
-}
-
-void TaaPass::prepareImages(const RenderFrameContext &frame,
-                            const RenderResourceRegistry &resources,
-                            bool historyValid) {
-    const uint32_t previousFrame =
-        (frame.frameIndex + resources.frameCount() - 1u) %
-        resources.frameCount();
-    if (!historyValid) {
-        const Image &oldDepth =
-            resources.image(resourceHandles_.surfaceDepth, previousFrame);
-        cmdImageBarrier(
-            frame.cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
-            VK_ACCESS_SHADER_READ_BIT, oldDepth.handle(),
-            VK_IMAGE_LAYOUT_UNDEFINED,
-            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, depthRange());
-        const Image &oldNormal = resources.image(
-            resourceHandles_.surfaceNormalRoughness, previousFrame);
-        cmdImageBarrier(frame.cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
-                        VK_ACCESS_SHADER_READ_BIT, oldNormal.handle(),
-                        VK_IMAGE_LAYOUT_UNDEFINED,
-                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        colorRange());
-    }
-
-    if (!historyLayoutInitialized_[previousFrame]) {
-        const Image &previous =
-            resources.image(resourceHandles_.taaHistory, previousFrame);
-        cmdImageBarrier(frame.cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
-                        VK_ACCESS_SHADER_READ_BIT, previous.handle(),
-                        VK_IMAGE_LAYOUT_UNDEFINED,
-                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        colorRange());
-        historyLayoutInitialized_[previousFrame] = true;
-    }
-
-    const Image &history =
-        resources.image(resourceHandles_.taaHistory, frame.frameIndex);
-    cmdImageBarrier(
-        frame.cmd,
-        historyLayoutInitialized_[frame.frameIndex]
-            ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-            : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        historyLayoutInitialized_[frame.frameIndex]
-            ? VK_ACCESS_SHADER_READ_BIT
-            : 0u,
-        VK_ACCESS_SHADER_WRITE_BIT, history.handle(),
-        historyLayoutInitialized_[frame.frameIndex]
-            ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-            : VK_IMAGE_LAYOUT_UNDEFINED,
-        VK_IMAGE_LAYOUT_GENERAL, colorRange());
-
-    const Image &debug =
-        resources.image(resourceHandles_.taaDebug, frame.frameIndex);
-    cmdImageBarrier(
-        frame.cmd,
-        debugLayoutInitialized_[frame.frameIndex]
-            ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-            : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        debugLayoutInitialized_[frame.frameIndex]
-            ? VK_ACCESS_SHADER_READ_BIT
-            : 0u,
-        VK_ACCESS_SHADER_WRITE_BIT, debug.handle(),
-        debugLayoutInitialized_[frame.frameIndex]
-            ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-            : VK_IMAGE_LAYOUT_UNDEFINED,
-        VK_IMAGE_LAYOUT_GENERAL, colorRange());
 }
 
 } // namespace vkr

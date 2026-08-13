@@ -5,11 +5,13 @@
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
 #include "core/GpuDebugUtils.h"
+#include "core/GpuBarrier.h"
 #include "core/Image.h"
 #include "core/VulkanCheck.h"
 #include "render/FrameGpuData.h"
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
+#include "render/RenderGraph.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/RenderView.h"
 #include "render/ShaderVariant.h"
@@ -81,43 +83,66 @@ BloomPass::~BloomPass() {
     }
 }
 
-std::vector<RenderImageUsage> BloomPass::resourceUsages() const {
-    std::vector<RenderImageUsage> usages;
-    usages.reserve(2 + kLevelCount * 4);
-    usages.push_back(
-        {resourceHandles_.hdrColor, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-    if (resourceHandles_.taaHistory.valid()) {
-        usages.push_back(
-            {resourceHandles_.taaHistory, RenderImageAccess::SampledRead,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-    }
-
-    for (uint32_t level = 0; level < kLevelCount; ++level) {
-        if (level > 0) {
-            usages.push_back(
-                {resourceHandles_.bloomLevels[level - 1],
+void BloomPass::setup(
+    RenderGraphBuilder &builder,
+    const RenderGraphBuildContext &context) const {
+    const uint32_t levels = activeLevelCount(context.resources);
+    for (uint32_t level = 0; level < levels; ++level) {
+        builder.addNode("Bloom/Downsample/L" + std::to_string(level),
+                        RgPassType::Compute, RgQueueClass::Compute, level);
+        if (level == 0) {
+            if (context.features.taaActive &&
+                resourceHandles_.taaHistory.valid()) {
+                builder.useImage(
+                    {resourceHandles_.taaHistory,
+                     RenderImageAccess::SampledRead,
+                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+            } else {
+                builder.useImage(
+                    {resourceHandles_.hdrColor,
+                     RenderImageAccess::SampledRead,
+                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+            }
+        } else {
+            builder.useImage(
+                {resourceHandles_.bloomLevels[level - 1u],
                  RenderImageAccess::SampledRead, VK_IMAGE_LAYOUT_GENERAL,
                  VK_IMAGE_LAYOUT_GENERAL});
         }
-        usages.push_back(
+        builder.useImage(
             {resourceHandles_.bloomLevels[level],
-             RenderImageAccess::StorageWrite, VK_IMAGE_LAYOUT_UNDEFINED,
+             RenderImageAccess::StorageWrite, VK_IMAGE_LAYOUT_GENERAL,
              VK_IMAGE_LAYOUT_GENERAL});
     }
-    for (uint32_t level = kLevelCount - 1; level > 0; --level) {
-        usages.push_back(
-            {resourceHandles_.bloomLevels[level],
+    for (uint32_t sourceLevel = levels - 1u; sourceLevel > 0;
+         --sourceLevel) {
+        const uint32_t destinationLevel = sourceLevel - 1u;
+        builder.addNode("Bloom/Upsample/L" +
+                            std::to_string(sourceLevel) + "-L" +
+                            std::to_string(destinationLevel),
+                        RgPassType::Compute, RgQueueClass::Compute,
+                        kLevelCount + destinationLevel);
+        builder.useImage(
+            {resourceHandles_.bloomLevels[sourceLevel],
              RenderImageAccess::SampledRead, VK_IMAGE_LAYOUT_GENERAL,
              VK_IMAGE_LAYOUT_GENERAL});
-        usages.push_back(
-            {resourceHandles_.bloomLevels[level - 1],
-             RenderImageAccess::StorageReadWrite, VK_IMAGE_LAYOUT_GENERAL,
-             VK_IMAGE_LAYOUT_GENERAL});
+        builder.useImage(
+            {resourceHandles_.bloomLevels[destinationLevel],
+             RenderImageAccess::StorageReadWrite,
+             VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
     }
-    return usages;
+}
+
+void BloomPass::recordNode(
+    RenderGraphPassContext &context, uint32_t localNodeIndex,
+    const VisibilityFrame &) {
+    if (localNodeIndex < kLevelCount)
+        recordDownsample(context.frame, context.resources, localNodeIndex);
+    else
+        recordUpsample(context.frame, context.resources,
+                       localNodeIndex - kLevelCount);
 }
 
 void BloomPass::releaseViewportResources() {
@@ -163,7 +188,7 @@ void BloomPass::execute(const RenderFrameContext &frame,
         VK_ACCESS_SHADER_READ_BIT,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    vkCmdPipelineBarrier(
+    cmdPipelineBarrier2Compat(
         frame.cmd,
         useTaa ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
                : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -218,7 +243,7 @@ void BloomPass::execute(const RenderFrameContext &frame,
                 VK_ACCESS_SHADER_WRITE_BIT,
                 VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
                 VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
-            vkCmdPipelineBarrier(
+            cmdPipelineBarrier2Compat(
                 frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 VK_DEPENDENCY_BY_REGION_BIT, 0, nullptr, 0, nullptr, 1,
@@ -273,7 +298,7 @@ void BloomPass::execute(const RenderFrameContext &frame,
                 VK_ACCESS_SHADER_WRITE_BIT,
                 VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
                 VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
-            vkCmdPipelineBarrier(
+            cmdPipelineBarrier2Compat(
                 frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 VK_DEPENDENCY_BY_REGION_BIT, 0, nullptr, 0, nullptr, 1,
@@ -287,11 +312,85 @@ void BloomPass::execute(const RenderFrameContext &frame,
             .handle(),
         VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
         VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
-    vkCmdPipelineBarrier(
+    cmdPipelineBarrier2Compat(
         frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
         VK_DEPENDENCY_BY_REGION_BIT, 0, nullptr, 0, nullptr, 1,
         &toneMapBarrier);
+}
+
+void BloomPass::recordDownsample(
+    const RenderFrameContext &frame,
+    const RenderResourceRegistry &resources, uint32_t level) {
+    if (!frame.pipelineCache || !frame.view || !frame.shaderVariant ||
+        level >= activeLevelCount(resources))
+        return;
+    const bool useTaa = frame.features.taaActive &&
+                        resourceHandles_.taaHistory.valid();
+    if (level == 0) {
+        updatePrimarySource(
+            resources, frame.frameIndex,
+            useTaa ? resourceHandles_.taaHistory : resourceHandles_.hdrColor,
+            useTaa ? resourceHandles_.taaSampler
+                   : resourceHandles_.hdrSampler);
+    }
+    const VkPushConstantRange pushRange{
+        VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(BloomPushConstants)};
+    ComputePipelineConfig config{};
+    config.debugName = "Pipeline/Bloom/Downsample";
+    config.computeShaderPath = downsampleShaderPath_;
+    config.descriptorLayouts = {descriptorSetLayout_};
+    config.pushConstants = {pushRange};
+    ComputePipeline &pipeline =
+        frame.pipelineCache->getOrCreateCompute(std::move(config));
+    vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      pipeline.handle());
+    const VkDescriptorSet set =
+        downsampleSets_[frame.frameIndex][level];
+    vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            pipeline.layout(), 0, 1, &set, 0, nullptr);
+    BloomPushConstants push{};
+    push.threshold = frame.view->settings.bloomThreshold;
+    push.softKnee = frame.view->settings.bloomSoftKnee;
+    push.applyThreshold = level == 0 ? 1u : 0u;
+    vkCmdPushConstants(frame.cmd, pipeline.layout(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+    const VkExtent2D extent =
+        resources.extent(resourceHandles_.bloomLevels[level]);
+    vkCmdDispatch(frame.cmd, dispatchCount(extent.width),
+                  dispatchCount(extent.height), 1);
+}
+
+void BloomPass::recordUpsample(
+    const RenderFrameContext &frame,
+    const RenderResourceRegistry &resources,
+    uint32_t destinationLevel) {
+    const uint32_t levels = activeLevelCount(resources);
+    if (!frame.pipelineCache || destinationLevel + 1u >= levels)
+        return;
+    const VkPushConstantRange pushRange{
+        VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(BloomPushConstants)};
+    ComputePipelineConfig config{};
+    config.debugName = "Pipeline/Bloom/Upsample";
+    config.computeShaderPath = upsampleShaderPath_;
+    config.descriptorLayouts = {descriptorSetLayout_};
+    config.pushConstants = {pushRange};
+    ComputePipeline &pipeline =
+        frame.pipelineCache->getOrCreateCompute(std::move(config));
+    vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      pipeline.handle());
+    const VkDescriptorSet set =
+        upsampleSets_[frame.frameIndex][destinationLevel];
+    vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            pipeline.layout(), 0, 1, &set, 0, nullptr);
+    BloomPushConstants push{};
+    push.filterRadius = 1.0f;
+    vkCmdPushConstants(frame.cmd, pipeline.layout(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+    const VkExtent2D extent =
+        resources.extent(resourceHandles_.bloomLevels[destinationLevel]);
+    vkCmdDispatch(frame.cmd, dispatchCount(extent.width),
+                  dispatchCount(extent.height), 1);
 }
 
 void BloomPass::updatePrimarySource(
@@ -467,7 +566,7 @@ void BloomPass::initializeImages(
             0, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
     }
-    vkCmdPipelineBarrier(
+    cmdPipelineBarrier2Compat(
         frame.cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
         static_cast<uint32_t>(barriers.size()), barriers.data());
@@ -488,7 +587,7 @@ void BloomPass::prepareImagesForCompute(
             VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
             VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
     }
-    vkCmdPipelineBarrier(
+    cmdPipelineBarrier2Compat(
         frame.cmd,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <optional>
 #include <vulkan/vulkan.h>
 
 namespace vkr {
@@ -13,15 +15,27 @@ struct RenderView;
 struct ShaderVariant;
 struct GpuVisibilityDrawStream;
 
+enum class FrameCaptureSource { Viewport, Workspace, Hdr };
+
 struct FrameRenderFeatures {
+    bool atmosphereRequired = false;
+    bool directionalShadowRequired = false;
+    bool pointShadowRequired = false;
+    bool spotShadowRequired = false;
+    uint32_t directionalShadowCascadeCount = 0;
+    uint32_t pointShadowLightCount = 0;
+    uint32_t spotShadowLightCount = 0;
     bool surfaceDataRequired = false;
     bool hiZRequired = false;
     bool occlusionRequired = false;
     bool screenDepthPyramidRequired = false;
     bool sceneColorPyramidRequired = false;
     bool ssaoRequired = false;
+    bool ssaoActive = false;
     bool cacaoRequired = false;
+    bool cacaoActive = false;
     bool gtaoRequired = false;
+    bool gtaoActive = false;
     bool taaRequired = false;
     bool taaActive = false;
     bool ssrRequired = false;
@@ -30,12 +44,17 @@ struct FrameRenderFeatures {
     bool ssgiActive = false;
     bool ddgiRequired = false;
     bool ddgiActive = false;
+    bool bloomRequired = false;
+    bool captureRequired = false;
+    std::optional<FrameCaptureSource> captureSource;
 };
 
 struct RenderFrameContext {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     uint32_t        frameIndex = 0;
     uint32_t        imageIndex = 0;
+    VkImage         swapchainImage = VK_NULL_HANDLE;
+    VkImageView     swapchainImageView = VK_NULL_HANDLE;
     uint64_t        submissionSerial = 0;
     VkExtent2D      viewportExtent{};
     VkExtent2D      swapchainExtent{};
@@ -59,6 +78,7 @@ struct RenderFrameContext {
     bool atmosphereReady = false;
     FrameRenderFeatures features{};
     const GpuVisibilityDrawStream *visibilityDrawStream = nullptr;
+    std::function<void(VkCommandBuffer)> screenshotCopy;
 };
 
 } // namespace vkr

@@ -35,7 +35,13 @@ class GtaoPass final : public IRenderPass {
     ~GtaoPass() override;
 
     std::string_view name() const override { return "GTAO"; }
-    std::vector<RenderImageUsage> resourceUsages() const override;
+    RgPassType passType() const override { return RgPassType::Compute; }
+    RgPassCondition condition() const override { return RgPassCondition::Gtao; }
+    void setup(RenderGraphBuilder &builder,
+               const RenderGraphBuildContext &context) const override;
+    void recordNode(RenderGraphPassContext &context,
+                    uint32_t localNodeIndex,
+                    const VisibilityFrame &visibility) override;
     void releaseViewportResources() override;
     void onViewportResize(const RenderResourceRegistry &resources) override;
     void execute(const RenderFrameContext &frame,
@@ -48,6 +54,14 @@ class GtaoPass final : public IRenderPass {
     void createDescriptorSetLayouts();
     void createDescriptors(const RenderResourceRegistry &resources);
     void freeDescriptors();
+    void beginFrame(const RenderFrameContext &frame,
+                    const RenderResourceRegistry &resources,
+                    const VisibilityFrame &visibility);
+    void recordStage(const RenderFrameContext &frame,
+                     const RenderResourceRegistry &resources,
+                     uint32_t stage);
+    void finishFrame(const RenderFrameContext &frame,
+                     const VisibilityFrame &visibility);
 
     Device *device_ = nullptr;
     RendererResourceHandles resourceHandles_{};
@@ -64,6 +78,8 @@ class GtaoPass final : public IRenderPass {
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> verticalSets_{};
     std::array<bool, MAX_FRAMES_IN_FLIGHT> initialized_{};
     std::array<bool, MAX_FRAMES_IN_FLIGHT> historyWritten_{};
+    bool currentHistoryValid_ = false;
+    uint64_t currentSettingsSignature_ = 0;
     uint64_t lastExecutionSerial_ = 0;
     uint64_t lastHistoryGeneration_ = 0;
     uint64_t lastSettingsSignature_ = 0;

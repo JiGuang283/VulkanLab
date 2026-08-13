@@ -36,7 +36,14 @@ class CacaoPass final : public IRenderPass {
     CacaoPass &operator=(const CacaoPass &) = delete;
 
     std::string_view name() const override { return "CACAO"; }
-    std::vector<RenderImageUsage> resourceUsages() const override;
+    // FidelityFX CACAO records its own internal image barriers. The frame
+    // graph treats the SDK invocation as one black-box external node while
+    // still tracking its imported inputs and output.
+    RgPassType passType() const override { return RgPassType::External; }
+    RgPassCondition condition() const override { return RgPassCondition::Cacao; }
+    void setup(RenderGraphBuilder &builder,
+               const RenderGraphBuildContext &context) const override;
+    bool managesDeclaredTransitionsInternally() const override { return true; }
     void releaseViewportResources() override;
     void onViewportResize(const RenderResourceRegistry &resources) override;
     void execute(const RenderFrameContext &frame,

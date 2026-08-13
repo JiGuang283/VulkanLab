@@ -7,6 +7,7 @@
 #include "core/Buffer.h"
 #include "core/Device.h"
 #include "core/GpuDebugUtils.h"
+#include "core/GpuBarrier.h"
 #include "core/Log.h"
 
 #include <stb_image_write.h>
@@ -347,25 +348,6 @@ class CaptureService::Impl {
         ScopedGpuLabel label(device_->debugUtils(), commandBuffer,
                              "ScreenshotCopy");
 
-        VkImageMemoryBarrier toTransfer{};
-        toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        toTransfer.srcAccessMask = active_->source.sourceAccess;
-        toTransfer.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        toTransfer.oldLayout = active_->source.layout;
-        toTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        toTransfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toTransfer.image = active_->source.image;
-        toTransfer.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        toTransfer.subresourceRange.baseMipLevel = 0;
-        toTransfer.subresourceRange.levelCount = 1;
-        toTransfer.subresourceRange.baseArrayLayer = 0;
-        toTransfer.subresourceRange.layerCount = 1;
-        vkCmdPipelineBarrier(commandBuffer,
-                             active_->source.sourceStage,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
-                             nullptr, 1, &toTransfer);
-
         VkBufferImageCopy copy{};
         copy.bufferOffset = 0;
         copy.bufferRowLength = 0;
@@ -379,15 +361,6 @@ class CaptureService::Impl {
         vkCmdCopyImageToBuffer(commandBuffer, active_->source.image,
                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                active_->buffer->handle(), 1, &copy);
-
-        VkImageMemoryBarrier restore = toTransfer;
-        restore.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        restore.dstAccessMask = active_->source.restoreAccess;
-        restore.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        restore.newLayout = active_->source.layout;
-        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             active_->source.restoreStage, 0, 0,
-                             nullptr, 0, nullptr, 1, &restore);
         active_->copyRecorded = true;
     }
 

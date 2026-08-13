@@ -24,7 +24,10 @@ class CacaoNormalAdapterPass final : public IRenderPass {
     ~CacaoNormalAdapterPass() override;
 
     std::string_view name() const override { return "CACAO Input Adapter"; }
-    std::vector<RenderImageUsage> resourceUsages() const override;
+    RgPassType passType() const override { return RgPassType::Compute; }
+    RgPassCondition condition() const override { return RgPassCondition::Cacao; }
+    void setup(RenderGraphBuilder &builder,
+               const RenderGraphBuildContext &context) const override;
     void releaseViewportResources() override;
     void onViewportResize(const RenderResourceRegistry &resources) override;
     void execute(const RenderFrameContext &frame,
@@ -43,7 +46,6 @@ class CacaoNormalAdapterPass final : public IRenderPass {
     VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
     std::string shaderPath_;
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> descriptorSets_{};
-    std::array<bool, MAX_FRAMES_IN_FLIGHT> initialized_{};
 };
 
 } // namespace vkr

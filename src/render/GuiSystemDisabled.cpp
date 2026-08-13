@@ -2,7 +2,7 @@
 
 namespace vkr {
 
-GuiSystem::GuiSystem(VkInstance, Device &, VkRenderPass, GLFWwindow *,
+GuiSystem::GuiSystem(VkInstance, Device &, VkFormat, GLFWwindow *,
                      uint32_t, uint32_t) {}
 
 GuiSystem::~GuiSystem() = default;

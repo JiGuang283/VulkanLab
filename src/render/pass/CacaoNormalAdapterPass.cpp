@@ -12,6 +12,7 @@
 #include "diagnostics/TracyProfiler.h"
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
+#include "render/RenderGraph.h"
 #include "render/RenderResourceRegistry.h"
 
 #include <array>
@@ -58,35 +59,36 @@ CacaoNormalAdapterPass::~CacaoNormalAdapterPass() {
     }
 }
 
-std::vector<RenderImageUsage>
-CacaoNormalAdapterPass::resourceUsages() const {
-    return {{resourceHandles_.surfaceDepth,
-             RenderImageAccess::SampledRead,
-             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
-            {resourceHandles_.surfaceNormalRoughness,
-             RenderImageAccess::SampledRead,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-            {resourceHandles_.cacaoDepth,
-             RenderImageAccess::StorageWrite,
-             VK_IMAGE_LAYOUT_UNDEFINED,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-            {resourceHandles_.cacaoViewNormals,
-             RenderImageAccess::StorageWrite,
-             VK_IMAGE_LAYOUT_UNDEFINED,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+void CacaoNormalAdapterPass::setup(
+    RenderGraphBuilder &builder,
+    const RenderGraphBuildContext &) const {
+    builder.addNode(std::string(name()), RgPassType::Compute,
+                    RgQueueClass::Graphics);
+    builder.useImage({resourceHandles_.surfaceDepth,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL});
+    builder.useImage({resourceHandles_.surfaceNormalRoughness,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage({resourceHandles_.cacaoDepth,
+                      RenderImageAccess::StorageWrite,
+                      VK_IMAGE_LAYOUT_GENERAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage({resourceHandles_.cacaoViewNormals,
+                      RenderImageAccess::StorageWrite,
+                      VK_IMAGE_LAYOUT_GENERAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
 }
 
 void CacaoNormalAdapterPass::releaseViewportResources() {
     freeDescriptors();
-    initialized_.fill(false);
 }
 
 void CacaoNormalAdapterPass::onViewportResize(
     const RenderResourceRegistry &resources) {
     createDescriptors(resources);
-    initialized_.fill(false);
 }
 
 void CacaoNormalAdapterPass::execute(
@@ -99,24 +101,6 @@ void CacaoNormalAdapterPass::execute(
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd,
                          "CACAO Normal Adapter");
     const uint32_t frameIndex = frame.frameIndex;
-    const std::array<const Image *, 2> outputs = {
-        &resources.image(resourceHandles_.cacaoDepth, frameIndex),
-        &resources.image(resourceHandles_.cacaoViewNormals, frameIndex)};
-    for (const Image *output : outputs) {
-        cmdImageBarrier(
-            frame.cmd,
-            initialized_[frameIndex] ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
-                                     : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            initialized_[frameIndex] ? VK_ACCESS_SHADER_READ_BIT : 0u,
-            VK_ACCESS_SHADER_WRITE_BIT, output->handle(),
-            initialized_[frameIndex]
-                ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                : VK_IMAGE_LAYOUT_UNDEFINED,
-            VK_IMAGE_LAYOUT_GENERAL,
-            {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1});
-    }
-    initialized_[frameIndex] = true;
 
     ComputePipelineConfig config{};
     config.debugName = "Pipeline/ScreenSpace/CACAO/NormalAdapter";
@@ -137,16 +121,6 @@ void CacaoNormalAdapterPass::execute(
         resources.extent(resourceHandles_.cacaoViewNormals);
     vkCmdDispatch(frame.cmd, dispatchCount(extent.width),
                   dispatchCount(extent.height), 1);
-
-    for (const Image *output : outputs) {
-        cmdImageBarrier(frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                        VK_ACCESS_SHADER_WRITE_BIT,
-                        VK_ACCESS_SHADER_READ_BIT, output->handle(),
-                        VK_IMAGE_LAYOUT_GENERAL,
-                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1});
-    }
 }
 
 void CacaoNormalAdapterPass::createDescriptorSetLayout() {

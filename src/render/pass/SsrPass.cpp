@@ -12,6 +12,7 @@
 #include "diagnostics/TracyProfiler.h"
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
+#include "render/RenderGraph.h"
 #include "render/RenderView.h"
 #include "render/Visibility.h"
 
@@ -99,50 +100,246 @@ SsrPass::~SsrPass() {
     }
 }
 
-std::vector<RenderImageUsage> SsrPass::resourceUsages() const {
-    return {
-        {resources_.surfaceDepth, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
-        {resources_.surfaceNormalRoughness, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resources_.surfaceMotion, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resources_.screenDepthPyramid, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resources_.sceneColorPyramid, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resources_.surfaceDepth, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-         RenderImageFrame::Previous},
-        {resources_.surfaceNormalRoughness, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         RenderImageFrame::Previous},
-        {resources_.ssrHistory, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         RenderImageFrame::Previous},
-        {resources_.ssrRaw, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resources_.ssrHistory, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resources_.ssrTemp, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL},
-        {resources_.ssrFiltered, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resources_.ssrDebug, RenderImageAccess::StorageWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+void SsrPass::setup(RenderGraphBuilder &builder,
+                    const RenderGraphBuildContext &) const {
+    const auto surfaceReads = [&] {
+        builder.useImage({resources_.surfaceDepth,
+                          RenderImageAccess::SampledRead,
+                          VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                          VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL});
+        builder.useImage({resources_.surfaceNormalRoughness,
+                          RenderImageAccess::SampledRead,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
     };
+
+    builder.addNode("SSR/Trace", RgPassType::Compute,
+                    RgQueueClass::Compute, 0);
+    surfaceReads();
+    builder.useImage({resources_.screenDepthPyramid,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage({resources_.sceneColorPyramid,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage({resources_.ssrRaw, RenderImageAccess::StorageWrite,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+
+    builder.addNode("SSR/Temporal", RgPassType::Compute,
+                    RgQueueClass::Compute, 1);
+    surfaceReads();
+    builder.useImage({resources_.surfaceMotion,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage({resources_.surfaceDepth,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                      RenderImageFrame::Previous});
+    builder.useImage({resources_.surfaceNormalRoughness,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      RenderImageFrame::Previous});
+    builder.useImage({resources_.ssrHistory,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      RenderImageFrame::Previous});
+    builder.useImage({resources_.ssrRaw, RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+    builder.useImage({resources_.ssrHistory,
+                      RenderImageAccess::StorageWrite,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+    builder.useImage({resources_.ssrDebug,
+                      RenderImageAccess::StorageWrite,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+
+    builder.addNode("SSR/BilateralHorizontal", RgPassType::Compute,
+                    RgQueueClass::Compute, 2);
+    surfaceReads();
+    builder.useImage({resources_.ssrHistory,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+    builder.useImage({resources_.ssrTemp, RenderImageAccess::StorageWrite,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+
+    builder.addNode("SSR/BilateralVertical", RgPassType::Compute,
+                    RgQueueClass::Compute, 3);
+    surfaceReads();
+    builder.useImage({resources_.ssrTemp, RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+    builder.useImage({resources_.ssrFiltered,
+                      RenderImageAccess::StorageWrite,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+
+    builder.addNode("SSR/Finalize", RgPassType::Compute,
+                    RgQueueClass::Compute, 4);
+    for (RenderImageHandle handle :
+         {resources_.ssrRaw, resources_.ssrHistory,
+          resources_.ssrFiltered, resources_.ssrDebug}) {
+        builder.useImage({handle, RenderImageAccess::SampledRead,
+                          VK_IMAGE_LAYOUT_GENERAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    }
+}
+
+void SsrPass::recordNode(RenderGraphPassContext &context,
+                         uint32_t localNodeIndex,
+                         const VisibilityFrame &visibility) {
+    if (localNodeIndex == 0)
+        beginFrame(context.frame, context.resources, visibility);
+    if (localNodeIndex < 4)
+        recordStage(context.frame, context.resources, localNodeIndex);
+    else if (localNodeIndex == 4)
+        finishFrame(context.frame, visibility);
+}
+
+void SsrPass::beginFrame(const RenderFrameContext &frame,
+                         const RenderResourceRegistry &resources,
+                         const VisibilityFrame &visibility) {
+    status_.active = frame.features.ssrActive;
+    if (!frame.view)
+        return;
+    const uint32_t previous =
+        (frame.frameIndex + resources.frameCount() - 1u) %
+        resources.frameCount();
+    currentSettingsSignature_ = signature(frame.view->settings);
+    const bool contiguous = lastExecutionSerial_ != 0 &&
+                            lastExecutionSerial_ + 1u ==
+                                frame.submissionSerial;
+    const bool generationMatches =
+        lastExecutionSerial_ != 0 &&
+        lastHistoryGeneration_ == visibility.history.historyGeneration;
+    const bool settingsMatch =
+        lastExecutionSerial_ != 0 &&
+        lastSettingsSignature_ == currentSettingsSignature_;
+    currentHistoryValid_ = visibility.history.globalValid && contiguous &&
+                           generationMatches && settingsMatch &&
+                           historyWritten_[previous];
+    updateTemporalHistoryDescriptors(resources, frame.frameIndex, previous,
+                                     currentHistoryValid_);
+    status_.historyValid = currentHistoryValid_;
+    status_.historyGeneration = visibility.history.historyGeneration;
+    status_.lastFrameSerial = frame.submissionSerial;
+    if (!currentHistoryValid_) {
+        if (!visibility.history.invalidationReason.empty())
+            status_.lastResetReason = visibility.history.invalidationReason;
+        else if (!contiguous)
+            status_.lastResetReason = "SSR was not executed continuously";
+        else if (!generationMatches)
+            status_.lastResetReason = "temporal generation changed";
+        else if (!settingsMatch)
+            status_.lastResetReason = "SSR settings changed";
+        else
+            status_.lastResetReason = "history is unavailable";
+    } else {
+        status_.lastResetReason.clear();
+    }
+    status_.extent = resources.extent(resources_.ssrFiltered);
+}
+
+void SsrPass::recordStage(const RenderFrameContext &frame,
+                          const RenderResourceRegistry &resources,
+                          uint32_t stage) {
+    if (!frame.pipelineCache || !frame.view || stage > 3)
+        return;
+    const uint32_t current = frame.frameIndex;
+    const VkExtent2D full = resources.extent(resources_.surfaceDepth);
+    const VkExtent2D half = resources.extent(resources_.ssrFiltered);
+
+    if (stage == 0) {
+        TracePush push{};
+        push.parameters = {frame.view->settings.ssrMaxDistance,
+                           frame.view->settings.ssrThickness,
+                           frame.view->settings.ssrMaxRoughness,
+                           frame.view->settings.ssrIntensity};
+        push.dimensions = {stepCount(frame.view->settings.ssrQuality), 4,
+                           full.width, full.height};
+        push.sampling = {
+            float(resources.mipLevelCount(resources_.screenDepthPyramid) - 1),
+            float(resources.mipLevelCount(resources_.sceneColorPyramid) - 1),
+            float(frame.submissionSerial & 7u), 0.0f};
+        ComputePipelineConfig config{};
+        config.debugName = "Pipeline/ScreenSpace/SSR/Trace";
+        config.computeShaderPath = traceShaderPath_;
+        config.descriptorLayouts = {globalLayout_, traceLayout_};
+        config.pushConstants = {{VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                 sizeof(push)}};
+        ComputePipeline &pipeline =
+            frame.pipelineCache->getOrCreateCompute(std::move(config));
+        vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          pipeline.handle());
+        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                pipeline.layout(), 0, 1,
+                                &frame.globalDescriptorSet, 0, nullptr);
+        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                pipeline.layout(), 1, 1,
+                                &traceSets_[current], 0, nullptr);
+        vkCmdPushConstants(frame.cmd, pipeline.layout(),
+                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push),
+                           &push);
+        vkCmdDispatch(frame.cmd, groups(half.width), groups(half.height), 1);
+        return;
+    }
+
+    if (stage == 1) {
+        TemporalPush push{};
+        push.parameters = {frame.view->settings.ssrHistoryWeight,
+                           0.01f, 0.8f, 0.0f};
+        push.dimensions = {full.width, full.height,
+                           currentHistoryValid_ ? 1u : 0u, 0u};
+        ComputePipelineConfig config{};
+        config.debugName = "Pipeline/ScreenSpace/SSR/Temporal";
+        config.computeShaderPath = temporalShaderPath_;
+        config.descriptorLayouts = {temporalLayout_};
+        config.pushConstants = {{VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                 sizeof(push)}};
+        ComputePipeline &pipeline =
+            frame.pipelineCache->getOrCreateCompute(std::move(config));
+        vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          pipeline.handle());
+        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                pipeline.layout(), 0, 1,
+                                &temporalSets_[current], 0, nullptr);
+        vkCmdPushConstants(frame.cmd, pipeline.layout(),
+                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push),
+                           &push);
+        vkCmdDispatch(frame.cmd, groups(half.width), groups(half.height), 1);
+        return;
+    }
+
+    BlurPush push{{full.width, full.height, stage == 2 ? 0u : 1u, 0u}};
+    ComputePipelineConfig config{};
+    config.debugName = "Pipeline/ScreenSpace/SSR/Blur";
+    config.computeShaderPath = blurShaderPath_;
+    config.descriptorLayouts = {globalLayout_, blurLayout_};
+    config.pushConstants = {{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push)}};
+    ComputePipeline &pipeline =
+        frame.pipelineCache->getOrCreateCompute(std::move(config));
+    vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      pipeline.handle());
+    vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            pipeline.layout(), 0, 1,
+                            &frame.globalDescriptorSet, 0, nullptr);
+    const VkDescriptorSet set = stage == 2 ? horizontalSets_[current]
+                                           : verticalSets_[current];
+    vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            pipeline.layout(), 1, 1, &set, 0, nullptr);
+    vkCmdPushConstants(frame.cmd, pipeline.layout(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+    vkCmdDispatch(frame.cmd, groups(half.width), groups(half.height), 1);
+}
+
+void SsrPass::finishFrame(const RenderFrameContext &frame,
+                          const VisibilityFrame &visibility) {
+    historyWritten_[frame.frameIndex] = true;
+    lastExecutionSerial_ = frame.submissionSerial;
+    lastHistoryGeneration_ = visibility.history.historyGeneration;
+    lastSettingsSignature_ = currentSettingsSignature_;
 }
 
 void SsrPass::releaseViewportResources() {

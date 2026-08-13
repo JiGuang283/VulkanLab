@@ -1,10 +1,12 @@
 #pragma once
 
 #include "core/FrameSync.h"
+#include "render/RenderGraphTypes.h"
 
 #include <array>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -24,6 +26,11 @@ struct GpuPassTimings {
     double totalMs = 0.0;
 };
 
+struct GpuPassProfile {
+    RenderGraphPassId id = 0;
+    std::string name;
+};
+
 uint64_t gpuTimestampDeltaTicks(uint64_t begin, uint64_t end,
                                 uint32_t validBits);
 double gpuTimestampTicksToMilliseconds(uint64_t ticks,
@@ -31,7 +38,7 @@ double gpuTimestampTicksToMilliseconds(uint64_t ticks,
 
 class GpuPassProfiler {
   public:
-    GpuPassProfiler(Device &device, std::vector<std::string> passNames);
+    GpuPassProfiler(Device &device, std::vector<GpuPassProfile> passes);
     ~GpuPassProfiler();
 
     GpuPassProfiler(const GpuPassProfiler &) = delete;
@@ -41,9 +48,9 @@ class GpuPassProfiler {
     void beginFrame(VkCommandBuffer commandBuffer, uint32_t frameIndex,
                     uint64_t frameSerial);
     void beginPass(VkCommandBuffer commandBuffer, uint32_t frameIndex,
-                   uint32_t passIndex) const;
+                   RenderGraphPassId passId);
     void endPass(VkCommandBuffer commandBuffer, uint32_t frameIndex,
-                 uint32_t passIndex) const;
+                 RenderGraphPassId passId);
 
     bool supported() const { return queryPool_ != VK_NULL_HANDLE; }
     const GpuPassTimings &latest() const { return latest_; }
@@ -52,14 +59,19 @@ class GpuPassProfiler {
     struct FrameSlot {
         bool recorded = false;
         uint64_t frameSerial = 0;
+        std::vector<uint8_t> activePasses;
+        uint32_t firstStartedPass = UINT32_MAX;
+        uint32_t lastCompletedPass = UINT32_MAX;
     };
 
     uint32_t frameQueryBase(uint32_t frameIndex) const;
     uint32_t passQuery(uint32_t frameIndex, uint32_t passIndex,
                        bool end) const;
+    uint32_t passIndex(RenderGraphPassId passId) const;
 
     Device *device_ = nullptr;
-    std::vector<std::string> passNames_;
+    std::vector<GpuPassProfile> passes_;
+    std::unordered_map<RenderGraphPassId, uint32_t> passSlots_;
     VkQueryPool queryPool_ = VK_NULL_HANDLE;
     uint32_t timestampValidBits_ = 0;
     double timestampPeriodNanoseconds_ = 0.0;

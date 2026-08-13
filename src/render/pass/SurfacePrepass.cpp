@@ -17,6 +17,7 @@
 #include "render/Mesh.h"
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
+#include "render/RenderGraph.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/Visibility.h"
 
@@ -50,7 +51,7 @@ struct SurfacePrepass::FrameStorage {
 };
 
 SurfacePrepass::SurfacePrepass(
-    Device &device, const RenderResourceRegistry &resources,
+    Device &device, const RenderResourceRegistry &,
     RendererResourceHandles resourceHandles,
     DescriptorAllocator &descriptorAllocator,
     VkDescriptorSetLayout globalDescriptorSetLayout,
@@ -71,14 +72,9 @@ SurfacePrepass::SurfacePrepass(
     }
     createDescriptorSetLayout();
     createFrameStorage();
-    createRenderPass(resources);
-    createFramebuffers(resources);
 }
 
 SurfacePrepass::~SurfacePrepass() {
-    destroyFramebuffers();
-    if (renderPass_ != VK_NULL_HANDLE)
-        vkDestroyRenderPass(device_->logicalDevice(), renderPass_, nullptr);
     for (auto &frame : frames_) {
         if (frame && frame->descriptorSet != VK_NULL_HANDLE)
             descriptorAllocator_->free(frame->descriptorSet);
@@ -91,37 +87,52 @@ SurfacePrepass::~SurfacePrepass() {
     }
 }
 
-std::vector<RenderImageUsage> SurfacePrepass::resourceUsages() const {
-    std::vector<RenderImageUsage> usages = {
-        {resourceHandles_.surfaceNormalRoughness,
-         RenderImageAccess::ColorAttachmentWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resourceHandles_.surfaceMotion,
-         RenderImageAccess::ColorAttachmentWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resourceHandles_.surfaceDepth,
-         RenderImageAccess::DepthAttachmentWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}};
+void SurfacePrepass::setup(RenderGraphBuilder &builder,
+                           const RenderGraphBuildContext &) const {
+    builder.addNode(std::string(name()), RgPassType::Graphics,
+                    RgQueueClass::Graphics);
+    builder.addColorAttachment(
+        resourceHandles_.surfaceNormalRoughness,
+        RenderImageAccess::ColorAttachmentWrite,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE,
+        {{0.5f, 0.5f, 1.0f, 0.0f}});
+    builder.addColorAttachment(
+        resourceHandles_.surfaceMotion,
+        RenderImageAccess::ColorAttachmentWrite,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE,
+        {{0.0f, 0.0f, 0.0f, 0.0f}});
     if (resourceHandles_.surfaceAlbedoMetallic.valid()) {
-        usages.insert(usages.end() - 1,
-                      {resourceHandles_.surfaceAlbedoMetallic,
-                       RenderImageAccess::ColorAttachmentWrite,
-                       VK_IMAGE_LAYOUT_UNDEFINED,
-                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+        builder.addColorAttachment(
+            resourceHandles_.surfaceAlbedoMetallic,
+            RenderImageAccess::ColorAttachmentWrite,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE,
+            {{0.0f, 0.0f, 0.0f, 0.0f}});
     }
-    return usages;
+    builder.addDepthAttachment(
+        resourceHandles_.surfaceDepth,
+        RenderImageAccess::DepthAttachmentWrite,
+        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+        VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE);
 }
 
-void SurfacePrepass::releaseViewportResources() {
-    destroyFramebuffers();
-}
-
-void SurfacePrepass::onViewportResize(
-    const RenderResourceRegistry &resources) {
-    createFramebuffers(resources);
+void SurfacePrepass::recordNode(
+    RenderGraphPassContext &context, uint32_t,
+    const VisibilityFrame &visibility) {
+    const VkExtent2D extent =
+        context.resources.extent(resourceHandles_.surfaceDepth);
+    prepareFrame(context.frame.frameIndex, visibility, extent);
+    VkViewport viewport{};
+    viewport.width = static_cast<float>(extent.width);
+    viewport.height = static_cast<float>(extent.height);
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(context.frame.cmd, 0, 1, &viewport);
+    const VkRect2D scissor{{0, 0}, extent};
+    vkCmdSetScissor(context.frame.cmd, 0, 1, &scissor);
+    draw(context.frame, context.resources, visibility);
 }
 
 void SurfacePrepass::execute(const RenderFrameContext &frame,
@@ -130,38 +141,9 @@ void SurfacePrepass::execute(const RenderFrameContext &frame,
     if (!frame.features.surfaceDataRequired || !frame.pipelineCache)
         return;
 
-    VKL_PROFILE_ZONE("Record SurfacePrepass");
-    VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "SurfacePrepass");
-    const VkExtent2D extent =
-        resources.extent(resourceHandles_.surfaceDepth);
-    prepareFrame(frame.frameIndex, visibility, extent);
-
-    std::array<VkClearValue, 4> clears{};
-    clears[0].color = {{0.5f, 0.5f, 1.0f, 0.0f}};
-    clears[1].color = {{0.0f, 0.0f, 0.0f, 0.0f}};
-    const bool hasAlbedoMetallic =
-        resourceHandles_.surfaceAlbedoMetallic.valid();
-    if (hasAlbedoMetallic)
-        clears[2].color = {{0.0f, 0.0f, 0.0f, 0.0f}};
-    clears[hasAlbedoMetallic ? 3u : 2u].depthStencil = {1.0f, 0};
-    VkRenderPassBeginInfo begin{};
-    begin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    begin.renderPass = renderPass_;
-    begin.framebuffer = framebuffers_.at(frame.frameIndex);
-    begin.renderArea = {{0, 0}, extent};
-    begin.clearValueCount = hasAlbedoMetallic ? 4u : 3u;
-    begin.pClearValues = clears.data();
-    vkCmdBeginRenderPass(frame.cmd, &begin, VK_SUBPASS_CONTENTS_INLINE);
-
-    VkViewport viewport{};
-    viewport.width = static_cast<float>(extent.width);
-    viewport.height = static_cast<float>(extent.height);
-    viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(frame.cmd, 0, 1, &viewport);
-    const VkRect2D scissor{{0, 0}, extent};
-    vkCmdSetScissor(frame.cmd, 0, 1, &scissor);
-    draw(frame, visibility);
-    vkCmdEndRenderPass(frame.cmd);
+    (void)frame;
+    (void)resources;
+    (void)visibility;
 }
 
 uint32_t SurfacePrepass::historyCapacity(uint32_t frameIndex) const {
@@ -312,6 +294,7 @@ void SurfacePrepass::prepareFrame(uint32_t frameIndex,
 }
 
 void SurfacePrepass::draw(const RenderFrameContext &frame,
+                          const RenderResourceRegistry &resources,
                           const VisibilityFrame &visibility) {
     Pipeline *boundPipeline = nullptr;
     for (RenderItemIndex itemIndex : visibility.cameraOpaque) {
@@ -350,8 +333,20 @@ void SurfacePrepass::draw(const RenderFrameContext &frame,
             "Pipeline/SurfacePrepass/" +
             std::string(alphaMasked ? "Mask" : "Opaque") + "/" +
             (cullMode == VK_CULL_MODE_NONE ? "CullNone" : "CullBack");
+        PipelineRenderingSignature signature{};
+        signature.colorAttachmentFormats = {
+            resources.description(resourceHandles_.surfaceNormalRoughness)
+                .format,
+            resources.description(resourceHandles_.surfaceMotion).format};
+        if (resourceHandles_.surfaceAlbedoMetallic.valid()) {
+            signature.colorAttachmentFormats.push_back(
+                resources.description(resourceHandles_.surfaceAlbedoMetallic)
+                    .format);
+        }
+        signature.depthAttachmentFormat =
+            resources.description(resourceHandles_.surfaceDepth).format;
         Pipeline &pipeline = frame.pipelineCache->getOrCreate(
-            renderPass_, std::move(config));
+            std::move(signature), std::move(config));
         if (boundPipeline != &pipeline) {
             vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                               pipeline.handle());
@@ -384,146 +379,6 @@ void SurfacePrepass::draw(const RenderFrameContext &frame,
                            0, sizeof(block), &block);
         item.mesh->bind(frame.cmd);
         item.mesh->draw(frame.cmd, itemIndex);
-    }
-}
-
-void SurfacePrepass::createRenderPass(
-    const RenderResourceRegistry &resources) {
-    const bool hasAlbedoMetallic =
-        resourceHandles_.surfaceAlbedoMetallic.valid();
-    std::vector<VkAttachmentDescription> attachments(
-        hasAlbedoMetallic ? 4u : 3u);
-    attachments[0].format = resources.description(
-        resourceHandles_.surfaceNormalRoughness).format;
-    attachments[1].format =
-        resources.description(resourceHandles_.surfaceMotion).format;
-    const uint32_t colorCount = hasAlbedoMetallic ? 3u : 2u;
-    if (hasAlbedoMetallic) {
-        attachments[2].format = resources.description(
-            resourceHandles_.surfaceAlbedoMetallic).format;
-    }
-    for (uint32_t index = 0; index < colorCount; ++index) {
-        attachments[index].samples = VK_SAMPLE_COUNT_1_BIT;
-        attachments[index].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        attachments[index].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        attachments[index].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        attachments[index].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        attachments[index].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        attachments[index].finalLayout =
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    }
-    const uint32_t depthIndex = colorCount;
-    attachments[depthIndex].format =
-        resources.description(resourceHandles_.surfaceDepth).format;
-    attachments[depthIndex].samples = VK_SAMPLE_COUNT_1_BIT;
-    attachments[depthIndex].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachments[depthIndex].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachments[depthIndex].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachments[depthIndex].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachments[depthIndex].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachments[depthIndex].finalLayout =
-        VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-
-    std::vector<VkAttachmentReference> colorRefs(colorCount);
-    for (uint32_t index = 0; index < colorCount; ++index) {
-        colorRefs[index] = {index,
-                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-    }
-    const VkAttachmentReference depthRef{
-        depthIndex, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
-    VkSubpassDescription subpass{};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount =
-        static_cast<uint32_t>(colorRefs.size());
-    subpass.pColorAttachments = colorRefs.data();
-    subpass.pDepthStencilAttachment = &depthRef;
-
-    std::array<VkSubpassDependency, 2> dependencies{};
-    dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependencies[0].dstSubpass = 0;
-    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-    dependencies[0].dstStageMask =
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-    dependencies[0].dstAccessMask =
-        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    dependencies[1].srcSubpass = 0;
-    dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-    dependencies[1].srcStageMask =
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-    dependencies[1].dstStageMask =
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    dependencies[1].srcAccessMask =
-        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-
-    VkRenderPassCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    info.attachmentCount = static_cast<uint32_t>(attachments.size());
-    info.pAttachments = attachments.data();
-    info.subpassCount = 1;
-    info.pSubpasses = &subpass;
-    info.dependencyCount = static_cast<uint32_t>(dependencies.size());
-    info.pDependencies = dependencies.data();
-    VK_CHECK(vkCreateRenderPass(device_->logicalDevice(), &info, nullptr,
-                                &renderPass_));
-    device_->debugUtils().setObjectName(VK_OBJECT_TYPE_RENDER_PASS,
-                                        renderPass_,
-                                        "RenderPass/SurfacePrepass");
-}
-
-void SurfacePrepass::createFramebuffers(
-    const RenderResourceRegistry &resources) {
-    const VkExtent2D extent = resources.extent(resourceHandles_.surfaceDepth);
-    const bool hasAlbedoMetallic =
-        resourceHandles_.surfaceAlbedoMetallic.valid();
-    for (uint32_t frame = 0; frame < framebuffers_.size(); ++frame) {
-        std::vector<VkImageView> attachments;
-        attachments.reserve(hasAlbedoMetallic ? 4u : 3u);
-        attachments.push_back(
-            resources.image(resourceHandles_.surfaceNormalRoughness, frame)
-                .imageView());
-        attachments.push_back(
-            resources.image(resourceHandles_.surfaceMotion, frame)
-                .imageView());
-        if (hasAlbedoMetallic) {
-            attachments.push_back(
-                resources.image(resourceHandles_.surfaceAlbedoMetallic, frame)
-                    .imageView());
-        }
-        attachments.push_back(
-            resources.image(resourceHandles_.surfaceDepth, frame)
-                .imageView());
-        VkFramebufferCreateInfo info{};
-        info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        info.renderPass = renderPass_;
-        info.attachmentCount = static_cast<uint32_t>(attachments.size());
-        info.pAttachments = attachments.data();
-        info.width = extent.width;
-        info.height = extent.height;
-        info.layers = 1;
-        VK_CHECK(vkCreateFramebuffer(device_->logicalDevice(), &info,
-                                     nullptr, &framebuffers_[frame]));
-        device_->debugUtils().setObjectName(
-            VK_OBJECT_TYPE_FRAMEBUFFER, framebuffers_[frame],
-            "Framebuffer/SurfacePrepass/Frame" + std::to_string(frame));
-    }
-}
-
-void SurfacePrepass::destroyFramebuffers() {
-    for (VkFramebuffer &framebuffer : framebuffers_) {
-        if (framebuffer != VK_NULL_HANDLE) {
-            vkDestroyFramebuffer(device_->logicalDevice(), framebuffer,
-                                 nullptr);
-        }
-        framebuffer = VK_NULL_HANDLE;
     }
 }
 

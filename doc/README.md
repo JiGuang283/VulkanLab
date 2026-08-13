@@ -1,8 +1,8 @@
 # VulkanLab 文档
 
 > Status: Current
-> Last verified: 2026-08-01
-> Verified against: Scene Authoring Stage 0-1 working tree
+> Last verified: 2026-08-12
+> Verified against: Vulkan 1.3 RenderGraph and Dynamic Rendering implementation
 
 本目录按文档有效性分为 Current、Active 和 Archived 三种状态。只有 `guides/` 与 `architecture/` 中标记为 Current 的文档可以作为当前实现依据；源码始终是最终事实来源。
 
@@ -18,6 +18,7 @@
 - [编辑器 UI 工作区](guides/editor_ui.md)：统一工具窗口、页面布局和各诊断入口。
 - [系统概览](architecture/overview.md)：模块边界、初始化顺序、线程所有权和每帧流程。
 - [渲染流程](architecture/rendering.md)：RenderQueue、Forward Pass、Pipeline、材质、Shader 和光源。
+- [RenderGraph](architecture/render_graph.md)：帧内依赖、资源版本、自动同步、Dynamic Rendering 和诊断边界。
 - [资源加载](architecture/resource_loading.md)：SceneFactory、glTF、KTX2、Artifact Index、Cook/package、批量上传和加载统计。
 - [场景数据与 Catalog](architecture/scene_documents.md)：Catalog v3、持久 Entity ID、SceneDocument schema 与当前运行边界。
 

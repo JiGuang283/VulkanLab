@@ -7,6 +7,7 @@
 #include "diagnostics/Profiling.h"
 #include "diagnostics/TracyProfiler.h"
 #include "render/RenderFrame.h"
+#include "render/RenderGraph.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/RenderView.h"
 
@@ -168,19 +169,27 @@ CacaoPass::CacaoPass(Device &device,
 
 CacaoPass::~CacaoPass() = default;
 
-std::vector<RenderImageUsage> CacaoPass::resourceUsages() const {
-    if (!resourceHandles_.cacaoOutput.valid())
-        return {};
-    return {{resourceHandles_.cacaoDepth, RenderImageAccess::SampledRead,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-            {resourceHandles_.cacaoViewNormals,
-             RenderImageAccess::SampledRead,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-            {resourceHandles_.cacaoOutput, RenderImageAccess::StorageWrite,
-             VK_IMAGE_LAYOUT_UNDEFINED,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+void CacaoPass::setup(RenderGraphBuilder &builder,
+                      const RenderGraphBuildContext &) const {
+    builder.addNode(std::string(name()), RgPassType::External,
+                    RgQueueClass::Graphics);
+    builder.setSideEffect();
+    if (!resourceHandles_.cacaoOutput.valid()) {
+        builder.setActive(false);
+        return;
+    }
+    builder.useImage({resourceHandles_.cacaoDepth,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage({resourceHandles_.cacaoViewNormals,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage({resourceHandles_.cacaoOutput,
+                      RenderImageAccess::StorageWrite,
+                      VK_IMAGE_LAYOUT_UNDEFINED,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
 }
 
 void CacaoPass::releaseViewportResources() {
@@ -261,15 +270,6 @@ void CacaoPass::execute(const RenderFrameContext &frame,
         return;
     }
 
-    const Image &output =
-        resources.image(resourceHandles_.cacaoOutput, frame.frameIndex);
-    cmdImageBarrier(frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                    VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-                    VK_ACCESS_SHADER_READ_BIT,
-                    output.handle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1});
     status_.active = true;
 }
 

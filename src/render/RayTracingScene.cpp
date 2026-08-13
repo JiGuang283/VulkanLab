@@ -2,6 +2,7 @@
 
 #include "core/AccelerationStructure.h"
 #include "core/Device.h"
+#include "core/GpuBarrier.h"
 #include "render/MaterialInstance.h"
 #include "render/Mesh.h"
 #include "render/Visibility.h"
@@ -50,6 +51,26 @@ RayTracingScene::RayTracingScene(Device &device) : device_(&device) {
 }
 
 RayTracingScene::~RayTracingScene() = default;
+
+void RayTracingScene::prepareFrame(uint32_t frameIndex,
+                                   const VisibilityFrame &visibility) {
+    if (!status_.supported)
+        return;
+    uint32_t count = 0;
+    for (const RenderItem &item : visibility.items) {
+        if (!item.mesh || !item.mesh->bottomLevelAccelerationStructure())
+            continue;
+        if (item.material) {
+            const MaterialParams &params = item.material->params();
+            if (params.alphaMode == AlphaMode::Blend ||
+                params.transmissionFactor > 0.0f)
+                continue;
+        }
+        ++count;
+    }
+    preparedCounts_.at(frameIndex) = count;
+    ensureCapacity(frameIndex, std::max(count, 1u));
+}
 
 void RayTracingScene::ensureCapacity(uint32_t frameIndex,
                                      uint32_t required) {
@@ -196,7 +217,7 @@ void RayTracingScene::build(VkCommandBuffer commandBuffer,
                                 VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
     hostBarrier.dstAccessMask =
         VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-    vkCmdPipelineBarrier(
+    cmdPipelineBarrier2Compat(
         commandBuffer,
         VK_PIPELINE_STAGE_HOST_BIT |
             VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
@@ -243,11 +264,26 @@ RayTracingScene::handle(uint32_t frameIndex) const {
                : VK_NULL_HANDLE;
 }
 
+VkAccelerationStructureKHR
+RayTracingScene::allocatedHandle(uint32_t frameIndex) const {
+    const FrameStorage &storage = frames_.at(frameIndex);
+    return storage.topLevel ? storage.topLevel->handle() : VK_NULL_HANDLE;
+}
+
 VkBuffer RayTracingScene::metadataBuffer(uint32_t frameIndex) const {
     const FrameStorage &storage = frames_.at(frameIndex);
     return storage.count > 0 && storage.metadata
                ? storage.metadata->handle()
                : VK_NULL_HANDLE;
+}
+
+VkBuffer RayTracingScene::allocatedMetadataBuffer(uint32_t frameIndex) const {
+    const FrameStorage &storage = frames_.at(frameIndex);
+    return storage.metadata ? storage.metadata->handle() : VK_NULL_HANDLE;
+}
+
+uint32_t RayTracingScene::preparedInstanceCount(uint32_t frameIndex) const {
+    return preparedCounts_.at(frameIndex);
 }
 
 uint32_t RayTracingScene::instanceCount(uint32_t frameIndex) const {

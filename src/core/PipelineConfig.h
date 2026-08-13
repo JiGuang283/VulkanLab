@@ -27,6 +27,21 @@ struct ColorBlendAttachmentConfig {
     VkBlendOp alphaBlendOp = VK_BLEND_OP_ADD;
 };
 
+struct PipelineRenderingSignature {
+    std::vector<VkFormat> colorAttachmentFormats;
+    VkFormat depthAttachmentFormat = VK_FORMAT_UNDEFINED;
+    VkFormat stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+    uint32_t viewMask = 0;
+
+    bool operator==(const PipelineRenderingSignature &rhs) const {
+        return colorAttachmentFormats == rhs.colorAttachmentFormats &&
+               depthAttachmentFormat == rhs.depthAttachmentFormat &&
+               stencilAttachmentFormat == rhs.stencilAttachmentFormat &&
+               samples == rhs.samples && viewMask == rhs.viewMask;
+    }
+};
+
 struct PipelineConfig {
     // Diagnostic-only label. Pipeline cache equality intentionally ignores it.
     std::string debugName;

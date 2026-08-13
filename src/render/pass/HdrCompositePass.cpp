@@ -11,6 +11,7 @@
 #include "diagnostics/Profiling.h"
 #include "diagnostics/TracyProfiler.h"
 #include "render/RenderFrame.h"
+#include "render/RenderGraph.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/RenderView.h"
 #include "render/PipelineCache.h"
@@ -44,36 +45,111 @@ HdrCompositePass::~HdrCompositePass() {
                                      descriptorLayout_, nullptr);
 }
 
-std::vector<RenderImageUsage> HdrCompositePass::resourceUsages() const {
-    std::vector<RenderImageUsage> usages = {
-        {resources_.hdrColor, RenderImageAccess::TransferRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {resources_.compositedHdrColor, RenderImageAccess::TransferWrite,
-         VK_IMAGE_LAYOUT_UNDEFINED,
-         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
-    };
-    if (resources_.baselineSpecular.valid())
-        usages.push_back({resources_.baselineSpecular,
-                          RenderImageAccess::SampledRead,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-    if (resources_.ssrFiltered.valid())
-        usages.push_back({resources_.ssrFiltered,
-                          RenderImageAccess::SampledRead,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-    if (resources_.baselineDiffuse.valid())
-        usages.push_back({resources_.baselineDiffuse,
-                          RenderImageAccess::SampledRead,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-    if (resources_.ssgiFiltered.valid())
-        usages.push_back({resources_.ssgiFiltered,
-                          RenderImageAccess::SampledRead,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-    return usages;
+void HdrCompositePass::setup(RenderGraphBuilder &builder,
+                             const RenderGraphBuildContext &context) const {
+    const bool composite = context.features.ssrActive ||
+                           context.features.ssgiActive;
+    builder.addNode("ScreenSpaceLightingComposite/Compute",
+                    RgPassType::Compute, RgQueueClass::Compute, 0);
+    builder.setActive(composite);
+    builder.useImage({resources_.hdrColor, RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    if (context.features.ssrActive) {
+        for (RenderImageHandle handle :
+             {resources_.baselineSpecular, resources_.ssrFiltered}) {
+            if (handle.valid()) {
+                builder.useImage({handle, RenderImageAccess::SampledRead,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+            }
+        }
+    }
+    if (context.features.ssgiActive) {
+        for (RenderImageHandle handle :
+             {resources_.baselineDiffuse, resources_.ssgiFiltered}) {
+            if (handle.valid()) {
+                builder.useImage({handle, RenderImageAccess::SampledRead,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+            }
+        }
+    }
+    builder.useImage({resources_.compositedHdrColor,
+                      RenderImageAccess::StorageWrite,
+                      VK_IMAGE_LAYOUT_GENERAL,
+                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
+
+    builder.addNode("ScreenSpaceLightingComposite/Copy",
+                    RgPassType::Transfer, RgQueueClass::Transfer, 1);
+    builder.setActive(!composite);
+    builder.useImage({resources_.hdrColor, RenderImageAccess::TransferRead,
+                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    builder.useImage({resources_.compositedHdrColor,
+                      RenderImageAccess::TransferWrite,
+                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
+}
+
+void HdrCompositePass::recordNode(RenderGraphPassContext &context,
+                                  uint32_t localNodeIndex,
+                                  const VisibilityFrame &) {
+    if (localNodeIndex == 0)
+        recordComposite(context.frame, context.resources);
+    else if (localNodeIndex == 1)
+        recordCopy(context.frame, context.resources);
+}
+
+void HdrCompositePass::recordComposite(
+    const RenderFrameContext &frame,
+    const RenderResourceRegistry &resources) {
+    const bool ssrActive = frame.features.ssrActive &&
+                           resources_.ssrFiltered.valid();
+    const bool ssgiActive = frame.features.ssgiActive &&
+                            resources_.ssgiFiltered.valid();
+    if (!frame.pipelineCache || (!ssrActive && !ssgiActive))
+        return;
+    updateDescriptor(resources, frame.frameIndex, ssrActive, ssgiActive);
+    struct CompositePush { glm::uvec4 dimensions{}; } push;
+    const VkExtent2D extent = resources.extent(resources_.hdrColor);
+    push.dimensions = {ssrActive ? 1u : 0u, ssgiActive ? 1u : 0u,
+                       extent.width, extent.height};
+    ComputePipelineConfig config{};
+    config.debugName = "Pipeline/ScreenSpace/LightingComposite";
+    config.computeShaderPath = shaderPath_;
+    config.descriptorLayouts = {descriptorLayout_};
+    config.pushConstants = {{VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                             sizeof(CompositePush)}};
+    ComputePipeline &pipeline =
+        frame.pipelineCache->getOrCreateCompute(std::move(config));
+    vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      pipeline.handle());
+    vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            pipeline.layout(), 0, 1,
+                            &descriptorSets_[frame.frameIndex], 0, nullptr);
+    vkCmdPushConstants(frame.cmd, pipeline.layout(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+    vkCmdDispatch(frame.cmd, (extent.width + 7u) / 8u,
+                  (extent.height + 7u) / 8u, 1);
+    initialized_[frame.frameIndex] = true;
+}
+
+void HdrCompositePass::recordCopy(const RenderFrameContext &frame,
+                                  const RenderResourceRegistry &resources) {
+    const VkExtent2D extent = resources.extent(resources_.hdrColor);
+    VkImageCopy copy{};
+    copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copy.extent = {extent.width, extent.height, 1};
+    vkCmdCopyImage(
+        frame.cmd,
+        resources.image(resources_.hdrColor, frame.frameIndex).handle(),
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        resources.image(resources_.compositedHdrColor,
+                        frame.frameIndex).handle(),
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+    initialized_[frame.frameIndex] = true;
 }
 
 void HdrCompositePass::releaseViewportResources() {

@@ -1,8 +1,8 @@
 # 系统架构概览
 
 > Status: Current
-> Last verified: 2026-08-02
-> Verified against: DDGI v1 implementation
+> Last verified: 2026-08-12
+> Verified against: Vulkan 1.3 RenderGraph and Dynamic Rendering implementation
 
 VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Application` 为组合根，场景、渲染提交、GPU 资源和调试控制之间保持显式所有权，不使用全局引擎服务定位器。
 
@@ -17,8 +17,8 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 | `src/workflows/` | UI 与 Application 之间的只读 workflow snapshot 和 action DTO。 |
 | `src/control/` | Windows Named Pipe 服务、运行时命令队列和 JSON 协议。 |
 | `src/core/` | Vulkan instance/device、SwapChain、FrameSync、Buffer/Image、AccelerationStructure、Descriptor、Pipeline、VMA、同步与增量上传。 |
-| `src/render/` | Mesh、Texture、材质、纯 CPU glTF prepare、Environment GPU build、RenderView、RenderQueue、RenderResourceRegistry、RayTracingScene、PipelineCache、Renderer、GPU profiler 和 Shader variant。 |
-| `src/render/pass/` | 显式 RenderPipeline 的 graphics/compute pass，包括 Atmosphere、Shadow、Surface/Visibility、AO、DDGI、Forward、SSR/SSGI、TAA、Bloom、ToneMap 和 Present。 |
+| `src/render/` | Mesh、Texture、材质、纯 CPU glTF prepare、Environment GPU build、RenderView、RenderQueue、RenderGraph、物理 RenderResourceRegistry、RayTracingScene、PipelineCache、Renderer、GPU profiler 和 Shader variant。 |
+| `src/render/pass/` | RenderGraph 的 graphics/compute/transfer/external pass，包括 Atmosphere、Shadow、Surface/Visibility、AO、DDGI、Forward、SSR/SSGI、TAA、Bloom、ToneMap、Present 和 Capture。 |
 | `src/scene/` | IRenderWorld、RuntimeWorld、兼容 Scene facade、ModelAsset/ModelInstance、AssetRepository、ModelGpuBuilder、Native Scene 加载任务、Camera、SceneFactory 和内建场景。 |
 | `src/window/` | GLFW 窗口和输入状态。 |
 | `src/platform/` | Win32 原生文件选择等平台适配。 |
@@ -43,7 +43,7 @@ schema v3 Cooked package 中 `projectRoot == runtimeRoot == package root`，cach
 2. Window 和 InputManager。
 3. VulkanContext、Device 和 DescriptorAllocator。
 4. SwapChain 和 FrameSync。
-5. Renderer、全局 UBO、Lighting descriptor generation、类型化 render resource registry、Forward + Compute RenderPipeline、GPU timestamp profiler 和开发模式 CaptureService。
+5. Renderer、全局 UBO、Lighting descriptor generation、物理 render resource registry、Vulkan 1.3 RenderGraph、GPU timestamp profiler 和开发模式 CaptureService。
 6. PipelineCache、AssetRepository/EnvironmentAssetRepository worker、SceneLoadManager 操作 facade、ArtifactIndex 和初始 Scene/environment admission；只有 OnDemand 创建 AssetImportManager supervisor。
 7. GuiSystem。
 8. 可选的 Runtime Control 命令队列和 Named Pipe 线程。
@@ -82,7 +82,7 @@ ArtifactIndex 由 Application 主线程持有；Fast/Admission 查询和 UI 快�
 
 Named Pipe 线程只读取带长度前缀的 JSON 请求，把 `RuntimeCommand` 放入队列并等待主线程填写响应。它不能读取 Scene、Camera、Shader、统计数据，也不能调用 Vulkan 或 GLFW。Runtime Control v3 的 scene/capture 请求快速返回 taskId；加载等待和稳定帧等待都由 VulkanLabCtl 使用短连接轮询 `load.status`、`render.status` 或 `capture.status`，服务端不会阻塞等待未来帧。每个自动化实例可以使用独立 pipe suffix。
 
-CaptureService 的主线程部分按请求从最终 Swapchain Workspace 或 per-frame Viewport Color 创建 readback buffer、记录 image copy，并按 FrameSync completed submission serial 收割 GPU 结果。惰性启动的编码 worker 只处理已复制到 CPU 的 RGBA bytes、PNG 和 SHA-256，不访问 Vulkan、GLFW、ImGui 或 Scene。
+CaptureService 的主线程部分按请求为最终 Swapchain Workspace、per-frame Viewport Color 或 HDR source 创建 readback buffer；Renderer 把实际 image copy 注册为条件 RenderGraph Transfer 节点，并按 FrameSync completed submission serial 收割 GPU 结果。惰性启动的编码 worker 只处理已复制到 CPU 的 RGBA bytes、PNG 和 SHA-256，不访问 Vulkan、GLFW、ImGui 或 Scene。
 
 `VulkanLabRenderTest` 是渲染器进程外的测试工具，不链接 Application、Renderer 或 Vulkan。它使用唯一 Named Pipe 和 Win32 Job Object 启动并监督 `VulkanLab.exe`，通过 Runtime Control 完成场景加载、稳定帧等待和异步截图，再在 CPU 上比较 PNG。Runner 崩溃或超时关闭 Job 时会终止完整子进程树。
 
@@ -95,8 +95,8 @@ CaptureService 的主线程部分按请求从最终 Swapchain Workspace 或 per-
 5. `FrameSync::beginFrame()` 获取 frame index、swapchain image 和 command buffer。
 6. Application 组装 `RenderViewInput`；纯函数 `buildRenderView()` 完成默认 Sun、灯光截断/GPU 打包、阴影拟合、Atmosphere Sun 选择、大气 frame data 和 DDGI Probe Volume frame data，生成不可变 `RenderView`。
 7. 当前 `IRenderWorld` 从 legacy SceneObject/预览 ModelInstance 或 RuntimeWorld Entity 生成 RenderCommand；Native Scene 实例矩阵使用 `entityWorld * localToAsset`，RenderQueue 分别排序 opaque 与 transparent 命令。
-8. Renderer 上传 Global UBO、Scene Light SSBO 和 Atmosphere UBO，按需从 canonical Render Items 构建当前 frame slot TLAS，并组装 RenderFrameContext；RenderPipeline 依次执行 Atmosphere/Shadow/Surface/Visibility、AO、可选 DDGI、SkyBackground、Forward、SSR/SSGI composite、Transparent、TAA、Bloom、ToneMap 与 Present + ImGui。每个 Pass 由 timestamp query 包围。
-9. 若有截图任务，在同一个 frame command buffer 中复制最终 Swapchain Workspace 或 Viewport Color，再恢复其 present/shader-read layout。
+8. Renderer 上传 Global UBO、Scene Light SSBO 和 Atmosphere UBO，按需从 canonical Render Items 构建当前 frame slot TLAS，并组装 RenderFrameContext；RenderGraph 根据 FrameRenderFeatures 构建/复用拓扑，自动生成 Synchronization2 barrier，并通过 Dynamic Rendering、Compute、Transfer 和 External 节点执行 Atmosphere/Shadow/Surface/Visibility、AO、可选 DDGI、SkyBackground、Forward、SSR/SSGI composite、Transparent、TAA、Bloom、ToneMap 与 Present + ImGui。每个活动节点由稳定 Graph Pass ID 的 timestamp query 包围。
+9. 若有截图任务，条件 ScreenshotCopy Transfer 节点在同一个 frame command buffer 中复制最终 Swapchain Workspace、Viewport Color 或 HDR source；资源 layout 由 Graph 恢复。
 10. `FrameSync::endFrame()` 提交和 present；操作系统窗口变化只重建 Swapchain/Present 资源，稳定后的 Viewport 内容区变化只重建 viewport-dependent Registry 资源。后续帧推进 completed submission serial，并把已完成截图交给 CPU worker。
 
 详细渲染行为见 [渲染流程](rendering.md)，场景创建与上传见 [资源加载](resource_loading.md)。

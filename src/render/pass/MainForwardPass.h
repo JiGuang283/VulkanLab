@@ -37,22 +37,13 @@ class MainForwardPass final : public IRenderPass {
         return phase_ == ForwardPhase::Opaque ? "MainForwardOpaque"
                                               : "MainForwardTransparent";
     }
-    std::vector<RenderImageUsage> resourceUsages() const override;
-    void releaseViewportResources() override;
-    void onViewportResize(
-        const RenderResourceRegistry &resources) override;
+    void setup(RenderGraphBuilder &builder,
+               const RenderGraphBuildContext &context) const override;
     void execute(const RenderFrameContext &frame,
                  const RenderResourceRegistry &resources,
                  const VisibilityFrame &visibility) override;
 
-    VkRenderPass renderPass() const { return renderPass_; }
   private:
-    void createRenderPass(const RenderResourceRegistry &resources);
-    void createFramebuffers(const RenderResourceRegistry &resources);
-    void destroyFramebuffers();
-
-    void begin(VkCommandBuffer cmd, uint32_t frameIndex,
-               const RenderResourceRegistry &resources);
     void drawQueue(const RenderFrameContext &frame,
                    const RenderResourceRegistry &resources,
                    const VisibilityFrame &visibility);
@@ -63,9 +54,6 @@ class MainForwardPass final : public IRenderPass {
     VkDescriptorSetLayout lightingDescriptorSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout atmosphereDescriptorSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout ddgiDescriptorSetLayout_ = VK_NULL_HANDLE;
-
-    VkRenderPass renderPass_ = VK_NULL_HANDLE;
-    std::array<VkFramebuffer, MAX_FRAMES_IN_FLIGHT> framebuffers_{};
 };
 
 } // namespace vkr

@@ -20,7 +20,12 @@ class HdrCompositePass final : public IRenderPass {
     std::string_view name() const override {
         return "ScreenSpaceLightingComposite";
     }
-    std::vector<RenderImageUsage> resourceUsages() const override;
+    RgPassType passType() const override { return RgPassType::Compute; }
+    void setup(RenderGraphBuilder &builder,
+               const RenderGraphBuildContext &context) const override;
+    void recordNode(RenderGraphPassContext &context,
+                    uint32_t localNodeIndex,
+                    const VisibilityFrame &visibility) override;
     void releaseViewportResources() override;
     void onViewportResize(const RenderResourceRegistry &resources) override;
     void execute(const RenderFrameContext &frame,
@@ -41,6 +46,10 @@ class HdrCompositePass final : public IRenderPass {
     void updateDescriptor(const RenderResourceRegistry &resources,
                           uint32_t frameIndex, bool ssrActive,
                           bool ssgiActive);
+    void recordComposite(const RenderFrameContext &frame,
+                         const RenderResourceRegistry &resources);
+    void recordCopy(const RenderFrameContext &frame,
+                    const RenderResourceRegistry &resources);
     void freeDescriptors();
 };
 

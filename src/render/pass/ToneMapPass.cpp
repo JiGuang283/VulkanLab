@@ -11,6 +11,7 @@
 #include "render/PipelineCache.h"
 #include "render/PipelineKey.h"
 #include "render/RenderFrame.h"
+#include "render/RenderGraph.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/RenderView.h"
 #include "render/ShaderVariant.h"
@@ -173,117 +174,76 @@ ToneMapPass::ToneMapPass(Device &device,
       descriptorAllocator_(&descriptorAllocator),
       fullscreenVertPath_(std::move(fullscreenVertPath)),
       toneMapFragPath_(std::move(toneMapFragPath)) {
-    createRenderPass(resources);
     createDescriptors(resources);
-    createFramebuffers(resources);
 }
 
 ToneMapPass::~ToneMapPass() {
-    destroyFramebuffers();
     for (VkDescriptorSet set : sourceDescriptorSets_)
         descriptorAllocator_->free(set);
     if (sourceDescriptorSetLayout_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(device_->logicalDevice(),
                                      sourceDescriptorSetLayout_, nullptr);
     }
-    if (renderPass_ != VK_NULL_HANDLE)
-        vkDestroyRenderPass(device_->logicalDevice(), renderPass_, nullptr);
 }
 
-void ToneMapPass::releaseViewportResources() {
-    destroyFramebuffers();
-}
-
-std::vector<RenderImageUsage> ToneMapPass::resourceUsages() const {
-    std::vector<RenderImageUsage> usages = {
-        {hdrColor_, RenderImageAccess::SampledRead,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
-    if (bloomColor_.valid()) {
-        usages.push_back(
-            {bloomColor_, RenderImageAccess::SampledRead,
-             VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+void ToneMapPass::setup(RenderGraphBuilder &builder,
+                        const RenderGraphBuildContext &context) const {
+    builder.addNode(std::string(name()), RgPassType::Graphics,
+                    RgQueueClass::Graphics);
+    const auto sampled = [&](RenderImageHandle handle,
+                             VkImageLayout layout =
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        if (handle.valid())
+            builder.useImage({handle, RenderImageAccess::SampledRead,
+                              layout, layout});
+    };
+    const FrameRenderFeatures &features = context.features;
+    sampled(hdrColor_);
+    if (features.bloomRequired)
+        sampled(bloomColor_, VK_IMAGE_LAYOUT_GENERAL);
+    if (features.surfaceDataRequired) {
+        sampled(surfaceNormalRoughness_);
+        sampled(surfaceMotion_);
     }
-    if (surfaceNormalRoughness_.valid()) {
-        usages.push_back(
-            {surfaceNormalRoughness_, RenderImageAccess::SampledRead,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    if (features.screenDepthPyramidRequired)
+        sampled(screenDepthPyramid_);
+    if (features.sceneColorPyramidRequired)
+        sampled(sceneColorPyramid_);
+    if (features.ssaoRequired) {
+        sampled(ssaoRaw_);
+        sampled(ssaoFiltered_);
     }
-    if (surfaceMotion_.valid()) {
-        usages.push_back(
-            {surfaceMotion_, RenderImageAccess::SampledRead,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-    }
-    if (screenDepthPyramid_.valid()) {
-        usages.push_back(
-            {screenDepthPyramid_, RenderImageAccess::SampledRead,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-    }
-    if (sceneColorPyramid_.valid()) {
-        usages.push_back(
-            {sceneColorPyramid_, RenderImageAccess::SampledRead,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-    }
-    if (ssaoRaw_.valid()) {
-        usages.push_back({ssaoRaw_, RenderImageAccess::SampledRead,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-        usages.push_back({ssaoFiltered_, RenderImageAccess::SampledRead,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-    }
-    if (cacaoOutput_.valid()) {
-        usages.push_back({cacaoOutput_, RenderImageAccess::SampledRead,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-    }
-    if (gtaoRaw_.valid()) {
+    if (features.cacaoRequired)
+        sampled(cacaoOutput_);
+    if (features.gtaoRequired) {
         for (RenderImageHandle handle :
-             {gtaoRaw_, gtaoHistory_, gtaoFiltered_, gtaoDebug_}) {
-            usages.push_back({handle, RenderImageAccess::SampledRead,
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-        }
+             {gtaoRaw_, gtaoHistory_, gtaoFiltered_, gtaoDebug_})
+            sampled(handle);
     }
-    if (taaHistory_.valid()) {
-        usages.push_back({taaHistory_, RenderImageAccess::SampledRead,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-        usages.push_back({taaDebug_, RenderImageAccess::SampledRead,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    if (features.taaRequired) {
+        sampled(taaHistory_);
+        sampled(taaDebug_);
     }
-    if (ssrRaw_.valid()) {
+    if (features.ssrRequired) {
         for (RenderImageHandle handle :
-             {ssrRaw_, ssrHistory_, ssrFiltered_, ssrDebug_}) {
-            usages.push_back({handle, RenderImageAccess::SampledRead,
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-        }
+             {ssrRaw_, ssrHistory_, ssrFiltered_, ssrDebug_})
+            sampled(handle);
     }
-    if (ssgiRaw_.valid()) {
+    if (features.ssgiRequired) {
         for (RenderImageHandle handle :
-             {ssgiRaw_, ssgiHistory_, ssgiFiltered_, ssgiDebug_}) {
-            usages.push_back({handle, RenderImageAccess::SampledRead,
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-        }
+             {ssgiRaw_, ssgiHistory_, ssgiFiltered_, ssgiDebug_})
+            sampled(handle);
     }
-    usages.push_back(
-        {viewportColor_, RenderImageAccess::ColorAttachmentWrite,
-         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-    return usages;
+    builder.addColorAttachment(
+        viewportColor_, RenderImageAccess::ColorAttachmentWrite,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE,
+        VkClearColorValue{{0.0f, 0.0f, 0.0f, 1.0f}});
 }
 
 void ToneMapPass::onViewportResize(
     const RenderResourceRegistry &resources) {
     updateDescriptors(resources);
-    createFramebuffers(resources);
 }
 
 void ToneMapPass::execute(const RenderFrameContext &frame,
@@ -295,17 +255,6 @@ void ToneMapPass::execute(const RenderFrameContext &frame,
         return;
     updateScreenDescriptors(resources, frame.frameIndex, frame.features,
                             frame.view->settings.screenSpaceDebugView);
-
-    VkClearValue clear{};
-    clear.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
-    VkRenderPassBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    beginInfo.renderPass = renderPass_;
-    beginInfo.framebuffer = framebuffers_.at(frame.frameIndex);
-    beginInfo.renderArea = {{0, 0}, frame.viewportExtent};
-    beginInfo.clearValueCount = 1;
-    beginInfo.pClearValues = &clear;
-    vkCmdBeginRenderPass(frame.cmd, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
     VkViewport viewport{};
     viewport.width = static_cast<float>(frame.viewportExtent.width);
@@ -335,8 +284,11 @@ void ToneMapPass::execute(const RenderFrameContext &frame,
                 .build();
         config.debugName = "Pipeline/ToneMap/Fullscreen";
 
-        Pipeline &pipeline =
-            frame.pipelineCache->getOrCreate(renderPass_, std::move(config));
+        PipelineRenderingSignature signature{};
+        signature.colorAttachmentFormats = {
+            resources.description(viewportColor_).format};
+        Pipeline &pipeline = frame.pipelineCache->getOrCreate(
+            std::move(signature), std::move(config));
         vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           pipeline.handle());
         const VkDescriptorSet sourceSet =
@@ -417,89 +369,6 @@ void ToneMapPass::execute(const RenderFrameContext &frame,
         vkCmdDraw(frame.cmd, 3, 1, 0, 0);
     }
 
-    vkCmdEndRenderPass(frame.cmd);
-}
-
-void ToneMapPass::createRenderPass(
-    const RenderResourceRegistry &resources) {
-    VkAttachmentDescription color{};
-    color.format = resources.description(viewportColor_).format;
-    color.samples = VK_SAMPLE_COUNT_1_BIT;
-    color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    color.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    VkAttachmentReference colorRef{0,
-                                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-    VkSubpassDescription subpass{};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorRef;
-
-    std::array<VkSubpassDependency, 2> dependencies{};
-    dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependencies[0].dstSubpass = 0;
-    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    dependencies[0].dstStageMask =
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-    dependencies[1].srcSubpass = 0;
-    dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-    dependencies[1].srcStageMask =
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-
-    VkRenderPassCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    info.attachmentCount = 1;
-    info.pAttachments = &color;
-    info.subpassCount = 1;
-    info.pSubpasses = &subpass;
-    info.dependencyCount = static_cast<uint32_t>(dependencies.size());
-    info.pDependencies = dependencies.data();
-    VK_CHECK(vkCreateRenderPass(device_->logicalDevice(), &info, nullptr,
-                                &renderPass_));
-    device_->debugUtils().setObjectName(VK_OBJECT_TYPE_RENDER_PASS,
-                                        renderPass_,
-                                        "Pass/ToneMap/RenderPass");
-}
-
-void ToneMapPass::createFramebuffers(
-    const RenderResourceRegistry &resources) {
-    const VkExtent2D extent = resources.extent(viewportColor_);
-    framebuffers_.resize(MAX_FRAMES_IN_FLIGHT);
-    for (size_t index = 0; index < framebuffers_.size(); ++index) {
-        const VkImageView attachment =
-            resources.image(viewportColor_, static_cast<uint32_t>(index))
-                .imageView();
-        VkFramebufferCreateInfo info{};
-        info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        info.renderPass = renderPass_;
-        info.attachmentCount = 1;
-        info.pAttachments = &attachment;
-        info.width = extent.width;
-        info.height = extent.height;
-        info.layers = 1;
-        VK_CHECK(vkCreateFramebuffer(device_->logicalDevice(), &info, nullptr,
-                                     &framebuffers_[index]));
-        device_->debugUtils().setObjectName(
-            VK_OBJECT_TYPE_FRAMEBUFFER, framebuffers_[index],
-            "Pass/ToneMap/Framebuffer/Frame" + std::to_string(index));
-    }
-}
-
-void ToneMapPass::destroyFramebuffers() {
-    for (VkFramebuffer framebuffer : framebuffers_)
-        vkDestroyFramebuffer(device_->logicalDevice(), framebuffer, nullptr);
-    framebuffers_.clear();
 }
 
 void ToneMapPass::createDescriptors(
@@ -543,15 +412,7 @@ void ToneMapPass::updateDescriptors(
             resources.image(hdrColor_, frameIndex).imageView();
         hdrInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-        VkDescriptorImageInfo bloomInfo{};
-        if (bloomColor_.valid()) {
-            bloomInfo.sampler = resources.sampler(bloomSampler_);
-            bloomInfo.imageView =
-                resources.image(bloomColor_, frameIndex).imageView();
-            bloomInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        } else {
-            bloomInfo = hdrInfo;
-        }
+        VkDescriptorImageInfo bloomInfo = hdrInfo;
 
         VkDescriptorImageInfo normalRoughnessInfo = hdrInfo;
         VkDescriptorImageInfo motionInfo = hdrInfo;
@@ -588,6 +449,13 @@ void ToneMapPass::updateScreenDescriptors(
     fallback.sampler = resources.sampler(hdrSampler_);
     fallback.imageView = resources.image(hdrColor_, frameIndex).imageView();
     fallback.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkDescriptorImageInfo bloomInfo = fallback;
+    if (features.bloomRequired && bloomColor_.valid()) {
+        bloomInfo = {resources.sampler(bloomSampler_),
+                     resources.image(bloomColor_, frameIndex).imageView(),
+                     VK_IMAGE_LAYOUT_GENERAL};
+    }
 
     VkDescriptorImageInfo primary = fallback;
     if (features.taaActive && taaHistory_.valid()) {
@@ -703,14 +571,20 @@ void ToneMapPass::updateScreenDescriptors(
         break;
     }
 
-    VkWriteDescriptorSet primaryWrite{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    primaryWrite.dstSet = sourceDescriptorSets_.at(frameIndex);
-    primaryWrite.dstBinding = 0;
-    primaryWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    primaryWrite.descriptorCount = 1;
-    primaryWrite.pImageInfo = &primary;
-    vkUpdateDescriptorSets(device_->logicalDevice(), 1, &primaryWrite, 0,
-                           nullptr);
+    std::array<VkDescriptorImageInfo, 2> primaryInfos = {primary, bloomInfo};
+    std::array<VkWriteDescriptorSet, 2> primaryWrites{};
+    for (uint32_t index = 0; index < primaryWrites.size(); ++index) {
+        primaryWrites[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        primaryWrites[index].dstSet = sourceDescriptorSets_.at(frameIndex);
+        primaryWrites[index].dstBinding = index;
+        primaryWrites[index].descriptorType =
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        primaryWrites[index].descriptorCount = 1;
+        primaryWrites[index].pImageInfo = &primaryInfos[index];
+    }
+    vkUpdateDescriptorSets(device_->logicalDevice(),
+                           static_cast<uint32_t>(primaryWrites.size()),
+                           primaryWrites.data(), 0, nullptr);
 
     std::array<VkDescriptorImageInfo, 3> infos = {
         normalInfo, motionInfo, debugInfo};

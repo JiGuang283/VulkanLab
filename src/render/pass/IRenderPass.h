@@ -1,5 +1,6 @@
 #pragma once
 
+#include "render/RenderGraphTypes.h"
 #include "render/RenderResourceRegistry.h"
 
 #include <string_view>
@@ -8,7 +9,10 @@
 namespace vkr {
 
 class RenderResourceRegistry;
+class RenderGraphBuilder;
 class SwapChain;
+struct RenderGraphBuildContext;
+struct RenderGraphPassContext;
 struct RenderFrameContext;
 struct VisibilityFrame;
 
@@ -17,7 +21,23 @@ class IRenderPass {
     virtual ~IRenderPass() = default;
 
     virtual std::string_view name() const = 0;
-    virtual std::vector<RenderImageUsage> resourceUsages() const = 0;
+    virtual RgPassType passType() const { return RgPassType::Graphics; }
+    virtual RgQueueClass queueClass() const { return RgQueueClass::Graphics; }
+    virtual RgPassCondition condition() const {
+        return RgPassCondition::Always;
+    }
+    virtual void prepareFrame(const RenderFrameContext &,
+                              const RenderResourceRegistry &,
+                              const VisibilityFrame &) {}
+    virtual void setup(RenderGraphBuilder &builder,
+                       const RenderGraphBuildContext &context) const;
+    virtual void record(RenderGraphPassContext &context,
+                        const VisibilityFrame &visibility);
+    virtual void recordNode(RenderGraphPassContext &context,
+                            uint32_t localNodeIndex,
+                            const VisibilityFrame &visibility);
+    virtual bool managesDeclaredTransitionsInternally() const { return false; }
+    virtual uint64_t topologySignature() const { return 0; }
     virtual void releaseViewportResources() {}
     virtual void onViewportResize(const RenderResourceRegistry &) {}
     virtual void releaseSwapChainResources() {}

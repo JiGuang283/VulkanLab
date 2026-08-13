@@ -6,7 +6,6 @@
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
 #include "core/GpuDebugUtils.h"
-#include "core/GpuBarrier.h"
 #include "core/Image.h"
 #include "core/VulkanCheck.h"
 #include "diagnostics/Profiling.h"
@@ -14,6 +13,7 @@
 #include "render/Mesh.h"
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
+#include "render/RenderGraph.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/RenderView.h"
 #include "render/Visibility.h"
@@ -99,9 +99,72 @@ OcclusionCullPass::~OcclusionCullPass() {
     }
 }
 
-std::vector<RenderImageUsage> OcclusionCullPass::resourceUsages() const {
-    return {{resourceHandles_.visibilityHiZ, RenderImageAccess::SampledRead,
-             VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL}};
+void OcclusionCullPass::setup(RenderGraphBuilder &builder,
+                              const RenderGraphBuildContext &) const {
+    builder.addNode("OcclusionCull/ClearCounter", RgPassType::Transfer,
+                    RgQueueClass::Transfer, 0);
+    for (uint32_t frame = 0; frame < frames_.size(); ++frame) {
+        const FrameStorage &storage = *frames_[frame];
+        builder.useBuffer(storage.counter->handle(),
+                          RgBufferAccess::TransferWrite, 0,
+                          sizeof(GpuVisibilityCounter), frame);
+    }
+
+    builder.addNode("OcclusionCull/Dispatch", RgPassType::Compute,
+                    RgQueueClass::Compute, 1);
+    builder.useImage({resourceHandles_.visibilityHiZ,
+                      RenderImageAccess::SampledRead,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
+    for (uint32_t frame = 0; frame < frames_.size(); ++frame) {
+        const FrameStorage &storage = *frames_[frame];
+        builder.useBuffer(storage.items->handle(), RgBufferAccess::StorageRead,
+                          0, VK_WHOLE_SIZE, frame);
+        builder.useBuffer(storage.indirect->handle(),
+                          RgBufferAccess::StorageWrite, 0, VK_WHOLE_SIZE,
+                          frame);
+        builder.useBuffer(storage.counter->handle(),
+                          RgBufferAccess::StorageReadWrite, 0,
+                          sizeof(GpuVisibilityCounter), frame);
+    }
+
+    builder.addNode("OcclusionCull/IndirectReady", RgPassType::External,
+                    RgQueueClass::Graphics, 2);
+    builder.setSideEffect();
+    for (uint32_t frame = 0; frame < frames_.size(); ++frame) {
+        const FrameStorage &storage = *frames_[frame];
+        builder.useBuffer(storage.indirect->handle(),
+                          RgBufferAccess::IndirectRead, 0, VK_WHOLE_SIZE,
+                          frame);
+    }
+}
+
+void OcclusionCullPass::recordNode(RenderGraphPassContext &context,
+                                   uint32_t localNodeIndex,
+                                   const VisibilityFrame &) {
+    FrameStorage &storage = *frames_.at(context.frame.frameIndex);
+    if (!storage.active || storage.activeCount == 0)
+        return;
+    if (localNodeIndex == 0) {
+        vkCmdFillBuffer(context.frame.cmd, storage.counter->handle(), 0,
+                        sizeof(GpuVisibilityCounter), 0);
+    } else if (localNodeIndex == 1) {
+        recordCull(context.frame, context.resources);
+    }
+}
+
+uint64_t OcclusionCullPass::topologySignature() const {
+    uint64_t signature = 1469598103934665603ull;
+    const auto mix = [&signature](uint64_t value) {
+        signature ^= value;
+        signature *= 1099511628211ull;
+    };
+    for (const auto &frame : frames_) {
+        mix(reinterpret_cast<uint64_t>(frame->items->handle()));
+        mix(reinterpret_cast<uint64_t>(frame->indirect->handle()));
+        mix(reinterpret_cast<uint64_t>(frame->counter->handle()));
+        mix(frame->capacity);
+    }
+    return signature;
 }
 
 void OcclusionCullPass::releaseViewportResources() {
@@ -182,12 +245,16 @@ void OcclusionCullPass::execute(const RenderFrameContext &frame,
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "OcclusionCull");
     vkCmdFillBuffer(frame.cmd, storage.counter->handle(), 0,
                     sizeof(GpuVisibilityCounter), 0);
-    cmdBufferBarrier(frame.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                     VK_ACCESS_TRANSFER_WRITE_BIT,
-                     VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-                     storage.counter->handle(), 0,
-                     sizeof(GpuVisibilityCounter));
+    recordCull(frame, resources);
+}
+
+void OcclusionCullPass::recordCull(
+    const RenderFrameContext &frame,
+    const RenderResourceRegistry &resources) {
+    FrameStorage &storage = *frames_.at(frame.frameIndex);
+    if (!storage.active || storage.activeCount == 0 || !frame.pipelineCache ||
+        !frame.view)
+        return;
 
     ComputePipelineConfig config{};
     config.debugName = "Pipeline/Visibility/OcclusionCull";
@@ -219,13 +286,7 @@ void OcclusionCullPass::execute(const RenderFrameContext &frame,
     vkCmdDispatch(frame.cmd,
                   (storage.activeCount + kWorkgroupSize - 1u) /
                       kWorkgroupSize,
-                  1, 1);
-
-    cmdBufferBarrier(frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
-                     VK_ACCESS_SHADER_WRITE_BIT,
-                     VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
-                     storage.indirect->handle(), 0, VK_WHOLE_SIZE);
+                   1, 1);
 }
 
 bool OcclusionCullPass::active(uint32_t frameIndex) const {

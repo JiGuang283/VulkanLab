@@ -94,6 +94,7 @@
 #include <cstdio>
 #include <cstring>
 #include <future>
+#include <fstream>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
@@ -1168,7 +1169,7 @@ void Application::init() {
 #if VKL_ENABLE_EDITOR_UI
     if (config_.diagnostics.guiVisible) {
         gui_ = std::make_unique<GuiSystem>(
-            context_->instance(), *device_, renderer_->renderPass(),
+            context_->instance(), *device_, swapChain_->imageFormat(),
             window_->handle(), swapChain_->imageCount(),
             swapChain_->imageCount());
         bindViewportTextures();
@@ -3979,6 +3980,40 @@ ControlJson Application::runtimeRenderStatus() {
     ControlJson gpuPasses = ControlJson::object();
     for (const GpuPassTiming &pass : gpuTimings.passes)
         gpuPasses[pass.name] = pass.milliseconds;
+    const RenderGraphDiagnostics &graph =
+        renderer_->renderGraphDiagnostics();
+    ControlJson graphExecutionOrder = ControlJson::array();
+    for (const std::string &name : graph.executionOrder)
+        graphExecutionOrder.push_back(name);
+    ControlJson graphCulledPasses = ControlJson::array();
+    for (const std::string &name : graph.culledNames)
+        graphCulledPasses.push_back(name);
+    ControlJson graphResources = ControlJson::array();
+    for (const auto &resource : graph.resources) {
+        graphResources.push_back(
+            {{"index", resource.index},
+             {"name", resource.name},
+             {"lifetime", resource.lifetime},
+             {"versions", resource.versions},
+             {"residentBytes", resource.residentBytes},
+             {"initialLayout",
+              static_cast<int32_t>(resource.initialLayout)},
+             {"finalLayout", static_cast<int32_t>(resource.finalLayout)},
+             {"producers", resource.producers},
+             {"consumers", resource.consumers}});
+    }
+    ControlJson graphBuffers = ControlJson::array();
+    for (const auto &buffer : graph.buffers) {
+        graphBuffers.push_back(
+            {{"index", buffer.index},
+             {"nativeHandle", buffer.nativeHandle},
+             {"name", buffer.name},
+             {"lifetime", buffer.lifetime},
+             {"versions", buffer.versions},
+             {"declaredRangeBytes", buffer.declaredRangeBytes},
+             {"producers", buffer.producers},
+             {"consumers", buffer.consumers}});
+    }
     uint64_t directionalSceneLights = 0;
     uint64_t pointSceneLights = 0;
     uint64_t spotSceneLights = 0;
@@ -4469,7 +4504,21 @@ ControlJson Application::runtimeRenderStatus() {
           {"available", build::kGpuProfiling && gpuTimings.available},
           {"frameSerial", gpuTimings.frameSerial},
           {"passes", std::move(gpuPasses)},
-          {"totalMs", gpuTimings.totalMs}}},
+           {"totalMs", gpuTimings.totalMs}}},
+        {"renderGraph",
+         {{"topologyHash", fmt::format("{:016x}", graph.topologyHash)},
+          {"activePasses", graph.activePasses},
+          {"culledPasses", graph.culledPasses},
+          {"dependencyEdges", graph.dependencyEdges},
+          {"automaticBarriers", graph.automaticBarriers},
+          {"layoutBarriers", graph.layoutBarriers},
+          {"hazardBarriers", graph.hazardBarriers},
+          {"activeImageBytes", graph.activeImageBytes},
+          {"residentImageBytes", graph.residentImageBytes},
+          {"executionOrder", std::move(graphExecutionOrder)},
+          {"culled", std::move(graphCulledPasses)},
+          {"resources", std::move(graphResources)},
+          {"buffers", std::move(graphBuffers)}}},
         {"pendingUpload", pendingUploads},
         {"pendingUploadDetail",
          {{"textures", pendingTextures},
@@ -7511,6 +7560,106 @@ void Application::drawPerformancePanel() {
             }
         }
     }
+
+    if (ImGui::CollapsingHeader("Render Graph",
+                                ImGuiTreeNodeFlags_DefaultOpen)) {
+        const RenderGraphDiagnostics &graph =
+            renderer_->renderGraphDiagnostics();
+        if (editor::beginPropertyGrid("RenderGraphSummary", 0.46f)) {
+            editor::propertyLabel("Topology");
+            ImGui::Text("%016llx",
+                        static_cast<unsigned long long>(graph.topologyHash));
+            editor::propertyLabel("Passes");
+            ImGui::Text("%u active / %u culled", graph.activePasses,
+                        graph.culledPasses);
+            editor::propertyLabel("Dependencies");
+            ImGui::Text("%u", graph.dependencyEdges);
+            editor::propertyLabel("Auto Barriers");
+            ImGui::Text("%u (%u layout, %u hazard)",
+                        graph.automaticBarriers, graph.layoutBarriers,
+                        graph.hazardBarriers);
+            editor::propertyLabel("Image Memory");
+            ImGui::Text("%.1f / %.1f MiB active/resident",
+                        graph.activeImageBytes / (1024.0 * 1024.0),
+                        graph.residentImageBytes / (1024.0 * 1024.0));
+            editor::endPropertyGrid();
+        }
+        if (ImGui::TreeNode("Execution Order")) {
+            for (uint32_t index = 0; index < graph.executionOrder.size();
+                 ++index) {
+                ImGui::Text("%02u  %s", index,
+                            graph.executionOrder[index].c_str());
+            }
+            ImGui::TreePop();
+        }
+        if (ImGui::TreeNode("Culled Passes")) {
+            for (const std::string &name : graph.culledNames)
+                ImGui::TextDisabled("%s", name.c_str());
+            ImGui::TreePop();
+        }
+        if (ImGui::TreeNode("Resources")) {
+            for (const auto &resource : graph.resources) {
+                ImGui::PushID(static_cast<int>(resource.index));
+                if (ImGui::TreeNode(
+                        "Resource", "%s  [%s, v%u]",
+                        resource.name.c_str(), resource.lifetime.c_str(),
+                        resource.versions)) {
+                    ImGui::Text("Memory: %.2f MiB",
+                                resource.residentBytes /
+                                    (1024.0 * 1024.0));
+                    ImGui::Text("Layout: %d -> %d",
+                                static_cast<int>(resource.initialLayout),
+                                static_cast<int>(resource.finalLayout));
+                    ImGui::TextUnformatted("Producers:");
+                    for (const std::string &producer : resource.producers)
+                        ImGui::BulletText("%s", producer.c_str());
+                    ImGui::TextUnformatted("Consumers:");
+                    for (const std::string &consumer : resource.consumers)
+                        ImGui::BulletText("%s", consumer.c_str());
+                    ImGui::TreePop();
+                }
+                ImGui::PopID();
+            }
+            ImGui::TreePop();
+        }
+        if (ImGui::TreeNode("Buffers")) {
+            for (const auto &buffer : graph.buffers) {
+                ImGui::PushID(static_cast<int>(buffer.index));
+                ImGui::PushID("RenderGraphBuffer");
+                if (ImGui::TreeNode(
+                        "Buffer", "%s  [%s, v%u]", buffer.name.c_str(),
+                        buffer.lifetime.c_str(), buffer.versions)) {
+                    if (buffer.declaredRangeBytes > 0) {
+                        ImGui::Text("Declared range: %.2f KiB",
+                                    buffer.declaredRangeBytes / 1024.0);
+                    } else {
+                        ImGui::TextDisabled("Declared range: whole buffer");
+                    }
+                    ImGui::TextUnformatted("Producers:");
+                    for (const std::string &producer : buffer.producers)
+                        ImGui::BulletText("%s", producer.c_str());
+                    ImGui::TextUnformatted("Consumers:");
+                    for (const std::string &consumer : buffer.consumers)
+                        ImGui::BulletText("%s", consumer.c_str());
+                    ImGui::TreePop();
+                }
+                ImGui::PopID();
+                ImGui::PopID();
+            }
+            ImGui::TreePop();
+        }
+        if (ImGui::Button("Export JSON")) {
+            std::filesystem::create_directories("logs");
+            std::ofstream("logs/render_graph.json", std::ios::binary)
+                << renderer_->renderGraphJson();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Export DOT")) {
+            std::filesystem::create_directories("logs");
+            std::ofstream("logs/render_graph.dot", std::ios::binary)
+                << renderer_->renderGraphDot();
+        }
+    }
 }
 
 void Application::drawLoadStatsPanel() {
@@ -9626,18 +9775,29 @@ void Application::mainLoop() {
                 "Frame " + std::to_string(presentedFrameCount_ + 1));
             renderer_->renderFrame(*ctx, visibilityFrame_, *pipelineCache_,
                                    frameGui, currentShaderVariant(),
-                                   renderView);
+                                   renderView,
+                                   captureSelection
+                                       ? std::optional<FrameCaptureSource>{
+                                             captureSelection->source ==
+                                                     CaptureSourceKind::Workspace
+                                                 ? FrameCaptureSource::Workspace
+                                                 : captureSelection->source ==
+                                                           CaptureSourceKind::Hdr
+                                                       ? FrameCaptureSource::Hdr
+                                                       : FrameCaptureSource::Viewport}
+                                       : std::nullopt,
+                                   captureSelection
+                                       ? std::function<void(VkCommandBuffer)>{
+                                             [this](VkCommandBuffer cmd) {
+                                                 captureService_->recordCopy(cmd);
+                                             }}
+                                       : std::function<void(VkCommandBuffer)>{});
             if constexpr (build::kTracy) {
                 profilePlotNumber(
                     "Visibility/GpuOccluded",
                     static_cast<int64_t>(renderer_
                                              ->occlusionCullingStatus()
                                              .completed.occluded));
-            }
-            if (captureSelection) {
-                VKL_PROFILE_GPU_ZONE(device_->tracyProfiler(), ctx->cmd,
-                                     "ScreenshotCopy");
-                captureService_->recordCopy(ctx->cmd);
             }
         }
         device_->tracyProfiler().collect(ctx->cmd);

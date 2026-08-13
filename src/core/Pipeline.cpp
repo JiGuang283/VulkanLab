@@ -38,7 +38,8 @@ VkShaderModule Pipeline::createShaderModule(const std::vector<char> &code) {
     return shaderModule;
 }
 
-Pipeline::Pipeline(Device &device, VkRenderPass renderPass,
+Pipeline::Pipeline(Device &device,
+                   const PipelineRenderingSignature &rendering,
                    const PipelineConfig &config)
     : device_(&device) {
 
@@ -216,8 +217,31 @@ Pipeline::Pipeline(Device &device, VkRenderPass renderPass,
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = pipelineLayout_;
-    pipelineInfo.renderPass = renderPass;
-    pipelineInfo.subpass = config.subpass;
+    if (rendering.samples != config.msaaSamples) {
+        throw std::invalid_argument(
+            "dynamic rendering signature sample count does not match pipeline config");
+    }
+    if (rendering.colorAttachmentFormats.size() !=
+        config.colorBlendAttachments.size()) {
+        throw std::invalid_argument(
+            "dynamic rendering signature color count does not match pipeline config");
+    }
+    VkPipelineRenderingCreateInfo renderingInfo{
+        VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+    renderingInfo.viewMask = rendering.viewMask;
+    renderingInfo.colorAttachmentCount = static_cast<uint32_t>(
+        rendering.colorAttachmentFormats.size());
+    renderingInfo.pColorAttachmentFormats =
+        rendering.colorAttachmentFormats.empty()
+            ? nullptr
+            : rendering.colorAttachmentFormats.data();
+    renderingInfo.depthAttachmentFormat =
+        rendering.depthAttachmentFormat;
+    renderingInfo.stencilAttachmentFormat =
+        rendering.stencilAttachmentFormat;
+    pipelineInfo.pNext = &renderingInfo;
+    pipelineInfo.renderPass = VK_NULL_HANDLE;
+    pipelineInfo.subpass = 0;
     pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
     pipelineInfo.basePipelineIndex = -1;
 
