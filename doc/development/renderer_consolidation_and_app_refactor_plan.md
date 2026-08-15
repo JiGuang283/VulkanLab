@@ -2,7 +2,7 @@
 
 > Status: Active
 > Last verified: 2026-08-15
-> Verified against: `737a5f3`
+> Verified against: `fb92352`
 
 ## Progress
 
@@ -12,8 +12,9 @@
 | 1. Retire Viking Room And Legacy OBJ | Complete | Renderer Smoke Scene replaces Viking; async ModelAsset/Native Scene loading is the only scene path |
 | 2. Remove RenderGraph Migration Debt | Complete | Graph setup/recordNode is the only pass path; legacy barriers, startup self-tests, and migration aliases removed |
 | 3. Feature-Aware Resource Residency | Complete | Graph-driven residency, reduced MRT variants, adaptive occlusion and capacity-tiered punctual shadows; default 800x600 steady-state resident images are about 162.9 MiB |
-| 4. Extract SceneRuntimeCoordinator | Next | Pending implementation |
-| 5-10 | Pending | Execute in order after each preceding stage is verified |
+| 4. Extract SceneRuntimeCoordinator | Complete | Scene/environment load state machines, repositories, publication and serial retirement moved out of Application |
+| 5. Complete SceneWorkflowController | Next | Pending implementation |
+| 6-10 | Pending | Execute in order after each preceding stage is verified |
 
 ## Summary
 
@@ -589,6 +590,15 @@ Sheen Chair继续承担 glTF/PBR/material smoke。
 - Application不包含具体scene load phase switch。
 - SceneRuntime可在无Editor、无Runtime Control构建中独立工作。
 - 所有Model Preview和Native Scene共享相同异步发布模型。
+
+### Stage 4 Completion Record
+
+- 新增 `SceneRuntimeCoordinator`，统一持有 `AssetRepository`、`EnvironmentAssetRepository`、`SceneLoadManager`、当前/退役 World、环境句柄、加载任务、统计和 scene generation。
+- Model Preview 与 Native Scene 的解析、资源等待、环境等待、原子发布、失败/取消和 submission-serial 延迟回收均从 `Application` 移入 Coordinator；`Application` 不再包含 scene load phase switch。
+- Editor attach/detach、ArtifactIndex touch 和渲染设置同步通过无 ImGui/Runtime Control 依赖的发布回调完成。通知回调失败与 World 发布事务隔离，不会反向把已发布场景标记为失败。
+- Coordinator 提供稳定的领域错误码，`Application` 仅在边界处转换为 Runtime Control 错误，保持既有 `scene_unavailable`、`source_fallback_not_applicable`、`model_prepare_unavailable` 和 `environment_artifacts_unavailable` 语义。
+- `Application.cpp` 删除约 1,100 行场景/环境状态机和生命周期代码；`Application.h` 不再直接持有 Repository、LoadManager、World retirement queue 或环境加载内部状态。
+- `windows-msvc-dev-fast` 与 `windows-msvc-runtime` 均已构建并实际启动。Runtime Control 加载 `Renderer Smoke Scene` 后得到 7 个实体、4 个共享模型实例和 2 盏灯；未执行测试套件。
 
 ## Stage 5: Complete SceneWorkflowController
 
