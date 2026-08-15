@@ -5,7 +5,6 @@
 #include "assets/ProjectContext.h"
 #include "assets/SceneCatalog.h"
 #include "workflows/SceneWorkflowTypes.h"
-#include "control/RuntimeCommandDispatcher.h"
 #include "render/RenderItem.h"
 #include "render/Visibility.h"
 #include "render/RenderSettings.h"
@@ -39,9 +38,9 @@ class GuiSystem;
 class EditorController;
 #endif
 class CaptureService;
-struct RuntimeCommand;
-class RuntimeCommandQueue;
-class NamedPipeServerWin32;
+#if VKL_ENABLE_RUNTIME_CONTROL
+class RuntimeControlAdapter;
+#endif
 class EnvironmentAssetHandle;
 struct SceneLoadTask;
 struct ModelAsset;
@@ -55,11 +54,7 @@ enum class InputMode {
     CameraDrag, // 按住右键，相机接管鼠标
 };
 
-class Application final
-#if VKL_ENABLE_RUNTIME_CONTROL
-    : public RuntimeControlHost
-#endif
-{
+class Application final {
   public:
     Application(const Config &config, ProjectContext projectContext,
                 SceneCatalog catalog);
@@ -80,9 +75,6 @@ class Application final
     void processCameraInput(float dt);
     void handleSwapChainRecreate();
     const ShaderVariant &currentShaderVariant() const;
-#if VKL_ENABLE_RUNTIME_CONTROL
-    void processRuntimeCommand();
-#endif
     bool hasUnsavedSceneChanges() const;
 
     uint64_t reloadCurrentScene();
@@ -114,51 +106,6 @@ class Application final
     const CatalogEnvironment *
     findEnvironmentByName(const std::string &name) const;
     std::string profileIdForTextureLimit(const SceneEntry &entry) const;
-
-#if VKL_ENABLE_RUNTIME_CONTROL
-    ControlJson runtimeSystemInfo() override;
-    ControlJson runtimeSceneList() override;
-    ControlJson runtimeSceneCurrent() override;
-    ControlJson runtimeSceneLoad(const std::string &name) override;
-    ControlJson runtimeSceneReload() override;
-    ControlJson runtimeLoadStatus(std::optional<uint64_t> taskId) override;
-    ControlJson runtimeLoadCancel(std::optional<uint64_t> taskId) override;
-    ControlJson runtimeTextureLimitGet() override;
-    ControlJson runtimeTextureLimitSet(uint32_t value) override;
-    ControlJson runtimeAssetCatalog() override;
-    ControlJson
-    runtimeAssetStatus(const std::optional<std::string> &name) override;
-    ControlJson runtimeAssetValidation(const std::string &name) override;
-    ControlJson runtimeAssetImport(const std::string &name, bool force,
-                                   bool loadAfter) override;
-    ControlJson runtimeAssetCancel(std::optional<uint64_t> taskId) override;
-    ControlJson runtimeAssetCacheInfo() override;
-    ControlJson runtimeShaderList() override;
-    ControlJson runtimeShaderCurrent() override;
-    ControlJson runtimeShaderSet(const std::string &name) override;
-    ControlJson runtimeCameraGet() override;
-    ControlJson runtimeCameraSet(const RuntimeCameraPose &pose) override;
-    ControlJson runtimeWindowResize(uint32_t width,
-                                    uint32_t height) override;
-    ControlJson runtimeRenderStatus() override;
-    ControlJson runtimeRenderSettingsGet() override;
-    ControlJson
-    runtimeRenderSettingsSet(const RenderSettingsPatch &patch) override;
-    ControlJson runtimeEnvironmentList() override;
-    ControlJson runtimeEnvironmentCurrent() override;
-    ControlJson runtimeEnvironmentSet(const std::string &name) override;
-    ControlJson runtimeEnvironmentReload() override;
-    ControlJson runtimeCaptureScreenshot(const std::string &path,
-                                         bool includeGui) override;
-    ControlJson runtimeCaptureStatus(uint64_t taskId) override;
-    ControlJson runtimeCaptureCancel(uint64_t taskId) override;
-    ControlJson runtimeLastLoadStats() override;
-    ControlJson runtimeQuit() override;
-
-    ControlJson runtimeSceneOperationResult(int index, uint64_t taskId);
-    int runtimeAssetSceneIndex(const std::string &name) const;
-    ControlJson runtimeIndexedArtifactStatus(int index) const;
-#endif
 
     Config config_;
     ProjectContext projectContext_;
@@ -193,11 +140,7 @@ class Application final
     std::unique_ptr<SceneRuntimeCoordinator> sceneRuntime_;
 
 #if VKL_ENABLE_RUNTIME_CONTROL
-    std::unique_ptr<RuntimeCommandQueue> runtimeCommandQueue_;
-    std::unique_ptr<NamedPipeServerWin32> runtimeControlServer_;
-    RuntimeCommandDispatcher runtimeCommandDispatcher_;
-    std::shared_ptr<RuntimeCommand> pendingQuitCommand_;
-    std::string runtimeControlPipeName_;
+    std::unique_ptr<RuntimeControlAdapter> runtimeControl_;
 #endif
     uint64_t presentedFrameCount_ = 0;
 

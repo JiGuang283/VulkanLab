@@ -324,6 +324,9 @@ add_executable(VulkanLab
 if(VKL_ENABLE_EDITOR_UI)
     target_sources(VulkanLab PRIVATE editor/EditorController.cpp)
 endif()
+if(VKL_ENABLE_RUNTIME_CONTROL)
+    target_sources(VulkanLab PRIVATE control/RuntimeControlAdapter.cpp)
+endif()
 target_include_directories(VulkanLab PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(VulkanLab PRIVATE
     vkl_build_options
