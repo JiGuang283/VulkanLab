@@ -2,7 +2,7 @@
 
 > Status: Active
 > Last verified: 2026-08-15
-> Verified against: `cb7e7b3`
+> Verified against: `e8ef4dd`
 
 ## Progress
 
@@ -15,8 +15,9 @@
 | 4. Extract SceneRuntimeCoordinator | Complete | Scene/environment load state machines, repositories, publication and serial retirement moved out of Application |
 | 5. Complete SceneWorkflowController | Complete | Catalog, artifact, validation, import and asset task state moved behind typed Workflow snapshots/actions |
 | 6. Render Settings And Feature Ownership | Complete | Typed requested/active settings, centralized validation, deterministic frame feature resolution and feature-owned Shader program families |
-| 7. Extract EditorController | Next | Pending implementation |
-| 8-10 | Pending | Execute in order after each preceding stage is verified |
+| 7. Extract EditorController | Complete | Editor workspace, authoring session, viewport, capture and panels moved behind an editor-only controller |
+| 8. Isolate Runtime Control | Next | Pending implementation |
+| 9-10 | Pending | Execute in order after each preceding stage is verified |
 
 ## Summary
 
@@ -702,6 +703,15 @@ Panel只能保存展示状态，不持有GPU资源或后台任务。
 - `VKL_ENABLE_EDITOR_UI=OFF` 时Application不包含ImGui相关成员和空panel方法。
 - Application不直接调用ImGui。
 - Editor操作和Runtime Control操作使用相同service actions。
+
+### Stage 7 Completion Record
+
+- 新增仅在 `VKL_ENABLE_EDITOR_UI=ON` 时编译的 `EditorController`，集中持有 Dock workspace、各编辑器 Panel、`SceneEditorSession`、Viewport/Gizmo、Reflection Probe authoring capture 和 Capture UI 状态。
+- `EditorControllerServices` 显式注入平台、场景运行时、工作流、渲染设置和捕获服务；Controller 不持有 `Application&`，Panel 继续通过 typed snapshot/action 操作业务状态。
+- `Application` 不再包含 ImGui 调用、Panel 实现、编辑会话、Viewport resize 状态或 authoring modal；只保留编辑器生命周期和 canonical frame-order 委托。
+- Editor 与 Runtime Control 继续共用 `SceneWorkflowController`、`SceneRuntimeCoordinator` 和 `RenderSettingsController` 的 action/validation 路径，没有复制场景加载或渲染设置规则。
+- `Application.cpp` 从约 7,700 行降至约 3,270 行，`Application.h` 为约 215 行；剩余主要体积来自 Runtime Control JSON/协议实现，交由 Stage 8 处理。
+- `windows-msvc-dev-fast` Debug 和 `windows-msvc-runtime` Release 均构建成功并持续启动 6 秒；日志无 error/critical。按项目策略未运行测试套件或完整 GPU 视觉回归。
 
 ## Stage 8: Isolate Runtime Control
 
