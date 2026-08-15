@@ -2,7 +2,7 @@
 
 > Status: Active
 > Last verified: 2026-08-15
-> Verified against: `fb92352`
+> Verified against: `474e7f2`
 
 ## Progress
 
@@ -13,8 +13,9 @@
 | 2. Remove RenderGraph Migration Debt | Complete | Graph setup/recordNode is the only pass path; legacy barriers, startup self-tests, and migration aliases removed |
 | 3. Feature-Aware Resource Residency | Complete | Graph-driven residency, reduced MRT variants, adaptive occlusion and capacity-tiered punctual shadows; default 800x600 steady-state resident images are about 162.9 MiB |
 | 4. Extract SceneRuntimeCoordinator | Complete | Scene/environment load state machines, repositories, publication and serial retirement moved out of Application |
-| 5. Complete SceneWorkflowController | Next | Pending implementation |
-| 6-10 | Pending | Execute in order after each preceding stage is verified |
+| 5. Complete SceneWorkflowController | Complete | Catalog, artifact, validation, import and asset task state moved behind typed Workflow snapshots/actions |
+| 6. Render Settings And Feature Ownership | Next | Pending implementation |
+| 7-10 | Pending | Execute in order after each preceding stage is verified |
 
 ## Summary
 
@@ -623,6 +624,15 @@ Sheen Chair继续承担 glTF/PBR/material smoke。
 - UI与Runtime Control的scene/asset行为来自同一action实现。
 - Application不直接访问ArtifactIndex内部结构。
 - `SceneWorkflowController`名称与实际职责一致。
+
+### Stage 5 Completion Record
+
+- `SceneWorkflowController` 现统一持有 Catalog/registry 刷新、ArtifactIndex 与使用统计、Validator 状态、AssetImportManager、load-after-import 映射、model import future、task generation、取消和错误状态。
+- `SceneWorkflowSnapshot` 与 `AssetWorkflowSnapshot` 提供纯类型只读状态；Scenes/Assets 面板只保留搜索、modal 草稿和选择等展示状态，不持有后台 future、Catalog、ArtifactIndex 或 manager task。
+- UI、Runtime Control 和 Reflection Probe 环境构建均调用同一 Workflow action；Runtime Control 只在 Application 边界执行 typed snapshot 到 JSON/协议错误的转换。
+- `Application` 不再直接持有 `AssetImportManager`、`ArtifactIndex`、artifact/validation 状态映射、model import UI operation 或 import-to-load task 映射。保留的 `catalog_` 与 `sceneRegistry_` 是 Controller 数据的兼容引用，用于 RuntimeWorld、authoring 和环境运行时适配，不形成第二份状态。
+- Asset Authoring 关闭时，Controller 的编译期路径不引用 authoring-only service symbol；Runtime Release 因此保持可独立链接和运行。
+- `windows-msvc-dev-fast` 与 `windows-msvc-runtime` 均已构建成功；开发版 Runtime Control 的 `info`、`scene list`、`asset catalog`、`quit` 以及带 Editor/无 Editor 启动路径已实际验证。按项目策略未运行测试套件。
 
 ## Stage 6: Render Settings And Feature Ownership
 
