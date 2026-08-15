@@ -3,11 +3,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
 #include <limits>
-#include <optional>
 #include <string>
-#include <vector>
 
 namespace vkr {
 
@@ -26,15 +23,6 @@ struct EditorUiState {
     size_t selectedMaterialIndex = 0;
     uint64_t materialSceneGeneration =
         std::numeric_limits<uint64_t>::max();
-    int selectedEnvironmentIndex = 0;
-    std::optional<std::filesystem::path> environmentImportSource;
-    std::array<char, 192> environmentDisplayName{};
-    std::array<char, 128> environmentId{};
-    std::vector<std::string> environmentProfileIds;
-    int environmentProfileIndex = 0;
-    bool requestEnvironmentImportModal = false;
-    std::string environmentStatus;
-    std::string environmentError;
 
     std::array<char, 192> sceneDisplayName{};
     std::array<char, 128> sceneId{};

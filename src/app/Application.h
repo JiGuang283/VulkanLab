@@ -2,10 +2,9 @@
 
 #include "Config.h"
 
-#include "assets/AssetImportManager.h"
-#include "assets/ArtifactIndex.h"
 #include "assets/ProjectContext.h"
 #include "assets/SceneCatalog.h"
+#include "workflows/SceneWorkflowTypes.h"
 #include "control/RuntimeCommandDispatcher.h"
 #include "render/RenderItem.h"
 #include "render/Visibility.h"
@@ -59,8 +58,6 @@ struct ModelAsset;
 struct EnvironmentLoadTask;
 class SceneRuntimeCoordinator;
 class SceneWorkflowController;
-struct ModelImportUiState;
-struct SceneAssetOperationState;
 struct EditorUiState;
 
 enum class InputMode {
@@ -101,7 +98,6 @@ class Application final
 #if VKL_ENABLE_RUNTIME_CONTROL
     void processRuntimeCommand();
 #endif
-    void updateAssetImports();
     void drawScenePanel(bool modelsOnly = false);
     void drawOutlinerPanel();
     void drawInspectorPanel();
@@ -132,10 +128,7 @@ class Application final
     void drawLoadStatsPanel();
     void drawCapturePanel();
     void requestManualCapture(bool includeGui);
-    void updateModelImport();
     void refreshSceneRegistry(const std::string &selectSceneId = {});
-    void reloadArtifactIndex();
-    void persistArtifactIndex();
 
     uint64_t reloadCurrentScene();
     void switchScene(int index);
@@ -143,7 +136,8 @@ class Application final
                               bool reloadAsset = false);
     uint64_t requestSceneOperation(int index, bool sourceFallback = false,
                                    bool loadAfter = true,
-                                   ImportReason reason = ImportReason::SceneLoad,
+                                   SceneWorkflowRequestReason reason =
+                                       SceneWorkflowRequestReason::SceneLoad,
                                    bool forceReimport = false,
                                    bool reloadAsset = false);
     bool cancelSceneLoad(uint64_t taskId);
@@ -164,10 +158,6 @@ class Application final
     const CatalogEnvironment *
     findEnvironmentByName(const std::string &name) const;
     std::string profileIdForTextureLimit(const SceneEntry &entry) const;
-    void refreshArtifactStatus(int sceneIndex, bool admission = false);
-    void refreshAllArtifactStatuses();
-    void refreshValidationStatus(int sceneIndex);
-    void refreshAllValidationStatuses();
 
 #if VKL_ENABLE_RUNTIME_CONTROL
     ControlJson runtimeSystemInfo() override;
@@ -211,9 +201,7 @@ class Application final
 
     ControlJson runtimeSceneOperationResult(int index, uint64_t taskId);
     int runtimeAssetSceneIndex(const std::string &name) const;
-    ControlJson runtimeIndexedArtifactStatus(int index,
-                                             const std::string &profileId,
-                                             const ArtifactStatus &status) const;
+    ControlJson runtimeIndexedArtifactStatus(int index) const;
 #endif
 
     Config config_;
@@ -292,10 +280,6 @@ class Application final
     // 场景切换
     SceneLoadContext        sceneLoadContext_;
     std::unique_ptr<SceneRuntimeCoordinator> sceneRuntime_;
-    std::unique_ptr<AssetImportManager> assetImportManager_;
-    std::unique_ptr<ArtifactIndex> artifactIndex_;
-    std::optional<ArtifactIndexUsage> artifactUsage_;
-    SceneAssetOperationState *sceneAssetOperations_ = nullptr;
 
 #if VKL_ENABLE_RUNTIME_CONTROL
     std::unique_ptr<RuntimeCommandQueue> runtimeCommandQueue_;
@@ -304,7 +288,6 @@ class Application final
     std::shared_ptr<RuntimeCommand> pendingQuitCommand_;
     std::string runtimeControlPipeName_;
 #endif
-    ModelImportUiState *modelImportUi_ = nullptr;
     std::unique_ptr<EditorUiState> editorUi_;
     uint64_t lastCaptureTaskId_ = 0;
     bool captureIncludeGui_ = false;

@@ -29,7 +29,7 @@ editor::StatusTone statusTone(const std::string &state) {
 
 } // namespace
 
-void AssetsPanel::draw(const AssetsPanelSnapshot &snapshot,
+void AssetsPanel::draw(const AssetWorkflowSnapshot &snapshot,
                        const AssetsPanelActions &actions,
                        bool environmentsOnly) {
     if (!environmentsOnly) {
