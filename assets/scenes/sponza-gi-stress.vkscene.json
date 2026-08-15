@@ -256,7 +256,7 @@
       "components": {
         "light": {
           "type": "point",
-          "castsShadow": false,
+          "castsShadow": true,
           "atmosphereSunIndex": null,
           "sourceAngularRadiusRadians": 0.004674999974668026,
           "color": [

@@ -2541,7 +2541,7 @@
       "components": {
         "light": {
           "type": "point",
-          "castsShadow": false,
+          "castsShadow": true,
           "atmosphereSunIndex": null,
           "sourceAngularRadiusRadians": 0.004675,
           "color": [
@@ -2582,7 +2582,7 @@
       "components": {
         "light": {
           "type": "point",
-          "castsShadow": false,
+          "castsShadow": true,
           "atmosphereSunIndex": null,
           "sourceAngularRadiusRadians": 0.004675,
           "color": [
@@ -2623,7 +2623,7 @@
       "components": {
         "light": {
           "type": "spot",
-          "castsShadow": false,
+          "castsShadow": true,
           "atmosphereSunIndex": null,
           "sourceAngularRadiusRadians": 0.004675,
           "color": [
@@ -2664,7 +2664,7 @@
       "components": {
         "light": {
           "type": "spot",
-          "castsShadow": false,
+          "castsShadow": true,
           "atmosphereSunIndex": null,
           "sourceAngularRadiusRadians": 0.004675,
           "color": [
@@ -2705,7 +2705,7 @@
       "components": {
         "light": {
           "type": "point",
-          "castsShadow": false,
+          "castsShadow": true,
           "atmosphereSunIndex": null,
           "sourceAngularRadiusRadians": 0.004675,
           "color": [
@@ -2746,7 +2746,7 @@
       "components": {
         "light": {
           "type": "spot",
-          "castsShadow": false,
+          "castsShadow": true,
           "atmosphereSunIndex": null,
           "sourceAngularRadiusRadians": 0.004675,
           "color": [
