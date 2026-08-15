@@ -1,9 +1,9 @@
 #pragma once
 
-#include "IRenderWorld.h"
+#include "render/IRenderWorld.h"
 #include "ModelInstance.h"
-#include "SceneLight.h"
-#include "SceneTypes.h"
+#include "render/SceneLight.h"
+#include "scene_data/SceneTypes.h"
 
 #include <cstddef>
 #include <memory>

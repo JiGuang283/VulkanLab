@@ -1,7 +1,7 @@
 #pragma once
 
-#include "core/ComputePipelineConfig.h"
-#include "core/PipelineConfig.h"
+#include "render/pipeline/ComputePipelineConfig.h"
+#include "render/pipeline/PipelineConfig.h"
 #include "render/ComputePipelineKey.h"
 #include "render/PipelineKey.h"
 

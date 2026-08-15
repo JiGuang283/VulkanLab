@@ -3,7 +3,7 @@
 #include "diagnostics/SceneLoadStats.h"
 #include "scene/AssetRepository.h"
 #include "scene/EnvironmentAssetRepository.h"
-#include "scene/IRenderWorld.h"
+#include "render/IRenderWorld.h"
 #include "scene/ModelPrepareFactory.h"
 #include "scene/SceneLoadTask.h"
 

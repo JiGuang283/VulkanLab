@@ -3,7 +3,7 @@
 #include "render/RenderItem.h"
 #include "render/DirectionalShadow.h"
 #include "render/PunctualShadow.h"
-#include "scene/BoundsMath.h"
+#include "render/BoundsMath.h"
 
 #include <array>
 #include <cstdint>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "render/TextureTranscodeTarget.h"
+#include "core/TextureTranscodeTarget.h"
 
 #include <cstdint>
 #include <functional>

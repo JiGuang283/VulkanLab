@@ -1,7 +1,7 @@
 #pragma once
 
 #include "render/GpuMaterialData.h"
-#include "render/MaterialBindingMode.h"
+#include "core/MaterialBindingMode.h"
 #include "render/MaterialTextureSlot.h"
 
 #include <array>

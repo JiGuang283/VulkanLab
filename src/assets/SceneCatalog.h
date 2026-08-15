@@ -1,7 +1,7 @@
 #pragma once
 
 #include "scene_data/SceneIds.h"
-#include "scene/SceneTypes.h"
+#include "scene_data/SceneTypes.h"
 
 #include <cstdint>
 #include <filesystem>

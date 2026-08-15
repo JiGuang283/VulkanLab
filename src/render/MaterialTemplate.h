@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/PipelineConfig.h"
+#include "render/pipeline/PipelineConfig.h"
 
 #include <vulkan/vulkan.h>
 

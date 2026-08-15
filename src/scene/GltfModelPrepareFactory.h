@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ModelPrepareFactory.h"
-#include "SceneTypes.h"
+#include "scene_data/SceneTypes.h"
 
 #include <optional>
 

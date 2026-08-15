@@ -3,7 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
-#include "render/MaterialBindingMode.h"
+#include "core/MaterialBindingMode.h"
 
 namespace vkr {
 

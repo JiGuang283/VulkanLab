@@ -1,7 +1,7 @@
 #pragma once
 
 #include "EnvironmentAssetHandle.h"
-#include "render/EnvironmentGpuBuilder.h"
+#include "scene/EnvironmentGpuBuilder.h"
 
 #include <filesystem>
 #include <memory>

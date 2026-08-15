@@ -1,7 +1,7 @@
 #include "PipelineCache.h"
 
-#include "core/ComputePipeline.h"
-#include "core/Pipeline.h"
+#include "render/pipeline/ComputePipeline.h"
+#include "render/pipeline/Pipeline.h"
 #include "diagnostics/Profiling.h"
 
 namespace vkr {

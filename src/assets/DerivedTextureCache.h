@@ -1,8 +1,8 @@
 #pragma once
 
 #include "DerivedTextureManifest.h"
-#include "render/TextureTranscodeTarget.h"
-#include "scene/PreparedModelData.h"
+#include "core/TextureTranscodeTarget.h"
+#include "assets/PreparedTextureData.h"
 
 #include <filesystem>
 #include <memory>

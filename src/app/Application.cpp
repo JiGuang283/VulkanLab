@@ -33,7 +33,7 @@
 #include "render/Visibility.h"
 #include "scene/Camera.h"
 #include "scene/EnvironmentAssetHandle.h"
-#include "scene/IRenderWorld.h"
+#include "render/IRenderWorld.h"
 #include "scene/ModelPrepareFactory.h"
 #include "scene/SceneEntry.h"
 #include "scene/SceneLoadTask.h"

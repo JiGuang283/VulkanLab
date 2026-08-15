@@ -1,8 +1,8 @@
 #include "ComputePipeline.h"
 
-#include "Device.h"
-#include "GpuDebugUtils.h"
-#include "VulkanCheck.h"
+#include "core/Device.h"
+#include "core/GpuDebugUtils.h"
+#include "core/VulkanCheck.h"
 
 #include <fstream>
 #include <stdexcept>

@@ -1,6 +1,6 @@
 #pragma once
 #include "core/Buffer.h"
-#include "scene/SceneTypes.h"
+#include "scene_data/SceneTypes.h"
 #include <cstdint>
 #include <memory>
 #include <string>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "render/MaterialBindingMode.h"
+#include "core/MaterialBindingMode.h"
 
 #include <array>
 #include <string>

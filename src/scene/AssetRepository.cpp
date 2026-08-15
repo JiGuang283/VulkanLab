@@ -1,11 +1,11 @@
 #include "AssetRepository.h"
 
-#include "PreparedModelData.h"
+#include "scene/PreparedModelData.h"
 #include "SceneLoadTask.h"
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
 #include "core/Log.h"
-#include "core/PipelineConfigBuilder.h"
+#include "render/pipeline/PipelineConfigBuilder.h"
 #include "diagnostics/Profiling.h"
 #include "render/MaterialTemplate.h"
 #include "render/MaterialSystem.h"

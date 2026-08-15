@@ -1,6 +1,6 @@
 #pragma once
 
-#include "IRenderWorld.h"
+#include "render/IRenderWorld.h"
 #include "EnvironmentAssetHandle.h"
 #include "ModelAssetHandle.h"
 #include "scene_data/SceneDocument.h"

@@ -1,8 +1,8 @@
 #include "DirectionalShadow.h"
 
-#include "scene/SceneLight.h"
-#include "scene/SceneTypes.h"
-#include "scene/BoundsMath.h"
+#include "render/SceneLight.h"
+#include "scene_data/SceneTypes.h"
+#include "render/BoundsMath.h"
 
 #include <algorithm>
 #include <array>

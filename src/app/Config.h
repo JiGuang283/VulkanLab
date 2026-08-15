@@ -2,17 +2,16 @@
 
 #include <BuildFeatures.h>
 
+#include "assets/AssetImportMode.h"
 #include "core/ValidationProfile.h"
 #include "diagnostics/DiagnosticsConfig.h"
-#include "render/MaterialBindingMode.h"
+#include "core/MaterialBindingMode.h"
 
 #include <cstdint>
 #include <filesystem>
 #include <string>
 
 namespace vkr {
-
-enum class AssetImportMode { OnDemand, ReadOnly, CookedOnly };
 
 struct Config {
     // ---- 窗口 ----

@@ -1,8 +1,8 @@
 #include "GltfModelPrepareFactory.h"
 
-#include "PreparedModelData.h"
+#include "scene/PreparedModelData.h"
 #include "SceneLoadTask.h"
-#include "render/GltfPreparer.h"
+#include "scene/GltfPreparer.h"
 
 #include <utility>
 

@@ -1,7 +1,7 @@
 #include "PrimitiveModelFactory.h"
 
 #include "PrimitiveMeshGenerator.h"
-#include "PreparedModelData.h"
+#include "scene/PreparedModelData.h"
 #include "SceneLoadTask.h"
 
 #include <stdexcept>

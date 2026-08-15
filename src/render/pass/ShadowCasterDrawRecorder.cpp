@@ -1,7 +1,7 @@
 #include "render/pass/ShadowCasterDrawRecorder.h"
 
-#include "core/Pipeline.h"
-#include "core/PipelineConfigBuilder.h"
+#include "render/pipeline/Pipeline.h"
+#include "render/pipeline/PipelineConfigBuilder.h"
 #include "render/GpuMaterialData.h"
 #include "render/MaterialInstance.h"
 #include "render/MaterialSystem.h"

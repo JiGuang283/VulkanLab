@@ -1,6 +1,6 @@
 #pragma once
 
-#include "EnvironmentGpuResources.h"
+#include "render/EnvironmentGpuResources.h"
 
 #include <chrono>
 #include <cstdint>

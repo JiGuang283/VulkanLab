@@ -1,7 +1,8 @@
 #pragma once
 
-#include "ModelLight.h"
-#include "SceneTypes.h"
+#include "assets/PreparedTextureData.h"
+#include "scene/ModelLightPrototype.h"
+#include "scene_data/SceneTypes.h"
 #include "render/MaterialInstance.h"
 #include "render/MaterialTextureSlot.h"
 #include "render/Vertex.h"
@@ -15,24 +16,6 @@
 #include <vulkan/vulkan.h>
 
 namespace vkr {
-
-enum class PreparedTextureDataKind { RawBaseLevel, PrebuiltMipChain };
-
-struct PreparedMipLevel {
-    uint64_t offset = 0;
-    uint64_t size = 0;
-    uint32_t width = 0;
-    uint32_t height = 0;
-};
-
-struct PreparedImage {
-    std::vector<uint8_t> pixels;
-    uint32_t width = 0;
-    uint32_t height = 0;
-    VkFormat format = VK_FORMAT_UNDEFINED;
-    PreparedTextureDataKind kind = PreparedTextureDataKind::RawBaseLevel;
-    std::vector<PreparedMipLevel> mipLevels;
-};
 
 struct PreparedTexture {
     std::shared_ptr<const PreparedImage> image;

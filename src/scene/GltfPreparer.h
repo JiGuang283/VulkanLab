@@ -2,7 +2,7 @@
 
 #include "scene/PreparedModelData.h"
 #include "scene/SceneLoadTask.h"
-#include "TextureTranscodeTarget.h"
+#include "core/TextureTranscodeTarget.h"
 
 #include <cstdint>
 #include <optional>

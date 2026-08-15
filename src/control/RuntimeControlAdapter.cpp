@@ -41,7 +41,7 @@
 #include "scene/ModelPrepareFactory.h"
 #include "scene/RuntimeWorld.h"
 #include "scene/SceneEntry.h"
-#include "scene/SceneLight.h"
+#include "render/SceneLight.h"
 #include "scene/SceneLoadTask.h"
 #include "window/Window.h"
 

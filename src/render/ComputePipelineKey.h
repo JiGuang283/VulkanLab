@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/ComputePipelineConfig.h"
+#include "render/pipeline/ComputePipelineConfig.h"
 
 #include <cstddef>
 #include <functional>

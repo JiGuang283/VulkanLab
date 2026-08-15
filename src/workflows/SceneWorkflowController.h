@@ -1,7 +1,6 @@
 #pragma once
 
-#include "app/Config.h"
-
+#include "assets/AssetImportMode.h"
 #include "assets/AssetImportManager.h"
 #include "assets/AssetLoadCoordinator.h"
 #include "assets/ArtifactIndex.h"

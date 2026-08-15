@@ -3,9 +3,9 @@
 #include "render/FrameGpuData.h"
 #include "render/RenderSettings.h"
 #include "render/ShadowSystem.h"
-#include "scene/SceneLight.h"
-#include "scene/IRenderWorld.h"
-#include "scene/SceneTypes.h"
+#include "render/SceneLight.h"
+#include "render/IRenderWorld.h"
+#include "scene_data/SceneTypes.h"
 
 #include <glm/glm.hpp>
 

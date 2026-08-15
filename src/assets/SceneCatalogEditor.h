@@ -2,7 +2,7 @@
 
 #include "ProjectContext.h"
 #include "SceneCatalog.h"
-#include "scene/SceneTypes.h"
+#include "scene_data/SceneTypes.h"
 
 #include <filesystem>
 #include <string>

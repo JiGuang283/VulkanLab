@@ -3,7 +3,7 @@
 #include "render/MaterialInstance.h"
 #include "render/RenderView.h"
 #include "render/Visibility.h"
-#include "scene/BoundsMath.h"
+#include "render/BoundsMath.h"
 
 #include <algorithm>
 

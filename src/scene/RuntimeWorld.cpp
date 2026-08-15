@@ -6,7 +6,7 @@
 #include "render/MaterialInstance.h"
 #include "render/Mesh.h"
 #include "render/RenderItem.h"
-#include "scene/BoundsMath.h"
+#include "render/BoundsMath.h"
 
 #include <algorithm>
 #include <cmath>

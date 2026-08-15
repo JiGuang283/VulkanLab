@@ -3,8 +3,8 @@
 #include "render/DirectionalShadow.h"
 #include "render/PunctualShadow.h"
 #include "render/RenderSettings.h"
-#include "scene/SceneLight.h"
-#include "scene/SceneTypes.h"
+#include "render/SceneLight.h"
+#include "scene_data/SceneTypes.h"
 
 #include <array>
 #include <cstdint>

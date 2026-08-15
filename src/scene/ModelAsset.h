@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ModelLight.h"
-#include "SceneTypes.h"
+#include "scene_data/SceneTypes.h"
 #include "scene_data/SceneIds.h"
 
 #include <glm/glm.hpp>

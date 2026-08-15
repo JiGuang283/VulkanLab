@@ -9,8 +9,8 @@
 #include "VulkanContext.h"
 #include "VulkanTypes.h"
 #include "diagnostics/SceneLoadStats.h"
-#include "render/TextureTranscodeTarget.h"
-#include "render/MaterialBindingMode.h"
+#include "core/TextureTranscodeTarget.h"
+#include "core/MaterialBindingMode.h"
 #include "vk_mem_alloc.h"
 
 namespace vkr {

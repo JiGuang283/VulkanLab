@@ -1,6 +1,6 @@
 #include "ModelGpuBuilder.h"
 
-#include "PreparedModelData.h"
+#include "scene/PreparedModelData.h"
 #include "core/Device.h"
 #include "core/IncrementalUploadQueue.h"
 #include "core/Log.h"
@@ -12,7 +12,7 @@
 #include "render/Mesh.h"
 #include "render/Texture.h"
 #include "SceneLoadTask.h"
-#include "scene/BoundsMath.h"
+#include "render/BoundsMath.h"
 
 #include <algorithm>
 #include <array>

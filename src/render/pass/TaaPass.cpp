@@ -1,8 +1,8 @@
 #include "render/pass/TaaPass.h"
 
 #include "core/Buffer.h"
-#include "core/ComputePipeline.h"
-#include "core/ComputePipelineConfig.h"
+#include "render/pipeline/ComputePipeline.h"
+#include "render/pipeline/ComputePipelineConfig.h"
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
 #include "core/GpuDebugUtils.h"

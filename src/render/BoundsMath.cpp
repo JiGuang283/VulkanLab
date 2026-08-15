@@ -1,4 +1,4 @@
-#include "scene/BoundsMath.h"
+#include "render/BoundsMath.h"
 
 #include <algorithm>
 #include <cmath>

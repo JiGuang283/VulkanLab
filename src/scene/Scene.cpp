@@ -5,7 +5,7 @@
 #include "render/MaterialInstance.h"
 #include "render/Mesh.h"
 #include "render/RenderItem.h"
-#include "scene/BoundsMath.h"
+#include "render/BoundsMath.h"
 
 #include <stdexcept>
 #include <unordered_set>
