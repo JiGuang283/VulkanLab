@@ -10,7 +10,6 @@
 #include "core/VulkanCheck.h"
 #include "diagnostics/Profiling.h"
 #include "diagnostics/TracyProfiler.h"
-#include "render/GuiSystem.h"
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
 #include "render/RenderGraph.h"
@@ -77,10 +76,10 @@ void PresentPass::recordNode(RenderGraphPassContext &context, uint32_t,
     const VkRect2D scissor{{0, 0}, frame.swapchainExtent};
     vkCmdSetScissor(frame.cmd, 0, 1, &scissor);
 
-    if (frame.gui) {
+    if (frame.drawUi) {
         VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "ImGui");
         ScopedGpuLabel label(device_->debugUtils(), frame.cmd, "ImGui");
-        frame.gui->render(frame.cmd);
+        frame.drawUi(frame.cmd);
     } else {
         VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd,
                              "FullscreenPresent");

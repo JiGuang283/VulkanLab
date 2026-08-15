@@ -31,7 +31,6 @@ class DescriptorAllocator;
 class MaterialSystem;
 class ShaderRegistry;
 struct EnvironmentGpuResources;
-class GuiSystem;
 class MainForwardPass;
 class SurfacePrepass;
 class AtmosphereLutPass;
@@ -182,7 +181,8 @@ class Renderer {
     void renderFrame(const FrameSync::FrameContext &frame,
                      const VisibilityFrame &visibility,
                      PipelineCache &pipelineCache,
-                     GuiSystem *gui, const ShaderVariant &shaderVariant,
+                     std::function<void(VkCommandBuffer)> drawUi,
+                     const ShaderVariant &shaderVariant,
                      const RenderView &view,
                      std::optional<FrameCaptureSource> captureSource = {},
                      std::function<void(VkCommandBuffer)> screenshotCopy = {});

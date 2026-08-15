@@ -12,7 +12,6 @@
 #include "render/FrameGpuData.h"
 #include "render/FrameFeatureResolver.h"
 #include "render/EnvironmentGpuResources.h"
-#include "render/GuiSystem.h"
 #include "render/MaterialSystem.h"
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
@@ -161,7 +160,7 @@ Renderer::~Renderer() {
 void Renderer::renderFrame(const FrameSync::FrameContext &frame,
                            const VisibilityFrame &visibility,
                            PipelineCache &pipelineCache,
-                           GuiSystem *gui,
+                           std::function<void(VkCommandBuffer)> drawUi,
                            const ShaderVariant &shaderVariant,
                            const RenderView &view,
                            std::optional<FrameCaptureSource> captureSource,
@@ -273,7 +272,7 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.materialSystem = materialSystem_;
     renderFrame.debugUtils = &device_->debugUtils();
     renderFrame.tracyProfiler = &device_->tracyProfiler();
-    renderFrame.gui = gui;
+    renderFrame.drawUi = std::move(drawUi);
     renderFrame.shaderVariant = &shaderVariant;
     renderFrame.view = &view;
     renderFrame.environmentReady = environmentReady();

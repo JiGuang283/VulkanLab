@@ -1,7 +1,7 @@
 #include "Application.h"
-#include "RenderSettingsController.h"
-#include "SceneRuntimeCoordinator.h"
-#include "SceneWorkflowController.h"
+#include "render/RenderSettingsController.h"
+#include "scene/SceneRuntimeCoordinator.h"
+#include "workflows/SceneWorkflowController.h"
 
 #include <BuildFeatures.h>
 
@@ -21,9 +21,9 @@
 #include "diagnostics/TracyProfiler.h"
 #if VKL_ENABLE_EDITOR_UI
 #include "editor/EditorController.h"
+#include "editor/GuiSystem.h"
 #endif
 #include "render/FrameGpuData.h"
-#include "render/GuiSystem.h"
 #include "render/MaterialSystem.h"
 #include "render/PipelineCache.h"
 #include "render/RenderView.h"
@@ -127,8 +127,8 @@ struct Application::RuntimeServices {
 };
 
 struct Application::OptionalTooling {
-    std::unique_ptr<GuiSystem> gui;
 #if VKL_ENABLE_EDITOR_UI
+    std::unique_ptr<GuiSystem> gui;
     std::unique_ptr<EditorController> editor;
 #endif
     std::unique_ptr<CaptureService> capture;
@@ -582,6 +582,10 @@ void Application::initOptionalTooling() {
             };
         }
 #endif
+        bool editorAvailable = false;
+#if VKL_ENABLE_EDITOR_UI
+        editorAvailable = tooling_->gui != nullptr;
+#endif
         tooling_->runtimeControl = std::make_unique<RuntimeControlAdapter>(
             RuntimeControlServices{config_,
                                    projectContext_,
@@ -603,7 +607,7 @@ void Application::initOptionalTooling() {
                                    frame_->visibilityFrame,
                                    frame_->lastLightStats,
                                    frame_->presentedFrameCount,
-                                   tooling_->gui != nullptr,
+                                   editorAvailable,
                                    std::move(viewportSnapshot),
                                    std::move(controlActions)});
     }
@@ -762,18 +766,17 @@ void Application::updateInputMode() {
     if (frame_->inputMode == InputMode::UI) {
         const bool pressed =
             platform_->input->isMousePressed(MouseButton::Right);
-        bool overUI = tooling_->gui && tooling_->gui->wantCaptureMouse();
+        bool overUI = false;
+        bool overSceneArea = true;
 #if VKL_ENABLE_EDITOR_UI
-        const bool overSceneArea =
-            !tooling_->editor || tooling_->editor->viewportHovered();
+        overUI = tooling_->gui && tooling_->gui->wantCaptureMouse();
+        overSceneArea = !tooling_->editor || tooling_->editor->viewportHovered();
         if (overSceneArea)
             overUI = false;
         overUI =
             overUI || (tooling_->editor && tooling_->editor->anyItemActive());
         overUI = overUI ||
                  (tooling_->editor && tooling_->editor->blocksViewportInput());
-#else
-        constexpr bool overSceneArea = true;
 #endif
         if (pressed && overSceneArea && !overUI) {
             frame_->savedCursor = platform_->input->cursorPos();
@@ -834,9 +837,13 @@ void Application::handleSwapChainRecreate() {
     }
     platform_->pipelineCache->clear();
     platform_->frameSync->onSwapChainRecreated();
+    bool editorViewportActive = false;
+#if VKL_ENABLE_EDITOR_UI
+    editorViewportActive = tooling_->gui != nullptr;
     if (tooling_->gui)
         tooling_->gui->onSwapChainRecreated(platform_->swapChain->imageCount());
-    if (!tooling_->gui) {
+#endif
+    if (!editorViewportActive) {
         platform_->renderer->resizeViewport(platform_->swapChain->extent());
         frame_->camera.setAspect(
             static_cast<float>(platform_->swapChain->extent().width) /
@@ -909,9 +916,9 @@ void Application::mainLoop() {
 #endif
 
         // 3. Begin the editor frame.
+#if VKL_ENABLE_EDITOR_UI
         if (tooling_->gui)
             tooling_->gui->beginFrame();
-#if VKL_ENABLE_EDITOR_UI
         if (tooling_->editor)
             tooling_->editor->beginFrame();
 #endif
@@ -963,8 +970,10 @@ void Application::mainLoop() {
         if (!ctx) {
             if (platform_->frameSync->swapChainNeedsRecreation())
                 handleSwapChainRecreate();
+#if VKL_ENABLE_EDITOR_UI
             if (tooling_->gui)
                 tooling_->gui->discardFrame();
+#endif
             platform_->input->endFrame();
             const VkExtent2D framebufferExtent =
                 platform_->window->framebufferExtent();
@@ -1093,11 +1102,11 @@ void Application::mainLoop() {
                 viewInput.settings.environmentRotationRadians =
                     environment->rotationRadians;
             }
-            bool useActiveSceneCamera = !tooling_->gui;
+            bool useActiveSceneCamera = true;
 #if VKL_ENABLE_EDITOR_UI
-            useActiveSceneCamera =
-                useActiveSceneCamera ||
-                (tooling_->editor && tooling_->editor->activeSceneCamera());
+            useActiveSceneCamera = !tooling_->gui ||
+                                   (tooling_->editor &&
+                                    tooling_->editor->activeSceneCamera());
 #endif
             if (useActiveSceneCamera) {
                 const VkExtent2D extent = platform_->renderer->viewportExtent();
@@ -1256,14 +1265,21 @@ void Application::mainLoop() {
                               static_cast<int64_t>(profilerMemory.blockBytes));
         }
 
-        GuiSystem *frameGui = tooling_->gui.get();
+        std::function<void(VkCommandBuffer)> drawUi;
+#if VKL_ENABLE_EDITOR_UI
+        if (tooling_->gui) {
+            drawUi = [gui = tooling_->gui.get()](VkCommandBuffer cmd) {
+                gui->render(cmd);
+            };
+        }
+#endif
         {
             ScopedGpuLabel frameLabel(
                 platform_->device->debugUtils(), ctx->cmd,
                 "Frame " + std::to_string(frame_->presentedFrameCount + 1));
             platform_->renderer->renderFrame(
                 *ctx, frame_->visibilityFrame, *platform_->pipelineCache,
-                frameGui, currentShaderVariant(), renderView,
+                std::move(drawUi), currentShaderVariant(), renderView,
                 captureSelection
                     ? std::optional<
                           FrameCaptureSource>{captureSelection->source ==

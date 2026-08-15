@@ -264,10 +264,7 @@ if(VKL_ENABLE_EDITOR_UI)
         editor/panels/InspectorPanel.cpp
         editor/panels/OutlinerPanel.cpp
         editor/panels/ScenesPanel.cpp
-        render/GuiSystem.cpp
     )
-else()
-    list(APPEND VKL_ENGINE_SOURCES render/GuiSystemDisabled.cpp)
 endif()
 
 if(VKL_ENABLE_CAPTURE)
@@ -317,12 +314,15 @@ endif()
 add_executable(VulkanLab
     main.cpp
     app/Application.cpp
-    app/RenderSettingsController.cpp
-    app/SceneRuntimeCoordinator.cpp
-    app/SceneWorkflowController.cpp
+    render/RenderSettingsController.cpp
+    scene/SceneRuntimeCoordinator.cpp
+    workflows/SceneWorkflowController.cpp
 )
 if(VKL_ENABLE_EDITOR_UI)
-    target_sources(VulkanLab PRIVATE editor/EditorController.cpp)
+    target_sources(VulkanLab PRIVATE
+        editor/EditorController.cpp
+        editor/GuiSystem.cpp
+    )
 endif()
 if(VKL_ENABLE_RUNTIME_CONTROL)
     target_sources(VulkanLab PRIVATE control/RuntimeControlAdapter.cpp)

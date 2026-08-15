@@ -1,4 +1,4 @@
-#include "app/RenderSettingsController.h"
+#include "RenderSettingsController.h"
 
 #include "render/DirectionalShadow.h"
 #include "render/PunctualShadow.h"

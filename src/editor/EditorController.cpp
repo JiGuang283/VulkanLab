@@ -2,9 +2,9 @@
 
 #include <BuildFeatures.h>
 
-#include "app/RenderSettingsController.h"
-#include "app/SceneRuntimeCoordinator.h"
-#include "app/SceneWorkflowController.h"
+#include "render/RenderSettingsController.h"
+#include "scene/SceneRuntimeCoordinator.h"
+#include "workflows/SceneWorkflowController.h"
 #include "assets/ArtifactStatus.h"
 #include "assets/EnvironmentLoadManager.h"
 #include "assets/ModelImportService.h"
@@ -31,7 +31,7 @@
 #include "editor/panels/OutlinerPanel.h"
 #include "editor/panels/ScenesPanel.h"
 #include "render/DirectionalShadow.h"
-#include "render/GuiSystem.h"
+#include "editor/GuiSystem.h"
 #include "render/MaterialInstance.h"
 #include "render/MaterialSystem.h"
 #include "render/MaterialTextureSlot.h"

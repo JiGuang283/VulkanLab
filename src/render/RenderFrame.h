@@ -7,7 +7,6 @@
 
 namespace vkr {
 
-class GuiSystem;
 class GpuDebugUtils;
 class PipelineCache;
 class MaterialSystem;
@@ -78,7 +77,7 @@ struct RenderFrameContext {
     MaterialSystem *materialSystem = nullptr;
     const GpuDebugUtils *debugUtils = nullptr;
     const TracyProfiler *tracyProfiler = nullptr;
-    GuiSystem      *gui = nullptr;
+    std::function<void(VkCommandBuffer)> drawUi;
     const ShaderVariant *shaderVariant = nullptr;
     const RenderView *view = nullptr;
     bool environmentReady = false;

@@ -1,9 +1,9 @@
 #include "RuntimeControlAdapter.h"
 
 #include "app/Config.h"
-#include "app/RenderSettingsController.h"
-#include "app/SceneRuntimeCoordinator.h"
-#include "app/SceneWorkflowController.h"
+#include "render/RenderSettingsController.h"
+#include "scene/SceneRuntimeCoordinator.h"
+#include "workflows/SceneWorkflowController.h"
 
 #include <BuildFeatures.h>
 
