@@ -7,7 +7,6 @@
 #include "assets/ProjectContext.h"
 #include "assets/SceneCatalog.h"
 #include "control/RuntimeCommandDispatcher.h"
-#include "diagnostics/SceneLoadStats.h"
 #include "render/RenderItem.h"
 #include "render/Visibility.h"
 #include "render/RenderSettings.h"
@@ -15,8 +14,7 @@
 #include "render/ShaderRegistry.h"
 #include "render/ShaderVariant.h"
 #include "scene/Camera.h"
-#include "scene/IRenderWorld.h"
-#include "scene/Scene.h"
+#include "scene/ModelPrepareFactory.h"
 #include "scene/SceneEntry.h"
 
 #include <glm/glm.hpp>
@@ -24,7 +22,6 @@
 #include <cstdint>
 #include <chrono>
 #include <array>
-#include <deque>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -56,13 +53,11 @@ class CaptureService;
 struct RuntimeCommand;
 class RuntimeCommandQueue;
 class NamedPipeServerWin32;
-class SceneLoadManager;
-class AssetRepository;
-class EnvironmentAssetRepository;
 class EnvironmentAssetHandle;
 struct SceneLoadTask;
 struct ModelAsset;
 struct EnvironmentLoadTask;
+class SceneRuntimeCoordinator;
 class SceneWorkflowController;
 struct ModelImportUiState;
 struct SceneAssetOperationState;
@@ -103,17 +98,9 @@ class Application final
     void applyPendingViewportResize();
 #endif
     const ShaderVariant &currentShaderVariant() const;
-    void applySceneCameraDefaults();
 #if VKL_ENABLE_RUNTIME_CONTROL
     void processRuntimeCommand();
 #endif
-    void updateSceneLoading();
-    void updateNativeSceneLoading(
-        const std::shared_ptr<SceneLoadTask> &task);
-    void resolveNativeSceneModels(
-        const std::shared_ptr<SceneLoadTask> &task);
-    void publishNativeScene(const std::shared_ptr<SceneLoadTask> &task);
-    void updateEnvironmentLoading();
     void updateAssetImports();
     void drawScenePanel(bool modelsOnly = false);
     void drawOutlinerPanel();
@@ -162,8 +149,6 @@ class Application final
     bool cancelSceneLoad(uint64_t taskId);
     bool cancelLoadOperation(uint64_t taskId);
     bool cancelEnvironmentLoad(uint64_t taskId);
-    void finalizeSceneLoad(const std::shared_ptr<SceneLoadTask> &task,
-                           bool success);
     uint64_t setTextureLimit(uint32_t limit);
     void setShaderVariant(const std::string &id);
     uint64_t setEnvironment(const std::string &id);
@@ -183,8 +168,6 @@ class Application final
     void refreshAllArtifactStatuses();
     void refreshValidationStatus(int sceneIndex);
     void refreshAllValidationStatuses();
-    void retireCurrentScene();
-    void collectRetiredScenes();
 
 #if VKL_ENABLE_RUNTIME_CONTROL
     ControlJson runtimeSystemInfo() override;
@@ -308,25 +291,7 @@ class Application final
 
     // 场景切换
     SceneLoadContext        sceneLoadContext_;
-    std::unique_ptr<AssetRepository> assetRepository_;
-    std::shared_ptr<IRenderWorld> currentScene_;
-    struct RetiredScene {
-        uint64_t retireAfterSerial = 0;
-        std::shared_ptr<IRenderWorld> scene;
-    };
-    std::deque<RetiredScene> retiredScenes_;
-    int                     currentSceneIndex_ = -1;
-    int                     pendingSceneIndex_ = -1;
-    std::optional<SceneLoadStats> lastSceneLoadStats_;
-    std::unique_ptr<SceneLoadManager> sceneLoadManager_;
-    std::shared_ptr<SceneLoadTask> latestSceneLoadTask_;
-    std::unique_ptr<EnvironmentAssetRepository>
-        environmentAssetRepository_;
-    std::shared_ptr<EnvironmentLoadTask> latestEnvironmentLoadTask_;
-    std::unique_ptr<EnvironmentAssetHandle> pendingEnvironmentAsset_;
-    std::unique_ptr<EnvironmentAssetHandle> activeEnvironmentAsset_;
-    std::string selectedEnvironmentId_;
-    uint64_t lastFinalizedTaskId_ = 0;
+    std::unique_ptr<SceneRuntimeCoordinator> sceneRuntime_;
     std::unique_ptr<AssetImportManager> assetImportManager_;
     std::unique_ptr<ArtifactIndex> artifactIndex_;
     std::optional<ArtifactIndexUsage> artifactUsage_;
@@ -344,7 +309,6 @@ class Application final
     uint64_t lastCaptureTaskId_ = 0;
     bool captureIncludeGui_ = false;
     std::string captureUiError_;
-    uint64_t sceneGeneration_ = 0;
     uint64_t presentedFrameCount_ = 0;
 
     // 输入模式

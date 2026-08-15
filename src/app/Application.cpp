@@ -1,4 +1,5 @@
 #include "Application.h"
+#include "SceneRuntimeCoordinator.h"
 #include "SceneWorkflowController.h"
 
 #include <BuildFeatures.h>
@@ -28,6 +29,7 @@
 #include "diagnostics/BuildInfo.h"
 #include "diagnostics/CaptureService.h"
 #include "diagnostics/Profiling.h"
+#include "diagnostics/SceneLoadStats.h"
 #include "diagnostics/TracyProfiler.h"
 #if VKL_ENABLE_EDITOR_UI
 #include "editor/EditorDockWorkspace.h"
@@ -170,30 +172,6 @@ const char *lightTypeName(LightType type) {
 const char *lightIntensityUnit(LightType type) {
     return type == LightType::Directional ? "lux" : "candela";
 }
-
-void populateSceneLightStats(SceneLoadStats &stats,
-                             const IRenderWorld *scene) {
-    stats.lightInstanceCount = scene ? scene->lights().size() : 0;
-    stats.directionalLightCount = 0;
-    stats.pointLightCount = 0;
-    stats.spotLightCount = 0;
-    if (!scene)
-        return;
-    for (const SceneLight &light : scene->lights()) {
-        switch (light.type) {
-        case LightType::Directional:
-            ++stats.directionalLightCount;
-            break;
-        case LightType::Point:
-            ++stats.pointLightCount;
-            break;
-        case LightType::Spot:
-            ++stats.spotLightCount;
-            break;
-        }
-    }
-}
-
 const char *slotName(MaterialTextureSlot slot) {
     switch (slot) {
     case MaterialTextureSlot::BaseColor:
@@ -625,124 +603,6 @@ ControlJson captureTaskToJson(const CaptureTaskSnapshot &task) {
 }
 #endif
 
-void validateSceneLoadStats(const SceneLoadStats &stats) {
-    const double detailedMax =
-        std::max({stats.deviceIdleMs, stats.teardownMs, stats.sceneFactoryMs,
-                  stats.gltfParseMs, stats.textureFileReadMs,
-                  stats.textureDecodeMs, stats.resources.textureResizeMs,
-                  stats.resources.derivedTextureReadMs,
-                  stats.resources.derivedTextureTranscodeMs,
-                  stats.resources.textureUploadMs, stats.materialSetupMs,
-                  stats.meshCpuMs, stats.resources.meshUploadMs,
-                  stats.resources.batchSubmitWaitMs, stats.hierarchyMs});
-    if (stats.totalMs + 0.01 < detailedMax) {
-        VKR_LOG_WARN("LoadStats",
-                     "Scene '{}' has inconsistent timing: total={:.2f}ms, "
-                     "largest stage={:.2f}ms.",
-                     stats.sceneName, stats.totalMs, detailedMax);
-    }
-    if (stats.resources.gpuTextureCount > 0 &&
-        stats.resources.textureUploadBytes == 0) {
-        VKR_LOG_WARN("LoadStats",
-                     "Scene '{}' created textures but recorded no texture "
-                     "upload bytes.",
-                     stats.sceneName);
-    }
-    if (stats.resources.gpuMeshCount > 0 &&
-        stats.resources.vertexUploadBytes == 0) {
-        VKR_LOG_WARN("LoadStats",
-                     "Scene '{}' created meshes but recorded no vertex "
-                     "upload bytes.",
-                     stats.sceneName);
-    }
-    if (stats.resources.fenceWaitCalls > stats.resources.batchSubmits) {
-        VKR_LOG_WARN("LoadStats",
-                     "Scene '{}' has invalid batch synchronization: "
-                     "submits={}, fence waits={}.",
-                     stats.sceneName, stats.resources.batchSubmits,
-                     stats.resources.fenceWaitCalls);
-    }
-    if (stats.resources.completedBatchSubmits >
-        stats.resources.batchSubmits) {
-        VKR_LOG_WARN("LoadStats",
-                     "Scene '{}' completed more upload batches than it "
-                     "submitted: completed={}, submits={}.",
-                     stats.sceneName,
-                     stats.resources.completedBatchSubmits,
-                     stats.resources.batchSubmits);
-    }
-}
-
-void logSceneLoadStats(const SceneLoadStats &stats) {
-    const int64_t allocationDelta =
-        memoryDelta(stats.allocatorAfter.allocationBytes,
-                    stats.allocatorBefore.allocationBytes);
-    const int64_t blockDelta = memoryDelta(stats.allocatorAfter.blockBytes,
-                                           stats.allocatorBefore.blockBytes);
-
-    VKR_LOG_INFO(
-        "LoadStats",
-        "scene='{}' success={} limit={} modelGen={} repoHit={} "
-        "coalesced={} total={:.2f}ms factory={:.2f}ms "
-        "textures={} meshes={} materials={} objects={} "
-        "lights={}/{} (dir={} point={} spot={}) cache={}/{} "
-        "nativeBc7={} basis={} transcodes={} "
-        "upload={:.2f}MiB "
-        "batchSubmits={} fenceWaits={} fencePolls={} "
-        "vmaAllocationDelta={:.2f}MiB vmaBlockDelta={:.2f}MiB",
-        stats.sceneName, stats.success,
-        stats.maxTextureSize == 0 ? std::string("Full")
-                                  : std::to_string(stats.maxTextureSize),
-        stats.modelGeneration, stats.repositoryHit,
-        stats.coalescedRequest,
-        stats.totalMs, stats.sceneFactoryMs,
-        stats.resources.gpuTextureCount, stats.resources.gpuMeshCount,
-        stats.materialCount, stats.objectCount, stats.lightInstanceCount,
-        stats.gltfLightDefinitionCount, stats.directionalLightCount,
-        stats.pointLightCount, stats.spotLightCount,
-        stats.resources.derivedTextureHits,
-        stats.resources.derivedTextureLookups,
-        stats.resources.nativeBc7CacheHits,
-        stats.resources.basisUastcCacheHits,
-        stats.resources.basisTranscodeCount,
-        bytesToMiB(stats.resources.textureUploadBytes +
-                   stats.resources.vertexUploadBytes +
-                   stats.resources.indexUploadBytes),
-        stats.resources.batchSubmits,
-        stats.resources.fenceWaitCalls,
-        stats.resources.fencePollCalls,
-        signedBytesToMiB(allocationDelta), signedBytesToMiB(blockDelta));
-
-    VKR_LOG_DEBUG(
-        "LoadStats",
-        "timings idle={:.2f}ms teardown={:.2f}ms parse={:.2f}ms "
-        "imageRead={:.2f}ms decode={:.2f}ms resize={:.2f}ms "
-        "textureUpload={:.2f}ms material={:.2f}ms meshCpu={:.2f}ms "
-        "meshUpload={:.2f}ms batchWait={:.2f}ms hierarchy={:.2f}ms; "
-        "peakStaging={:.2f}MiB; "
-        "textureBytes "
-        "encoded={:.2f}MiB decoded={:.2f}MiB baseUpload={:.2f}MiB "
-        "gpuEstimated={:.2f}MiB; VMA allocations {} -> {}, bytes "
-        "{:.2f}MiB -> {:.2f}MiB, blocks {:.2f}MiB -> {:.2f}MiB",
-        stats.deviceIdleMs, stats.teardownMs, stats.gltfParseMs,
-        stats.textureFileReadMs, stats.textureDecodeMs,
-        stats.resources.textureResizeMs, stats.resources.textureUploadMs,
-        stats.materialSetupMs, stats.meshCpuMs,
-        stats.resources.meshUploadMs, stats.resources.batchSubmitWaitMs,
-        stats.hierarchyMs,
-        bytesToMiB(stats.resources.peakStagingBytes),
-        bytesToMiB(stats.resources.encodedSourceBytes),
-        bytesToMiB(stats.resources.decodedRgbaBytes),
-        bytesToMiB(stats.resources.textureUploadBytes),
-        bytesToMiB(stats.resources.textureGpuBytesEstimated),
-        stats.allocatorBefore.allocationCount,
-        stats.allocatorAfter.allocationCount,
-        bytesToMiB(stats.allocatorBefore.allocationBytes),
-        bytesToMiB(stats.allocatorAfter.allocationBytes),
-        bytesToMiB(stats.allocatorBefore.blockBytes),
-        bytesToMiB(stats.allocatorAfter.blockBytes));
-}
-
 #if VKL_ENABLE_EDITOR_UI
 std::string reflectionProbeEnvironmentId(const SceneDocumentId &sceneId,
                                          const PersistentEntityId &entityId) {
@@ -878,14 +738,8 @@ Application::~Application() {
     }
     if (assetImportManager_)
         assetImportManager_->shutdown();
-    pendingEnvironmentAsset_.reset();
-    activeEnvironmentAsset_.reset();
-    if (environmentAssetRepository_)
-        environmentAssetRepository_->shutdown();
-    if (sceneLoadManager_)
-        sceneLoadManager_->shutdown();
-    if (assetRepository_)
-        assetRepository_->shutdown();
+    if (sceneRuntime_)
+        sceneRuntime_->shutdown();
     if (device_) {
         vkDeviceWaitIdle(device_->logicalDevice());
         if (frameSync_)
@@ -895,10 +749,7 @@ Application::~Application() {
                 frameSync_->completedSubmissionSerial());
         }
     }
-    currentScene_.reset();
-    retiredScenes_.clear();
-    assetRepository_.reset();
-    environmentAssetRepository_.reset();
+    sceneRuntime_.reset();
 }
 
 void Application::run() {
@@ -1151,11 +1002,6 @@ void Application::init() {
         start = static_cast<int>(found - sceneRegistry_.begin());
     }
     pipelineCache_ = std::make_unique<PipelineCache>(*device_);
-    assetRepository_ = std::make_unique<AssetRepository>(
-        *device_, *descriptorAllocator_, *materialSystem_);
-    sceneLoadManager_ = std::make_unique<SceneLoadManager>();
-    environmentAssetRepository_ =
-        std::make_unique<EnvironmentAssetRepository>(*device_);
 #if VKL_ENABLE_ASSET_AUTHORING
     if (config_.assetImportMode == AssetImportMode::OnDemand) {
         assetImportManager_ = std::make_unique<AssetImportManager>(
@@ -1185,6 +1031,85 @@ void Application::init() {
     }
     sceneLoadContext_.requireDerivedTextures =
         config_.assetImportMode == AssetImportMode::CookedOnly;
+    SceneRuntimeCallbacks runtimeCallbacks;
+    runtimeCallbacks.publicationBlockReason = [this]()
+        -> std::optional<std::string> {
+        return hasUnsavedSceneChanges()
+                   ? std::optional<std::string>(
+                         "Scene changed while another world was loading")
+                   : std::nullopt;
+    };
+    runtimeCallbacks.worldPublished =
+        [this](const SceneRuntimePublication &publication) {
+            shadowSystem_.reset();
+#if VKL_ENABLE_EDITOR_UI
+            if (sceneEditorSession_) {
+                if (publication.kind == SceneLoadKind::NativeScene &&
+                    publication.document && gui_) {
+                    const LoadedSceneDocument &loaded =
+                        *publication.document;
+                    const std::shared_ptr<RuntimeWorld> runtimeWorld =
+                        std::dynamic_pointer_cast<RuntimeWorld>(
+                            publication.world);
+                    if (!runtimeWorld) {
+                        throw std::logic_error(
+                            "Native scene publication did not contain a "
+                            "RuntimeWorld");
+                    }
+                    sceneEditorSession_->attach(
+                        runtimeWorld, loaded.path, loaded.sourceStamp);
+                    sceneEditorSession_->setWorldChangedCallback(
+                        [this]() {
+                            updateEditorModelBindings();
+                            updateEditorReflectionProbeBindings();
+                        });
+                } else {
+                    sceneEditorSession_->detach();
+                }
+            }
+#endif
+            if (publication.document &&
+                publication.document->document.environment) {
+                const SceneEnvironmentDocument &environment =
+                    *publication.document->document.environment;
+                renderSettings_.environmentIntensity =
+                    environment.intensity;
+                renderSettings_.environmentRotationRadians =
+                    environment.rotationRadians;
+            }
+        };
+    runtimeCallbacks.environmentPublished =
+        [this](const EnvironmentAssetKey &key) {
+            if (!artifactIndex_)
+                return;
+            artifactIndex_->touchEnvironment(key.environmentId,
+                                             key.profileId);
+            persistArtifactIndex();
+        };
+    runtimeCallbacks.loadFinalized =
+        [this](const std::shared_ptr<SceneLoadTask> &task,
+               bool success) {
+            if (!success || !artifactIndex_ || !task ||
+                task->sceneIndex < 0 ||
+                task->sceneIndex >=
+                    static_cast<int>(sceneRegistry_.size())) {
+                return;
+            }
+            const SceneEntry &entry = sceneRegistry_[task->sceneIndex];
+            if (!entry.isModelPreview())
+                return;
+            const std::string &profileId = task->profileId;
+            const auto profile = catalog_.importProfiles.find(profileId);
+            if (profile != catalog_.importProfiles.end() &&
+                profile->second.textureLimit == task->textureLimit) {
+                artifactIndex_->touch(entry.id, profileId);
+                persistArtifactIndex();
+            }
+        };
+    sceneRuntime_ = std::make_unique<SceneRuntimeCoordinator>(
+        *device_, *descriptorAllocator_, *materialSystem_, *renderer_,
+        *frameSync_, camera_, projectContext_, catalog_, sceneRegistry_,
+        sceneLoadContext_, std::move(runtimeCallbacks));
     reloadArtifactIndex();
     refreshAllArtifactStatuses();
     refreshAllValidationStatuses();
@@ -1213,23 +1138,12 @@ void Application::init() {
 }
 
 uint64_t Application::reloadCurrentScene() {
-    if (currentSceneIndex_ < 0 ||
-        currentSceneIndex_ >= static_cast<int>(sceneRegistry_.size()))
+    const int index = sceneRuntime_->currentSceneIndex();
+    if (index < 0 || index >= static_cast<int>(sceneRegistry_.size()))
         return 0;
-
-    const int index = currentSceneIndex_;
     const uint64_t taskId = requestSceneOperation(
         index, false, true, ImportReason::SceneLoad, false, true);
-    if (taskId != 0) {
-        VKR_LOG_INFO("Scene", "Requested reload of {} with glTF texture limit {}",
-                     sceneRegistry_[index].name,
-                     sceneLoadContext_.maxTextureSize == 0
-                         ? std::string("Full")
-                         : std::to_string(sceneLoadContext_.maxTextureSize));
-        return taskId;
-    }
-
-    VKR_LOG_INFO("Scene", "Reloaded {} with glTF texture limit {}",
+    VKR_LOG_INFO("Scene", "Requested reload of {} with glTF texture limit {}",
                  sceneRegistry_[index].name,
                  sceneLoadContext_.maxTextureSize == 0
                      ? std::string("Full")
@@ -1240,26 +1154,20 @@ uint64_t Application::reloadCurrentScene() {
 void Application::switchScene(int index) {
     if (index < 0 || index >= static_cast<int>(sceneRegistry_.size()))
         return;
-    if (index == currentSceneIndex_ &&
-        (!latestSceneLoadTask_ ||
-         isTerminalSceneLoadState(latestSceneLoadTask_->state.load())))
+    const auto &latest = sceneRuntime_->latestSceneLoadTask();
+    if (index == sceneRuntime_->currentSceneIndex() &&
+        (!latest || isTerminalSceneLoadState(latest->state.load())))
         return;
-
     const uint64_t taskId = requestSceneOperation(index);
-    if (taskId != 0) {
-        VKR_LOG_INFO("Scene", "Requested switch to {}",
-                     sceneRegistry_[index].name);
-        return;
-    }
-
-    VKR_LOG_INFO("Scene", "Switched to {}", sceneRegistry_[index].name);
+    VKR_LOG_INFO("Scene", "{} {}",
+                 taskId != 0 ? "Requested switch to" : "Switched to",
+                 sceneRegistry_[index].name);
 }
 
 uint64_t Application::setTextureLimit(uint32_t limit) {
     if (limit != 0 && limit != 512 && limit != 1024 && limit != 2048)
         throw RuntimeCommandError("invalid_texture_limit",
-                                  "Texture limit must be 0, 512, 1024, or "
-                                  "2048.");
+                                  "Texture limit must be 0, 512, 1024, or 2048.");
     if (sceneLoadContext_.maxTextureSize == limit)
         return 0;
     if (config_.assetImportMode == AssetImportMode::CookedOnly) {
@@ -1267,112 +1175,42 @@ uint64_t Application::setTextureLimit(uint32_t limit) {
             "texture_limit_locked",
             "Texture limit is fixed by the cooked package profile.");
     }
-
     sceneLoadContext_.maxTextureSize = limit;
     refreshAllArtifactStatuses();
     VKR_LOG_INFO("Renderer", "glTF texture limit set to {}",
                  textureLimitLabel(limit));
-    if (currentSceneIndex_ >= 0 &&
-        currentSceneIndex_ < static_cast<int>(sceneRegistry_.size()) &&
-        sceneRegistry_[currentSceneIndex_].isNativeScene()) {
+    const int currentIndex = sceneRuntime_->currentSceneIndex();
+    if (currentIndex >= 0 &&
+        currentIndex < static_cast<int>(sceneRegistry_.size()) &&
+        sceneRegistry_[currentIndex].isNativeScene())
         return 0;
-    }
-    if (latestSceneLoadTask_ &&
-        !isTerminalSceneLoadState(latestSceneLoadTask_->state.load())) {
-        return requestSceneOperation(latestSceneLoadTask_->sceneIndex);
-    } else {
-        return reloadCurrentScene();
-    }
+    const auto &latest = sceneRuntime_->latestSceneLoadTask();
+    return latest && !isTerminalSceneLoadState(latest->state.load())
+               ? requestSceneOperation(latest->sceneIndex)
+               : reloadCurrentScene();
 }
 
 uint64_t Application::requestSceneLoad(int index, bool sourceFallback,
                                        bool reloadAsset) {
-    if (index < 0 || index >= static_cast<int>(sceneRegistry_.size()))
-        throw RuntimeCommandError("invalid_scene", "Invalid scene index.");
-    const SceneEntry &entry = sceneRegistry_[index];
-    if (!entry.available)
-        throw RuntimeCommandError("scene_unavailable",
-                                  entry.unavailableReason);
-    if (entry.isNativeScene()) {
-        if (sourceFallback)
-            throw RuntimeCommandError(
-                "source_fallback_not_applicable",
-                "Source fallback applies only to model previews.");
-        latestSceneLoadTask_ = sceneLoadManager_->requestNative(
-            index, entry.name, entry.id,
-            std::filesystem::u8path(entry.sourcePath),
-            projectContext_.projectRoot, catalog_.documentReferences());
-        if (!latestSceneLoadTask_)
-            throw std::runtime_error("Scene load manager is shutting down");
-        latestSceneLoadTask_->stats.allocatorBefore =
-            device_->allocatorMemorySnapshot();
-        VKR_LOG_INFO("Scene", "Queued native scene task {} for {}",
-                     latestSceneLoadTask_->id, entry.name);
-        return latestSceneLoadTask_->id;
+    try {
+        return sceneRuntime_->requestSceneLoad(index, sourceFallback,
+                                               reloadAsset);
+    } catch (const SceneRuntimeError &error) {
+        throw RuntimeCommandError(error.code(), error.what());
     }
-    sceneLoadContext_.sceneId = entry.id;
-    sceneLoadContext_.modelId = entry.id;
-    sceneLoadContext_.profileId =
-        sourceFallback ? std::string("explicit_source_fallback")
-                       : profileIdForTextureLimit(entry);
-    if (!entry.prepareFactory)
-        throw RuntimeCommandError(
-            "model_prepare_unavailable",
-            "Model Preview has no asynchronous prepare factory.");
-    if (!assetRepository_)
-        throw std::runtime_error("Model AssetRepository is unavailable");
-
-    SceneLoadContext loadContext = sceneLoadContext_;
-    loadContext.loadStats = nullptr;
-    ModelAssetRequest request{};
-    request.key = {ModelAssetId(entry.id), sceneLoadContext_.profileId};
-    request.displayName = entry.name;
-    request.sourcePath = std::filesystem::u8path(entry.sourcePath);
-    request.prepareFactory = entry.prepareFactory;
-    request.loadContext = std::move(loadContext);
-    request.policy = reloadAsset ? ModelAssetRequestPolicy::Reload
-                                 : ModelAssetRequestPolicy::UseCached;
-    bool repositoryHit = false;
-    bool coalesced = false;
-    ModelAssetHandle handle = assetRepository_->requestModel(
-        request, &repositoryHit, &coalesced);
-    latestSceneLoadTask_ = sceneLoadManager_->request(
-        index, entry.name, entry.id, sceneLoadContext_.profileId,
-        sceneLoadContext_.maxTextureSize, std::move(handle), repositoryHit,
-        coalesced);
-    if (!latestSceneLoadTask_)
-        throw std::runtime_error("Scene load manager is shutting down");
-    latestSceneLoadTask_->stats.allocatorBefore =
-        device_->allocatorMemorySnapshot();
-    VKR_LOG_INFO(
-        "Scene",
-        "Queued preview task {} for {} modelGeneration={} hit={} coalesced={}",
-        latestSceneLoadTask_->id, entry.name,
-        latestSceneLoadTask_->modelGeneration, repositoryHit, coalesced);
-    return latestSceneLoadTask_->id;
 }
 
 bool Application::cancelSceneLoad(uint64_t taskId) {
-    return sceneLoadManager_ && sceneLoadManager_->cancel(taskId);
+    return sceneRuntime_ && sceneRuntime_->cancelSceneLoad(taskId);
 }
 
 bool Application::cancelEnvironmentLoad(uint64_t taskId) {
-    return environmentAssetRepository_ &&
-           environmentAssetRepository_->cancel(taskId);
+    return sceneRuntime_ && sceneRuntime_->cancelEnvironmentLoad(taskId);
 }
 
 uint64_t Application::setEnvironment(const std::string &id) {
     if (asciiEqualsIgnoreCase(id, "None") || id.empty()) {
-        if (latestEnvironmentLoadTask_ &&
-            !isTerminalEnvironmentLoadState(
-                latestEnvironmentLoadTask_->state.load())) {
-            cancelEnvironmentLoad(latestEnvironmentLoadTask_->id);
-        }
-        pendingEnvironmentAsset_.reset();
-        activeEnvironmentAsset_.reset();
-        selectedEnvironmentId_.clear();
-        renderer_->clearEnvironment();
-        VKR_LOG_INFO("Environment", "Environment cleared");
+        sceneRuntime_->clearEnvironment();
         return 0;
     }
     if (!device_->environmentIblSupported()) {
@@ -1383,653 +1221,38 @@ uint64_t Application::setEnvironment(const std::string &id) {
     }
     const CatalogEnvironment *environment = findEnvironmentByName(id);
     if (!environment) {
-        throw RuntimeCommandError(
-            "unknown_environment",
-            "Unknown environment '" + id + "'.");
+        throw RuntimeCommandError("unknown_environment",
+                                  "Unknown environment '" + id + "'.");
     }
-    return queueEnvironmentLoad(*environment, false);
+    return queueEnvironmentLoad(*environment);
 }
 
 uint64_t Application::queueEnvironmentLoad(
     const CatalogEnvironment &environment, bool reload) {
-    EnvironmentAssetHandle handle =
-        requestEnvironmentAsset(environment, reload);
-    latestEnvironmentLoadTask_ =
-        environmentAssetRepository_->task(handle.taskId());
-    if (!latestEnvironmentLoadTask_)
-        throw std::logic_error("Environment repository lost its task");
-    selectedEnvironmentId_ = environment.id;
-    pendingEnvironmentAsset_ =
-        std::make_unique<EnvironmentAssetHandle>(std::move(handle));
-    VKR_LOG_INFO("Environment",
-                 "Queued environment load task {} for {}",
-                 latestEnvironmentLoadTask_->id,
-                 environment.displayName);
-    return latestEnvironmentLoadTask_->id;
+    try {
+        return sceneRuntime_->queueEnvironment(environment, reload);
+    } catch (const SceneRuntimeError &error) {
+        throw RuntimeCommandError(error.code(), error.what());
+    }
 }
 
 EnvironmentAssetHandle Application::requestEnvironmentAsset(
     const CatalogEnvironment &environment, bool reload,
     bool *repositoryHit, bool *coalesced) {
-    const EnvironmentProfile &profile =
-        catalog_.environmentProfile(environment.environmentProfile);
-    (void)profile;
-    const std::filesystem::path source =
-        projectContext_.resolveProjectPath(environment.source);
-    if (!projectContext_.cookedPackage) {
-        const ArtifactStatus status = inspectEnvironmentArtifacts(
-            {std::filesystem::u8path(
-                 config_.derivedTextureCachePath),
-             source, catalog_.projectId, environment.id,
-             environment.environmentProfile});
-        if (!status.ready()) {
-            throw RuntimeCommandError(
-                "environment_artifacts_unavailable",
-                "Environment artifacts are " +
-                    std::string(artifactStateName(status.state)) +
-                    ": " + status.reason +
-                    ". Build them with VulkanLabAssetTool "
-                    "environment-cache build.");
-        }
+    try {
+        return sceneRuntime_->requestEnvironmentAsset(
+            environment, reload, repositoryHit, coalesced);
+    } catch (const SceneRuntimeError &error) {
+        throw RuntimeCommandError(error.code(), error.what());
     }
-
-    EnvironmentAssetRequest request{};
-    request.key = {environment.id, environment.environmentProfile};
-    request.displayName = environment.displayName;
-    request.cacheRoot =
-        std::filesystem::u8path(config_.derivedTextureCachePath);
-    request.sourcePath = source;
-    request.projectId = catalog_.projectId;
-    request.validateSource = !projectContext_.cookedPackage;
-    request.policy = reload ? EnvironmentAssetRequestPolicy::Reload
-                            : EnvironmentAssetRequestPolicy::UseCached;
-    return environmentAssetRepository_->request(
-        request, repositoryHit, coalesced);
 }
 
 uint64_t Application::reloadCurrentEnvironment() {
-    if (selectedEnvironmentId_.empty())
-        return 0;
-    const CatalogEnvironment *environment =
-        catalog_.findEnvironment(selectedEnvironmentId_);
-    if (!environment)
-        throw RuntimeCommandError("unknown_environment",
-                                  "Current environment is not in Catalog");
-    return queueEnvironmentLoad(*environment, true);
-}
-
-void Application::updateEnvironmentLoading() {
-    VKL_PROFILE_ZONE("Environment Load Update");
-    if (!environmentAssetRepository_)
-        return;
-    environmentAssetRepository_->pump();
-
-    if (pendingEnvironmentAsset_) {
-        const EnvironmentAssetHandleSnapshot snapshot =
-            pendingEnvironmentAsset_->snapshot();
-        if (snapshot.state == EnvironmentAssetState::Ready) {
-            std::shared_ptr<EnvironmentGpuResources> resources =
-                pendingEnvironmentAsset_->asset();
-            if (!resources)
-                throw std::logic_error(
-                    "Ready environment asset has no GPU resources");
-            renderer_->publishEnvironment(resources);
-            activeEnvironmentAsset_ =
-                std::move(pendingEnvironmentAsset_);
-            if (artifactIndex_) {
-                artifactIndex_->touchEnvironment(
-                    snapshot.key.environmentId, snapshot.key.profileId);
-                persistArtifactIndex();
-            }
-            VKR_LOG_INFO("Environment",
-                         "Published environment '{}:{}' generation {}",
-                         snapshot.key.environmentId, snapshot.key.profileId,
-                         snapshot.generation);
-        } else if (snapshot.state == EnvironmentAssetState::Failed ||
-                   snapshot.state == EnvironmentAssetState::Cancelled) {
-            pendingEnvironmentAsset_.reset();
-        }
-    }
-}
-
-void Application::updateSceneLoading() {
-    VKL_PROFILE_ZONE("Scene Load Update");
-    if (assetRepository_)
-        assetRepository_->pump();
-    if (!latestSceneLoadTask_)
-        return;
-
-    sceneLoadManager_->refresh(latestSceneLoadTask_);
-    if (latestSceneLoadTask_->kind == SceneLoadKind::NativeScene) {
-        updateNativeSceneLoading(latestSceneLoadTask_);
-        return;
-    }
-    const SceneLoadState state = latestSceneLoadTask_->state.load();
-    if (state == SceneLoadState::ReadyToPublish) {
-#if VKL_ENABLE_EDITOR_UI
-        if (hasUnsavedSceneChanges()) {
-            {
-                std::lock_guard<std::mutex> lock(
-                    latestSceneLoadTask_->mutex);
-                latestSceneLoadTask_->error =
-                    "Scene changed while another world was loading";
-            }
-            latestSceneLoadTask_->state = SceneLoadState::Failed;
-            latestSceneLoadTask_->phase = SceneLoadPhase::Complete;
-            sceneLoadManager_->releaseAsset(latestSceneLoadTask_);
-            latestSceneLoadTask_->stats.allocatorAfter =
-                device_->allocatorMemorySnapshot();
-            finalizeSceneLoad(latestSceneLoadTask_, false);
-            return;
-        }
-#endif
-        const ModelAssetHandleSnapshot snapshot =
-            latestSceneLoadTask_->modelAsset.snapshot();
-        const std::shared_ptr<const ModelAsset> asset =
-            latestSceneLoadTask_->modelAsset.asset();
-        if (!asset)
-            return;
-
-        const AllocatorMemorySnapshot operationStart =
-            latestSceneLoadTask_->stats.allocatorBefore;
-        if (snapshot.terminalStats &&
-            !latestSceneLoadTask_->repositoryHit &&
-            !latestSceneLoadTask_->coalescedRequest) {
-            latestSceneLoadTask_->stats = *snapshot.terminalStats;
-        } else {
-            latestSceneLoadTask_->stats = {};
-            latestSceneLoadTask_->stats.allocatorBefore = operationStart;
-        }
-        latestSceneLoadTask_->stats.taskId = latestSceneLoadTask_->id;
-        latestSceneLoadTask_->stats.generation =
-            latestSceneLoadTask_->generation;
-        latestSceneLoadTask_->stats.modelGeneration = asset->generation;
-        latestSceneLoadTask_->stats.sceneName =
-            latestSceneLoadTask_->sceneName;
-        latestSceneLoadTask_->stats.maxTextureSize =
-            latestSceneLoadTask_->textureLimit;
-        latestSceneLoadTask_->stats.repositoryHit =
-            latestSceneLoadTask_->repositoryHit;
-        latestSceneLoadTask_->stats.coalescedRequest =
-            latestSceneLoadTask_->coalescedRequest;
-        latestSceneLoadTask_->stats.materialCount = asset->materials.size();
-        latestSceneLoadTask_->stats.objectCount = asset->primitives.size();
-        latestSceneLoadTask_->stats.primitiveCount =
-            asset->primitives.size();
-
-
-        auto preview = std::make_unique<Scene>();
-        preview->initialCamera = asset->previewCamera;
-        ModelInstance instance{};
-        instance.asset = latestSceneLoadTask_->modelAsset;
-        preview->addModelInstance(std::move(instance));
-        populateSceneLightStats(latestSceneLoadTask_->stats, preview.get());
-
-        retireCurrentScene();
-        currentScene_ = std::move(preview);
-#if VKL_ENABLE_EDITOR_UI
-        if (sceneEditorSession_)
-            sceneEditorSession_->detach();
-#endif
-        currentSceneIndex_ = latestSceneLoadTask_->sceneIndex;
-        ++sceneGeneration_;
-        shadowSystem_.reset();
-        if (const auto initialCamera = currentScene_->initialEditorCamera()) {
-            const auto &pose = *initialCamera;
-            camera_.setPosition(pose.position);
-            camera_.setYawPitch(pose.yaw, pose.pitch);
-        }
-        applySceneCameraDefaults();
-        latestSceneLoadTask_->stats.allocatorAfter =
-            device_->allocatorMemorySnapshot();
-        sceneLoadManager_->releaseAsset(latestSceneLoadTask_);
-        finalizeSceneLoad(latestSceneLoadTask_, true);
-    } else if ((state == SceneLoadState::Failed ||
-                state == SceneLoadState::Cancelled) &&
-               latestSceneLoadTask_->id != lastFinalizedTaskId_) {
-        latestSceneLoadTask_->stats.allocatorAfter =
-            device_->allocatorMemorySnapshot();
-        sceneLoadManager_->releaseAsset(latestSceneLoadTask_);
-        finalizeSceneLoad(latestSceneLoadTask_, false);
-    }
-}
-
-void Application::resolveNativeSceneModels(
-    const std::shared_ptr<SceneLoadTask> &task) {
-    LoadedSceneDocument loaded;
-    {
-        std::lock_guard<std::mutex> lock(task->mutex);
-        if (!task->loadedDocument)
-            return;
-        loaded = *task->loadedDocument;
-    }
-
-    std::vector<std::string> modelIds;
-    std::unordered_set<std::string> seen;
-    for (const SceneEntityDocument &entity : loaded.document.entities) {
-        if (entity.modelInstance &&
-            seen.insert(entity.modelInstance->model.value()).second) {
-            modelIds.push_back(entity.modelInstance->model.value());
-        }
-    }
-
-    std::vector<NativeSceneModelBinding> bindings;
-    bindings.reserve(modelIds.size());
-    bool allHits = !modelIds.empty();
-    bool anyCoalesced = false;
-    for (const std::string &modelId : modelIds) {
-        const auto source = resolveModelSource(
-            catalog_, projectContext_, ModelAssetId(modelId));
-        if (!source)
-            throw std::runtime_error("Scene references unknown model: " +
-                                     modelId);
-        if (!source->instanceable) {
-            throw RuntimeCommandError(
-                "model_not_instanceable",
-                "Builtin model cannot be instanced in a native scene: " +
-                    modelId);
-        }
-        if (!source->available || !source->prepareFactory) {
-            throw std::runtime_error(
-                "Model is unavailable: " + modelId +
-                (source->unavailableReason.empty()
-                     ? std::string{}
-                     : " (" + source->unavailableReason + ")"));
-        }
-        SceneLoadContext context = sceneLoadContext_;
-        context.sceneId = modelId;
-        context.modelId = modelId;
-        context.profileId = source->profileId;
-        context.maxTextureSize = source->textureLimit;
-        context.loadStats = nullptr;
-        ModelAssetRequest request{};
-        request.key = {ModelAssetId(modelId), source->profileId};
-        request.displayName = source->displayName;
-        request.sourcePath = source->sourcePath;
-        request.prepareFactory = source->prepareFactory;
-        request.loadContext = std::move(context);
-        request.policy = ModelAssetRequestPolicy::UseCached;
-        bool hit = false;
-        bool coalesced = false;
-        ModelAssetHandle handle = assetRepository_->requestModel(
-            request, &hit, &coalesced);
-        allHits = allHits && hit;
-        anyCoalesced = anyCoalesced || coalesced;
-        bindings.push_back(
-            {ModelAssetId(modelId), source->profileId, std::move(handle)});
-    }
-
-    std::vector<std::pair<std::string, bool>> environmentIds;
-    std::unordered_set<std::string> seenEnvironments;
-    if (loaded.document.environment) {
-        const std::string &id =
-            loaded.document.environment->environmentId;
-        seenEnvironments.insert(id);
-        environmentIds.emplace_back(id, true);
-    }
-    for (const SceneEntityDocument &entity : loaded.document.entities) {
-        if (!entity.reflectionProbe ||
-            !entity.reflectionProbe->environmentId)
-            continue;
-        const std::string &id =
-            *entity.reflectionProbe->environmentId;
-        if (seenEnvironments.insert(id).second)
-            environmentIds.emplace_back(id, false);
-    }
-    std::vector<NativeSceneEnvironmentBinding> environmentBindings;
-    environmentBindings.reserve(environmentIds.size());
-    for (const auto &[environmentId, globalEnvironment] :
-         environmentIds) {
-        const CatalogEnvironment *environment =
-            catalog_.findEnvironment(environmentId);
-        if (!environment) {
-            throw std::runtime_error(
-                "Scene references unknown environment: " +
-                environmentId);
-        }
-        EnvironmentAssetHandle handle =
-            requestEnvironmentAsset(*environment, false);
-        environmentBindings.push_back(
-            {environmentId, environment->environmentProfile,
-             globalEnvironment, std::move(handle)});
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(task->mutex);
-        task->nativeModels = std::move(bindings);
-        task->nativeEnvironments = std::move(environmentBindings);
-        task->uniqueModelCount = modelIds.size();
-        task->readyModelCount = 0;
-        task->repositoryHit = allHits;
-        task->coalescedRequest = anyCoalesced;
-        task->targetEnvironmentId =
-            loaded.document.environment
-                ? loaded.document.environment->environmentId
-                : std::string{};
-        task->uniqueEnvironmentCount = environmentIds.size();
-        task->readyEnvironmentCount = 0;
-        task->failedEnvironmentId.clear();
-    }
-    task->phase = SceneLoadPhase::LoadingModels;
-    task->state = modelIds.empty() ? SceneLoadState::ReadyForUpload
-                                   : SceneLoadState::PreparingCpu;
-}
-
-void Application::updateNativeSceneLoading(
-    const std::shared_ptr<SceneLoadTask> &task) {
-    const SceneLoadState state = task->state.load();
-    if ((state == SceneLoadState::Failed ||
-         state == SceneLoadState::Cancelled) &&
-        task->id != lastFinalizedTaskId_) {
-        {
-            std::lock_guard<std::mutex> lock(task->mutex);
-            for (const NativeSceneEnvironmentBinding &binding :
-                 task->nativeEnvironments) {
-                cancelEnvironmentLoad(binding.asset.taskId());
-            }
-            task->nativeEnvironments.clear();
-        }
-        task->stats.allocatorAfter = device_->allocatorMemorySnapshot();
-        finalizeSceneLoad(task, false);
-        return;
-    }
-
     try {
-        SceneLoadPhase phase = task->phase.load();
-        if (phase == SceneLoadPhase::ResolvingModels) {
-            resolveNativeSceneModels(task);
-            phase = task->phase.load();
-        }
-        if (phase == SceneLoadPhase::LoadingModels) {
-            uint64_t ready = 0;
-            uint64_t textureDone = 0;
-            uint64_t textureTotal = 0;
-            uint64_t meshDone = 0;
-            uint64_t meshTotal = 0;
-            uint64_t processedBytes = 0;
-            std::string failedModel;
-            std::string failure;
-            {
-                std::lock_guard<std::mutex> lock(task->mutex);
-                for (const NativeSceneModelBinding &binding :
-                     task->nativeModels) {
-                    const ModelAssetHandleSnapshot snapshot =
-                        binding.asset.snapshot();
-                    textureDone += snapshot.texturesCompleted;
-                    textureTotal += snapshot.texturesTotal;
-                    meshDone += snapshot.meshesCompleted;
-                    meshTotal += snapshot.meshesTotal;
-                    processedBytes += snapshot.processedBytes;
-                    if (snapshot.state == ModelAssetState::Ready ||
-                        snapshot.state == ModelAssetState::Retiring) {
-                        ++ready;
-                    } else if (snapshot.state == ModelAssetState::Failed ||
-                               snapshot.state ==
-                                   ModelAssetState::Cancelled) {
-                        failedModel = binding.modelId.value();
-                        failure = snapshot.error.empty()
-                                      ? "Model load was cancelled"
-                                      : snapshot.error;
-                        break;
-                    }
-                }
-                task->readyModelCount = ready;
-                task->failedModelId = failedModel;
-            }
-            task->progress.completedTextures = textureDone;
-            task->progress.totalTextures = textureTotal;
-            task->progress.completedMeshes = meshDone;
-            task->progress.totalMeshes = meshTotal;
-            task->progress.processedBytes = processedBytes;
-            if (!failedModel.empty()) {
-                throw std::runtime_error("Model '" + failedModel +
-                                         "' failed: " + failure);
-            }
-            if (ready < task->uniqueModelCount) {
-                task->state = SceneLoadState::Uploading;
-                return;
-            }
-
-            if (task->uniqueEnvironmentCount == 0) {
-                task->environmentReady = true;
-                task->phase = SceneLoadPhase::PublishingWorld;
-                task->state = SceneLoadState::ReadyToPublish;
-            } else {
-                task->phase = SceneLoadPhase::LoadingEnvironment;
-                task->state = SceneLoadState::WaitingForGpu;
-                return;
-            }
-        }
-
-        if (task->phase.load() == SceneLoadPhase::LoadingEnvironment) {
-            uint64_t ready = 0;
-            std::string failedEnvironment;
-            std::string failure;
-            {
-                std::lock_guard<std::mutex> lock(task->mutex);
-                for (const NativeSceneEnvironmentBinding &binding :
-                     task->nativeEnvironments) {
-                    const EnvironmentAssetHandleSnapshot snapshot =
-                        binding.asset.snapshot();
-                    if (snapshot.state == EnvironmentAssetState::Ready ||
-                        snapshot.state ==
-                            EnvironmentAssetState::Retiring) {
-                        ++ready;
-                    } else if (snapshot.state ==
-                                   EnvironmentAssetState::Failed ||
-                               snapshot.state ==
-                                   EnvironmentAssetState::Cancelled) {
-                        failedEnvironment = binding.environmentId;
-                        failure = snapshot.error.empty()
-                                      ? "Environment load was cancelled"
-                                      : snapshot.error;
-                        break;
-                    }
-                }
-                task->readyEnvironmentCount = ready;
-                task->failedEnvironmentId = failedEnvironment;
-            }
-            if (!failedEnvironment.empty()) {
-                throw std::runtime_error(
-                    "Environment '" + failedEnvironment +
-                    "' failed: " + failure);
-            }
-            if (ready < task->uniqueEnvironmentCount) {
-                task->state = SceneLoadState::WaitingForGpu;
-                return;
-            }
-            task->environmentReady = true;
-            task->phase = SceneLoadPhase::PublishingWorld;
-            task->state = SceneLoadState::ReadyToPublish;
-        }
-
-        if (task->phase.load() == SceneLoadPhase::PublishingWorld)
-            publishNativeScene(task);
-    } catch (const std::exception &error) {
-        {
-            std::lock_guard<std::mutex> lock(task->mutex);
-            task->error = error.what();
-        }
-        task->state = SceneLoadState::Failed;
-        task->phase = SceneLoadPhase::Complete;
+        return sceneRuntime_->reloadEnvironment();
+    } catch (const SceneRuntimeError &error) {
+        throw RuntimeCommandError(error.code(), error.what());
     }
-}
-
-void Application::publishNativeScene(
-    const std::shared_ptr<SceneLoadTask> &task) {
-#if VKL_ENABLE_EDITOR_UI
-    if (hasUnsavedSceneChanges()) {
-        throw RuntimeCommandError(
-            "unsaved_changes",
-            "Scene changed while another world was loading");
-    }
-#endif
-    LoadedSceneDocument loaded;
-    std::vector<ResolvedModelAsset> assets;
-    std::vector<ResolvedEnvironmentAsset> environments;
-    {
-        std::lock_guard<std::mutex> lock(task->mutex);
-        if (!task->loadedDocument)
-            throw std::runtime_error("Native scene document is unavailable");
-        loaded = *task->loadedDocument;
-        assets.reserve(task->nativeModels.size());
-        for (const NativeSceneModelBinding &binding : task->nativeModels) {
-            assets.push_back(
-                {binding.modelId, binding.profileId, binding.asset});
-        }
-        environments.reserve(task->nativeEnvironments.size());
-        for (const NativeSceneEnvironmentBinding &binding :
-             task->nativeEnvironments) {
-            environments.push_back({binding.environmentId,
-                                    binding.profileId,
-                                    binding.asset});
-        }
-    }
-    auto world = RuntimeWorld::fromDocument(loaded.document, assets,
-                                            environments);
-    populateSceneLightStats(task->stats, world.get());
-    task->stats.materialCount = world->materials().size();
-    task->stats.objectCount = world->renderableCount();
-    task->stats.primitiveCount = task->stats.objectCount;
-
-    if (loaded.document.environment) {
-        const std::string &environmentId =
-            loaded.document.environment->environmentId;
-        const auto found = std::find_if(
-            task->nativeEnvironments.begin(),
-            task->nativeEnvironments.end(),
-            [&](const NativeSceneEnvironmentBinding &binding) {
-                return binding.environmentId == environmentId;
-            });
-        if (found == task->nativeEnvironments.end() ||
-            !found->asset.asset()) {
-            throw std::runtime_error(
-                "Global environment is not ready for publication");
-        }
-        renderer_->publishEnvironment(found->asset.asset());
-        activeEnvironmentAsset_ =
-            std::make_unique<EnvironmentAssetHandle>(found->asset);
-        selectedEnvironmentId_ = environmentId;
-        renderSettings_.environmentIntensity =
-            loaded.document.environment->intensity;
-        renderSettings_.environmentRotationRadians =
-            loaded.document.environment->rotationRadians;
-    } else {
-        renderer_->clearEnvironment();
-        activeEnvironmentAsset_.reset();
-        selectedEnvironmentId_.clear();
-    }
-
-    retireCurrentScene();
-    std::shared_ptr<RuntimeWorld> sharedWorld(std::move(world));
-    currentScene_ = sharedWorld;
-#if VKL_ENABLE_EDITOR_UI
-    if (sceneEditorSession_ && gui_) {
-        sceneEditorSession_->attach(sharedWorld, loaded.path,
-                                    loaded.sourceStamp);
-        sceneEditorSession_->setWorldChangedCallback(
-            [this]() {
-                updateEditorModelBindings();
-                updateEditorReflectionProbeBindings();
-            });
-    }
-#endif
-    currentSceneIndex_ = task->sceneIndex;
-    ++sceneGeneration_;
-    shadowSystem_.reset();
-    applySceneCameraDefaults();
-    task->stats.allocatorAfter = device_->allocatorMemorySnapshot();
-    {
-        std::lock_guard<std::mutex> lock(task->mutex);
-        task->nativeModels.clear();
-        task->nativeEnvironments.clear();
-    }
-    finalizeSceneLoad(task, true);
-    task->phase = SceneLoadPhase::Complete;
-}
-
-void Application::retireCurrentScene() {
-    if (!currentScene_)
-        return;
-    retiredScenes_.push_back(
-        {frameSync_ ? frameSync_->lastSubmittedSerial() : 0,
-         std::move(currentScene_)});
-}
-
-void Application::collectRetiredScenes() {
-    if (!frameSync_)
-        return;
-    const uint64_t completed = frameSync_->completedSubmissionSerial();
-    while (!retiredScenes_.empty() &&
-           retiredScenes_.front().retireAfterSerial <= completed) {
-        retiredScenes_.pop_front();
-    }
-    if (assetRepository_) {
-        assetRepository_->releaseUnused(frameSync_->lastSubmittedSerial(),
-                                        completed);
-    }
-    if (materialSystem_) {
-        materialSystem_->updateSubmissionSerials(
-            frameSync_->lastSubmittedSerial(), completed);
-    }
-    if (environmentAssetRepository_) {
-        environmentAssetRepository_->releaseUnused(
-            frameSync_->lastSubmittedSerial(), completed);
-    }
-}
-
-void Application::finalizeSceneLoad(
-    const std::shared_ptr<SceneLoadTask> &task, bool success) {
-    if (!task || task->id == lastFinalizedTaskId_)
-        return;
-    task->stats.taskId = task->id;
-    task->stats.generation = task->generation;
-    task->stats.modelGeneration = task->modelGeneration;
-    task->stats.sceneName = task->sceneName;
-    task->stats.maxTextureSize = task->textureLimit;
-    task->stats.repositoryHit = task->repositoryHit;
-    task->stats.coalescedRequest = task->coalescedRequest;
-    task->stats.success = success;
-    task->stats.totalMs =
-        std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - task->requestedAt)
-            .count();
-    if (success)
-        task->state = SceneLoadState::Completed;
-    else if (task->cancellation->load())
-        task->state = SceneLoadState::Cancelled;
-    else
-        task->state = SceneLoadState::Failed;
-    task->stats.finalState = sceneLoadStateName(task->state.load());
-    task->phase = SceneLoadPhase::Complete;
-    lastSceneLoadStats_ = task->stats;
-    lastFinalizedTaskId_ = task->id;
-    validateSceneLoadStats(task->stats);
-    logSceneLoadStats(task->stats);
-    if (success && artifactIndex_ && task->sceneIndex >= 0 &&
-        task->sceneIndex < static_cast<int>(sceneRegistry_.size())) {
-        const SceneEntry &entry = sceneRegistry_[task->sceneIndex];
-        if (entry.isModelPreview()) {
-            std::string profileId;
-            const auto preferred = catalog_.importProfiles.find(entry.profileId);
-            if (preferred != catalog_.importProfiles.end() &&
-                preferred->second.textureLimit == task->textureLimit) {
-                profileId = preferred->first;
-            } else {
-                for (const auto &candidate : catalog_.importProfiles) {
-                    if (candidate.second.textureLimit == task->textureLimit) {
-                        profileId = candidate.first;
-                        break;
-                    }
-                }
-            }
-            if (!profileId.empty()) {
-                artifactIndex_->touch(entry.id, profileId);
-                persistArtifactIndex();
-            }
-        }
-    }
-    task->finalized = true;
 }
 
 void Application::setShaderVariant(const std::string &id) {
@@ -2529,7 +1752,7 @@ void Application::requestEditorSceneLoad(int index) {
 void Application::updateEditorModelBindings() {
 #if VKL_ENABLE_EDITOR_UI
     if (!sceneEditorSession_ || !sceneEditorSession_->active() ||
-        !assetRepository_)
+        !sceneRuntime_)
         return;
     const std::shared_ptr<RuntimeWorld> world = sceneEditorSession_->world();
     for (const RuntimeEntitySnapshot &entity : world->entities()) {
@@ -2565,7 +1788,7 @@ void Application::updateEditorModelBindings() {
             request.sourcePath = source->sourcePath;
             request.prepareFactory = source->prepareFactory;
             request.loadContext = std::move(context);
-            ModelAssetHandle handle = assetRepository_->requestModel(request);
+            ModelAssetHandle handle = sceneRuntime_->requestModel(request);
             world->bindModel(entity.handle, entity.modelBindingRevision,
                              source->profileId, std::move(handle));
         } catch (const std::exception &error) {
@@ -2577,9 +1800,9 @@ void Application::updateEditorModelBindings() {
     const auto environment = world->worldEnvironment();
     try {
         if (!environment) {
-            if (!selectedEnvironmentId_.empty())
+            if (!sceneRuntime_->selectedEnvironmentId().empty())
                 setEnvironment("None");
-        } else if (selectedEnvironmentId_ != environment->id) {
+        } else if (sceneRuntime_->selectedEnvironmentId() != environment->id) {
             setEnvironment(environment->id);
         }
         if (environment) {
@@ -2596,7 +1819,7 @@ void Application::updateEditorModelBindings() {
 void Application::updateEditorReflectionProbeBindings() {
 #if VKL_ENABLE_EDITOR_UI
     if (!sceneEditorSession_ || !sceneEditorSession_->active() ||
-        !environmentAssetRepository_)
+        !sceneRuntime_)
         return;
     const std::shared_ptr<RuntimeWorld> world = sceneEditorSession_->world();
     for (const RuntimeEntitySnapshot &entity : world->entities()) {
@@ -2859,8 +2082,8 @@ void Application::updateReflectionProbeCapture() {
                 return;
             }
             reloadArtifactIndex();
-            environmentAssetRepository_->invalidate(
-                state.environmentId, &state.profileId);
+            sceneRuntime_->invalidateEnvironment(state.environmentId,
+                                                 &state.profileId);
             const std::string environmentId = state.environmentId;
             const PersistentEntityId entityId = state.entityId;
             sceneEditorSession_->execute(
@@ -3012,7 +2235,7 @@ void Application::updateAssetImports() {
                 editorUi_->environmentStatus =
                     "Built environment artifacts for " + task->sceneId;
                 editorUi_->environmentError.clear();
-                if (selectedEnvironmentId_ == task->sceneId) {
+                if (sceneRuntime_->selectedEnvironmentId() == task->sceneId) {
                     try {
                         setEnvironment(task->sceneId);
                     } catch (const std::exception &error) {
@@ -3033,10 +2256,8 @@ void Application::updateAssetImports() {
         }
         if (state == AssetImportState::Completed) {
             reloadArtifactIndex();
-            if (assetRepository_) {
-                assetRepository_->invalidate(ModelAssetId(task->sceneId),
-                                             task->profileId);
-            }
+            sceneRuntime_->invalidateModel(ModelAssetId(task->sceneId),
+                                           &task->profileId);
             if (artifactIndex_) {
                 artifactIndex_->recordImportSuccess(
                     task->sceneId, task->profileId, task->id);
@@ -3144,15 +2365,15 @@ ControlJson Application::runtimeSystemInfo() {
         {"protocolVersion", control::kProtocolVersion},
         {"capabilities", std::move(capabilities)},
         {"pipe", runtimeControlPipeName_},
-        {"scene", currentScene_ && currentSceneIndex_ >= 0
-                      ? ControlJson(sceneRegistry_[currentSceneIndex_].name)
+        {"scene", sceneRuntime_->currentWorld() && sceneRuntime_->currentSceneIndex() >= 0
+                      ? ControlJson(sceneRegistry_[sceneRuntime_->currentSceneIndex()].name)
                       : ControlJson(nullptr)},
-        {"sceneId", currentScene_ && currentSceneIndex_ >= 0
-                        ? ControlJson(sceneRegistry_[currentSceneIndex_].id)
+        {"sceneId", sceneRuntime_->currentWorld() && sceneRuntime_->currentSceneIndex() >= 0
+                        ? ControlJson(sceneRegistry_[sceneRuntime_->currentSceneIndex()].id)
                         : ControlJson(nullptr)},
-        {"modelId", currentScene_ && currentSceneIndex_ >= 0
-                        && sceneRegistry_[currentSceneIndex_].isModelPreview()
-                        ? ControlJson(sceneRegistry_[currentSceneIndex_].id)
+        {"modelId", sceneRuntime_->currentWorld() && sceneRuntime_->currentSceneIndex() >= 0
+                        && sceneRegistry_[sceneRuntime_->currentSceneIndex()].isModelPreview()
+                        ? ControlJson(sceneRegistry_[sceneRuntime_->currentSceneIndex()].id)
                         : ControlJson(nullptr)},
         {"projectId", catalog_.projectId},
         {"build",
@@ -3239,7 +2460,7 @@ ControlJson Application::runtimeSystemInfo() {
           {"fragmentSha256",
            sha256File(shader->fragmentSpvPath(
                materialSystem_->activeMode()))}}},
-        {"loadTask", sceneLoadTaskToJson(latestSceneLoadTask_)}};
+        {"loadTask", sceneLoadTaskToJson(sceneRuntime_->latestSceneLoadTask())}};
 }
 
 ControlJson Application::runtimeSceneList() {
@@ -3275,16 +2496,16 @@ ControlJson Application::runtimeSceneList() {
 
 ControlJson Application::runtimeSceneCurrent() {
     const ControlJson name =
-        currentScene_ && currentSceneIndex_ >= 0
-            ? ControlJson(sceneRegistry_[currentSceneIndex_].name)
+        sceneRuntime_->currentWorld() && sceneRuntime_->currentSceneIndex() >= 0
+            ? ControlJson(sceneRegistry_[sceneRuntime_->currentSceneIndex()].name)
             : ControlJson(nullptr);
     const ControlJson id =
-        currentScene_ && currentSceneIndex_ >= 0
-            ? ControlJson(sceneRegistry_[currentSceneIndex_].id)
+        sceneRuntime_->currentWorld() && sceneRuntime_->currentSceneIndex() >= 0
+            ? ControlJson(sceneRegistry_[sceneRuntime_->currentSceneIndex()].id)
             : ControlJson(nullptr);
     const SceneEntry *entry =
-        currentScene_ && currentSceneIndex_ >= 0
-            ? &sceneRegistry_[currentSceneIndex_]
+        sceneRuntime_->currentWorld() && sceneRuntime_->currentSceneIndex() >= 0
+            ? &sceneRegistry_[sceneRuntime_->currentSceneIndex()]
             : nullptr;
     ControlJson result = {{"name", name},
                           {"id", id},
@@ -3298,7 +2519,7 @@ ControlJson Application::runtimeSceneCurrent() {
                           {"kind", entry ? sceneEntryKindName(entry->kind)
                                          : "none"}};
     if (const auto *world =
-            dynamic_cast<const RuntimeWorld *>(currentScene_.get())) {
+            dynamic_cast<const RuntimeWorld *>(sceneRuntime_->currentWorld().get())) {
         result["sceneDocumentId"] = world->id().value();
         result["entityCount"] = world->entityCount();
         result["modelInstanceCount"] = world->modelInstanceCount();
@@ -3318,12 +2539,12 @@ ControlJson Application::runtimeSceneOperationResult(int index,
         result =
             loadOperationToJson(assetImportManager_->task(taskId), nullptr);
     } else if (taskId != 0) {
-        result = sceneLoadTaskToJson(latestSceneLoadTask_);
+        result = sceneLoadTaskToJson(sceneRuntime_->latestSceneLoadTask());
     } else {
         result = {{"scene", sceneRegistry_[index].name}, {"completed", true}};
     }
-    if (taskId == 0 && lastSceneLoadStats_)
-        result["loadStats"] = sceneLoadStatsToJson(*lastSceneLoadStats_);
+    if (taskId == 0 && sceneRuntime_->lastSceneLoadStats())
+        result["loadStats"] = sceneLoadStatsToJson(*sceneRuntime_->lastSceneLoadStats());
     return result;
 }
 
@@ -3338,15 +2559,14 @@ ControlJson Application::runtimeSceneLoad(const std::string &name) {
             "Unknown scene '" + name + "'. Available scenes: " +
                 candidates.dump());
     }
-    pendingSceneIndex_ = -1;
     return runtimeSceneOperationResult(index, requestSceneOperation(index));
 }
 
 ControlJson Application::runtimeSceneReload() {
-    if (currentSceneIndex_ < 0)
+    if (sceneRuntime_->currentSceneIndex() < 0)
         throw RuntimeCommandError("no_current_scene",
                                   "No scene is currently loaded.");
-    const int index = currentSceneIndex_;
+    const int index = sceneRuntime_->currentSceneIndex();
     return runtimeSceneOperationResult(
         index, requestSceneOperation(index, false, true,
                                      ImportReason::SceneLoad, false, true));
@@ -3360,26 +2580,23 @@ Application::runtimeLoadStatus(std::optional<uint64_t> requestedTaskId) {
             assetImportManager_ ? assetImportManager_->activeTask()
                                 : std::shared_ptr<AssetImportTask>{};
         const bool environmentActive =
-            latestEnvironmentLoadTask_ &&
+            sceneRuntime_->latestEnvironmentLoadTask() &&
             !isTerminalEnvironmentLoadState(
-                latestEnvironmentLoadTask_->state.load());
+                sceneRuntime_->latestEnvironmentLoadTask()->state.load());
         taskId =
             activeImport
                 ? activeImport->id
                 : (environmentActive
-                       ? latestEnvironmentLoadTask_->id
-                       : (latestSceneLoadTask_
-                              ? latestSceneLoadTask_->id
-                              : (latestEnvironmentLoadTask_
-                                     ? latestEnvironmentLoadTask_->id
+                       ? sceneRuntime_->latestEnvironmentLoadTask()->id
+                       : (sceneRuntime_->latestSceneLoadTask()
+                              ? sceneRuntime_->latestSceneLoadTask()->id
+                              : (sceneRuntime_->latestEnvironmentLoadTask()
+                                     ? sceneRuntime_->latestEnvironmentLoadTask()->id
                                      : 0)));
     }
     if ((taskId & EnvironmentLoadManager::kTaskIdMask) != 0 &&
         (taskId & AssetImportManager::kTaskIdMask) == 0) {
-        const auto task =
-            environmentAssetRepository_
-                ? environmentAssetRepository_->task(taskId)
-                : nullptr;
+        const auto task = sceneRuntime_->environmentLoadTask(taskId);
         if (!task)
             throw RuntimeCommandError("load_not_found",
                                       "Load task was not found.");
@@ -3398,16 +2615,17 @@ Application::runtimeLoadStatus(std::optional<uint64_t> requestedTaskId) {
             sceneAssetOperations_->importToLoadTask.find(taskId);
         if (linked != sceneAssetOperations_->importToLoadTask.end() &&
             linked->second != 0)
-            loadTask = sceneLoadManager_->task(linked->second);
+            loadTask = sceneRuntime_->sceneLoadTask(linked->second);
         return loadOperationToJson(importTask, loadTask);
     }
 
-    std::shared_ptr<SceneLoadTask> task = sceneLoadManager_->task(taskId);
+    std::shared_ptr<SceneLoadTask> task =
+        sceneRuntime_->sceneLoadTask(taskId);
     if (!task)
         throw RuntimeCommandError("load_not_found",
                                   "Load task was not found.");
     const bool superseded =
-        !latestSceneLoadTask_ || latestSceneLoadTask_->id != task->id;
+        !sceneRuntime_->latestSceneLoadTask() || sceneRuntime_->latestSceneLoadTask()->id != task->id;
     return sceneLoadTaskToJson(task, superseded);
 }
 
@@ -3419,11 +2637,11 @@ Application::runtimeLoadCancel(std::optional<uint64_t> requestedTaskId) {
     const uint64_t taskId = requestedTaskId.value_or(
         activeImport
             ? activeImport->id
-            : (latestEnvironmentLoadTask_ &&
+            : (sceneRuntime_->latestEnvironmentLoadTask() &&
                        !isTerminalEnvironmentLoadState(
-                           latestEnvironmentLoadTask_->state.load())
-                   ? latestEnvironmentLoadTask_->id
-                   : (latestSceneLoadTask_ ? latestSceneLoadTask_->id : 0)));
+                           sceneRuntime_->latestEnvironmentLoadTask()->state.load())
+                   ? sceneRuntime_->latestEnvironmentLoadTask()->id
+                   : (sceneRuntime_->latestSceneLoadTask() ? sceneRuntime_->latestSceneLoadTask()->id : 0)));
     if (taskId == 0 || !cancelLoadOperation(taskId))
         throw RuntimeCommandError("load_not_cancellable",
                                   "Load task cannot be cancelled.");
@@ -3441,11 +2659,11 @@ ControlJson Application::runtimeTextureLimitSet(uint32_t value) {
         result["loadTask"] =
             loadOperationToJson(assetImportManager_->task(taskId), nullptr);
         result["taskId"] = taskId;
-    } else if (latestSceneLoadTask_ &&
-               !isTerminalSceneLoadState(latestSceneLoadTask_->state.load())) {
-        result["loadTask"] = sceneLoadTaskToJson(latestSceneLoadTask_);
-    } else if (lastSceneLoadStats_) {
-        result["loadStats"] = sceneLoadStatsToJson(*lastSceneLoadStats_);
+    } else if (sceneRuntime_->latestSceneLoadTask() &&
+               !isTerminalSceneLoadState(sceneRuntime_->latestSceneLoadTask()->state.load())) {
+        result["loadTask"] = sceneLoadTaskToJson(sceneRuntime_->latestSceneLoadTask());
+    } else if (sceneRuntime_->lastSceneLoadStats()) {
+        result["loadStats"] = sceneLoadStatsToJson(*sceneRuntime_->lastSceneLoadStats());
     }
     return result;
 }
@@ -3705,17 +2923,14 @@ ControlJson Application::runtimeRenderStatus() {
     uint64_t pendingMeshes = 0;
     uint64_t pendingUploads = 0;
     uint32_t inFlightUploadBatches = 0;
-    if (assetRepository_) {
-        pendingTextures = assetRepository_->pendingTextureCount();
-        pendingMeshes = assetRepository_->pendingMeshCount();
-        pendingUploads = assetRepository_->pendingUploadCount();
-        inFlightUploadBatches =
-            assetRepository_->inFlightUploadBatches();
-    }
-    if (latestEnvironmentLoadTask_ &&
+    pendingTextures = sceneRuntime_->pendingTextureCount();
+    pendingMeshes = sceneRuntime_->pendingMeshCount();
+    pendingUploads = sceneRuntime_->pendingUploadCount();
+    inFlightUploadBatches = sceneRuntime_->inFlightUploadBatches();
+    if (sceneRuntime_->latestEnvironmentLoadTask() &&
         !isTerminalEnvironmentLoadState(
-            latestEnvironmentLoadTask_->state.load())) {
-        const auto &task = latestEnvironmentLoadTask_;
+            sceneRuntime_->latestEnvironmentLoadTask()->state.load())) {
+        const auto &task = sceneRuntime_->latestEnvironmentLoadTask();
         const uint64_t uploaded = task->uploadedImages.load();
         pendingUploads +=
             task->totalImages > uploaded
@@ -3769,14 +2984,14 @@ ControlJson Application::runtimeRenderStatus() {
     }
 
     ControlJson scene = nullptr;
-    if (currentScene_ && currentSceneIndex_ >= 0) {
-        scene = {{"id", sceneRegistry_[currentSceneIndex_].id},
-                 {"name", sceneRegistry_[currentSceneIndex_].name},
+    if (sceneRuntime_->currentWorld() && sceneRuntime_->currentSceneIndex() >= 0) {
+        scene = {{"id", sceneRegistry_[sceneRuntime_->currentSceneIndex()].id},
+                 {"name", sceneRegistry_[sceneRuntime_->currentSceneIndex()].name},
                  {"kind", sceneEntryKindName(
-                              sceneRegistry_[currentSceneIndex_].kind)}};
+                              sceneRegistry_[sceneRuntime_->currentSceneIndex()].kind)}};
     }
 
-    ControlJson loadTask = sceneLoadTaskToJson(latestSceneLoadTask_);
+    ControlJson loadTask = sceneLoadTaskToJson(sceneRuntime_->latestSceneLoadTask());
     if (assetImportManager_) {
         const auto importHistory = assetImportManager_->history();
         const auto activeImport = std::find_if(
@@ -3791,7 +3006,7 @@ ControlJson Application::runtimeRenderStatus() {
                 (*activeImport)->id);
             if (linked != sceneAssetOperations_->importToLoadTask.end() &&
                 linked->second != 0) {
-                linkedLoad = sceneLoadManager_->task(linked->second);
+                linkedLoad = sceneRuntime_->sceneLoadTask(linked->second);
             }
             loadTask = loadOperationToJson(*activeImport, linkedLoad);
         }
@@ -3845,8 +3060,8 @@ ControlJson Application::runtimeRenderStatus() {
     uint64_t pointSceneLights = 0;
     uint64_t spotSceneLights = 0;
     uint64_t activeSceneLights = 0;
-    if (currentScene_) {
-        for (const SceneLight &light : currentScene_->lights()) {
+    if (sceneRuntime_->currentWorld()) {
+        for (const SceneLight &light : sceneRuntime_->currentWorld()->lights()) {
             if (isEffectiveSceneLight(light))
                 ++activeSceneLights;
             switch (light.type) {
@@ -3972,9 +3187,7 @@ ControlJson Application::runtimeRenderStatus() {
     const RayTracingSceneStatus rayTracingStatus =
         renderer_->rayTracingSceneStatus();
     const EnvironmentAssetRepositorySnapshot environmentRepository =
-        environmentAssetRepository_
-            ? environmentAssetRepository_->snapshot()
-            : EnvironmentAssetRepositorySnapshot{};
+        sceneRuntime_->environmentRepositorySnapshot();
     ControlJson ignoredProbeEntities = ControlJson::array();
     for (size_t index = 0;
          index < std::min<size_t>(
@@ -4024,8 +3237,7 @@ ControlJson Application::runtimeRenderStatus() {
     }
 #endif
     const AssetRepositorySnapshot repository =
-        assetRepository_ ? assetRepository_->snapshot()
-                          : AssetRepositorySnapshot{};
+        sceneRuntime_->modelRepositorySnapshot();
     const MaterialBindingStatus &materialBinding = materialSystem_->status();
     ControlJson repositoryRecords = ControlJson::array();
     for (const ModelAssetRecordSnapshot &record : repository.records) {
@@ -4043,7 +3255,7 @@ ControlJson Application::runtimeRenderStatus() {
     }
     ControlJson runtimeWorld = nullptr;
     if (const auto *world =
-            dynamic_cast<const RuntimeWorld *>(currentScene_.get())) {
+            dynamic_cast<const RuntimeWorld *>(sceneRuntime_->currentWorld().get())) {
         runtimeWorld = {
             {"sceneDocumentId", world->id().value()},
             {"entities", world->entityCount()},
@@ -4071,20 +3283,20 @@ ControlJson Application::runtimeRenderStatus() {
            projectContext_.startupSceneId.empty()
                ? ControlJson(nullptr)
                : ControlJson(projectContext_.startupSceneId)}}},
-        {"sceneGeneration", sceneGeneration_},
+        {"sceneGeneration", sceneRuntime_->sceneGeneration()},
         {"loadTask", std::move(loadTask)},
         {"environment",
          {{"selectedId",
-           selectedEnvironmentId_.empty()
+           sceneRuntime_->selectedEnvironmentId().empty()
                ? ControlJson(nullptr)
-               : ControlJson(selectedEnvironmentId_)},
+               : ControlJson(sceneRuntime_->selectedEnvironmentId())},
           {"publishedId",
            renderer_->environmentReady()
                ? ControlJson(renderer_->currentEnvironmentId())
                : ControlJson(nullptr)},
           {"ready", renderer_->environmentReady()},
           {"loadTask",
-           environmentLoadTaskToJson(latestEnvironmentLoadTask_)},
+           environmentLoadTaskToJson(sceneRuntime_->latestEnvironmentLoadTask())},
           {"repository",
            {{"records", environmentRepository.recordCount},
             {"ready", environmentRepository.readyCount},
@@ -4142,14 +3354,14 @@ ControlJson Application::runtimeRenderStatus() {
           {"unavailableReason", atmosphereStatus.unavailableReason}}},
         {"lighting",
          {{"sceneLights",
-           currentScene_ ? currentScene_->lights().size() : 0},
+           sceneRuntime_->currentWorld() ? sceneRuntime_->currentWorld()->lights().size() : 0},
           {"sceneDirectional", directionalSceneLights},
           {"scenePoint", pointSceneLights},
           {"sceneSpot", spotSceneLights},
           {"activeSceneLights", activeSceneLights},
           {"fallbackSunActive",
-           activeSceneLights == 0 && currentScene_ &&
-               currentScene_->allowsFallbackSun()},
+           activeSceneLights == 0 && sceneRuntime_->currentWorld() &&
+               sceneRuntime_->currentWorld()->allowsFallbackSun()},
           {"effective", lastLightStats_.effectiveLights},
           {"uploadedDirectional", lastLightStats_.directionalLights},
           {"uploadedPoint", lastLightStats_.pointLights},
@@ -4402,7 +3614,7 @@ ControlJson Application::runtimeRenderStatus() {
         {"guiVisible", config_.diagnostics.guiVisible},
         {"minimized", minimized},
         {"swapchainRecreatePending", recreatePending},
-        {"rendering", currentScene_ && !minimized && !recreatePending}};
+        {"rendering", sceneRuntime_->currentWorld() && !minimized && !recreatePending}};
 }
 
 ControlJson Application::runtimeRenderSettingsGet() {
@@ -4630,16 +3842,16 @@ ControlJson Application::runtimeEnvironmentList() {
 ControlJson Application::runtimeEnvironmentCurrent() {
     return {
         {"selectedId",
-         selectedEnvironmentId_.empty()
+         sceneRuntime_->selectedEnvironmentId().empty()
              ? ControlJson(nullptr)
-             : ControlJson(selectedEnvironmentId_)},
+             : ControlJson(sceneRuntime_->selectedEnvironmentId())},
         {"publishedId",
          renderer_->environmentReady()
              ? ControlJson(renderer_->currentEnvironmentId())
              : ControlJson(nullptr)},
         {"ready", renderer_->environmentReady()},
         {"task", environmentLoadTaskToJson(
-                     latestEnvironmentLoadTask_)}};
+                     sceneRuntime_->latestEnvironmentLoadTask())}};
 }
 
 ControlJson
@@ -4652,7 +3864,7 @@ Application::runtimeEnvironmentSet(const std::string &name) {
 }
 
 ControlJson Application::runtimeEnvironmentReload() {
-    if (selectedEnvironmentId_.empty()) {
+    if (sceneRuntime_->selectedEnvironmentId().empty()) {
         throw RuntimeCommandError(
             "no_current_environment",
             "No environment is currently selected.");
@@ -4756,10 +3968,10 @@ ControlJson Application::runtimeCaptureCancel(uint64_t taskId) {
 }
 
 ControlJson Application::runtimeLastLoadStats() {
-    if (!lastSceneLoadStats_)
+    if (!sceneRuntime_->lastSceneLoadStats())
         throw RuntimeCommandError("no_load_stats",
                                   "No scene load statistics exist.");
-    return sceneLoadStatsToJson(*lastSceneLoadStats_);
+    return sceneLoadStatsToJson(*sceneRuntime_->lastSceneLoadStats());
 }
 
 ControlJson Application::runtimeQuit() {
@@ -4771,38 +3983,6 @@ ControlJson Application::runtimeQuit() {
     return {{"quitting", true}};
 }
 #endif
-
-void Application::applySceneCameraDefaults() {
-    constexpr float kFallbackNear = 0.05f;
-    constexpr float kFallbackFar = 200.0f;
-    constexpr float kMinSceneFar = 50.0f;
-    constexpr float kRadiusFarScale = 4.0f;
-    constexpr float kMinAutoNear = 0.01f;
-    constexpr float kMaxAutoNear = 0.05f;
-
-    if (!currentScene_ || !currentScene_->bounds().valid) {
-        camera_.setClipPlanes(kFallbackNear, kFallbackFar);
-        return;
-    }
-
-    const Bounds &bounds = currentScene_->bounds();
-    if (!currentScene_->initialEditorCamera()) {
-        const float distance = std::max(bounds.radius * 2.2f, 1.0f);
-        const glm::vec3 direction =
-            glm::normalize(glm::vec3(1.0f, 1.0f, 0.65f));
-        camera_.setPosition(bounds.center + direction * distance);
-        camera_.lookAt(bounds.center);
-    }
-    const float distanceToCenter =
-        glm::length(camera_.position() - bounds.center);
-    const float farPlane =
-        std::max(kMinSceneFar,
-                 distanceToCenter + bounds.radius * kRadiusFarScale);
-    const float nearPlane =
-        std::max(kMinAutoNear, std::min(kMaxAutoNear, farPlane / 10000.0f));
-    camera_.setClipPlanes(nearPlane, farPlane);
-}
-
 void Application::updateInputMode() {
 #if VKL_ENABLE_EDITOR_UI
     ImGuiIO *io = gui_ ? &ImGui::GetIO() : nullptr;
@@ -4885,11 +4065,7 @@ void Application::refreshSceneRegistry(const std::string &selectSceneId) {
         if (entry.prepareFactory)
             previousModelSources.emplace(entry.id, entry.sourcePath);
     }
-    std::string currentId;
     std::string selectedId = selectSceneId;
-    if (currentSceneIndex_ >= 0 &&
-        currentSceneIndex_ < static_cast<int>(sceneRegistry_.size()))
-        currentId = sceneRegistry_[currentSceneIndex_].id;
     if (selectedId.empty() && sceneAssetOperations_ &&
         sceneAssetOperations_->selectedSceneIndex >= 0 &&
         sceneAssetOperations_->selectedSceneIndex <
@@ -4899,23 +4075,17 @@ void Application::refreshSceneRegistry(const std::string &selectSceneId) {
     }
 
     sceneWorkflow_->refresh(projectContext_);
-    if (assetRepository_) {
-        for (const auto &[modelId, sourcePath] : previousModelSources) {
-            const auto found = std::find_if(
-                sceneRegistry_.begin(), sceneRegistry_.end(),
-                [&](const SceneEntry &entry) { return entry.id == modelId; });
-            if (found == sceneRegistry_.end() ||
-                found->sourcePath != sourcePath) {
-                assetRepository_->invalidate(ModelAssetId(modelId));
-            }
+    for (const auto &[modelId, sourcePath] : previousModelSources) {
+        const auto found = std::find_if(
+            sceneRegistry_.begin(), sceneRegistry_.end(),
+            [&](const SceneEntry &entry) { return entry.id == modelId; });
+        if (found == sceneRegistry_.end() ||
+            found->sourcePath != sourcePath) {
+            sceneRuntime_->invalidateModel(ModelAssetId(modelId));
         }
     }
     reloadArtifactIndex();
-    currentSceneIndex_ = -1;
-    for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
-        if (sceneRegistry_[i].id == currentId)
-            currentSceneIndex_ = i;
-    }
+    sceneRuntime_->remapCurrentSceneIndex();
     sceneAssetOperations_->selectedSceneIndex = -1;
     if (!selectedId.empty()) {
         for (int i = 0; i < static_cast<int>(sceneRegistry_.size()); ++i) {
@@ -5110,7 +4280,7 @@ void Application::drawScenePanel(bool modelsOnly) {
                 item.validationReason = validation->second.reason;
                 item.validationReportPath = validation->second.reportPath;
             }
-            item.current = item.index == currentSceneIndex_;
+            item.current = item.index == sceneRuntime_->currentSceneIndex();
             item.canAuthor =
                 config_.assetImportMode == AssetImportMode::OnDemand;
             item.canLoadSource =
@@ -5126,7 +4296,7 @@ void Application::drawScenePanel(bool modelsOnly) {
                 catalogModel != nullptr;
         }
         for (SceneWorkflowItemSnapshot &item : snapshot.nativeScenes)
-            item.current = item.index == currentSceneIndex_;
+            item.current = item.index == sceneRuntime_->currentSceneIndex();
 
         SceneWorkflowActions actions;
 #if VKL_ENABLE_ASSET_AUTHORING
@@ -5523,7 +4693,7 @@ void Application::drawAssetsPanel(bool environmentsOnly) {
             };
         actions.removeEnvironment = [this](const std::string &id) {
             try {
-                if (selectedEnvironmentId_ == id)
+                if (sceneRuntime_->selectedEnvironmentId() == id)
                     setEnvironment("None");
                 SceneCatalogEditor::removeEnvironment(projectContext_, id);
                 editorUi_->environmentStatus =
@@ -5714,9 +4884,9 @@ void Application::drawRenderPanel() {
     }
     constexpr uint32_t textureLimits[] = {0, 2048, 1024, 512};
     const bool nativeSceneActive =
-        currentSceneIndex_ >= 0 &&
-        currentSceneIndex_ < static_cast<int>(sceneRegistry_.size()) &&
-        sceneRegistry_[currentSceneIndex_].isNativeScene();
+        sceneRuntime_->currentSceneIndex() >= 0 &&
+        sceneRuntime_->currentSceneIndex() < static_cast<int>(sceneRegistry_.size()) &&
+        sceneRegistry_[sceneRuntime_->currentSceneIndex()].isNativeScene();
     ImGui::BeginDisabled(config_.assetImportMode ==
                              AssetImportMode::CookedOnly ||
                          nativeSceneActive);
@@ -6631,10 +5801,10 @@ void Application::drawCullingPanel() {
 }
 
 void Application::drawSceneLoadingPanel() {
-    if (!latestSceneLoadTask_)
+    if (!sceneRuntime_->latestSceneLoadTask())
         return;
 
-    const auto task = latestSceneLoadTask_;
+    const auto task = sceneRuntime_->latestSceneLoadTask();
     const SceneLoadState state = task->state.load();
     if (isTerminalSceneLoadState(state))
         return;
@@ -6833,9 +6003,9 @@ void Application::drawLightingPanel() {
     ImGui::Separator();
 
     const CatalogEnvironment *selectedEnvironment =
-        selectedEnvironmentId_.empty()
+        sceneRuntime_->selectedEnvironmentId().empty()
             ? nullptr
-            : catalog_.findEnvironment(selectedEnvironmentId_);
+            : catalog_.findEnvironment(sceneRuntime_->selectedEnvironmentId());
     const char *environmentLabel =
         selectedEnvironment ? selectedEnvironment->displayName.c_str()
                             : "None";
@@ -6855,7 +6025,7 @@ void Application::drawLightingPanel() {
         for (const CatalogEnvironment &environment :
              catalog_.environments) {
             const bool selected =
-                selectedEnvironmentId_ == environment.id;
+                sceneRuntime_->selectedEnvironmentId() == environment.id;
             if (ImGui::Selectable(environment.displayName.c_str(),
                                   selected)) {
                 try {
@@ -6943,17 +6113,17 @@ void Application::drawLightingPanel() {
     if (!device_->environmentIblSupported()) {
         ImGui::TextDisabled(
             "IBL unsupported: RGBA16F cube/RG16F linear filtering required.");
-    } else if (latestEnvironmentLoadTask_ &&
+    } else if (sceneRuntime_->latestEnvironmentLoadTask() &&
                !isTerminalEnvironmentLoadState(
-                   latestEnvironmentLoadTask_->state.load())) {
+                   sceneRuntime_->latestEnvironmentLoadTask()->state.load())) {
         ImGui::Text(
             "Environment: %s (%u/%u)",
             environmentLoadStateName(
-                latestEnvironmentLoadTask_->state.load()),
-            latestEnvironmentLoadTask_->uploadedImages.load(),
-            latestEnvironmentLoadTask_->totalImages);
+                sceneRuntime_->latestEnvironmentLoadTask()->state.load()),
+            sceneRuntime_->latestEnvironmentLoadTask()->uploadedImages.load(),
+            sceneRuntime_->latestEnvironmentLoadTask()->totalImages);
         if (ImGui::Button("Cancel Environment Load")) {
-            cancelEnvironmentLoad(latestEnvironmentLoadTask_->id);
+            cancelEnvironmentLoad(sceneRuntime_->latestEnvironmentLoadTask()->id);
         }
     } else {
         ImGui::Text("Environment ready: %s",
@@ -6967,9 +6137,7 @@ void Application::drawLightingPanel() {
         const ReflectionProbeRuntimeStatus probeStatus =
             renderer_->reflectionProbeStatus();
         const EnvironmentAssetRepositorySnapshot repository =
-            environmentAssetRepository_
-                ? environmentAssetRepository_->snapshot()
-                : EnvironmentAssetRepositorySnapshot{};
+            sceneRuntime_->environmentRepositorySnapshot();
         ImGui::Text("Active: %u / %u", probeStatus.activeCount,
                     probeStatus.limit);
         ImGui::Text("Sources: %u", probeStatus.sourceCount);
@@ -7000,13 +6168,13 @@ void Application::drawLightingPanel() {
     ImGui::ColorEdit3("Ambient Color", &ambientColor_.x);
     ImGui::DragFloat("Ambient Intensity", &ambientIntensity_, 0.01f, 0.0f,
                      10.0f);
-    const size_t sceneLightCount = currentScene_ ? currentScene_->lights().size()
+    const size_t sceneLightCount = sceneRuntime_->currentWorld() ? sceneRuntime_->currentWorld()->lights().size()
                                                  : 0;
     const size_t effectiveSceneLightCount =
-        currentScene_
+        sceneRuntime_->currentWorld()
             ? static_cast<size_t>(std::count_if(
-                  currentScene_->lights().begin(),
-                  currentScene_->lights().end(), isEffectiveSceneLight))
+                  sceneRuntime_->currentWorld()->lights().begin(),
+                  sceneRuntime_->currentWorld()->lights().end(), isEffectiveSceneLight))
             : 0;
     if (ImGui::TreeNodeEx("Light Diagnostics")) {
         const SceneLightBufferStatus bufferStatus =
@@ -7040,8 +6208,8 @@ void Application::drawLightingPanel() {
         } else {
             ImGui::TextDisabled("Shadow caster: None");
         }
-        if (currentScene_ && !currentScene_->lights().empty()) {
-            const auto &lights = currentScene_->lights();
+        if (sceneRuntime_->currentWorld() && !sceneRuntime_->currentWorld()->lights().empty()) {
+            const auto &lights = sceneRuntime_->currentWorld()->lights();
             for (size_t index = 0; index < lights.size(); ++index) {
                 const SceneLight &light = lights[index];
                 const std::string name =
@@ -7123,7 +6291,7 @@ void Application::drawMaterialsPanel() {
     ImGui::Separator();
     std::vector<std::shared_ptr<MaterialInstance>> selectedMaterials;
     const std::vector<std::shared_ptr<MaterialInstance>> *materialsView =
-        currentScene_ ? &currentScene_->materials() : nullptr;
+        sceneRuntime_->currentWorld() ? &sceneRuntime_->currentWorld()->materials() : nullptr;
     if (sceneEditorSession_ && sceneEditorSession_->active()) {
         materialsView = &selectedMaterials;
     }
@@ -7137,8 +6305,8 @@ void Application::drawMaterialsPanel() {
             selectedMaterials = asset->materials;
         }
     }
-    if (ui.materialSceneGeneration != sceneGeneration_) {
-        ui.materialSceneGeneration = sceneGeneration_;
+    if (ui.materialSceneGeneration != sceneRuntime_->sceneGeneration()) {
+        ui.materialSceneGeneration = sceneRuntime_->sceneGeneration();
         ui.selectedMaterialIndex = 0;
         if (materialsView) {
             const auto &materials = *materialsView;
@@ -7335,8 +6503,8 @@ void Application::drawCameraPanel() {
     if (clipChanged)
         camera_.setClipPlanes(nearPlane, farPlane);
 
-    if (currentScene_ && currentScene_->bounds().valid) {
-        const Bounds &bounds = currentScene_->bounds();
+    if (sceneRuntime_->currentWorld() && sceneRuntime_->currentWorld()->bounds().valid) {
+        const Bounds &bounds = sceneRuntime_->currentWorld()->bounds();
         ImGui::Separator();
         ImGui::Text("Bounds Center: (%.2f, %.2f, %.2f)", bounds.center.x,
                     bounds.center.y, bounds.center.z);
@@ -7355,7 +6523,7 @@ void Application::drawPerformancePanel() {
         ImGui::TextUnformatted(mode_ == InputMode::UI ? "UI"
                                                      : "CameraDrag");
         editor::propertyLabel("Objects");
-        ImGui::Text("%zu", currentScene_ ? currentScene_->renderableCount()
+        ImGui::Text("%zu", sceneRuntime_->currentWorld() ? sceneRuntime_->currentWorld()->renderableCount()
                                          : 0);
         editor::propertyLabel("Tracy");
         if (build::kTracy) {
@@ -7539,10 +6707,10 @@ void Application::drawPerformancePanel() {
 }
 
 void Application::drawLoadStatsPanel() {
-    if (lastSceneLoadStats_ &&
+    if (sceneRuntime_->lastSceneLoadStats() &&
         ImGui::CollapsingHeader("Last Scene Load",
                                 ImGuiTreeNodeFlags_DefaultOpen)) {
-        const SceneLoadStats &stats = *lastSceneLoadStats_;
+        const SceneLoadStats &stats = *sceneRuntime_->lastSceneLoadStats();
         const ResourceLoadStats &resources = stats.resources;
         const int64_t allocationDelta =
             memoryDelta(stats.allocatorAfter.allocationBytes,
@@ -7681,7 +6849,7 @@ void Application::drawLoadStatsPanel() {
                     bytesToMiB(stats.allocatorBefore.blockBytes),
                     bytesToMiB(stats.allocatorAfter.blockBytes),
                     signedBytesToMiB(blockDelta));
-    } else if (!lastSceneLoadStats_) {
+    } else if (!sceneRuntime_->lastSceneLoadStats()) {
         ImGui::TextDisabled("No scene load statistics are available.");
     }
 
@@ -7714,8 +6882,7 @@ void Application::drawLoadStatsPanel() {
     if (ImGui::CollapsingHeader("Model Asset Repository",
                                 ImGuiTreeNodeFlags_DefaultOpen)) {
         const AssetRepositorySnapshot snapshot =
-            assetRepository_ ? assetRepository_->snapshot()
-                             : AssetRepositorySnapshot{};
+            sceneRuntime_->modelRepositorySnapshot();
         ImGui::Text("Ready %llu  Loading %llu  Failed %llu  Retiring %llu",
                     static_cast<unsigned long long>(snapshot.readyCount),
                     static_cast<unsigned long long>(snapshot.loadingCount),
@@ -7805,11 +6972,7 @@ void Application::executePendingEditorAction(bool saveFirst) {
         case EditorPendingActionKind::CloseScene:
             if (sceneEditorSession_)
                 sceneEditorSession_->detach();
-            retireCurrentScene();
-            renderer_->clearEnvironment();
-            selectedEnvironmentId_.clear();
-            currentSceneIndex_ = -1;
-            ++sceneGeneration_;
+            sceneRuntime_->closeWorld();
             shadowSystem_.reset();
             break;
         case EditorPendingActionKind::Quit:
@@ -7974,7 +7137,8 @@ void Application::drawSceneAuthoringDialogs() {
                         updateEditorReflectionProbeBindings();
                     });
                 refreshSceneRegistry(id);
-                currentSceneIndex_ = sceneWorkflow_->findEntryById(id);
+                sceneRuntime_->adoptCurrentSceneIndex(
+                    sceneWorkflow_->findEntryById(id));
                 ui.sceneStatus = "Saved as " + name;
                 ui.sceneError.clear();
                 ImGui::CloseCurrentPopup();
@@ -7992,8 +7156,8 @@ void Application::drawSceneAuthoringDialogs() {
     if (ui.requestConvertPreviewModal) {
         ui.requestConvertPreviewModal = false;
         const SceneEntry *entry =
-            currentSceneIndex_ >= 0
-                ? &sceneRegistry_[currentSceneIndex_]
+            sceneRuntime_->currentSceneIndex() >= 0
+                ? &sceneRegistry_[sceneRuntime_->currentSceneIndex()]
                 : nullptr;
         const std::string baseId = entry ? entry->id + "-scene" : "scene";
         const std::string baseName =
@@ -8010,16 +7174,16 @@ void Application::drawSceneAuthoringDialogs() {
                          ui.sceneDisplayName.size());
         ImGui::InputText("Scene ID", ui.sceneId.data(), ui.sceneId.size());
         const bool previewValid =
-            currentSceneIndex_ >= 0 &&
-            currentSceneIndex_ < static_cast<int>(sceneRegistry_.size()) &&
-            sceneRegistry_[currentSceneIndex_].isModelPreview();
+            sceneRuntime_->currentSceneIndex() >= 0 &&
+            sceneRuntime_->currentSceneIndex() < static_cast<int>(sceneRegistry_.size()) &&
+            sceneRegistry_[sceneRuntime_->currentSceneIndex()].isModelPreview();
         const bool valid = previewValid &&
                            ui.sceneDisplayName[0] != '\0' &&
                            isStableAssetId(ui.sceneId.data());
         ImGui::BeginDisabled(!valid);
         if (ImGui::Button("Convert")) {
             try {
-                const SceneEntry preview = sceneRegistry_[currentSceneIndex_];
+                const SceneEntry preview = sceneRegistry_[sceneRuntime_->currentSceneIndex()];
                 const std::string id = ui.sceneId.data();
                 const std::string name = ui.sceneDisplayName.data();
                 SceneDocument document =
@@ -8805,9 +7969,9 @@ void Application::drawGui() {
         return;
 
     std::string sceneName = "No Scene";
-    if (currentSceneIndex_ >= 0 &&
-        currentSceneIndex_ < static_cast<int>(sceneRegistry_.size()))
-        sceneName = sceneRegistry_[currentSceneIndex_].name;
+    if (sceneRuntime_->currentSceneIndex() >= 0 &&
+        sceneRuntime_->currentSceneIndex() < static_cast<int>(sceneRegistry_.size()))
+        sceneName = sceneRegistry_[sceneRuntime_->currentSceneIndex()].name;
     EditorFrameStatus status{};
     status.sceneName = sceneName;
     status.fps = ImGui::GetIO().Framerate;
@@ -8827,11 +7991,11 @@ void Application::drawGui() {
         EditorUiState::kPerformanceHistorySize);
 
     bool hasActiveLoad = false;
-    if (latestSceneLoadTask_) {
-        const SceneLoadState state = latestSceneLoadTask_->state.load();
+    if (sceneRuntime_->latestSceneLoadTask()) {
+        const SceneLoadState state = sceneRuntime_->latestSceneLoadTask()->state.load();
         hasActiveLoad = !isTerminalSceneLoadState(state);
         if (hasActiveLoad) {
-            const auto &progress = latestSceneLoadTask_->progress;
+            const auto &progress = sceneRuntime_->latestSceneLoadTask()->progress;
             const uint64_t completed =
                 progress.completedTextures.load() +
                 progress.completedMeshes.load() +
@@ -9280,12 +8444,7 @@ void Application::mainLoop() {
 #endif
 
         // 1. 帧外：场景切�?
-        if (pendingSceneIndex_ != -1) {
-            switchScene(pendingSceneIndex_);
-            pendingSceneIndex_ = -1;
-        }
-        updateSceneLoading();
-        updateEnvironmentLoading();
+        sceneRuntime_->pump();
 #if VKL_ENABLE_EDITOR_UI
         updateReflectionProbeCapture();
 #endif
@@ -9341,8 +8500,8 @@ void Application::mainLoop() {
                              ? simulationTime + dt
                              : std::chrono::duration<float>(now - startTime)
                                    .count();
-        if (currentScene_)
-            currentScene_->update(dt, simulationTime);
+        if (sceneRuntime_->currentWorld())
+            sceneRuntime_->currentWorld()->update(dt, simulationTime);
 
         // 6. UI
         if (gui_)
@@ -9354,7 +8513,7 @@ void Application::mainLoop() {
             VKL_PROFILE_ZONE("Begin Render Frame");
             ctx = frameSync_->beginFrame();
         }
-        collectRetiredScenes();
+        sceneRuntime_->collectRetired();
         if (!ctx) {
             if (frameSync_->swapChainNeedsRecreation())
                 handleSwapChainRecreate();
@@ -9448,10 +8607,10 @@ void Application::mainLoop() {
         }
 
         RenderWorldFrameSnapshot worldSnapshot{};
-        const bool hasWorldSnapshot = currentScene_ != nullptr;
-        if (currentScene_) {
+        const bool hasWorldSnapshot = sceneRuntime_->currentWorld() != nullptr;
+        if (sceneRuntime_->currentWorld()) {
             VKL_PROFILE_ZONE("RenderWorld Snapshot");
-            worldSnapshot = currentScene_->buildRenderSnapshot();
+            worldSnapshot = sceneRuntime_->currentWorld()->buildRenderSnapshot();
         }
 
         RenderViewInput viewInput{};
@@ -9473,7 +8632,7 @@ void Application::mainLoop() {
         viewInput.maxSpecularLod =
             renderer_->currentEnvironmentMaxSpecularLod();
         std::string cameraHistoryIdentity = "editor";
-        if (currentScene_) {
+        if (sceneRuntime_->currentWorld()) {
             viewInput.sceneBounds = worldSnapshot.bounds;
             viewInput.sceneLights = &worldSnapshot.lights;
             viewInput.reflectionProbes = &worldSnapshot.reflectionProbes;
@@ -9507,7 +8666,7 @@ void Application::mainLoop() {
                         : static_cast<float>(extent.width) /
                               static_cast<float>(extent.height);
                 if (const auto activeCamera =
-                        currentScene_->activeCamera(aspect)) {
+                        sceneRuntime_->currentWorld()->activeCamera(aspect)) {
                     viewInput.view = activeCamera->view;
                     viewInput.projection = activeCamera->projection;
                     viewInput.cameraPosition = activeCamera->position;
@@ -9578,7 +8737,7 @@ void Application::mainLoop() {
         {
             VKL_PROFILE_ZONE("Visibility Build");
             VisibilityBuildInput visibilityInput{};
-            visibilityInput.sceneGeneration = sceneGeneration_;
+            visibilityInput.sceneGeneration = sceneRuntime_->sceneGeneration();
             visibilityInput.cameraIdentity =
                 std::move(cameraHistoryIdentity);
             visibilityInput.shaderIdentity =
@@ -9638,15 +8797,12 @@ void Application::mainLoop() {
                 static_cast<int64_t>(pipelineCache_->computePipelineCount()));
             profilePlotMemory(
                 "SceneLoad/StagingBytes",
-                static_cast<int64_t>(
-                    assetRepository_
-                        ? assetRepository_->stagingBytesInUse()
-                        : 0));
-            if (latestSceneLoadTask_) {
+                static_cast<int64_t>(sceneRuntime_->stagingBytesInUse()));
+            if (sceneRuntime_->latestSceneLoadTask()) {
                 profilePlotMemory(
                     "SceneLoad/ProcessedBytes",
                     static_cast<int64_t>(
-                        latestSceneLoadTask_->progress.processedBytes.load()));
+                        sceneRuntime_->latestSceneLoadTask()->progress.processedBytes.load()));
             }
             const auto profilerNow = std::chrono::steady_clock::now();
             if (profileConnected() &&
@@ -9712,7 +8868,7 @@ void Application::mainLoop() {
 
     vkDeviceWaitIdle(device_->logicalDevice());
     frameSync_->markAllSubmissionsCompleted();
-    collectRetiredScenes();
+    sceneRuntime_->collectRetired();
     if (captureService_)
         captureService_->shutdown(frameSync_->completedSubmissionSerial());
 }

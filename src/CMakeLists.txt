@@ -314,6 +314,7 @@ endif()
 add_executable(VulkanLab
     main.cpp
     app/Application.cpp
+    app/SceneRuntimeCoordinator.cpp
     app/SceneWorkflowController.cpp
 )
 target_include_directories(VulkanLab PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
