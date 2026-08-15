@@ -18,9 +18,6 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
-#include <chrono>
-#include <array>
-#include <filesystem>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -39,13 +36,7 @@ class Renderer;
 class PipelineCache;
 class GuiSystem;
 #if VKL_ENABLE_EDITOR_UI
-class EditorDockWorkspace;
-class AssetsPanel;
-class ScenesPanel;
-class OutlinerPanel;
-class InspectorPanel;
-class SceneEditorSession;
-class SceneViewportController;
+class EditorController;
 #endif
 class CaptureService;
 struct RuntimeCommand;
@@ -58,10 +49,9 @@ struct EnvironmentLoadTask;
 class SceneRuntimeCoordinator;
 class SceneWorkflowController;
 class RenderSettingsController;
-struct EditorUiState;
 
 enum class InputMode {
-    UI,         // 光标可见，ImGui 接管
+    UI,         // Cursor visible; editor controls input.
     CameraDrag, // 按住右键，相机接管鼠标
 };
 
@@ -88,47 +78,12 @@ class Application final
 
     void updateInputMode();
     void processCameraInput(float dt);
-    void drawGui();
     void handleSwapChainRecreate();
-#if VKL_ENABLE_EDITOR_UI
-    void bindViewportTextures();
-    void applyPendingViewportResize();
-#endif
     const ShaderVariant &currentShaderVariant() const;
 #if VKL_ENABLE_RUNTIME_CONTROL
     void processRuntimeCommand();
 #endif
-    void drawScenePanel(bool modelsOnly = false);
-    void drawOutlinerPanel();
-    void drawInspectorPanel();
-    void drawSceneAuthoringDialogs();
-    void updateEditorModelBindings();
-    void updateEditorReflectionProbeBindings();
-    void beginReflectionProbeCapture(PersistentEntityId entityId);
-    void updateReflectionProbeCapture();
-    void applyReflectionProbeCaptureView(RenderViewInput &input,
-                                         std::string &cameraIdentity) const;
-    void requestEditorSceneLoad(int index);
-    void saveEditorScene();
-    void executePendingEditorAction(bool saveFirst);
-    void deleteSelectedEditorEntity();
-    void duplicateSelectedEditorEntity();
-    void handleEditorShortcuts();
     bool hasUnsavedSceneChanges() const;
-    void drawSceneLoadingPanel();
-    void drawAssetsPanel(bool environmentsOnly = false);
-    void drawRenderPanel();
-    void drawPostProcessingPanel();
-    void drawSurfaceDataPanel();
-    void drawCullingPanel();
-    void drawLightingPanel();
-    void drawCameraPanel();
-    void drawMaterialsPanel();
-    void drawPerformancePanel();
-    void drawLoadStatsPanel();
-    void drawCapturePanel();
-    void requestManualCapture(bool includeGui);
-    void refreshSceneRegistry(const std::string &selectSceneId = {});
 
     uint64_t reloadCurrentScene();
     void switchScene(int index);
@@ -224,51 +179,7 @@ class Application final
     std::unique_ptr<PipelineCache>       pipelineCache_;
     std::unique_ptr<GuiSystem>           gui_;
 #if VKL_ENABLE_EDITOR_UI
-    std::unique_ptr<EditorDockWorkspace> editorDockWorkspace_;
-    std::unique_ptr<AssetsPanel> assetsPanel_;
-    std::unique_ptr<ScenesPanel> scenesPanel_;
-    std::unique_ptr<OutlinerPanel> outlinerPanel_;
-    std::unique_ptr<InspectorPanel> inspectorPanel_;
-    std::unique_ptr<SceneEditorSession> sceneEditorSession_;
-    std::unique_ptr<SceneViewportController> sceneViewportController_;
-    struct ViewportResizeState {
-        uint32_t desiredWidth = 0;
-        uint32_t desiredHeight = 0;
-        std::chrono::steady_clock::time_point changedAt{};
-        bool pending = false;
-        bool immediate = false;
-        bool measured = false;
-    } viewportResize_;
-    uint32_t viewportDisplayWidth_ = 0;
-    uint32_t viewportDisplayHeight_ = 0;
-    bool viewportVisible_ = false;
-    bool viewportHovered_ = false;
-    enum class ReflectionProbeCapturePhase {
-        AwaitingResize,
-        CapturingFaces,
-        Baking,
-        Loading,
-    };
-    struct ReflectionProbeCaptureState {
-        PersistentEntityId entityId;
-        ReflectionProbeCapturePhase phase =
-            ReflectionProbeCapturePhase::AwaitingResize;
-        std::string environmentId;
-        std::string profileId;
-        std::filesystem::path sourcePath;
-        std::filesystem::path backupPath;
-        std::filesystem::path temporaryDirectory;
-        std::array<std::filesystem::path, 6> faceRelativePaths{};
-        std::array<std::filesystem::path, 6> facePaths{};
-        VkExtent2D previousExtent{};
-        uint32_t faceSize = 256;
-        uint32_t faceIndex = 0;
-        uint64_t captureTaskId = 0;
-        uint64_t bakeTaskId = 0;
-        bool catalogEntryAdded = false;
-        std::string status;
-    };
-    std::optional<ReflectionProbeCaptureState> reflectionProbeCapture_;
+    std::unique_ptr<EditorController> editorController_;
 #endif
     std::unique_ptr<CaptureService>      captureService_;
     std::vector<RenderItem>              renderItems_;
@@ -288,10 +199,6 @@ class Application final
     std::shared_ptr<RuntimeCommand> pendingQuitCommand_;
     std::string runtimeControlPipeName_;
 #endif
-    std::unique_ptr<EditorUiState> editorUi_;
-    uint64_t lastCaptureTaskId_ = 0;
-    bool captureIncludeGui_ = false;
-    std::string captureUiError_;
     uint64_t presentedFrameCount_ = 0;
 
     // 输入模式

@@ -321,6 +321,9 @@ add_executable(VulkanLab
     app/SceneRuntimeCoordinator.cpp
     app/SceneWorkflowController.cpp
 )
+if(VKL_ENABLE_EDITOR_UI)
+    target_sources(VulkanLab PRIVATE editor/EditorController.cpp)
+endif()
 target_include_directories(VulkanLab PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(VulkanLab PRIVATE
     vkl_build_options
