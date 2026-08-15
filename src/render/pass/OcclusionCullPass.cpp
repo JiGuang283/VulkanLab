@@ -202,7 +202,8 @@ void OcclusionCullPass::prepareFrame(uint32_t frameIndex,
     ensureCapacity(frameIndex, std::max(activeCount, 1u));
     storage.activeCount = activeCount;
     storage.active = view.settings.culling.occlusionEnabled &&
-                     activeCount > 0;
+                     activeCount >=
+                         view.settings.culling.occlusionMinCandidates;
     storage.submittedSerial = storage.active ? frameSerial : 0;
     storage.stream.indirectBuffer = storage.indirect
                                         ? storage.indirect->handle()

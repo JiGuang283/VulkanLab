@@ -26,6 +26,9 @@ class IRenderPass {
     virtual RgPassCondition condition() const {
         return RgPassCondition::Always;
     }
+    virtual void prepareGraph(const RenderFrameContext &,
+                              const RenderResourceRegistry &,
+                              const VisibilityFrame &) {}
     virtual void prepareFrame(const RenderFrameContext &,
                               const RenderResourceRegistry &,
                               const VisibilityFrame &) {}
@@ -36,6 +39,12 @@ class IRenderPass {
                             const VisibilityFrame &visibility) = 0;
     virtual bool managesDeclaredTransitionsInternally() const { return false; }
     virtual uint64_t topologySignature() const { return 0; }
+    virtual void onResourceResidencyChanged(
+        const RenderResourceRegistry &resources, uint32_t,
+        const std::vector<RenderImageHandle> &) {
+        releaseViewportResources();
+        onViewportResize(resources);
+    }
     virtual void releaseViewportResources() {}
     virtual void onViewportResize(const RenderResourceRegistry &) {}
     virtual void releaseSwapChainResources() {}

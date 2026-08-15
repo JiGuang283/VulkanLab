@@ -20,6 +20,7 @@ enum class FrameCaptureSource { Viewport, Workspace, Hdr };
 
 struct FrameRenderFeatures {
     bool atmosphereRequired = false;
+    bool transparentRequired = false;
     bool directionalShadowRequired = false;
     bool pointShadowRequired = false;
     bool spotShadowRequired = false;
@@ -27,6 +28,9 @@ struct FrameRenderFeatures {
     uint32_t pointShadowLightCount = 0;
     uint32_t spotShadowLightCount = 0;
     bool surfaceDataRequired = false;
+    bool surfaceNormalsRequired = false;
+    bool surfaceMotionRequired = false;
+    bool surfaceAlbedoRequired = false;
     bool hiZRequired = false;
     bool occlusionRequired = false;
     bool screenDepthPyramidRequired = false;
@@ -43,6 +47,7 @@ struct FrameRenderFeatures {
     bool ssrActive = false;
     bool ssgiRequired = false;
     bool ssgiActive = false;
+    bool lightingCompositeRequired = false;
     bool ddgiRequired = false;
     bool ddgiActive = false;
     bool bloomRequired = false;

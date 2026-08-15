@@ -35,6 +35,14 @@ namespace {
 
 constexpr uint32_t kInitialHistoryCapacity = 256;
 
+uint32_t surfaceAttachmentCount(const FrameRenderFeatures &features) {
+    if (features.surfaceAlbedoRequired)
+        return 3;
+    if (features.surfaceMotionRequired)
+        return 2;
+    return features.surfaceNormalsRequired ? 1u : 0u;
+}
+
 uint32_t nextHistoryCapacity(uint32_t required) {
     uint32_t capacity = kInitialHistoryCapacity;
     while (capacity < required)
@@ -57,14 +65,14 @@ SurfacePrepass::SurfacePrepass(
     DescriptorAllocator &descriptorAllocator,
     VkDescriptorSetLayout globalDescriptorSetLayout,
     std::string vertexShaderPath,
-    std::string opaqueFragmentShaderPath,
-    std::string maskFragmentShaderPath)
+    std::array<std::string, 4> opaqueFragmentShaderPaths,
+    std::array<std::string, 4> maskFragmentShaderPaths)
     : device_(&device), descriptorAllocator_(&descriptorAllocator),
       resourceHandles_(resourceHandles),
       globalDescriptorSetLayout_(globalDescriptorSetLayout),
       vertexShaderPath_(std::move(vertexShaderPath)),
-      opaqueFragmentShaderPath_(std::move(opaqueFragmentShaderPath)),
-      maskFragmentShaderPath_(std::move(maskFragmentShaderPath)) {
+      opaqueFragmentShaderPaths_(std::move(opaqueFragmentShaderPaths)),
+      maskFragmentShaderPaths_(std::move(maskFragmentShaderPaths)) {
     if (!resourceHandles_.surfaceDepth.valid() ||
         !resourceHandles_.surfaceNormalRoughness.valid() ||
         !resourceHandles_.surfaceMotion.valid()) {
@@ -89,22 +97,27 @@ SurfacePrepass::~SurfacePrepass() {
 }
 
 void SurfacePrepass::setup(RenderGraphBuilder &builder,
-                           const RenderGraphBuildContext &) const {
+                           const RenderGraphBuildContext &context) const {
     builder.addNode(std::string(name()), RgPassType::Graphics,
                     RgQueueClass::Graphics);
-    builder.addColorAttachment(
-        resourceHandles_.surfaceNormalRoughness,
-        RenderImageAccess::ColorAttachmentWrite,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE,
-        {{0.5f, 0.5f, 1.0f, 0.0f}});
-    builder.addColorAttachment(
-        resourceHandles_.surfaceMotion,
-        RenderImageAccess::ColorAttachmentWrite,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE,
-        {{0.0f, 0.0f, 0.0f, 0.0f}});
-    if (resourceHandles_.surfaceAlbedoMetallic.valid()) {
+    if (context.features.surfaceNormalsRequired) {
+        builder.addColorAttachment(
+            resourceHandles_.surfaceNormalRoughness,
+            RenderImageAccess::ColorAttachmentWrite,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE,
+            {{0.5f, 0.5f, 1.0f, 0.0f}});
+    }
+    if (context.features.surfaceMotionRequired) {
+        builder.addColorAttachment(
+            resourceHandles_.surfaceMotion,
+            RenderImageAccess::ColorAttachmentWrite,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE,
+            {{0.0f, 0.0f, 0.0f, 0.0f}});
+    }
+    if (context.features.surfaceAlbedoRequired &&
+        resourceHandles_.surfaceAlbedoMetallic.valid()) {
         builder.addColorAttachment(
             resourceHandles_.surfaceAlbedoMetallic,
             RenderImageAccess::ColorAttachmentWrite,
@@ -300,18 +313,20 @@ void SurfacePrepass::draw(const RenderFrameContext &frame,
         const VkCullModeFlags cullMode =
             params.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
 
+        const uint32_t attachmentCount =
+            surfaceAttachmentCount(frame.features);
         PipelineConfig config =
             PipelineConfigBuilder{}
                 .shaders(vertexShaderPath_,
-                         alphaMasked ? maskFragmentShaderPath_
-                                     : opaqueFragmentShaderPath_)
+                         alphaMasked
+                             ? maskFragmentShaderPaths_[attachmentCount]
+                             : opaqueFragmentShaderPaths_[attachmentCount])
                 .defaultVertexLayout()
                 .rasterization(cullMode,
                                materialTemplate.pipelineConfig().frontFace)
                 .depth(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
-                .colorAttachmentCount(
-                    resourceHandles_.surfaceAlbedoMetallic.valid() ? 3u : 2u)
                 .blending(false)
+                .colorAttachmentCount(attachmentCount)
                 .msaa(VK_SAMPLE_COUNT_1_BIT)
                 .descriptorLayout(globalDescriptorSetLayout_)
                 .descriptorLayout(materialTemplate.descriptorSetLayout())
@@ -323,13 +338,21 @@ void SurfacePrepass::draw(const RenderFrameContext &frame,
         config.debugName =
             "Pipeline/SurfacePrepass/" +
             std::string(alphaMasked ? "Mask" : "Opaque") + "/" +
-            (cullMode == VK_CULL_MODE_NONE ? "CullNone" : "CullBack");
+            (cullMode == VK_CULL_MODE_NONE ? "CullNone" : "CullBack") +
+            "/Mrt" + std::to_string(attachmentCount);
         PipelineRenderingSignature signature{};
-        signature.colorAttachmentFormats = {
-            resources.description(resourceHandles_.surfaceNormalRoughness)
-                .format,
-            resources.description(resourceHandles_.surfaceMotion).format};
-        if (resourceHandles_.surfaceAlbedoMetallic.valid()) {
+        if (attachmentCount >= 1) {
+            signature.colorAttachmentFormats.push_back(
+                resources.description(
+                             resourceHandles_.surfaceNormalRoughness)
+                    .format);
+        }
+        if (attachmentCount >= 2) {
+            signature.colorAttachmentFormats.push_back(
+                resources.description(resourceHandles_.surfaceMotion)
+                    .format);
+        }
+        if (attachmentCount >= 3) {
             signature.colorAttachmentFormats.push_back(
                 resources.description(resourceHandles_.surfaceAlbedoMetallic)
                     .format);

@@ -505,6 +505,7 @@ struct CullingSettings {
     bool  smallObjectEnabled = false;
     float minProjectedSizePixels = 1.0f;
     bool  occlusionEnabled = true;
+    uint32_t occlusionMinCandidates = 64;
     float occlusionDepthBias = 0.0005f;
 };
 
@@ -659,6 +660,7 @@ struct RenderSettingsPatch {
     std::optional<bool>  smallObjectCullingEnabled;
     std::optional<float> minProjectedSizePixels;
     std::optional<bool>  occlusionCullingEnabled;
+    std::optional<uint32_t> occlusionMinCandidates;
     std::optional<float> occlusionDepthBias;
 };
 
@@ -804,6 +806,9 @@ inline void applyRenderSettingsPatch(RenderSettings &settings,
             *patch.minProjectedSizePixels;
     if (patch.occlusionCullingEnabled)
         settings.culling.occlusionEnabled = *patch.occlusionCullingEnabled;
+    if (patch.occlusionMinCandidates)
+        settings.culling.occlusionMinCandidates =
+            *patch.occlusionMinCandidates;
     if (patch.occlusionDepthBias)
         settings.culling.occlusionDepthBias = *patch.occlusionDepthBias;
 }

@@ -72,6 +72,7 @@ void printUsage() {
            "[--shadow-distance N] [--distance-culling on|off] "
            "[--max-draw-distance N] [--small-object-culling on|off] "
            "[--min-projected-pixels N] [--occlusion on|off] "
+           "[--occlusion-min-candidates N] "
            "[--occlusion-bias N] "
            "[--surface-debug none|normal|roughness|motion|history-validity] "
            "[--surface-motion-scale N] [--ao off|ssao|cacao|gtao] "
@@ -217,6 +218,7 @@ ParsedCommand parseCommand(int argc, char **argv) {
     std::optional<std::string> smallObjectCulling;
     std::optional<std::string> minProjectedPixels;
     std::optional<std::string> occlusionCulling;
+    std::optional<std::string> occlusionMinCandidates;
     std::optional<std::string> occlusionBias;
     std::optional<std::string> surfaceDebug;
     std::optional<std::string> surfaceMotionScale;
@@ -300,6 +302,7 @@ ParsedCommand parseCommand(int argc, char **argv) {
                  argument == "--small-object-culling" ||
                  argument == "--min-projected-pixels" ||
                  argument == "--occlusion" ||
+                 argument == "--occlusion-min-candidates" ||
                  argument == "--occlusion-bias" ||
                   argument == "--surface-debug" ||
                   argument == "--surface-motion-scale" ||
@@ -407,6 +410,8 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 minProjectedPixels = argv[i];
             else if (argument == "--occlusion")
                 occlusionCulling = argv[i];
+            else if (argument == "--occlusion-min-candidates")
+                occlusionMinCandidates = argv[i];
             else if (argument == "--occlusion-bias")
                 occlusionBias = argv[i];
             else if (argument == "--surface-debug")
@@ -740,6 +745,10 @@ ParsedCommand parseCommand(int argc, char **argv) {
         if (occlusionCulling) {
             parsed.params["occlusionCullingEnabled"] =
                 parseOnOff(*occlusionCulling, "--occlusion");
+        }
+        if (occlusionMinCandidates) {
+            parsed.params["occlusionMinCandidates"] = parseUint32(
+                *occlusionMinCandidates, "--occlusion-min-candidates");
         }
         if (occlusionBias) {
             parsed.params["occlusionDepthBias"] =
@@ -1364,10 +1373,13 @@ void printHuman(const std::string &method, const Json &result) {
                   << (result.at("occlusionCullingEnabled").get<bool>()
                           ? "on"
                           : "off")
-                  << "\nshadow/max distance/min pixels/occlusion bias: "
+                  << "\nshadow/max distance/min pixels/occlusion "
+                     "candidates/bias: "
                   << result.at("shadowDistance").get<float>() << "/"
                   << result.at("maxDrawDistance").get<float>() << "/"
                   << result.at("minProjectedSizePixels").get<float>()
+                  << "/"
+                  << result.at("occlusionMinCandidates").get<uint32_t>()
                   << "/" << result.at("occlusionDepthBias").get<float>()
                   << "\nSurface debug: "
                   << result.at("surfaceDebugView").get<std::string>()

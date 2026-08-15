@@ -14,7 +14,7 @@ class RayTracingSceneBuildPass final : public IRenderPass {
     std::string_view name() const override { return "RayTracingScene"; }
     RgPassType passType() const override { return RgPassType::External; }
     RgPassCondition condition() const override { return RgPassCondition::Ddgi; }
-    void prepareFrame(const RenderFrameContext &frame,
+    void prepareGraph(const RenderFrameContext &frame,
                       const RenderResourceRegistry &resources,
                       const VisibilityFrame &visibility) override;
     void setup(RenderGraphBuilder &builder,

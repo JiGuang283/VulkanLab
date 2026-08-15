@@ -28,6 +28,9 @@ class HdrCompositePass final : public IRenderPass {
                     const VisibilityFrame &visibility) override;
     void releaseViewportResources() override;
     void onViewportResize(const RenderResourceRegistry &resources) override;
+    void onResourceResidencyChanged(
+        const RenderResourceRegistry &, uint32_t,
+        const std::vector<RenderImageHandle> &) override {}
 
   private:
     Device *device_ = nullptr;
@@ -44,8 +47,6 @@ class HdrCompositePass final : public IRenderPass {
                           bool ssgiActive);
     void recordComposite(const RenderFrameContext &frame,
                          const RenderResourceRegistry &resources);
-    void recordCopy(const RenderFrameContext &frame,
-                    const RenderResourceRegistry &resources);
     void freeDescriptors();
 };
 

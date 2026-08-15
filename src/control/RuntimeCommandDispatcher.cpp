@@ -184,6 +184,8 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         command, "minProjectedSizePixels", 0.0f, 256.0f);
     patch.occlusionCullingEnabled =
         optionalBoolValue(command, "occlusionCullingEnabled");
+    patch.occlusionMinCandidates =
+        optionalUint32(command, "occlusionMinCandidates", 65536u);
     patch.occlusionDepthBias = optionalFiniteFloat(
         command, "occlusionDepthBias", 0.0f, 0.05f);
     patch.surfaceMotionDebugScale = optionalFiniteFloat(
@@ -381,7 +383,8 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         !patch.distanceCullingEnabled && !patch.maxDrawDistance &&
         !patch.smallObjectCullingEnabled &&
         !patch.minProjectedSizePixels && !patch.occlusionCullingEnabled &&
-        !patch.occlusionDepthBias && !patch.surfaceDebugView &&
+        !patch.occlusionMinCandidates && !patch.occlusionDepthBias &&
+        !patch.surfaceDebugView &&
         !patch.surfaceMotionDebugScale && !patch.ambientOcclusionMode &&
         !patch.ssaoQuality && !patch.ssaoRadius && !patch.ssaoBias &&
         !patch.ssaoIntensity && !patch.ssaoPower && !patch.cacaoQuality &&

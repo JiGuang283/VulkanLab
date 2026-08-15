@@ -1066,10 +1066,15 @@ void Application::init() {
     }
     shaderPaths.shadowSpotMaskFrag = materialFragment(shadowSpotMask);
     shaderPaths.surfacePrepassVert = surfacePrepassOpaque.vertSpvPath;
-    shaderPaths.surfacePrepassOpaqueFrag =
-        materialFragment(surfacePrepassOpaque);
-    shaderPaths.surfacePrepassMaskFrag =
-        materialFragment(surfacePrepassMask);
+    for (uint32_t attachmentCount = 0; attachmentCount <= 3;
+         ++attachmentCount) {
+        shaderPaths.surfacePrepassOpaqueFrags[attachmentCount] =
+            surfacePrepassOpaque.fragmentSpvPath(
+                materialSystem_->activeMode(), attachmentCount);
+        shaderPaths.surfacePrepassMaskFrags[attachmentCount] =
+            surfacePrepassMask.fragmentSpvPath(
+                materialSystem_->activeMode(), attachmentCount);
+    }
     shaderPaths.visibilityHiZInitComp = visibilityHiZInit.computeSpvPath;
     shaderPaths.visibilityHiZReduceComp = visibilityHiZReduce.computeSpvPath;
     shaderPaths.visibilityOcclusionComp = visibilityOcclusion.computeSpvPath;
@@ -2254,6 +2259,8 @@ void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
         glm::clamp(next.culling.maxDrawDistance, 0.1f, 1000000.0f);
     next.culling.minProjectedSizePixels = glm::clamp(
         next.culling.minProjectedSizePixels, 0.0f, 256.0f);
+    next.culling.occlusionMinCandidates =
+        std::min(next.culling.occlusionMinCandidates, 65536u);
     next.culling.occlusionDepthBias =
         glm::clamp(next.culling.occlusionDepthBias, 0.0f, 0.05f);
     if (renderer_ && frameSync_ &&
@@ -3936,14 +3943,22 @@ ControlJson Application::runtimeRenderStatus() {
                                    {"reason", eviction.reason}});
     }
     constexpr uint64_t shadowTexelBytes = 4;
-    constexpr uint64_t shadowMapEstimatedBytes =
-        shadowTexelBytes *
-        (uint64_t{kCsmCascadeCount} * kDirectionalShadowMapSize *
-             kDirectionalShadowMapSize +
-         uint64_t{kPointShadowLayers} * kPointShadowMapSize *
-             kPointShadowMapSize +
-         uint64_t{kMaxSpotShadowLights} * kSpotShadowMapSize *
-             kSpotShadowMapSize);
+    uint64_t shadowMapEstimatedBytes = 0;
+    if (lastLightStats_.shadowCasterActive) {
+        shadowMapEstimatedBytes +=
+            shadowTexelBytes * uint64_t{kCsmCascadeCount} *
+            kDirectionalShadowMapSize * kDirectionalShadowMapSize;
+    }
+    if (!lastLightStats_.pointShadowSelections.empty()) {
+        shadowMapEstimatedBytes +=
+            shadowTexelBytes * uint64_t{kPointShadowLayers} *
+            kPointShadowMapSize * kPointShadowMapSize;
+    }
+    if (!lastLightStats_.spotShadowSelections.empty()) {
+        shadowMapEstimatedBytes +=
+            shadowTexelBytes * uint64_t{kMaxSpotShadowLights} *
+            kSpotShadowMapSize * kSpotShadowMapSize;
+    }
     const AtmosphereRuntimeStatus atmosphereStatus =
         renderer_->atmosphereStatus();
     const OcclusionCullingStatus cullingStatus =
@@ -4188,6 +4203,8 @@ ControlJson Application::runtimeRenderStatus() {
           {"spotShadowDraws",
            visibilityFrame_.cpuStats.spotShadowDraws},
           {"depthPrepassDraws", visibilityFrame_.cpuStats.depthPrepassDraws},
+          {"occlusionMinCandidates",
+           renderSettings_.culling.occlusionMinCandidates},
           {"occlusionCandidates",
            cullingStatus.latestCandidates},
           {"gpuUncullable", cullingStatus.latestUncullable},
@@ -4335,7 +4352,9 @@ ControlJson Application::runtimeRenderStatus() {
           {"layoutBarriers", graph.layoutBarriers},
           {"hazardBarriers", graph.hazardBarriers},
           {"activeImageBytes", graph.activeImageBytes},
+          {"logicalImageBytes", graph.logicalImageBytes},
           {"residentImageBytes", graph.residentImageBytes},
+          {"retiringImageBytes", graph.retiringImageBytes},
           {"executionOrder", std::move(graphExecutionOrder)},
           {"culled", std::move(graphCulledPasses)},
           {"resources", std::move(graphResources)},
@@ -4559,6 +4578,8 @@ ControlJson Application::runtimeRenderSettingsGet() {
              renderSettings_.culling.minProjectedSizePixels},
             {"occlusionCullingEnabled",
              renderSettings_.culling.occlusionEnabled},
+            {"occlusionMinCandidates",
+             renderSettings_.culling.occlusionMinCandidates},
             {"occlusionDepthBias",
              renderSettings_.culling.occlusionDepthBias},
             {"occlusionAvailable", cullingStatus.supported},
@@ -6532,6 +6553,15 @@ void Application::drawCullingPanel() {
         applyRenderSettings(patch);
     }
     ImGui::BeginDisabled(!renderSettings_.culling.occlusionEnabled);
+    int minimumCandidates = static_cast<int>(
+        renderSettings_.culling.occlusionMinCandidates);
+    if (ImGui::DragInt("Minimum Candidates", &minimumCandidates, 1.0f,
+                       0, 65536)) {
+        RenderSettingsPatch patch;
+        patch.occlusionMinCandidates =
+            static_cast<uint32_t>(std::max(minimumCandidates, 0));
+        applyRenderSettings(patch);
+    }
     float depthBias = renderSettings_.culling.occlusionDepthBias;
     if (ImGui::DragFloat("Depth Bias", &depthBias, 0.00005f, 0.0f, 0.05f,
                          "%.5f")) {
@@ -7424,6 +7454,10 @@ void Application::drawPerformancePanel() {
             ImGui::Text("%.1f / %.1f MiB active/resident",
                         graph.activeImageBytes / (1024.0 * 1024.0),
                         graph.residentImageBytes / (1024.0 * 1024.0));
+            editor::propertyLabel("Declared / Retiring");
+            ImGui::Text("%.1f / %.1f MiB",
+                        graph.logicalImageBytes / (1024.0 * 1024.0),
+                        graph.retiringImageBytes / (1024.0 * 1024.0));
             editor::endPropertyGrid();
         }
         if (ImGui::TreeNode("Execution Order")) {

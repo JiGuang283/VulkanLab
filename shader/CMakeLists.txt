@@ -31,6 +31,18 @@ foreach(PROGRAM_INDEX RANGE 0 ${VKL_SHADER_PROGRAM_LAST})
     if(MATERIAL_TEXTURES_ERROR)
         set(PROGRAM_MATERIAL_TEXTURES OFF)
     endif()
+    string(JSON PROGRAM_LIGHTING_MRT ERROR_VARIABLE LIGHTING_MRT_ERROR
+        GET "${VKL_SHADER_MANIFEST_JSON}"
+        programs ${PROGRAM_INDEX} lightingMrt)
+    if(LIGHTING_MRT_ERROR)
+        set(PROGRAM_LIGHTING_MRT OFF)
+    endif()
+    string(JSON PROGRAM_SURFACE_MRT ERROR_VARIABLE SURFACE_MRT_ERROR
+        GET "${VKL_SHADER_MANIFEST_JSON}"
+        programs ${PROGRAM_INDEX} surfaceMrt)
+    if(SURFACE_MRT_ERROR)
+        set(PROGRAM_SURFACE_MRT OFF)
+    endif()
     string(JSON PROGRAM_TARGET_ENV ERROR_VARIABLE TARGET_ENV_ERROR
         GET "${VKL_SHADER_MANIFEST_JSON}"
         programs ${PROGRAM_INDEX} targetEnv)
@@ -87,6 +99,12 @@ foreach(PROGRAM_INDEX RANGE 0 ${VKL_SHADER_PROGRAM_LAST})
             set(${SHADER_TARGET_VARIABLE} "${PROGRAM_TARGET_ENV}")
             if(STAGE_NAME STREQUAL "fragment" AND PROGRAM_MATERIAL_TEXTURES)
                 set("VKL_SHADER_BINDLESS_${SHADER_SOURCE_ID}" ON)
+            endif()
+            if(STAGE_NAME STREQUAL "fragment" AND PROGRAM_LIGHTING_MRT)
+                set("VKL_SHADER_LIGHTING_MRT_${SHADER_SOURCE_ID}" ON)
+            endif()
+            if(STAGE_NAME STREQUAL "fragment" AND PROGRAM_SURFACE_MRT)
+                set("VKL_SHADER_SURFACE_MRT_${SHADER_SOURCE_ID}" ON)
             endif()
         endif()
     endforeach()
@@ -171,6 +189,181 @@ foreach(SHADER_SOURCE IN LISTS VKL_SHADER_SOURCES)
         )
         list(APPEND VKL_RUNTIME_SHADER_OUTPUTS
             "${SHADER_BINDLESS_RUNTIME_OUTPUT}")
+    endif()
+
+    if(DEFINED VKL_SHADER_LIGHTING_MRT_${SHADER_SOURCE_ID})
+        foreach(MRT_COUNT RANGE 1 2)
+            if(MRT_COUNT EQUAL 1)
+                set(MRT_DEFINES
+                    -DVKL_FORWARD_SPECULAR_OUTPUT=0
+                    -DVKL_FORWARD_DIFFUSE_OUTPUT=0)
+            else()
+                set(MRT_DEFINES
+                    -DVKL_FORWARD_SPECULAR_OUTPUT=1
+                    -DVKL_FORWARD_DIFFUSE_OUTPUT=0)
+            endif()
+            set(SHADER_MRT_GENERATED_OUTPUT
+                "${VKL_GENERATED_SHADER_ROOT}/${SHADER_SOURCE}.mrt${MRT_COUNT}.spv")
+            set(SHADER_MRT_RUNTIME_OUTPUT
+                "${VKL_RUNTIME_SHADER_ROOT}/${SHADER_SOURCE}.mrt${MRT_COUNT}.spv")
+            add_custom_command(
+                OUTPUT "${SHADER_MRT_GENERATED_OUTPUT}"
+                COMMAND ${CMAKE_COMMAND} -E make_directory
+                    "${VKL_GENERATED_SHADER_ROOT}/${SHADER_SUBDIRECTORY}"
+                COMMAND ${GLSLC} --target-env=${SHADER_TARGET_ENV}
+                    ${MRT_DEFINES}
+                    -I "${CMAKE_CURRENT_SOURCE_DIR}"
+                    "${SHADER_INPUT}" -o "${SHADER_MRT_GENERATED_OUTPUT}"
+                COMMAND ${SPIRV_VAL} --target-env ${SHADER_TARGET_ENV}
+                    "${SHADER_MRT_GENERATED_OUTPUT}"
+                DEPENDS "${SHADER_INPUT}" ${VKL_SHADER_INCLUDES}
+                COMMENT "Compiling ${MRT_COUNT}-target shader ${SHADER_SOURCE}"
+                VERBATIM
+            )
+            add_custom_command(
+                OUTPUT "${SHADER_MRT_RUNTIME_OUTPUT}"
+                COMMAND ${CMAKE_COMMAND} -E make_directory
+                    "${VKL_RUNTIME_SHADER_ROOT}/${SHADER_SUBDIRECTORY}"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${SHADER_MRT_GENERATED_OUTPUT}"
+                    "${SHADER_MRT_RUNTIME_OUTPUT}"
+                COMMAND ${CMAKE_COMMAND} -E touch
+                    "${SHADER_MRT_RUNTIME_OUTPUT}"
+                DEPENDS "${SHADER_MRT_GENERATED_OUTPUT}"
+                COMMENT "Staging ${MRT_COUNT}-target shader ${SHADER_SOURCE}"
+                VERBATIM
+            )
+            list(APPEND VKL_RUNTIME_SHADER_OUTPUTS
+                "${SHADER_MRT_RUNTIME_OUTPUT}")
+
+            if(DEFINED VKL_SHADER_BINDLESS_${SHADER_SOURCE_ID})
+                set(SHADER_MRT_BINDLESS_GENERATED_OUTPUT
+                    "${VKL_GENERATED_SHADER_ROOT}/${SHADER_SOURCE}.mrt${MRT_COUNT}.bindless.spv")
+                set(SHADER_MRT_BINDLESS_RUNTIME_OUTPUT
+                    "${VKL_RUNTIME_SHADER_ROOT}/${SHADER_SOURCE}.mrt${MRT_COUNT}.bindless.spv")
+                add_custom_command(
+                    OUTPUT "${SHADER_MRT_BINDLESS_GENERATED_OUTPUT}"
+                    COMMAND ${CMAKE_COMMAND} -E make_directory
+                        "${VKL_GENERATED_SHADER_ROOT}/${SHADER_SUBDIRECTORY}"
+                    COMMAND ${GLSLC} --target-env=vulkan1.2
+                        -DVKL_BINDLESS_MATERIALS=1
+                        ${MRT_DEFINES}
+                        -I "${CMAKE_CURRENT_SOURCE_DIR}"
+                        "${SHADER_INPUT}" -o "${SHADER_MRT_BINDLESS_GENERATED_OUTPUT}"
+                    COMMAND ${SPIRV_VAL} --target-env vulkan1.2
+                        "${SHADER_MRT_BINDLESS_GENERATED_OUTPUT}"
+                    DEPENDS "${SHADER_INPUT}" ${VKL_SHADER_INCLUDES}
+                    COMMENT "Compiling bindless ${MRT_COUNT}-target shader ${SHADER_SOURCE}"
+                    VERBATIM
+                )
+                add_custom_command(
+                    OUTPUT "${SHADER_MRT_BINDLESS_RUNTIME_OUTPUT}"
+                    COMMAND ${CMAKE_COMMAND} -E make_directory
+                        "${VKL_RUNTIME_SHADER_ROOT}/${SHADER_SUBDIRECTORY}"
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${SHADER_MRT_BINDLESS_GENERATED_OUTPUT}"
+                        "${SHADER_MRT_BINDLESS_RUNTIME_OUTPUT}"
+                    COMMAND ${CMAKE_COMMAND} -E touch
+                        "${SHADER_MRT_BINDLESS_RUNTIME_OUTPUT}"
+                    DEPENDS "${SHADER_MRT_BINDLESS_GENERATED_OUTPUT}"
+                    COMMENT "Staging bindless ${MRT_COUNT}-target shader ${SHADER_SOURCE}"
+                    VERBATIM
+                )
+                list(APPEND VKL_RUNTIME_SHADER_OUTPUTS
+                    "${SHADER_MRT_BINDLESS_RUNTIME_OUTPUT}")
+            endif()
+        endforeach()
+    endif()
+
+    if(DEFINED VKL_SHADER_SURFACE_MRT_${SHADER_SOURCE_ID})
+        foreach(MRT_COUNT RANGE 0 2)
+            if(MRT_COUNT EQUAL 0)
+                set(MRT_DEFINES
+                    -DVKL_SURFACE_NORMAL_OUTPUT=0
+                    -DVKL_SURFACE_MOTION_OUTPUT=0
+                    -DVKL_SURFACE_ALBEDO_OUTPUT=0)
+            elseif(MRT_COUNT EQUAL 1)
+                set(MRT_DEFINES
+                    -DVKL_SURFACE_NORMAL_OUTPUT=1
+                    -DVKL_SURFACE_MOTION_OUTPUT=0
+                    -DVKL_SURFACE_ALBEDO_OUTPUT=0)
+            else()
+                set(MRT_DEFINES
+                    -DVKL_SURFACE_NORMAL_OUTPUT=1
+                    -DVKL_SURFACE_MOTION_OUTPUT=1
+                    -DVKL_SURFACE_ALBEDO_OUTPUT=0)
+            endif()
+            set(SHADER_MRT_GENERATED_OUTPUT
+                "${VKL_GENERATED_SHADER_ROOT}/${SHADER_SOURCE}.mrt${MRT_COUNT}.spv")
+            set(SHADER_MRT_RUNTIME_OUTPUT
+                "${VKL_RUNTIME_SHADER_ROOT}/${SHADER_SOURCE}.mrt${MRT_COUNT}.spv")
+            add_custom_command(
+                OUTPUT "${SHADER_MRT_GENERATED_OUTPUT}"
+                COMMAND ${CMAKE_COMMAND} -E make_directory
+                    "${VKL_GENERATED_SHADER_ROOT}/${SHADER_SUBDIRECTORY}"
+                COMMAND ${GLSLC} --target-env=${SHADER_TARGET_ENV}
+                    ${MRT_DEFINES}
+                    -I "${CMAKE_CURRENT_SOURCE_DIR}"
+                    "${SHADER_INPUT}" -o "${SHADER_MRT_GENERATED_OUTPUT}"
+                COMMAND ${SPIRV_VAL} --target-env ${SHADER_TARGET_ENV}
+                    "${SHADER_MRT_GENERATED_OUTPUT}"
+                DEPENDS "${SHADER_INPUT}" ${VKL_SHADER_INCLUDES}
+                COMMENT "Compiling ${MRT_COUNT}-target surface shader ${SHADER_SOURCE}"
+                VERBATIM
+            )
+            add_custom_command(
+                OUTPUT "${SHADER_MRT_RUNTIME_OUTPUT}"
+                COMMAND ${CMAKE_COMMAND} -E make_directory
+                    "${VKL_RUNTIME_SHADER_ROOT}/${SHADER_SUBDIRECTORY}"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${SHADER_MRT_GENERATED_OUTPUT}"
+                    "${SHADER_MRT_RUNTIME_OUTPUT}"
+                COMMAND ${CMAKE_COMMAND} -E touch
+                    "${SHADER_MRT_RUNTIME_OUTPUT}"
+                DEPENDS "${SHADER_MRT_GENERATED_OUTPUT}"
+                COMMENT "Staging ${MRT_COUNT}-target surface shader ${SHADER_SOURCE}"
+                VERBATIM
+            )
+            list(APPEND VKL_RUNTIME_SHADER_OUTPUTS
+                "${SHADER_MRT_RUNTIME_OUTPUT}")
+
+            if(DEFINED VKL_SHADER_BINDLESS_${SHADER_SOURCE_ID})
+                set(SHADER_MRT_BINDLESS_GENERATED_OUTPUT
+                    "${VKL_GENERATED_SHADER_ROOT}/${SHADER_SOURCE}.mrt${MRT_COUNT}.bindless.spv")
+                set(SHADER_MRT_BINDLESS_RUNTIME_OUTPUT
+                    "${VKL_RUNTIME_SHADER_ROOT}/${SHADER_SOURCE}.mrt${MRT_COUNT}.bindless.spv")
+                add_custom_command(
+                    OUTPUT "${SHADER_MRT_BINDLESS_GENERATED_OUTPUT}"
+                    COMMAND ${CMAKE_COMMAND} -E make_directory
+                        "${VKL_GENERATED_SHADER_ROOT}/${SHADER_SUBDIRECTORY}"
+                    COMMAND ${GLSLC} --target-env=vulkan1.2
+                        -DVKL_BINDLESS_MATERIALS=1
+                        ${MRT_DEFINES}
+                        -I "${CMAKE_CURRENT_SOURCE_DIR}"
+                        "${SHADER_INPUT}" -o "${SHADER_MRT_BINDLESS_GENERATED_OUTPUT}"
+                    COMMAND ${SPIRV_VAL} --target-env vulkan1.2
+                        "${SHADER_MRT_BINDLESS_GENERATED_OUTPUT}"
+                    DEPENDS "${SHADER_INPUT}" ${VKL_SHADER_INCLUDES}
+                    COMMENT "Compiling bindless ${MRT_COUNT}-target surface shader ${SHADER_SOURCE}"
+                    VERBATIM
+                )
+                add_custom_command(
+                    OUTPUT "${SHADER_MRT_BINDLESS_RUNTIME_OUTPUT}"
+                    COMMAND ${CMAKE_COMMAND} -E make_directory
+                        "${VKL_RUNTIME_SHADER_ROOT}/${SHADER_SUBDIRECTORY}"
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${SHADER_MRT_BINDLESS_GENERATED_OUTPUT}"
+                        "${SHADER_MRT_BINDLESS_RUNTIME_OUTPUT}"
+                    COMMAND ${CMAKE_COMMAND} -E touch
+                        "${SHADER_MRT_BINDLESS_RUNTIME_OUTPUT}"
+                    DEPENDS "${SHADER_MRT_BINDLESS_GENERATED_OUTPUT}"
+                    COMMENT "Staging bindless ${MRT_COUNT}-target surface shader ${SHADER_SOURCE}"
+                    VERBATIM
+                )
+                list(APPEND VKL_RUNTIME_SHADER_OUTPUTS
+                    "${SHADER_MRT_BINDLESS_RUNTIME_OUTPUT}")
+            endif()
+        endforeach()
     endif()
 endforeach()
 

@@ -22,6 +22,7 @@
 #include "diagnostics/TracyProfiler.h"
 
 #include <glm/glm.hpp>
+#include <algorithm>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -67,6 +68,8 @@ void MainForwardPass::setup(RenderGraphBuilder &builder,
     builder.addNode(std::string(name()), RgPassType::Graphics,
                     RgQueueClass::Graphics);
     const FrameRenderFeatures &features = context.features;
+    if (phase_ == ForwardPhase::Transparent)
+        builder.setActive(features.transparentRequired);
     const auto sampled = [&](RenderImageHandle handle,
                              VkImageLayout layout) {
         if (handle.valid())
@@ -76,12 +79,22 @@ void MainForwardPass::setup(RenderGraphBuilder &builder,
     if (features.directionalShadowRequired)
         sampled(resourceHandles_.directionalShadowDepth,
                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
-    if (features.pointShadowRequired)
-        sampled(resourceHandles_.pointShadowDepth,
+    if (features.pointShadowRequired) {
+        const uint32_t capacity = std::clamp(
+            features.pointShadowLightCount, 1u,
+            static_cast<uint32_t>(
+                resourceHandles_.pointShadowDepthByCapacity.size()));
+        sampled(resourceHandles_.pointShadowDepthByCapacity[capacity - 1],
                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
-    if (features.spotShadowRequired)
-        sampled(resourceHandles_.spotShadowDepth,
+    }
+    if (features.spotShadowRequired) {
+        const uint32_t capacity = std::clamp(
+            features.spotShadowLightCount, 1u,
+            static_cast<uint32_t>(
+                resourceHandles_.spotShadowDepthByCapacity.size()));
+        sampled(resourceHandles_.spotShadowDepthByCapacity[capacity - 1],
                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+    }
     if (features.atmosphereRequired) {
         sampled(resourceHandles_.atmosphereTransmittance,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -105,8 +118,12 @@ void MainForwardPass::setup(RenderGraphBuilder &builder,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     if (phase_ == ForwardPhase::Transparent) {
+        const RenderImageHandle transparentColor =
+            features.lightingCompositeRequired
+                ? resourceHandles_.compositedHdrColor
+                : resourceHandles_.hdrColor;
         builder.addColorAttachment(
-            resourceHandles_.compositedHdrColor,
+            transparentColor,
             RenderImageAccess::ColorAttachmentReadWrite,
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE);
@@ -132,20 +149,23 @@ void MainForwardPass::setup(RenderGraphBuilder &builder,
         VkClearColorValue{{0.0f, 0.0f, 0.0f, 1.0f}}, {},
         multisampled ? resourceHandles_.hdrColor : RenderImageHandle{},
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    builder.addColorAttachment(
-        multisampled ? resourceHandles_.baselineSpecularMsaa
-                     : resourceHandles_.baselineSpecular,
-        RenderImageAccess::ColorAttachmentWrite,
-        multisampled ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-                     : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_ATTACHMENT_LOAD_OP_CLEAR,
-        multisampled ? VK_ATTACHMENT_STORE_OP_DONT_CARE
-                     : VK_ATTACHMENT_STORE_OP_STORE,
-        VkClearColorValue{{0.0f, 0.0f, 0.0f, 0.0f}}, {},
-        multisampled ? resourceHandles_.baselineSpecular
-                     : RenderImageHandle{},
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    if (resourceHandles_.baselineDiffuse.valid()) {
+    const bool specularBaseline = features.ssrActive || features.ssgiActive;
+    if (specularBaseline) {
+        builder.addColorAttachment(
+            multisampled ? resourceHandles_.baselineSpecularMsaa
+                         : resourceHandles_.baselineSpecular,
+            RenderImageAccess::ColorAttachmentWrite,
+            multisampled ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                         : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_ATTACHMENT_LOAD_OP_CLEAR,
+            multisampled ? VK_ATTACHMENT_STORE_OP_DONT_CARE
+                         : VK_ATTACHMENT_STORE_OP_STORE,
+            VkClearColorValue{{0.0f, 0.0f, 0.0f, 0.0f}}, {},
+            multisampled ? resourceHandles_.baselineSpecular
+                         : RenderImageHandle{},
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+    if (features.ssgiActive && resourceHandles_.baselineDiffuse.valid()) {
         builder.addColorAttachment(
             multisampled ? resourceHandles_.baselineDiffuseMsaa
                          : resourceHandles_.baselineDiffuse,
@@ -178,8 +198,11 @@ void MainForwardPass::recordNode(RenderGraphPassContext &context, uint32_t,
         phase_ == ForwardPhase::Opaque ? "MainForward/Opaque"
                                        : "MainForward/Transparent");
     const RenderImageHandle colorHandle =
-        phase_ == ForwardPhase::Opaque ? resourceHandles_.hdrColor
-                                       : resourceHandles_.compositedHdrColor;
+        phase_ == ForwardPhase::Opaque
+            ? resourceHandles_.hdrColor
+            : (frame.features.lightingCompositeRequired
+                   ? resourceHandles_.compositedHdrColor
+                   : resourceHandles_.hdrColor);
     const VkExtent2D extent = resources.extent(colorHandle);
     VkViewport viewport{};
     viewport.width = static_cast<float>(extent.width);
@@ -218,7 +241,12 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                 p.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
             auto pipelineConfig = materialTemplate.pipelineConfig();
             const uint32_t opaqueAttachmentCount =
-                resourceHandles_.baselineDiffuse.valid() ? 3u : 2u;
+                frame.features.ssgiActive
+                    ? 3u
+                    : ((frame.features.ssrActive ||
+                        frame.features.ssgiActive)
+                           ? 2u
+                           : 1u);
             pipelineConfig.colorBlendAttachments.resize(
                 transparent ? 1u : opaqueAttachmentCount);
             pipelineConfig.colorBlendAttachments[0].blendEnable = transparent;
@@ -239,7 +267,8 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                 frame.shaderVariant->vertSpvPath;
             pipelineConfig.fragShaderPath =
                 frame.shaderVariant->fragmentSpvPath(
-                    frame.materialSystem->activeMode());
+                    frame.materialSystem->activeMode(),
+                    transparent ? 1u : opaqueAttachmentCount);
             pipelineConfig.debugName =
                 "Pipeline/MainForward/" + frame.shaderVariant->id + "/" +
                 (transparent ? "Transparent" : "Opaque") + "/" +
@@ -266,8 +295,12 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
             PipelineRenderingSignature signature{};
             signature.samples = pipelineConfig.msaaSamples;
             if (transparent) {
+                const RenderImageHandle transparentColor =
+                    frame.features.lightingCompositeRequired
+                        ? resourceHandles_.compositedHdrColor
+                        : resourceHandles_.hdrColor;
                 signature.colorAttachmentFormats = {
-                    resources.description(resourceHandles_.compositedHdrColor)
+                    resources.description(transparentColor)
                         .format};
                 signature.depthAttachmentFormat =
                     resources.description(resourceHandles_.surfaceDepth)
@@ -275,8 +308,10 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
             } else {
                 const VkFormat hdrFormat =
                     resources.description(resourceHandles_.hdrColor).format;
-                signature.colorAttachmentFormats = {hdrFormat, hdrFormat};
-                if (resourceHandles_.baselineDiffuse.valid())
+                signature.colorAttachmentFormats = {hdrFormat};
+                if (frame.features.ssrActive || frame.features.ssgiActive)
+                    signature.colorAttachmentFormats.push_back(hdrFormat);
+                if (frame.features.ssgiActive)
                     signature.colorAttachmentFormats.push_back(hdrFormat);
                 signature.depthAttachmentFormat =
                     resources.description(resourceHandles_.mainDepth).format;

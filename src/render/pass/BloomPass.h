@@ -38,6 +38,9 @@ class BloomPass final : public IRenderPass {
     void releaseViewportResources() override;
     void onViewportResize(
         const RenderResourceRegistry &resources) override;
+    void onResourceResidencyChanged(
+        const RenderResourceRegistry &resources, uint32_t frameIndex,
+        const std::vector<RenderImageHandle> &createdImages) override;
 
   private:
     static constexpr uint32_t kLevelCount =

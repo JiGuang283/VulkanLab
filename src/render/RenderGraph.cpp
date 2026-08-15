@@ -475,10 +475,14 @@ uint64_t featureKey(
     hashCombine(key, features.pointShadowLightCount);
     hashCombine(key, features.spotShadowLightCount);
     hashCombine(key, features.atmosphereRequired);
+    hashCombine(key, features.transparentRequired);
     hashCombine(key, features.directionalShadowRequired);
     hashCombine(key, features.pointShadowRequired);
     hashCombine(key, features.spotShadowRequired);
     hashCombine(key, features.surfaceDataRequired);
+    hashCombine(key, features.surfaceNormalsRequired);
+    hashCombine(key, features.surfaceMotionRequired);
+    hashCombine(key, features.surfaceAlbedoRequired);
     hashCombine(key, features.hiZRequired);
     hashCombine(key, features.occlusionRequired);
     hashCombine(key, features.screenDepthPyramidRequired);
@@ -495,6 +499,7 @@ uint64_t featureKey(
     hashCombine(key, features.ssrActive);
     hashCombine(key, features.ssgiRequired);
     hashCombine(key, features.ssgiActive);
+    hashCombine(key, features.lightingCompositeRequired);
     hashCombine(key, features.ddgiRequired);
     hashCombine(key, features.ddgiActive);
     hashCombine(key, features.bloomRequired);
@@ -522,7 +527,9 @@ RenderGraphDiagnostics makeDiagnostics(
         static_cast<uint32_t>(compiled.culledPasses.size());
     diagnostics.dependencyEdges =
         static_cast<uint32_t>(compiled.dependencies.size());
+    diagnostics.logicalImageBytes = resources.estimatedLogicalBytes();
     diagnostics.residentImageBytes = resources.estimatedResidentBytes();
+    diagnostics.retiringImageBytes = resources.estimatedRetiringBytes();
     std::unordered_set<uint32_t> activeImages;
     std::unordered_map<uint32_t, uint32_t> resourceRows;
     std::unordered_map<uint32_t, uint32_t> bufferRows;
@@ -1198,6 +1205,27 @@ CompiledRenderGraph RenderGraphCompiler::compile(
         hashCombine(hash, dependency.consumer);
         hashCombine(hash, dependency.resource);
     }
+    std::unordered_set<uint32_t> activeImages;
+    std::unordered_set<uint32_t> activeOwners;
+    for (uint32_t passIndex : result.executionOrder) {
+        const RenderGraphPassDeclaration &pass = result.passes[passIndex];
+        activeOwners.insert(pass.ownerPassIndex);
+        for (const RenderGraphImageUse &image : pass.images) {
+            if (image.physical.image.valid())
+                activeImages.insert(image.physical.image.index);
+        }
+    }
+    result.activeImages.reserve(activeImages.size());
+    for (uint32_t image : activeImages)
+        result.activeImages.push_back({image});
+    std::sort(result.activeImages.begin(), result.activeImages.end(),
+              [](RenderImageHandle left, RenderImageHandle right) {
+                  return left.index < right.index;
+              });
+    result.activeOwnerPasses.assign(activeOwners.begin(),
+                                    activeOwners.end());
+    std::sort(result.activeOwnerPasses.begin(),
+              result.activeOwnerPasses.end());
     result.topologyHash = hash;
     return result;
 }
@@ -1340,16 +1368,22 @@ void RenderGraphExecutor::execute(
                                 declaration.groupId);
             profilerStarted[declaration.ownerPassIndex] = true;
         }
-        if (frame.debugUtils) {
-            ScopedGpuLabel label(*frame.debugUtils, frame.cmd,
-                                 declaration.name);
-            RenderGraphPassContext passContext{frame, resources};
-            pass.recordNode(passContext, declaration.localNodeIndex,
-                            visibility);
-        } else {
-            RenderGraphPassContext passContext{frame, resources};
-            pass.recordNode(passContext, declaration.localNodeIndex,
-                            visibility);
+        try {
+            if (frame.debugUtils) {
+                ScopedGpuLabel label(*frame.debugUtils, frame.cmd,
+                                     declaration.name);
+                RenderGraphPassContext passContext{frame, resources};
+                pass.recordNode(passContext, declaration.localNodeIndex,
+                                visibility);
+            } else {
+                RenderGraphPassContext passContext{frame, resources};
+                pass.recordNode(passContext, declaration.localNodeIndex,
+                                visibility);
+            }
+        } catch (const std::exception &error) {
+            throw std::runtime_error("RenderGraph node '" +
+                                     declaration.name + "' failed: " +
+                                     error.what());
         }
         if (dynamicRendering)
             vkCmdEndRendering(frame.cmd);
@@ -1443,15 +1477,97 @@ void RenderGraph::compile(const RenderResourceRegistry &resources,
                  order);
 }
 
+RenderResourceResidencyUpdate RenderGraph::prepareResources(
+    RenderResourceRegistry &resources,
+    const FrameRenderFeatures &features, uint32_t frameIndex,
+    uint64_t lastSubmittedSerial, uint64_t completedSerial) {
+    const uint64_t requestedKey = featureKey(passes_, resources, features);
+    if (!compiledValid_ || requestedKey != compiledFeatureKey_)
+        compile(resources, features);
+
+    RenderResourceResidencyUpdate update = resources.synchronizeResidency(
+        compiled_.activeImages, lastSubmittedSerial, completedSerial);
+    if (resourceRefreshPending_) {
+        for (uint32_t owner : compiled_.activeOwnerPasses) {
+            try {
+                passes_.at(owner)->onViewportResize(resources);
+            } catch (const std::exception &error) {
+                throw std::runtime_error(
+                    "RenderGraph resource refresh failed for " +
+                    std::string(passes_.at(owner)->name()) + ": " +
+                    error.what());
+            }
+        }
+        resourceRefreshPending_ = false;
+        imageStates_.clear();
+    } else if (!update.createdImages.empty()) {
+        std::vector<bool> affectedOwners(passes_.size(), false);
+        for (uint32_t passIndex : compiled_.executionOrder) {
+            const RenderGraphPassDeclaration &declaration =
+                compiled_.passes.at(passIndex);
+            for (const RenderGraphImageUse &use : declaration.images) {
+                if (std::find(update.createdImages.begin(),
+                              update.createdImages.end(),
+                              use.physical.image) !=
+                    update.createdImages.end()) {
+                    affectedOwners.at(declaration.ownerPassIndex) = true;
+                    break;
+                }
+            }
+        }
+        for (uint32_t owner = 0; owner < affectedOwners.size(); ++owner) {
+            if (!affectedOwners[owner])
+                continue;
+            try {
+                passes_.at(owner)->onResourceResidencyChanged(
+                    resources, frameIndex, update.createdImages);
+            } catch (const std::exception &error) {
+                throw std::runtime_error(
+                    "RenderGraph residency refresh failed for " +
+                    std::string(passes_.at(owner)->name()) + ": " +
+                    error.what());
+            }
+        }
+        imageStates_.clear();
+    } else if (update.physicalResourcesChanged) {
+        imageStates_.clear();
+    }
+    diagnostics_ = makeDiagnostics(compiled_, resources);
+    return update;
+}
+
+void RenderGraph::prepareGraph(const RenderFrameContext &frame,
+                               const RenderResourceRegistry &resources,
+                               const VisibilityFrame &visibility) {
+    for (const auto &pass : passes_) {
+        try {
+            pass->prepareGraph(frame, resources, visibility);
+        } catch (const std::exception &error) {
+            throw std::runtime_error(
+                "RenderGraph topology preparation failed for " +
+                std::string(pass->name()) + ": " + error.what());
+        }
+    }
+}
+
 void RenderGraph::execute(const RenderFrameContext &frame,
                           const RenderResourceRegistry &resources,
                           const VisibilityFrame &visibility,
                           GpuPassProfiler *profiler) {
-    for (const auto &pass : passes_)
-        pass->prepareFrame(frame, resources, visibility);
     const uint64_t requestedKey = featureKey(passes_, resources, frame.features);
     if (!compiledValid_ || requestedKey != compiledFeatureKey_)
-        compile(resources, frame.features);
+        throw std::logic_error(
+            "RenderGraph resources must be prepared before execution");
+    for (uint32_t owner : compiled_.activeOwnerPasses) {
+        try {
+            passes_.at(owner)->prepareFrame(frame, resources, visibility);
+        } catch (const std::exception &error) {
+            throw std::runtime_error(
+                "RenderGraph frame preparation failed for " +
+                std::string(passes_.at(owner)->name()) + ": " +
+                error.what());
+        }
+    }
     RenderGraphExecutor::execute(compiled_, passes_, frame, resources,
                                  visibility, profiler, imageStates_,
                                  bufferStates_,
@@ -1469,12 +1585,12 @@ void RenderGraph::releaseViewportResources() {
 }
 
 void RenderGraph::onViewportResize(const RenderResourceRegistry &resources) {
-    for (auto &pass : passes_)
-        pass->onViewportResize(resources);
+    (void)resources;
     compiledValid_ = false;
     compiledCache_.clear();
     imageStates_.clear();
     bufferStates_.clear();
+    resourceRefreshPending_ = true;
 }
 
 void RenderGraph::onSwapChainResize(const SwapChain &swapChain) {
@@ -1514,7 +1630,9 @@ std::string RenderGraph::toJson() const {
         << ",\"layoutBarriers\":" << diagnostics_.layoutBarriers
         << ",\"hazardBarriers\":" << diagnostics_.hazardBarriers
         << ",\"activeImageBytes\":" << diagnostics_.activeImageBytes
+        << ",\"logicalImageBytes\":" << diagnostics_.logicalImageBytes
         << ",\"residentImageBytes\":" << diagnostics_.residentImageBytes
+        << ",\"retiringImageBytes\":" << diagnostics_.retiringImageBytes
         << ",\"executionOrder\":[";
     for (size_t i = 0; i < diagnostics_.executionOrder.size(); ++i) {
         if (i)

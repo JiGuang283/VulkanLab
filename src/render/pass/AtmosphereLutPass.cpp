@@ -15,6 +15,7 @@
 #include "render/RenderResourceRegistry.h"
 #include "render/RenderView.h"
 
+#include <algorithm>
 #include <array>
 #include <stdexcept>
 #include <utility>
@@ -58,6 +59,26 @@ AtmosphereLutPass::~AtmosphereLutPass() {
         vkDestroyDescriptorSetLayout(device_->logicalDevice(),
                                      storageDescriptorSetLayout_, nullptr);
     }
+}
+
+void AtmosphereLutPass::onResourceResidencyChanged(
+    const RenderResourceRegistry &resources, uint32_t,
+    const std::vector<RenderImageHandle> &createdImages) {
+    const std::array<RenderImageHandle, 4> outputs = {
+        resourceHandles_.atmosphereTransmittance,
+        resourceHandles_.atmosphereMultipleScattering,
+        resourceHandles_.atmosphereSkyView,
+        resourceHandles_.atmosphereAerialPerspective};
+    const bool outputCreated = std::any_of(
+        outputs.begin(), outputs.end(), [&](RenderImageHandle handle) {
+            return std::find(createdImages.begin(), createdImages.end(),
+                             handle) != createdImages.end();
+        });
+    if (!outputCreated)
+        return;
+    freeStorageDescriptors();
+    createStorageDescriptors(resources);
+    currentStaticLutKey_ = 0;
 }
 
 void AtmosphereLutPass::setup(

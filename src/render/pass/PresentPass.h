@@ -37,6 +37,9 @@ class PresentPass final : public IRenderPass {
     void releaseViewportResources() override {}
     void onViewportResize(
         const RenderResourceRegistry &resources) override;
+    void onResourceResidencyChanged(
+        const RenderResourceRegistry &, uint32_t,
+        const std::vector<RenderImageHandle> &) override {}
     void releaseSwapChainResources() override {}
     void onSwapChainResize(const SwapChain &) override {}
     void recordNode(RenderGraphPassContext &context, uint32_t localNodeIndex,

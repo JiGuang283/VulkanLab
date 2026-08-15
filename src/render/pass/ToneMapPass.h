@@ -23,6 +23,7 @@ class ToneMapPass final : public IRenderPass {
   public:
     ToneMapPass(Device &device, const RenderResourceRegistry &resources,
                 RenderImageHandle hdrColor,
+                RenderImageHandle compositedHdrColor,
                 RenderSamplerHandle hdrSampler,
                 RenderImageHandle bloomColor,
                 RenderSamplerHandle bloomSampler,
@@ -67,6 +68,9 @@ class ToneMapPass final : public IRenderPass {
                const RenderGraphBuildContext &context) const override;
     void onViewportResize(
         const RenderResourceRegistry &resources) override;
+    void onResourceResidencyChanged(
+        const RenderResourceRegistry &, uint32_t,
+        const std::vector<RenderImageHandle> &) override {}
     void recordNode(RenderGraphPassContext &context, uint32_t localNodeIndex,
                     const VisibilityFrame &visibility) override;
 
@@ -80,6 +84,7 @@ class ToneMapPass final : public IRenderPass {
 
     Device *device_ = nullptr;
     RenderImageHandle hdrColor_{};
+    RenderImageHandle compositedHdrColor_{};
     RenderSamplerHandle hdrSampler_{};
     RenderImageHandle bloomColor_{};
     RenderSamplerHandle bloomSampler_{};

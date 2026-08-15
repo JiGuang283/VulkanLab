@@ -14,6 +14,7 @@
       "vertex": "pbr_lite/forward.vert",
       "fragment": "pbr_lite/forward.frag",
       "materialTextures": true,
+      "lightingMrt": true,
       "sceneLights": true,
       "atmosphere": true,
       "screenSpace": true,
@@ -25,6 +26,7 @@
       "vertex": "pbr_lite/forward_normal_mapped.vert",
       "fragment": "pbr_lite/forward_normal_mapped.frag",
       "materialTextures": true,
+      "lightingMrt": true,
       "sceneLights": true,
       "atmosphere": true,
       "screenSpace": true,
@@ -148,14 +150,16 @@
       "contract": "surface-prepass",
       "vertex": "visibility/surface.vert",
       "fragment": "visibility/surface_opaque.frag",
-      "materialTextures": true
+      "materialTextures": true,
+      "surfaceMrt": true
     },
     {
       "id": "surface.prepass-mask",
       "contract": "surface-prepass",
       "vertex": "visibility/surface.vert",
       "fragment": "visibility/surface_mask.frag",
-      "materialTextures": true
+      "materialTextures": true,
+      "surfaceMrt": true
     },
     {
       "id": "visibility.hiz-init",

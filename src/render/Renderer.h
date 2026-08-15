@@ -253,6 +253,7 @@ class Renderer {
     void createAtmosphereUniformBuffers();
     void createAtmosphereDescriptorSetLayout();
     void createAtmosphereDescriptorSets();
+    void updateAtmosphereDescriptor(uint32_t frameIndex, bool active);
     void createScreenSpaceUniformBuffers();
     void createScreenSpaceDescriptorSetLayout();
     void createScreenSpaceFallback();
@@ -308,6 +309,9 @@ class Renderer {
     uint64_t nextLightingDescriptorGeneration_ = 1;
     std::unique_ptr<RenderResourceRegistry> renderResources_;
     RendererResourceHandles resourceHandles_{};
+    RenderImageHandle activeDirectionalShadowImage_{};
+    RenderImageHandle activePointShadowImage_{};
+    RenderImageHandle activeSpotShadowImage_{};
     RendererShaderPaths shaderPaths_;
     RenderGraph renderGraph_;
     std::unique_ptr<GpuPassProfiler> gpuPassProfiler_;

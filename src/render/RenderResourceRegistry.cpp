@@ -150,6 +150,8 @@ RenderResourceRegistry::registerImage(RenderImageDesc desc) {
         static_cast<uint32_t>(imageDescriptions_.size())};
     imageDescriptions_.push_back(std::move(desc));
     images_.emplace_back();
+    residency_.push_back(RenderResourceResidency::Unallocated);
+    retireAfterSerial_.push_back(0);
     realizedMipLevels_.push_back(0);
     return handle;
 }
@@ -171,11 +173,71 @@ void RenderResourceRegistry::realize(VkExtent2D viewportExtent) {
     if (realized_)
         throw std::logic_error("render resources were already realized");
     viewportExtent_ = viewportExtent;
-    for (uint32_t i = 0; i < imageDescriptions_.size(); ++i)
+    for (uint32_t i = 0; i < imageDescriptions_.size(); ++i) {
+        updateMipLevelCount(i);
         createImageEntry(i);
+        residency_[i] = RenderResourceResidency::Resident;
+    }
     for (uint32_t i = 0; i < samplerDescriptions_.size(); ++i)
         createSamplerEntry(i);
     realized_ = true;
+}
+
+RenderResourceResidencyUpdate
+RenderResourceRegistry::synchronizeResidency(
+    const std::vector<RenderImageHandle> &activeImages,
+    uint64_t lastSubmittedSerial, uint64_t completedSerial) {
+    if (!realized_)
+        throw std::logic_error("render resources are not realized");
+
+    std::vector<bool> active(imageDescriptions_.size(), false);
+    for (RenderImageHandle handle : activeImages) {
+        if (!valid(handle))
+            throw std::out_of_range("active render image handle is invalid");
+        active[handle.index] = true;
+    }
+    for (uint32_t index = 0; index < imageDescriptions_.size(); ++index) {
+        if (imageDescriptions_[index].persistentResidency)
+            active[index] = true;
+    }
+
+    RenderResourceResidencyUpdate update{};
+    for (uint32_t index = 0; index < imageDescriptions_.size(); ++index) {
+        if (active[index]) {
+            if (residency_[index] == RenderResourceResidency::Retiring) {
+                residency_[index] = RenderResourceResidency::Resident;
+                retireAfterSerial_[index] = 0;
+            } else if (residency_[index] ==
+                       RenderResourceResidency::Unallocated) {
+                createImageEntry(index);
+                residency_[index] = RenderResourceResidency::Resident;
+                ++update.created;
+                update.createdImages.push_back({index});
+                update.physicalResourcesChanged = true;
+                ++residencyGeneration_;
+            }
+        } else if (residency_[index] ==
+                   RenderResourceResidency::Resident) {
+            residency_[index] = RenderResourceResidency::Retiring;
+            retireAfterSerial_[index] = lastSubmittedSerial;
+            ++update.retired;
+        }
+    }
+
+    for (uint32_t index = 0; index < imageDescriptions_.size(); ++index) {
+        if (residency_[index] != RenderResourceResidency::Retiring ||
+            active[index] || retireAfterSerial_[index] > completedSerial) {
+            continue;
+        }
+        destroyImageEntry(index);
+        residency_[index] = RenderResourceResidency::Unallocated;
+        retireAfterSerial_[index] = 0;
+        ++update.destroyed;
+        update.destroyedImages.push_back({index});
+        update.physicalResourcesChanged = true;
+        ++residencyGeneration_;
+    }
+    return update;
 }
 
 void RenderResourceRegistry::releaseViewportDependent() {
@@ -193,11 +255,18 @@ void RenderResourceRegistry::recreateViewportDependent(
     releaseViewportDependent();
     viewportExtent_ = viewportExtent;
     for (uint32_t i = 0; i < imageDescriptions_.size(); ++i) {
-        if (imageDescriptions_[i].extentPolicy ==
-            RenderExtentPolicy::Viewport) {
+        if (imageDescriptions_[i].extentPolicy !=
+            RenderExtentPolicy::Viewport)
+            continue;
+        updateMipLevelCount(i);
+        if (residency_[i] == RenderResourceResidency::Retiring) {
+            residency_[i] = RenderResourceResidency::Unallocated;
+            retireAfterSerial_[i] = 0;
+        } else if (residency_[i] == RenderResourceResidency::Resident) {
             createImageEntry(i);
         }
     }
+    ++residencyGeneration_;
 }
 
 bool RenderResourceRegistry::valid(RenderImageHandle handle) const {
@@ -206,6 +275,19 @@ bool RenderResourceRegistry::valid(RenderImageHandle handle) const {
 
 bool RenderResourceRegistry::valid(RenderSamplerHandle handle) const {
     return handle.valid() && handle.index < samplerDescriptions_.size();
+}
+
+bool RenderResourceRegistry::resident(RenderImageHandle handle) const {
+    return valid(handle) &&
+           residency_[handle.index] != RenderResourceResidency::Unallocated &&
+           !images_[handle.index].empty();
+}
+
+RenderResourceResidency
+RenderResourceRegistry::residency(RenderImageHandle handle) const {
+    if (!valid(handle))
+        throw std::out_of_range("invalid render image handle");
+    return residency_[handle.index];
 }
 
 const RenderImageDesc &
@@ -397,6 +479,53 @@ uint64_t RenderResourceRegistry::estimatedResidentBytes() const {
     return bytes;
 }
 
+uint64_t RenderResourceRegistry::estimatedRetiringBytes() const {
+    uint64_t bytes = 0;
+    for (uint32_t index = 0; index < imageDescriptions_.size(); ++index) {
+        if (residency_[index] == RenderResourceResidency::Retiring &&
+            !images_[index].empty()) {
+            bytes += estimatedBytes({index});
+        }
+    }
+    return bytes;
+}
+
+uint64_t RenderResourceRegistry::estimatedLogicalBytes() const {
+    uint64_t bytes = 0;
+    for (uint32_t index = 0; index < imageDescriptions_.size(); ++index)
+        bytes += estimatedBytes({index});
+    return bytes;
+}
+
+void RenderResourceRegistry::updateMipLevelCount(uint32_t index) {
+    const RenderImageDesc &desc = imageDescriptions_.at(index);
+    const VkExtent2D imageExtent =
+        desc.extentPolicy == RenderExtentPolicy::Fixed
+            ? desc.fixedExtent
+            : VkExtent2D{
+                  std::max(1u,
+                           (viewportExtent_.width + desc.extentDivisor - 1u) /
+                               desc.extentDivisor),
+                  std::max(1u,
+                           (viewportExtent_.height + desc.extentDivisor - 1u) /
+                               desc.extentDivisor)};
+    uint32_t mipLevels = desc.mipLevels;
+    if (desc.mipPolicy == RenderMipPolicy::FullChain) {
+        uint32_t dimension = std::max(imageExtent.width, imageExtent.height);
+        mipLevels = 1;
+        while (dimension > 1u) {
+            dimension >>= 1u;
+            ++mipLevels;
+        }
+    }
+    realizedMipLevels_.at(index) = mipLevels;
+}
+
+void RenderResourceRegistry::destroyImageEntry(uint32_t index) {
+    destroyAttachmentViews(index);
+    images_.at(index).clear();
+}
+
 void RenderResourceRegistry::createImageEntry(uint32_t index) {
     const RenderImageDesc &desc = imageDescriptions_.at(index);
     const VkExtent2D imageExtent =
@@ -412,16 +541,9 @@ void RenderResourceRegistry::createImageEntry(uint32_t index) {
                                desc.extentDivisor)};
     if (imageExtent.width == 0 || imageExtent.height == 0)
         return;
-    uint32_t mipLevels = desc.mipLevels;
-    if (desc.mipPolicy == RenderMipPolicy::FullChain) {
-        uint32_t dimension = std::max(imageExtent.width, imageExtent.height);
-        mipLevels = 1;
-        while (dimension > 1u) {
-            dimension >>= 1u;
-            ++mipLevels;
-        }
-    }
-    realizedMipLevels_.at(index) = mipLevels;
+    if (realizedMipLevels_.at(index) == 0)
+        updateMipLevelCount(index);
+    const uint32_t mipLevels = realizedMipLevels_.at(index);
     const uint32_t count =
         desc.multiplicity == RenderResourceMultiplicity::PerFrame
             ? frameCount_
@@ -590,9 +712,6 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
             desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
                          VK_IMAGE_USAGE_SAMPLED_BIT;
             desc.aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
-            desc.externallyInitialized = true;
-            desc.initialLayout =
-                VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
             desc.arrayLayers = layers;
             desc.viewType = viewType;
             desc.createFlags = createFlags;
@@ -603,15 +722,53 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
         "Directional Shadow Depth",
         {kDirectionalShadowMapSize, kDirectionalShadowMapSize},
         kCsmCascadeCount, VK_IMAGE_VIEW_TYPE_2D_ARRAY);
-    handles.pointShadowDepth = registerShadowImage(
-        "Point Shadow Depth",
-        {kPointShadowMapSize, kPointShadowMapSize}, kPointShadowLayers,
-        VK_IMAGE_VIEW_TYPE_CUBE_ARRAY,
+    for (uint32_t capacity = 1; capacity <= kMaxPointShadowLights;
+         ++capacity) {
+        handles.pointShadowDepthByCapacity[capacity - 1] =
+            registerShadowImage(
+                "Point Shadow Depth/Capacity" + std::to_string(capacity),
+                {kPointShadowMapSize, kPointShadowMapSize},
+                capacity * kPointShadowFaceCount,
+                VK_IMAGE_VIEW_TYPE_CUBE_ARRAY,
+                VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT);
+    }
+    for (uint32_t capacity = 1; capacity <= kMaxSpotShadowLights;
+         ++capacity) {
+        handles.spotShadowDepthByCapacity[capacity - 1] =
+            registerShadowImage(
+                "Spot Shadow Depth/Capacity" + std::to_string(capacity),
+                {kSpotShadowMapSize, kSpotShadowMapSize}, capacity,
+                VK_IMAGE_VIEW_TYPE_2D_ARRAY);
+    }
+    const auto registerShadowFallback =
+        [&](std::string name, uint32_t layers, VkImageViewType viewType,
+            VkImageCreateFlags createFlags = 0) {
+            RenderImageDesc desc{};
+            desc.name = std::move(name);
+            desc.extentPolicy = RenderExtentPolicy::Fixed;
+            desc.fixedExtent = {1, 1};
+            desc.multiplicity = RenderResourceMultiplicity::Single;
+            desc.format = shadowDepthFormat;
+            desc.samples = VK_SAMPLE_COUNT_1_BIT;
+            desc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                         VK_IMAGE_USAGE_SAMPLED_BIT;
+            desc.aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+            desc.externallyInitialized = true;
+            desc.persistentResidency = true;
+            desc.initialLayout =
+                VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            desc.arrayLayers = layers;
+            desc.viewType = viewType;
+            desc.createFlags = createFlags;
+            return registry.registerImage(std::move(desc));
+        };
+    handles.directionalShadowFallback = registerShadowFallback(
+        "Directional Shadow Fallback", 1, VK_IMAGE_VIEW_TYPE_2D_ARRAY);
+    handles.pointShadowFallback = registerShadowFallback(
+        "Point Shadow Fallback", 6, VK_IMAGE_VIEW_TYPE_CUBE_ARRAY,
         VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT);
-    handles.spotShadowDepth = registerShadowImage(
-        "Spot Shadow Depth",
-        {kSpotShadowMapSize, kSpotShadowMapSize}, kMaxSpotShadowLights,
-        VK_IMAGE_VIEW_TYPE_2D_ARRAY);
+    handles.spotShadowFallback = registerShadowFallback(
+        "Spot Shadow Fallback", 1, VK_IMAGE_VIEW_TYPE_2D_ARRAY);
 
     if (device.surfaceDataSupport().available) {
         RenderImageDesc surfaceDepth{};
@@ -878,8 +1035,6 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
             desc.format = atmosphereFormat;
             desc.usage = atmosphereUsage;
             desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
-            desc.externallyInitialized = true;
-            desc.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             desc.arrayLayers = atmosphereSupported ? arrayLayers : 1u;
             desc.viewType = viewType;
             return registry.registerImage(std::move(desc));
@@ -898,6 +1053,34 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
         RenderResourceMultiplicity::PerFrame, 32,
         VK_IMAGE_VIEW_TYPE_2D_ARRAY);
 
+    const auto registerAtmosphereFallback =
+        [&](std::string name, VkImageViewType viewType) {
+            RenderImageDesc desc{};
+            desc.name = std::move(name);
+            desc.extentPolicy = RenderExtentPolicy::Fixed;
+            desc.fixedExtent = {1, 1};
+            desc.multiplicity = RenderResourceMultiplicity::Single;
+            desc.format = atmosphereFormat;
+            desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                         VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+            desc.externallyInitialized = true;
+            desc.persistentResidency = true;
+            desc.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            desc.arrayLayers = 1;
+            desc.viewType = viewType;
+            return registry.registerImage(std::move(desc));
+        };
+    handles.atmosphereTransmittanceFallback =
+        registerAtmosphereFallback("Atmosphere/Fallback/Transmittance",
+                                   VK_IMAGE_VIEW_TYPE_2D);
+    handles.atmosphereScatteringFallback =
+        registerAtmosphereFallback("Atmosphere/Fallback/Scattering",
+                                   VK_IMAGE_VIEW_TYPE_2D);
+    handles.atmosphereAerialFallback =
+        registerAtmosphereFallback("Atmosphere/Fallback/Aerial",
+                                   VK_IMAGE_VIEW_TYPE_2D_ARRAY);
+
     const bool ddgiSupported = device.ddgiSupport().available;
     const auto registerDdgiImage =
         [&](std::string name, VkExtent2D extent, VkFormat format,
@@ -912,8 +1095,6 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
                          VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                          (ddgiSupported ? VK_IMAGE_USAGE_STORAGE_BIT : 0u);
             desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
-            desc.externallyInitialized = true;
-            desc.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             desc.arrayLayers = ddgiSupported ? kMaxDdgiProbes : 1u;
             desc.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
             return registry.registerImage(std::move(desc));
@@ -924,6 +1105,33 @@ registerDefaultRendererResources(RenderResourceRegistry &registry,
     handles.ddgiDistance = registerDdgiImage(
         "DDGI/DistanceMoments", {16, 16},
         device.ddgiSupport().distanceFormat, VK_FORMAT_R8G8_UNORM);
+
+    const auto registerDdgiFallback =
+        [&](std::string name, VkFormat format) {
+            RenderImageDesc desc{};
+            desc.name = std::move(name);
+            desc.extentPolicy = RenderExtentPolicy::Fixed;
+            desc.fixedExtent = {1, 1};
+            desc.multiplicity = RenderResourceMultiplicity::Single;
+            desc.format = format;
+            desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                         VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+            desc.externallyInitialized = true;
+            desc.persistentResidency = true;
+            desc.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            desc.arrayLayers = 1;
+            desc.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+            return registry.registerImage(std::move(desc));
+        };
+    handles.ddgiIrradianceFallback = registerDdgiFallback(
+        "DDGI/Fallback/Irradiance",
+        ddgiSupported ? device.ddgiSupport().irradianceFormat
+                      : VK_FORMAT_R8G8B8A8_UNORM);
+    handles.ddgiDistanceFallback = registerDdgiFallback(
+        "DDGI/Fallback/DistanceMoments",
+        ddgiSupported ? device.ddgiSupport().distanceFormat
+                      : VK_FORMAT_R8G8_UNORM);
 
     RenderSamplerDesc hdrSampler{};
     hdrSampler.name = "HDR Sampler";

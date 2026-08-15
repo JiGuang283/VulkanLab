@@ -41,6 +41,9 @@ class TaaPass final : public IRenderPass {
                const RenderGraphBuildContext &context) const override;
     void releaseViewportResources() override;
     void onViewportResize(const RenderResourceRegistry &resources) override;
+    void onResourceResidencyChanged(
+        const RenderResourceRegistry &resources, uint32_t frameIndex,
+        const std::vector<RenderImageHandle> &createdImages) override;
     void recordNode(RenderGraphPassContext &context, uint32_t localNodeIndex,
                     const VisibilityFrame &visibility) override;
 
@@ -50,6 +53,9 @@ class TaaPass final : public IRenderPass {
     void createDescriptorSetLayout();
     void createFrameBuffers();
     void createDescriptors(const RenderResourceRegistry &resources);
+    void updateColorSource(const RenderResourceRegistry &resources,
+                           uint32_t frameIndex,
+                           RenderImageHandle source);
     void freeDescriptors();
 
     Device *device_ = nullptr;

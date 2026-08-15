@@ -199,7 +199,8 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
                 item, field,
                 {"id", "contract", "vertex", "fragment", "compute",
                  "sceneLights", "atmosphere", "screenSpace", "ddgi",
-                 "materialTextures", "targetEnv"});
+                 "materialTextures", "lightingMrt", "surfaceMrt",
+                 "targetEnv"});
 
             ShaderProgram program;
             program.id = requiredString(item, "id", field);
@@ -217,6 +218,8 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
             program.usesDdgi = item.value("ddgi", false);
             program.usesMaterialTextures =
                 item.value("materialTextures", false);
+            program.usesLightingMrt = item.value("lightingMrt", false);
+            program.usesSurfaceMrt = item.value("surfaceMrt", false);
 
             const std::string targetEnv =
                 optionalString(item, "targetEnv", field);
@@ -263,6 +266,18 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
                                  "only main-forward programs may consume "
                                  "screen-space lighting resources");
             }
+            if (program.usesLightingMrt &&
+                program.contract != ShaderProgramContract::MainForward) {
+                throw fieldError(field + ".lightingMrt",
+                                 "only main-forward programs may expose "
+                                 "lighting MRT outputs");
+            }
+            if (program.usesSurfaceMrt &&
+                program.contract != ShaderProgramContract::SurfacePrepass) {
+                throw fieldError(field + ".surfaceMrt",
+                                 "only surface-prepass programs may expose "
+                                 "reduced surface outputs");
+            }
             if (program.usesDdgi &&
                 program.contract != ShaderProgramContract::MainForward) {
                 throw fieldError(field + ".ddgi",
@@ -281,6 +296,42 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
                 program.bindlessFragSpvPath = resolveSpirvPath(
                     shaderRoot, program.fragmentSourcePath,
                     field + ".fragment", ".bindless.spv");
+            }
+            if (program.usesLightingMrt) {
+                program.colorOnlyFragSpvPath = resolveSpirvPath(
+                    shaderRoot, program.fragmentSourcePath,
+                    field + ".fragment", ".mrt1.spv");
+                program.specularFragSpvPath = resolveSpirvPath(
+                    shaderRoot, program.fragmentSourcePath,
+                    field + ".fragment", ".mrt2.spv");
+                if (program.usesMaterialTextures) {
+                    program.bindlessColorOnlyFragSpvPath = resolveSpirvPath(
+                        shaderRoot, program.fragmentSourcePath,
+                        field + ".fragment", ".mrt1.bindless.spv");
+                    program.bindlessSpecularFragSpvPath = resolveSpirvPath(
+                        shaderRoot, program.fragmentSourcePath,
+                        field + ".fragment", ".mrt2.bindless.spv");
+                }
+            }
+            if (program.usesSurfaceMrt) {
+                for (uint32_t attachmentCount = 0; attachmentCount < 3;
+                     ++attachmentCount) {
+                    const std::string suffix =
+                        ".mrt" + std::to_string(attachmentCount) + ".spv";
+                    program.reducedSurfaceFragSpvPaths[attachmentCount] =
+                        resolveSpirvPath(shaderRoot,
+                                         program.fragmentSourcePath,
+                                         field + ".fragment", suffix);
+                    if (program.usesMaterialTextures) {
+                        const std::string bindlessSuffix =
+                            ".mrt" + std::to_string(attachmentCount) +
+                            ".bindless.spv";
+                        program.bindlessReducedSurfaceFragSpvPaths
+                            [attachmentCount] = resolveSpirvPath(
+                                shaderRoot, program.fragmentSourcePath,
+                                field + ".fragment", bindlessSuffix);
+                    }
+                }
             }
             program.computeSpvPath = resolveSpirvPath(
                 shaderRoot, program.computeSourcePath, field + ".compute");
@@ -338,6 +389,13 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
             variant.vertSpvPath = program.vertSpvPath;
             variant.fragSpvPath = program.fragSpvPath;
             variant.bindlessFragSpvPath = program.bindlessFragSpvPath;
+            variant.colorOnlyFragSpvPath = program.colorOnlyFragSpvPath;
+            variant.bindlessColorOnlyFragSpvPath =
+                program.bindlessColorOnlyFragSpvPath;
+            variant.specularFragSpvPath = program.specularFragSpvPath;
+            variant.bindlessSpecularFragSpvPath =
+                program.bindlessSpecularFragSpvPath;
+            variant.usesLightingMrt = program.usesLightingMrt;
             if (variant.isDefault) {
                 ++defaultCount;
                 defaultId = variant.id;
@@ -414,9 +472,20 @@ std::vector<std::filesystem::path> ShaderRegistry::spirvPaths() const {
         for (const std::string *path : {&program.vertSpvPath,
                                         &program.fragSpvPath,
                                         &program.bindlessFragSpvPath,
+                                        &program.colorOnlyFragSpvPath,
+                                        &program.bindlessColorOnlyFragSpvPath,
+                                        &program.specularFragSpvPath,
+                                        &program.bindlessSpecularFragSpvPath,
                                         &program.computeSpvPath}) {
             if (!path->empty())
                 unique.insert(std::filesystem::path(*path));
+        }
+        for (const auto *paths : {&program.reducedSurfaceFragSpvPaths,
+                                  &program.bindlessReducedSurfaceFragSpvPaths}) {
+            for (const std::string &path : *paths) {
+                if (!path.empty())
+                    unique.insert(std::filesystem::path(path));
+            }
         }
     }
     return {unique.begin(), unique.end()};

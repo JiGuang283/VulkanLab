@@ -163,6 +163,8 @@ struct CompiledRenderGraph {
     std::vector<uint32_t> executionOrder;
     std::vector<uint32_t> culledPasses;
     std::vector<RenderGraphDependency> dependencies;
+    std::vector<RenderImageHandle> activeImages;
+    std::vector<uint32_t> activeOwnerPasses;
     uint64_t topologyHash = 0;
 };
 
@@ -232,7 +234,9 @@ struct RenderGraphDiagnostics {
     uint32_t layoutBarriers = 0;
     uint32_t hazardBarriers = 0;
     uint64_t activeImageBytes = 0;
+    uint64_t logicalImageBytes = 0;
     uint64_t residentImageBytes = 0;
+    uint64_t retiringImageBytes = 0;
     std::vector<std::string> executionOrder;
     std::vector<std::string> culledNames;
     std::vector<Resource> resources;
@@ -250,6 +254,14 @@ class RenderGraph {
     void addPass(std::unique_ptr<IRenderPass> pass);
     void compile(const RenderResourceRegistry &resources,
                  const struct FrameRenderFeatures &features);
+    void prepareGraph(const RenderFrameContext &frame,
+                      const RenderResourceRegistry &resources,
+                      const VisibilityFrame &visibility);
+    RenderResourceResidencyUpdate prepareResources(
+        RenderResourceRegistry &resources,
+        const struct FrameRenderFeatures &features,
+        uint32_t frameIndex, uint64_t lastSubmittedSerial,
+        uint64_t completedSerial);
     void execute(const RenderFrameContext &frame,
                  const RenderResourceRegistry &resources,
                  const VisibilityFrame &visibility,
@@ -277,6 +289,7 @@ class RenderGraph {
     std::unordered_map<uint64_t, RenderGraphImageState> imageStates_;
     std::unordered_map<uint64_t, RenderGraphBufferState> bufferStates_;
     RenderGraphDiagnostics diagnostics_{};
+    bool resourceRefreshPending_ = true;
 };
 
 } // namespace vkr

@@ -46,11 +46,9 @@ HdrCompositePass::~HdrCompositePass() {
 
 void HdrCompositePass::setup(RenderGraphBuilder &builder,
                              const RenderGraphBuildContext &context) const {
-    const bool composite = context.features.ssrActive ||
-                           context.features.ssgiActive;
     builder.addNode("ScreenSpaceLightingComposite/Compute",
                     RgPassType::Compute, RgQueueClass::Compute, 0);
-    builder.setActive(composite);
+    builder.setActive(context.features.lightingCompositeRequired);
     builder.useImage({resources_.hdrColor, RenderImageAccess::SampledRead,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
@@ -79,25 +77,13 @@ void HdrCompositePass::setup(RenderGraphBuilder &builder,
                       VK_IMAGE_LAYOUT_GENERAL,
                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
 
-    builder.addNode("ScreenSpaceLightingComposite/Copy",
-                    RgPassType::Transfer, RgQueueClass::Transfer, 1);
-    builder.setActive(!composite);
-    builder.useImage({resources_.hdrColor, RenderImageAccess::TransferRead,
-                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-    builder.useImage({resources_.compositedHdrColor,
-                      RenderImageAccess::TransferWrite,
-                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
 }
 
 void HdrCompositePass::recordNode(RenderGraphPassContext &context,
                                   uint32_t localNodeIndex,
                                   const VisibilityFrame &) {
-    if (localNodeIndex == 0)
-        recordComposite(context.frame, context.resources);
-    else if (localNodeIndex == 1)
-        recordCopy(context.frame, context.resources);
+    (void)localNodeIndex;
+    recordComposite(context.frame, context.resources);
 }
 
 void HdrCompositePass::recordComposite(
@@ -131,22 +117,6 @@ void HdrCompositePass::recordComposite(
                        VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
     vkCmdDispatch(frame.cmd, (extent.width + 7u) / 8u,
                   (extent.height + 7u) / 8u, 1);
-}
-
-void HdrCompositePass::recordCopy(const RenderFrameContext &frame,
-                                  const RenderResourceRegistry &resources) {
-    const VkExtent2D extent = resources.extent(resources_.hdrColor);
-    VkImageCopy copy{};
-    copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    copy.extent = {extent.width, extent.height, 1};
-    vkCmdCopyImage(
-        frame.cmd,
-        resources.image(resources_.hdrColor, frame.frameIndex).handle(),
-        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        resources.image(resources_.compositedHdrColor,
-                        frame.frameIndex).handle(),
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
 }
 
 void HdrCompositePass::releaseViewportResources() {
@@ -197,16 +167,24 @@ void HdrCompositePass::updateDescriptor(
         ? registry.sampler(resources_.ssgiSampler) : hdrSampler;
     const VkImageView fallback =
         registry.image(resources_.hdrColor, frame).imageView();
-    const VkImageView baselineSpecular = resources_.baselineSpecular.valid()
+    const VkImageView baselineSpecular =
+        ssrActive && resources_.baselineSpecular.valid() &&
+                registry.resident(resources_.baselineSpecular)
         ? registry.image(resources_.baselineSpecular, frame).imageView()
         : fallback;
-    const VkImageView ssr = ssrActive && resources_.ssrFiltered.valid()
+    const VkImageView ssr =
+        ssrActive && resources_.ssrFiltered.valid() &&
+                registry.resident(resources_.ssrFiltered)
         ? registry.image(resources_.ssrFiltered, frame).imageView()
         : fallback;
-    const VkImageView baselineDiffuse = resources_.baselineDiffuse.valid()
+    const VkImageView baselineDiffuse =
+        ssgiActive && resources_.baselineDiffuse.valid() &&
+                registry.resident(resources_.baselineDiffuse)
         ? registry.image(resources_.baselineDiffuse, frame).imageView()
         : fallback;
-    const VkImageView ssgi = ssgiActive && resources_.ssgiFiltered.valid()
+    const VkImageView ssgi =
+        ssgiActive && resources_.ssgiFiltered.valid() &&
+                registry.resident(resources_.ssgiFiltered)
         ? registry.image(resources_.ssgiFiltered, frame).imageView()
         : fallback;
     std::array<VkDescriptorImageInfo, 6> infos = {{

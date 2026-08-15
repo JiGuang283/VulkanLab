@@ -23,25 +23,30 @@
 #include "diagnostics/Profiling.h"
 #include "diagnostics/TracyProfiler.h"
 
-#include <string>
 #include <glm/glm.hpp>
+#include <algorithm>
+#include <string>
+#include <utility>
 
 namespace vkr {
 
 SpotShadowPass::SpotShadowPass(Device &device,
                                const RenderResourceRegistry &resources,
-                               RenderImageHandle shadowDepth,
+                               std::array<RenderImageHandle, 4>
+                                   shadowDepthByCapacity,
                                DescriptorAllocator &descriptorAllocator,
                                std::string vertPath,
                                std::string maskFragPath)
-    : device_(&device), shadowDepth_(shadowDepth),
+    : device_(&device),
+      shadowDepthByCapacity_(std::move(shadowDepthByCapacity)),
       vertPath_(std::move(vertPath)),
       maskFragPath_(std::move(maskFragPath)) {
     sliceBuffer_ = std::make_unique<PunctualShadowSliceBuffer>(
         device, descriptorAllocator, kMaxSpotShadowLights,
         VK_SHADER_STAGE_VERTEX_BIT, "SpotShadowSliceBuffer");
 
-    depthFormat_ = resources.description(shadowDepth_).format;
+    depthFormat_ =
+        resources.description(shadowDepthByCapacity_.front()).format;
 }
 
 SpotShadowPass::~SpotShadowPass() {
@@ -51,13 +56,21 @@ SpotShadowPass::~SpotShadowPass() {
 void SpotShadowPass::setup(
     RenderGraphBuilder &builder,
     const RenderGraphBuildContext &context) const {
+    const uint32_t capacityIndex =
+        context.features.spotShadowLightCount == 0
+            ? 0u
+            : std::min(context.features.spotShadowLightCount,
+                       static_cast<uint32_t>(shadowDepthByCapacity_.size())) -
+                  1u;
+    const RenderImageHandle shadowDepth =
+        shadowDepthByCapacity_[capacityIndex];
     for (uint32_t light = 0; light < kMaxSpotShadowLights; ++light) {
         builder.addNode("SpotShadow/Light" + std::to_string(light),
                         RgPassType::Graphics, RgQueueClass::Graphics,
                         light);
         builder.setActive(light < context.features.spotShadowLightCount);
         builder.addDepthAttachment(
-            shadowDepth_, RenderImageAccess::DepthAttachmentWrite,
+            shadowDepth, RenderImageAccess::DepthAttachmentWrite,
             VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
             VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE,

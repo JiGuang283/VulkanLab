@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <string>
 
 namespace vkr {
@@ -12,8 +13,8 @@ struct RendererShaderPaths {
     std::string shadowPointMaskFrag;
     std::string shadowSpotMaskFrag;
     std::string surfacePrepassVert;
-    std::string surfacePrepassOpaqueFrag;
-    std::string surfacePrepassMaskFrag;
+    std::array<std::string, 4> surfacePrepassOpaqueFrags;
+    std::array<std::string, 4> surfacePrepassMaskFrags;
     std::string visibilityHiZInitComp;
     std::string visibilityHiZReduceComp;
     std::string visibilityOcclusionComp;

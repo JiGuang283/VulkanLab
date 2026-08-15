@@ -99,7 +99,7 @@ DdgiPass::~DdgiPass() {
                                      samplingDescriptorSetLayout_, nullptr);
 }
 
-void DdgiPass::prepareFrame(const RenderFrameContext &frame,
+void DdgiPass::prepareGraph(const RenderFrameContext &frame,
                             const RenderResourceRegistry &resources,
                             const VisibilityFrame &visibility) {
     status_.componentPresent = frame.view && frame.view->ddgi.componentPresent;
@@ -118,7 +118,7 @@ void DdgiPass::prepareFrame(const RenderFrameContext &frame,
                           frame.frameIndex) > 0;
     status_.active = false;
     if (!preparedActive_) {
-        disableSampling(frame.frameIndex);
+        disableSampling(frame.frameIndex, resources);
         status_.tracedInstanceCount = 0;
         preparedUpdateCount_ = 0;
         preparedRayCount_ = 0;
@@ -126,6 +126,12 @@ void DdgiPass::prepareFrame(const RenderFrameContext &frame,
     }
 
     const DdgiFrameData &volume = frame.view->ddgi;
+    if (resources.residency(handles_.ddgiIrradiance) ==
+            RenderResourceResidency::Unallocated ||
+        resources.residency(handles_.ddgiDistance) ==
+            RenderResourceResidency::Unallocated) {
+        resetPending_ = true;
+    }
     const auto &settings = volume.parameters;
     const uint64_t signature =
         volumeSignature(volume, visibility.history.sceneGeneration);
@@ -163,7 +169,15 @@ void DdgiPass::prepareFrame(const RenderFrameContext &frame,
                   preparedReset_ ? 1.0f : 0.0f, 0.0f, 0.0f);
     std::memcpy(frames_[frame.frameIndex].parameters->mappedData(), &gpu,
                 sizeof(gpu));
-    updateComputeDescriptor(frame.frameIndex, resources);
+}
+
+void DdgiPass::prepareFrame(const RenderFrameContext &frame,
+                            const RenderResourceRegistry &resources,
+                            const VisibilityFrame &) {
+    if (preparedActive_ && preparedFrameIndex_ == frame.frameIndex) {
+        updateComputeDescriptor(frame.frameIndex, resources);
+        updateSamplingDescriptor(frame.frameIndex, resources, true);
+    }
 }
 
 uint64_t DdgiPass::topologySignature() const {
@@ -337,7 +351,8 @@ void DdgiPass::createPersistentResources(
     VkCommandBuffer cmd = upload.commandBuffer();
     vkCmdFillBuffer(cmd, probeStates_->handle(), 0, VK_WHOLE_SIZE, 0);
     for (RenderImageHandle handle :
-         {handles_.ddgiIrradiance, handles_.ddgiDistance}) {
+         {handles_.ddgiIrradianceFallback,
+          handles_.ddgiDistanceFallback}) {
         const Image &image = resources.image(handle, 0);
         const RenderImageDesc &desc = resources.description(handle);
         VkImageMemoryBarrier barrier{};
@@ -368,11 +383,13 @@ void DdgiPass::createPersistentResources(
     upload.finish();
 }
 
-void DdgiPass::disableSampling(uint32_t frameIndex) {
+void DdgiPass::disableSampling(
+    uint32_t frameIndex, const RenderResourceRegistry &resources) {
     if (frameIndex >= frames_.size() || !frames_[frameIndex].parameters)
         return;
     std::memset(frames_[frameIndex].parameters->mappedData(), 0,
                 sizeof(DdgiGpuParams));
+    updateSamplingDescriptor(frameIndex, resources, false);
     status_.active = false;
 }
 
@@ -394,7 +411,6 @@ void DdgiPass::ensureRayCapacity(uint32_t frameIndex, uint32_t required) {
 
 void DdgiPass::createSamplingDescriptors(
     const RenderResourceRegistry &resources) {
-    const VkSampler sampler = resources.sampler(handles_.ddgiSampler);
     for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
         samplingSets_[frame] = descriptorAllocator_->allocate(
             samplingDescriptorSetLayout_,
@@ -402,37 +418,46 @@ void DdgiPass::createSamplingDescriptors(
              {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2},
              {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1}},
             "DDGI/Frame" + std::to_string(frame) + "/SamplingSet");
-        VkDescriptorBufferInfo params{frames_[frame].parameters->handle(), 0,
-                                      sizeof(DdgiGpuParams)};
-        VkDescriptorBufferInfo states{probeStates_->handle(), 0,
-                                      VK_WHOLE_SIZE};
-        std::array<VkDescriptorImageInfo, 2> images{};
-        images[0] = {sampler,
-                     resources.image(handles_.ddgiIrradiance, 0).imageView(),
-                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        images[1] = {sampler,
-                     resources.image(handles_.ddgiDistance, 0).imageView(),
-                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        std::array<VkWriteDescriptorSet, 4> writes{};
-        writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                     samplingSets_[frame], 0, 0, 1,
-                     VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &params,
-                     nullptr};
-        for (uint32_t index = 0; index < 2; ++index) {
-            writes[index + 1] = {
-                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                samplingSets_[frame], index + 1, 0, 1,
-                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &images[index],
-                nullptr, nullptr};
-        }
-        writes[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-                     samplingSets_[frame], 3, 0, 1,
-                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &states,
-                     nullptr};
-        vkUpdateDescriptorSets(device_->logicalDevice(),
-                               static_cast<uint32_t>(writes.size()),
-                               writes.data(), 0, nullptr);
+        updateSamplingDescriptor(frame, resources, false);
     }
+}
+
+void DdgiPass::updateSamplingDescriptor(
+    uint32_t frameIndex, const RenderResourceRegistry &resources,
+    bool active) {
+    const VkSampler sampler = resources.sampler(handles_.ddgiSampler);
+    const RenderImageHandle irradiance =
+        active ? handles_.ddgiIrradiance
+               : handles_.ddgiIrradianceFallback;
+    const RenderImageHandle distance =
+        active ? handles_.ddgiDistance : handles_.ddgiDistanceFallback;
+    VkDescriptorBufferInfo params{frames_[frameIndex].parameters->handle(), 0,
+                                  sizeof(DdgiGpuParams)};
+    VkDescriptorBufferInfo states{probeStates_->handle(), 0, VK_WHOLE_SIZE};
+    std::array<VkDescriptorImageInfo, 2> images = {{
+        {sampler, resources.image(irradiance, 0).imageView(),
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {sampler, resources.image(distance, 0).imageView(),
+         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}}};
+    std::array<VkWriteDescriptorSet, 4> writes{};
+    writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                 samplingSets_[frameIndex], 0, 0, 1,
+                 VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &params,
+                 nullptr};
+    for (uint32_t index = 0; index < images.size(); ++index) {
+        writes[index + 1] = {
+            VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+            samplingSets_[frameIndex], index + 1, 0, 1,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &images[index],
+            nullptr, nullptr};
+    }
+    writes[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+                 samplingSets_[frameIndex], 3, 0, 1,
+                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &states,
+                 nullptr};
+    vkUpdateDescriptorSets(device_->logicalDevice(),
+                           static_cast<uint32_t>(writes.size()),
+                           writes.data(), 0, nullptr);
 }
 
 void DdgiPass::updateComputeDescriptor(

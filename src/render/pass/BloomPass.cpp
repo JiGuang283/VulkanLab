@@ -79,7 +79,9 @@ void BloomPass::setup(
                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
             } else {
                 builder.useImage(
-                    {resourceHandles_.hdrColor,
+                    {context.features.lightingCompositeRequired
+                         ? resourceHandles_.compositedHdrColor
+                         : resourceHandles_.hdrColor,
                      RenderImageAccess::SampledRead,
                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
@@ -133,6 +135,21 @@ void BloomPass::onViewportResize(
     createDescriptors(resources);
 }
 
+void BloomPass::onResourceResidencyChanged(
+    const RenderResourceRegistry &resources, uint32_t,
+    const std::vector<RenderImageHandle> &createdImages) {
+    const bool pyramidCreated = std::any_of(
+        resourceHandles_.bloomLevels.begin(),
+        resourceHandles_.bloomLevels.end(), [&](RenderImageHandle handle) {
+            return std::find(createdImages.begin(), createdImages.end(),
+                             handle) != createdImages.end();
+        });
+    if (!pyramidCreated)
+        return;
+    releaseViewportResources();
+    onViewportResize(resources);
+}
+
 void BloomPass::recordDownsample(
     const RenderFrameContext &frame,
     const RenderResourceRegistry &resources, uint32_t level) {
@@ -144,7 +161,10 @@ void BloomPass::recordDownsample(
     if (level == 0) {
         updatePrimarySource(
             resources, frame.frameIndex,
-            useTaa ? resourceHandles_.taaHistory : resourceHandles_.hdrColor,
+            useTaa ? resourceHandles_.taaHistory
+                   : (frame.features.lightingCompositeRequired
+                          ? resourceHandles_.compositedHdrColor
+                          : resourceHandles_.hdrColor),
             useTaa ? resourceHandles_.taaSampler
                    : resourceHandles_.hdrSampler);
     }

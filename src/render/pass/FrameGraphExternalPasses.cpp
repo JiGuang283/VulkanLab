@@ -6,7 +6,7 @@
 
 namespace vkr {
 
-void RayTracingSceneBuildPass::prepareFrame(
+void RayTracingSceneBuildPass::prepareGraph(
     const RenderFrameContext &frame, const RenderResourceRegistry &,
     const VisibilityFrame &visibility) {
     if (frame.features.ddgiRequired)
@@ -43,7 +43,9 @@ void ScreenshotCopyPass::setup(
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
         break;
     case FrameCaptureSource::Hdr:
-        builder.useImage({resources_.compositedHdrColor,
+        builder.useImage({context.features.lightingCompositeRequired
+                              ? resources_.compositedHdrColor
+                              : resources_.hdrColor,
                           RenderImageAccess::TransferRead,
                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});

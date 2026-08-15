@@ -25,7 +25,7 @@ class PointShadowPass final : public IRenderPass {
   public:
     PointShadowPass(Device &device,
                     const RenderResourceRegistry &resources,
-                    RenderImageHandle shadowDepth,
+                    std::array<RenderImageHandle, 4> shadowDepthByCapacity,
                     DescriptorAllocator &descriptorAllocator,
                     std::string vertPath,
                     std::string opaqueFragPath,
@@ -51,7 +51,7 @@ class PointShadowPass final : public IRenderPass {
                     const VisibilityFrame &visibility,
                     uint32_t layer);
     Device *device_ = nullptr;
-    RenderImageHandle shadowDepth_{};
+    std::array<RenderImageHandle, 4> shadowDepthByCapacity_{};
     std::string vertPath_;
     std::string opaqueFragPath_;
     std::string maskFragPath_;

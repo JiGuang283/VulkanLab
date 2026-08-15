@@ -117,8 +117,9 @@ uint32_t screenDebugModeValue(ScreenSpaceDebugView view) {
 } // namespace
 
 ToneMapPass::ToneMapPass(Device &device,
-                         const RenderResourceRegistry &resources,
-                         RenderImageHandle hdrColor,
+                const RenderResourceRegistry &resources,
+                RenderImageHandle hdrColor,
+                RenderImageHandle compositedHdrColor,
                          RenderSamplerHandle hdrSampler,
                          RenderImageHandle bloomColor,
                          RenderSamplerHandle bloomSampler,
@@ -153,7 +154,8 @@ ToneMapPass::ToneMapPass(Device &device,
                          DescriptorAllocator &descriptorAllocator,
                          std::string fullscreenVertPath,
                          std::string toneMapFragPath)
-    : device_(&device), hdrColor_(hdrColor), hdrSampler_(hdrSampler),
+    : device_(&device), hdrColor_(hdrColor),
+      compositedHdrColor_(compositedHdrColor), hdrSampler_(hdrSampler),
       bloomColor_(bloomColor), bloomSampler_(bloomSampler),
       viewportColor_(viewportColor),
       surfaceNormalRoughness_(surfaceNormalRoughness),
@@ -198,13 +200,15 @@ void ToneMapPass::setup(RenderGraphBuilder &builder,
                               layout, layout});
     };
     const FrameRenderFeatures &features = context.features;
-    sampled(hdrColor_);
+    sampled(context.features.lightingCompositeRequired
+                ? compositedHdrColor_
+                : hdrColor_);
     if (features.bloomRequired)
         sampled(bloomColor_, VK_IMAGE_LAYOUT_GENERAL);
-    if (features.surfaceDataRequired) {
+    if (features.surfaceNormalsRequired)
         sampled(surfaceNormalRoughness_);
+    if (features.surfaceMotionRequired)
         sampled(surfaceMotion_);
-    }
     if (features.screenDepthPyramidRequired)
         sampled(screenDepthPyramid_);
     if (features.sceneColorPyramidRequired)
@@ -448,31 +452,40 @@ void ToneMapPass::updateScreenDescriptors(
     const FrameRenderFeatures &features, ScreenSpaceDebugView debugView) {
     VkDescriptorImageInfo fallback{};
     fallback.sampler = resources.sampler(hdrSampler_);
-    fallback.imageView = resources.image(hdrColor_, frameIndex).imageView();
+    const RenderImageHandle primaryHdr =
+        features.lightingCompositeRequired ? compositedHdrColor_ : hdrColor_;
+    fallback.imageView = resources.image(primaryHdr, frameIndex).imageView();
     fallback.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkDescriptorImageInfo bloomInfo = fallback;
-    if (features.bloomRequired && bloomColor_.valid()) {
+    if (features.bloomRequired && bloomColor_.valid() &&
+        resources.resident(bloomColor_)) {
         bloomInfo = {resources.sampler(bloomSampler_),
                      resources.image(bloomColor_, frameIndex).imageView(),
                      VK_IMAGE_LAYOUT_GENERAL};
     }
 
     VkDescriptorImageInfo primary = fallback;
-    if (features.taaActive && taaHistory_.valid()) {
+    if (features.taaActive && taaHistory_.valid() &&
+        resources.resident(taaHistory_)) {
         primary = {resources.sampler(taaSampler_),
                    resources.image(taaHistory_, frameIndex).imageView(),
                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     }
     VkDescriptorImageInfo normalInfo = fallback;
     VkDescriptorImageInfo motionInfo = fallback;
-    if (features.surfaceDataRequired && surfaceNormalRoughness_.valid() &&
-        surfaceMotion_.valid()) {
+    if (features.surfaceNormalsRequired &&
+        surfaceNormalRoughness_.valid() &&
+        resources.resident(surfaceNormalRoughness_)) {
         const VkSampler sampler = resources.sampler(surfaceSampler_);
         normalInfo = {
             sampler,
             resources.image(surfaceNormalRoughness_, frameIndex).imageView(),
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    }
+    if (features.surfaceMotionRequired && surfaceMotion_.valid() &&
+        resources.resident(surfaceMotion_)) {
+        const VkSampler sampler = resources.sampler(surfaceSampler_);
         motionInfo = {
             sampler, resources.image(surfaceMotion_, frameIndex).imageView(),
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -480,6 +493,8 @@ void ToneMapPass::updateScreenDescriptors(
     VkDescriptorImageInfo debugInfo = fallback;
     const auto sampled = [&](RenderImageHandle image,
                              RenderSamplerHandle sampler) {
+        if (!image.valid() || !resources.resident(image))
+            return fallback;
         return VkDescriptorImageInfo{
             resources.sampler(sampler),
             resources.image(image, frameIndex).imageView(),

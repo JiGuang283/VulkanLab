@@ -24,8 +24,8 @@ class SurfacePrepass final : public IRenderPass {
                    DescriptorAllocator &descriptorAllocator,
                    VkDescriptorSetLayout globalDescriptorSetLayout,
                    std::string vertexShaderPath,
-                   std::string opaqueFragmentShaderPath,
-                   std::string maskFragmentShaderPath);
+                   std::array<std::string, 4> opaqueFragmentShaderPaths,
+                   std::array<std::string, 4> maskFragmentShaderPaths);
     ~SurfacePrepass() override;
 
     std::string_view name() const override { return "SurfacePrepass"; }
@@ -61,8 +61,8 @@ class SurfacePrepass final : public IRenderPass {
     VkDescriptorSetLayout globalDescriptorSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout surfaceDescriptorSetLayout_ = VK_NULL_HANDLE;
     std::string vertexShaderPath_;
-    std::string opaqueFragmentShaderPath_;
-    std::string maskFragmentShaderPath_;
+    std::array<std::string, 4> opaqueFragmentShaderPaths_;
+    std::array<std::string, 4> maskFragmentShaderPaths_;
     std::array<std::unique_ptr<FrameStorage>, MAX_FRAMES_IN_FLIGHT> frames_{};
 };
 

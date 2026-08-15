@@ -47,6 +47,9 @@ class DdgiPass final : public IRenderPass {
     std::string_view name() const override { return "DDGI"; }
     RgPassType passType() const override { return RgPassType::Compute; }
     RgPassCondition condition() const override { return RgPassCondition::Ddgi; }
+    void prepareGraph(const RenderFrameContext &frame,
+                      const RenderResourceRegistry &resources,
+                      const VisibilityFrame &visibility) override;
     void prepareFrame(const RenderFrameContext &frame,
                       const RenderResourceRegistry &resources,
                       const VisibilityFrame &visibility) override;
@@ -64,7 +67,8 @@ class DdgiPass final : public IRenderPass {
         return samplingSets_.at(frameIndex);
     }
     const DdgiRuntimeStatus &status() const { return status_; }
-    void disableSampling(uint32_t frameIndex);
+    void disableSampling(uint32_t frameIndex,
+                         const RenderResourceRegistry &resources);
 
   private:
     struct FrameStorage {
@@ -77,6 +81,9 @@ class DdgiPass final : public IRenderPass {
     void createDescriptorLayouts();
     void createPersistentResources(const RenderResourceRegistry &resources);
     void createSamplingDescriptors(const RenderResourceRegistry &resources);
+    void updateSamplingDescriptor(uint32_t frameIndex,
+                                  const RenderResourceRegistry &resources,
+                                  bool active);
     void ensureRayCapacity(uint32_t frameIndex, uint32_t required);
     void updateComputeDescriptor(uint32_t frameIndex,
                                  const RenderResourceRegistry &resources);

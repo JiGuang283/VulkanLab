@@ -14,6 +14,7 @@
 #include "render/RenderGraph.h"
 #include "render/RenderResourceRegistry.h"
 
+#include <algorithm>
 #include <array>
 #include <glm/glm.hpp>
 #include <stdexcept>
@@ -78,6 +79,17 @@ void ScreenSpacePyramidPass::releaseViewportResources() {
 void ScreenSpacePyramidPass::onViewportResize(
     const RenderResourceRegistry &resources) {
     createDescriptors(resources);
+}
+
+void ScreenSpacePyramidPass::onResourceResidencyChanged(
+    const RenderResourceRegistry &resources, uint32_t,
+    const std::vector<RenderImageHandle> &createdImages) {
+    if (std::find(createdImages.begin(), createdImages.end(), pyramid_) ==
+        createdImages.end()) {
+        return;
+    }
+    releaseViewportResources();
+    onViewportResize(resources);
 }
 
 void ScreenSpacePyramidPass::setup(

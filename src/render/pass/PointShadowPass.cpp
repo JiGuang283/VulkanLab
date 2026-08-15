@@ -25,18 +25,22 @@
 #include "diagnostics/TracyProfiler.h"
 
 #include <glm/glm.hpp>
+#include <algorithm>
 #include <string>
+#include <utility>
 
 namespace vkr {
 
 PointShadowPass::PointShadowPass(Device &device,
                                  const RenderResourceRegistry &resources,
-                                 RenderImageHandle shadowDepth,
+                                 std::array<RenderImageHandle, 4>
+                                     shadowDepthByCapacity,
                                  DescriptorAllocator &descriptorAllocator,
                                  std::string vertPath,
                                  std::string opaqueFragPath,
                                  std::string maskFragPath)
-    : device_(&device), shadowDepth_(shadowDepth),
+    : device_(&device),
+      shadowDepthByCapacity_(std::move(shadowDepthByCapacity)),
       vertPath_(std::move(vertPath)),
       opaqueFragPath_(std::move(opaqueFragPath)),
       maskFragPath_(std::move(maskFragPath)) {
@@ -45,7 +49,8 @@ PointShadowPass::PointShadowPass(Device &device,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         "PointShadowSliceBuffer");
 
-    depthFormat_ = resources.description(shadowDepth_).format;
+    depthFormat_ =
+        resources.description(shadowDepthByCapacity_.front()).format;
 }
 
 PointShadowPass::~PointShadowPass() {
@@ -55,6 +60,14 @@ PointShadowPass::~PointShadowPass() {
 void PointShadowPass::setup(
     RenderGraphBuilder &builder,
     const RenderGraphBuildContext &context) const {
+    const uint32_t capacityIndex =
+        context.features.pointShadowLightCount == 0
+            ? 0u
+            : std::min(context.features.pointShadowLightCount,
+                       static_cast<uint32_t>(shadowDepthByCapacity_.size())) -
+                  1u;
+    const RenderImageHandle shadowDepth =
+        shadowDepthByCapacity_[capacityIndex];
     for (uint32_t layer = 0; layer < kPointShadowLayers; ++layer) {
         const uint32_t light = layer / kPointShadowFaceCount;
         const uint32_t face = layer % kPointShadowFaceCount;
@@ -65,7 +78,7 @@ void PointShadowPass::setup(
         builder.setActive(
             light < context.features.pointShadowLightCount);
         builder.addDepthAttachment(
-            shadowDepth_, RenderImageAccess::DepthAttachmentWrite,
+            shadowDepth, RenderImageAccess::DepthAttachmentWrite,
             VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
             VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE,

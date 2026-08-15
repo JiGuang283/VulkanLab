@@ -287,7 +287,6 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
                    0u, 0u);
     std::memcpy(screenSpaceUniformBuffers_[frame.frameIndex]->mappedData(),
                 &screenUbo, sizeof(screenUbo));
-    updateScreenSpaceDescriptor(frame.frameIndex, activeAoMode);
 
     if (occlusionCullPass_) {
         lastOcclusionRequested_ = visibility.cpuStats.occlusionCandidates;
@@ -310,8 +309,6 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.swapchainExtent = swapChain_->extent();
     renderFrame.globalDescriptorSet = globalDescriptorSet(frame.frameIndex);
     renderFrame.globalDescriptorSetLayout = globalDescriptorSetLayout_;
-    renderFrame.lightingDescriptorSet =
-        currentLightingGeneration_->sets.at(frame.frameIndex);
     renderFrame.lightingDescriptorSetLayout =
         lightingDescriptorSetLayout_;
     renderFrame.atmosphereDescriptorSet =
@@ -339,6 +336,8 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
         atmosphereLutPass_->readyFor(view.atmosphere.staticLutKey);
     renderFrame.features.atmosphereRequired =
         view.atmosphere.active && atmosphereLutPass_;
+    renderFrame.features.transparentRequired =
+        !visibility.cameraTransparent.empty();
     renderFrame.features.directionalShadowRequired =
         view.shadow.csm.enabled;
     renderFrame.features.pointShadowRequired =
@@ -351,21 +350,62 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
         view.shadow.punctual.activePointCount;
     renderFrame.features.spotShadowLightCount =
         view.shadow.punctual.activeSpotCount;
+    const RenderImageHandle directionalShadowImage =
+        renderFrame.features.directionalShadowRequired
+            ? resourceHandles_.directionalShadowDepth
+            : RenderImageHandle{};
+    const RenderImageHandle pointShadowImage =
+        renderFrame.features.pointShadowRequired
+            ? resourceHandles_.pointShadowDepthByCapacity.at(
+                  std::min(renderFrame.features.pointShadowLightCount,
+                           static_cast<uint32_t>(resourceHandles_
+                                                     .pointShadowDepthByCapacity
+                                                     .size())) -
+                  1u)
+            : RenderImageHandle{};
+    const RenderImageHandle spotShadowImage =
+        renderFrame.features.spotShadowRequired
+            ? resourceHandles_.spotShadowDepthByCapacity.at(
+                  std::min(renderFrame.features.spotShadowLightCount,
+                           static_cast<uint32_t>(resourceHandles_
+                                                     .spotShadowDepthByCapacity
+                                                     .size())) -
+                  1u)
+            : RenderImageHandle{};
+    const bool shadowBindingsChanged =
+        !(directionalShadowImage == activeDirectionalShadowImage_) ||
+        !(pointShadowImage == activePointShadowImage_) ||
+        !(spotShadowImage == activeSpotShadowImage_);
+    activeDirectionalShadowImage_ = directionalShadowImage;
+    activePointShadowImage_ = pointShadowImage;
+    activeSpotShadowImage_ = spotShadowImage;
+    const bool occlusionWorkRequired =
+        device_->occlusionCullingSupport().available &&
+        view.settings.culling.occlusionEnabled &&
+        visibility.cpuStats.occlusionCandidates >=
+            view.settings.culling.occlusionMinCandidates;
+    const SurfaceDebugView surfaceDebug =
+        view.settings.surfaceDebugView;
+    renderFrame.features.surfaceAlbedoRequired = ssgiPassRequired;
+    renderFrame.features.surfaceMotionRequired =
+        surfaceDebug == SurfaceDebugView::Motion || gtaoPassRequired ||
+        ssrPassRequired || ssgiPassRequired || taaPassRequired;
+    renderFrame.features.surfaceNormalsRequired =
+        surfaceDebug != SurfaceDebugView::None ||
+        (screenSupport.ssaoAvailable && ssaoPassRequired) ||
+        (device_->cacaoSupport().available && cacaoPassRequired) ||
+        gtaoPassRequired || ssrPassRequired || ssgiPassRequired ||
+        taaPassRequired;
     renderFrame.features.surfaceDataRequired =
         device_->surfaceDataSupport().available &&
-        (view.settings.culling.occlusionEnabled ||
-         view.settings.surfaceDebugView != SurfaceDebugView::None ||
+        (renderFrame.features.transparentRequired ||
+         occlusionWorkRequired ||
+         renderFrame.features.surfaceNormalsRequired ||
+         renderFrame.features.surfaceMotionRequired ||
+         renderFrame.features.surfaceAlbedoRequired ||
          view.settings.screenSpaceDebugView ==
-             ScreenSpaceDebugView::NearestDepth ||
-          (screenSupport.ssaoAvailable && ssaoPassRequired) ||
-          (device_->cacaoSupport().available && cacaoPassRequired) ||
-          gtaoPassRequired ||
-          ssrPassRequired ||
-          ssgiPassRequired ||
-          taaPassRequired);
-    renderFrame.features.hiZRequired =
-        device_->occlusionCullingSupport().available &&
-        view.settings.culling.occlusionEnabled;
+             ScreenSpaceDebugView::NearestDepth);
+    renderFrame.features.hiZRequired = occlusionWorkRequired;
     renderFrame.features.occlusionRequired =
         renderFrame.features.hiZRequired;
     renderFrame.features.screenDepthPyramidRequired =
@@ -393,6 +433,8 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.features.ssrActive = ssrShadingActive;
     renderFrame.features.ssgiRequired = ssgiPassRequired;
     renderFrame.features.ssgiActive = ssgiShadingActive;
+    renderFrame.features.lightingCompositeRequired =
+        ssrShadingActive || ssgiShadingActive;
     renderFrame.features.ddgiRequired = ddgiPassRequired;
     renderFrame.features.ddgiActive = ddgiShadingActive;
     renderFrame.features.bloomRequired =
@@ -402,8 +444,30 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.features.captureSource =
         renderFrame.features.captureRequired ? captureSource : std::nullopt;
     renderFrame.screenshotCopy = std::move(screenshotCopy);
+    renderGraph_.prepareGraph(renderFrame, *renderResources_, visibility);
+    const RenderResourceResidencyUpdate residencyUpdate =
+        renderGraph_.prepareResources(
+        *renderResources_, renderFrame.features,
+        frame.frameIndex,
+        frameSync_->lastSubmittedSerial(),
+        frameSync_->completedSubmissionSerial());
+    if (residencyUpdate.physicalResourcesChanged ||
+        shadowBindingsChanged) {
+        createLightingGeneration(
+            currentLightingGeneration_
+                ? currentLightingGeneration_->environment
+                : fallbackEnvironment_,
+            currentLightingGeneration_
+                ? currentLightingGeneration_->reflectionProbeEnvironments
+                : std::vector<std::shared_ptr<EnvironmentGpuResources>>{});
+    }
+    updateAtmosphereDescriptor(frame.frameIndex,
+                               renderFrame.features.atmosphereRequired);
+    renderFrame.lightingDescriptorSet =
+        currentLightingGeneration_->sets.at(frame.frameIndex);
+    updateScreenSpaceDescriptor(frame.frameIndex, activeAoMode);
     if (!ddgiShadingActive)
-        ddgiPass_->disableSampling(frame.frameIndex);
+        ddgiPass_->disableSampling(frame.frameIndex, *renderResources_);
     lastSurfaceDataActive_ = renderFrame.features.surfaceDataRequired;
 
     screenSpaceStatus_.requestedMode = view.settings.ambientOcclusionMode;
@@ -542,15 +606,14 @@ void Renderer::createUniformBuffers() {
 
 RendererHdrOutput Renderer::hdrOutput() const {
     RendererHdrOutput output{};
+    const RenderImageHandle source =
+        renderResources_->resident(resourceHandles_.compositedHdrColor)
+            ? resourceHandles_.compositedHdrColor
+            : resourceHandles_.hdrColor;
     output.extent = renderResources_->viewportExtent();
-    output.format = renderResources_
-                        ->description(resourceHandles_.compositedHdrColor)
-                        .format;
+    output.format = renderResources_->description(source).format;
     for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
-        output.images[frame] =
-            renderResources_
-                ->image(resourceHandles_.compositedHdrColor, frame)
-                .handle();
+        output.images[frame] = renderResources_->image(source, frame).handle();
     }
     return output;
 }
@@ -902,10 +965,10 @@ void Renderer::createAtmosphereDescriptorSetLayout() {
 
 void Renderer::createAtmosphereDescriptorSets() {
     const std::array<RenderImageHandle, 4> images = {
-        resourceHandles_.atmosphereTransmittance,
-        resourceHandles_.atmosphereMultipleScattering,
-        resourceHandles_.atmosphereSkyView,
-        resourceHandles_.atmosphereAerialPerspective};
+        resourceHandles_.atmosphereTransmittanceFallback,
+        resourceHandles_.atmosphereScatteringFallback,
+        resourceHandles_.atmosphereScatteringFallback,
+        resourceHandles_.atmosphereAerialFallback};
     const VkSampler sampler =
         renderResources_->sampler(resourceHandles_.atmosphereSampler);
     for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
@@ -949,15 +1012,50 @@ void Renderer::createAtmosphereDescriptorSets() {
     }
 }
 
+void Renderer::updateAtmosphereDescriptor(uint32_t frameIndex,
+                                          bool active) {
+    const std::array<RenderImageHandle, 4> images =
+        active
+            ? std::array<RenderImageHandle, 4>{
+                  resourceHandles_.atmosphereTransmittance,
+                  resourceHandles_.atmosphereMultipleScattering,
+                  resourceHandles_.atmosphereSkyView,
+                  resourceHandles_.atmosphereAerialPerspective}
+            : std::array<RenderImageHandle, 4>{
+                  resourceHandles_.atmosphereTransmittanceFallback,
+                  resourceHandles_.atmosphereScatteringFallback,
+                  resourceHandles_.atmosphereScatteringFallback,
+                  resourceHandles_.atmosphereAerialFallback};
+    const VkSampler sampler =
+        renderResources_->sampler(resourceHandles_.atmosphereSampler);
+    std::array<VkDescriptorImageInfo, 4> imageInfos{};
+    std::array<VkWriteDescriptorSet, 4> writes{};
+    for (uint32_t index = 0; index < images.size(); ++index) {
+        imageInfos[index] = {
+            sampler,
+            renderResources_->image(images[index], frameIndex).imageView(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        writes[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[index].dstSet = atmosphereDescriptorSets_[frameIndex];
+        writes[index].dstBinding = index + 1;
+        writes[index].descriptorType =
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[index].descriptorCount = 1;
+        writes[index].pImageInfo = &imageInfos[index];
+    }
+    vkUpdateDescriptorSets(device_->logicalDevice(),
+                           static_cast<uint32_t>(writes.size()),
+                           writes.data(), 0, nullptr);
+}
+
 void Renderer::initializeAtmosphereImages() {
     UploadContext upload(*device_, nullptr, 64 * 1024,
                          "AtmosphereFallbacks");
     VkCommandBuffer cmd = upload.commandBuffer();
-    const std::array<RenderImageHandle, 4> handles = {
-        resourceHandles_.atmosphereTransmittance,
-        resourceHandles_.atmosphereMultipleScattering,
-        resourceHandles_.atmosphereSkyView,
-        resourceHandles_.atmosphereAerialPerspective};
+    const std::array<RenderImageHandle, 3> handles = {
+        resourceHandles_.atmosphereTransmittanceFallback,
+        resourceHandles_.atmosphereScatteringFallback,
+        resourceHandles_.atmosphereAerialFallback};
     for (RenderImageHandle handle : handles) {
         const RenderImageDesc &desc = renderResources_->description(handle);
         const uint32_t count =
@@ -981,7 +1079,8 @@ void Renderer::initializeAtmosphereImages() {
                                  VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
                                  nullptr, 0, nullptr, 1, &toClear);
             VkClearColorValue clear{};
-            if (handle == resourceHandles_.atmosphereTransmittance)
+            if (handle ==
+                resourceHandles_.atmosphereTransmittanceFallback)
                 clear.float32[0] = clear.float32[1] =
                     clear.float32[2] = clear.float32[3] = 1.0f;
             else
@@ -1009,9 +1108,9 @@ void Renderer::initializeShadowImages() {
                          "ShadowLayouts");
     VkCommandBuffer cmd = upload.commandBuffer();
     const std::array<RenderImageHandle, 3> handles = {
-        resourceHandles_.directionalShadowDepth,
-        resourceHandles_.pointShadowDepth,
-        resourceHandles_.spotShadowDepth};
+        resourceHandles_.directionalShadowFallback,
+        resourceHandles_.pointShadowFallback,
+        resourceHandles_.spotShadowFallback};
     for (RenderImageHandle handle : handles) {
         const RenderImageDesc &desc = renderResources_->description(handle);
         const Image &image = renderResources_->image(handle, 0);
@@ -1113,6 +1212,19 @@ void Renderer::createLightingGeneration(
     generation->reflectionProbeEnvironments =
         std::move(reflectionProbeEnvironments);
     generation->generation = nextLightingDescriptorGeneration_++;
+    const auto residentOrFallback =
+        [this](RenderImageHandle image, RenderImageHandle fallback) {
+            return renderResources_->resident(image) ? image : fallback;
+        };
+    const RenderImageHandle directionalShadow = residentOrFallback(
+        activeDirectionalShadowImage_,
+        resourceHandles_.directionalShadowFallback);
+    const RenderImageHandle pointShadow = residentOrFallback(
+        activePointShadowImage_,
+        resourceHandles_.pointShadowFallback);
+    const RenderImageHandle spotShadow = residentOrFallback(
+        activeSpotShadowImage_,
+        resourceHandles_.spotShadowFallback);
     for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT;
          ++frameIndex) {
         VkDescriptorSet set = descriptorAllocator_->allocate(
@@ -1127,10 +1239,7 @@ void Renderer::createLightingGeneration(
         images[0].sampler =
             renderResources_->sampler(resourceHandles_.shadowSampler);
         images[0].imageView =
-            renderResources_
-                ->image(resourceHandles_.directionalShadowDepth,
-                        frameIndex)
-                .imageView();
+            renderResources_->image(directionalShadow, frameIndex).imageView();
         images[0].imageLayout =
             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
         const auto fillEnvironment =
@@ -1207,9 +1316,7 @@ void Renderer::createLightingGeneration(
         pointShadowInfo.sampler =
             renderResources_->sampler(resourceHandles_.pointShadowSampler);
         pointShadowInfo.imageView =
-            renderResources_
-                ->image(resourceHandles_.pointShadowDepth, frameIndex)
-                .imageView();
+            renderResources_->image(pointShadow, frameIndex).imageView();
         pointShadowInfo.imageLayout =
             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
         writes[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1224,9 +1331,7 @@ void Renderer::createLightingGeneration(
         spotShadowInfo.sampler =
             renderResources_->sampler(resourceHandles_.spotShadowSampler);
         spotShadowInfo.imageView =
-            renderResources_
-                ->image(resourceHandles_.spotShadowDepth, frameIndex)
-                .imageView();
+            renderResources_->image(spotShadow, frameIndex).imageView();
         spotShadowInfo.imageLayout =
             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
         writes[8].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1594,13 +1699,15 @@ void Renderer::createRenderGraph() {
         globalDescriptorSetLayout_,
         shaderPaths_.shadowVert, shaderPaths_.shadowMaskFrag));
     renderGraph_.addPass(std::make_unique<PointShadowPass>(
-        *device_, *renderResources_, resourceHandles_.pointShadowDepth,
+        *device_, *renderResources_,
+        resourceHandles_.pointShadowDepthByCapacity,
         *descriptorAllocator_,
         shaderPaths_.shadowPunctualVert,
         shaderPaths_.shadowPointFrag,
         shaderPaths_.shadowPointMaskFrag));
     renderGraph_.addPass(std::make_unique<SpotShadowPass>(
-        *device_, *renderResources_, resourceHandles_.spotShadowDepth,
+        *device_, *renderResources_,
+        resourceHandles_.spotShadowDepthByCapacity,
         *descriptorAllocator_,
         shaderPaths_.shadowPunctualVert,
         shaderPaths_.shadowSpotMaskFrag));
@@ -1610,8 +1717,8 @@ void Renderer::createRenderGraph() {
             *device_, *renderResources_, resourceHandles_,
             *descriptorAllocator_, globalDescriptorSetLayout_,
             shaderPaths_.surfacePrepassVert,
-            shaderPaths_.surfacePrepassOpaqueFrag,
-            shaderPaths_.surfacePrepassMaskFrag);
+            shaderPaths_.surfacePrepassOpaqueFrags,
+            shaderPaths_.surfacePrepassMaskFrags);
         surfacePrepass_ = surfacePass.get();
         renderGraph_.addPass(std::move(surfacePass));
     }
@@ -1732,7 +1839,6 @@ void Renderer::createRenderGraph() {
         ForwardPhase::Transparent,
         lightingDescriptorSetLayout_, atmosphereDescriptorSetLayout_,
         ddgiPass_->samplingDescriptorSetLayout()));
-    postProcessHandles.hdrColor = resourceHandles_.compositedHdrColor;
 
     if (screenSupport.taaAvailable) {
         auto taaPass = std::make_unique<TaaPass>(
@@ -1751,6 +1857,7 @@ void Renderer::createRenderGraph() {
 
     auto toneMapPass = std::make_unique<ToneMapPass>(
         *device_, *renderResources_, postProcessHandles.hdrColor,
+        resourceHandles_.compositedHdrColor,
         resourceHandles_.hdrSampler, resourceHandles_.bloomLevels.front(),
         resourceHandles_.bloomSampler, resourceHandles_.viewportColor,
         resourceHandles_.surfaceNormalRoughness,

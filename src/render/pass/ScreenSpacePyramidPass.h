@@ -49,6 +49,9 @@ class ScreenSpacePyramidPass final : public IRenderPass {
                     const VisibilityFrame &visibility) override;
     void releaseViewportResources() override;
     void onViewportResize(const RenderResourceRegistry &resources) override;
+    void onResourceResidencyChanged(
+        const RenderResourceRegistry &resources, uint32_t frameIndex,
+        const std::vector<RenderImageHandle> &createdImages) override;
 
   private:
     void createDescriptorSetLayout();

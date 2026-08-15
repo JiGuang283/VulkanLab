@@ -71,6 +71,24 @@ struct RenderImageDesc {
     RenderMipPolicy mipPolicy = RenderMipPolicy::Fixed;
     bool historyCapable = false;
     VkImageCreateFlags createFlags = 0;
+    // Resources initialized or consumed outside the frame graph remain
+    // resident until their external ownership is migrated into the graph.
+    bool persistentResidency = false;
+};
+
+enum class RenderResourceResidency {
+    Unallocated,
+    Resident,
+    Retiring,
+};
+
+struct RenderResourceResidencyUpdate {
+    bool physicalResourcesChanged = false;
+    uint32_t created = 0;
+    uint32_t retired = 0;
+    uint32_t destroyed = 0;
+    std::vector<RenderImageHandle> createdImages;
+    std::vector<RenderImageHandle> destroyedImages;
 };
 
 struct RenderSamplerDesc {
@@ -129,8 +147,11 @@ struct RendererResourceHandles {
     RenderImageHandle mainDepth{};
     RenderImageHandle viewportColor{};
     RenderImageHandle directionalShadowDepth{};
-    RenderImageHandle pointShadowDepth{};
-    RenderImageHandle spotShadowDepth{};
+    std::array<RenderImageHandle, 4> pointShadowDepthByCapacity{};
+    std::array<RenderImageHandle, 4> spotShadowDepthByCapacity{};
+    RenderImageHandle directionalShadowFallback{};
+    RenderImageHandle pointShadowFallback{};
+    RenderImageHandle spotShadowFallback{};
     RenderImageHandle surfaceDepth{};
     RenderImageHandle surfaceNormalRoughness{};
     RenderImageHandle surfaceMotion{};
@@ -186,9 +207,14 @@ struct RendererResourceHandles {
     RenderImageHandle atmosphereMultipleScattering{};
     RenderImageHandle atmosphereSkyView{};
     RenderImageHandle atmosphereAerialPerspective{};
+    RenderImageHandle atmosphereTransmittanceFallback{};
+    RenderImageHandle atmosphereScatteringFallback{};
+    RenderImageHandle atmosphereAerialFallback{};
     RenderSamplerHandle atmosphereSampler{};
     RenderImageHandle ddgiIrradiance{};
     RenderImageHandle ddgiDistance{};
+    RenderImageHandle ddgiIrradianceFallback{};
+    RenderImageHandle ddgiDistanceFallback{};
     RenderSamplerHandle ddgiSampler{};
 };
 
@@ -205,11 +231,16 @@ class RenderResourceRegistry {
     RenderImageHandle registerImage(RenderImageDesc desc);
     RenderSamplerHandle registerSampler(RenderSamplerDesc desc);
     void realize(VkExtent2D viewportExtent);
+    RenderResourceResidencyUpdate synchronizeResidency(
+        const std::vector<RenderImageHandle> &activeImages,
+        uint64_t lastSubmittedSerial, uint64_t completedSerial);
     void releaseViewportDependent();
     void recreateViewportDependent(VkExtent2D viewportExtent);
 
     bool valid(RenderImageHandle handle) const;
     bool valid(RenderSamplerHandle handle) const;
+    bool resident(RenderImageHandle handle) const;
+    RenderResourceResidency residency(RenderImageHandle handle) const;
     const RenderImageDesc &description(RenderImageHandle handle) const;
     const std::vector<RenderImageDesc> &imageDescriptions() const {
         return imageDescriptions_;
@@ -233,7 +264,10 @@ class RenderResourceRegistry {
     VkExtent2D viewportExtent() const { return viewportExtent_; }
     uint32_t frameCount() const { return frameCount_; }
     uint64_t estimatedResidentBytes() const;
+    uint64_t estimatedRetiringBytes() const;
+    uint64_t estimatedLogicalBytes() const;
     uint64_t estimatedBytes(RenderImageHandle handle) const;
+    uint64_t residencyGeneration() const { return residencyGeneration_; }
 
   private:
     struct AttachmentView {
@@ -249,6 +283,8 @@ class RenderResourceRegistry {
 
     void destroyAttachmentViews(
         std::optional<uint32_t> imageIndex = std::nullopt);
+    void updateMipLevelCount(uint32_t index);
+    void destroyImageEntry(uint32_t index);
     void createImageEntry(uint32_t index);
     void createSamplerEntry(uint32_t index);
 
@@ -258,10 +294,13 @@ class RenderResourceRegistry {
     bool realized_ = false;
     std::vector<RenderImageDesc> imageDescriptions_;
     std::vector<std::vector<std::unique_ptr<Image>>> images_;
+    std::vector<RenderResourceResidency> residency_;
+    std::vector<uint64_t> retireAfterSerial_;
     mutable std::vector<AttachmentView> attachmentViews_;
     std::vector<uint32_t> realizedMipLevels_;
     std::vector<RenderSamplerDesc> samplerDescriptions_;
     std::vector<VkSampler> samplers_;
+    uint64_t residencyGeneration_ = 0;
 };
 
 RendererResourceHandles

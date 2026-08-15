@@ -17,6 +17,7 @@
 #include "render/RenderView.h"
 #include "render/Visibility.h"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <glm/gtc/matrix_inverse.hpp>
@@ -77,7 +78,7 @@ TaaPass::~TaaPass() {
 }
 
 void TaaPass::setup(RenderGraphBuilder &builder,
-                    const RenderGraphBuildContext &) const {
+                    const RenderGraphBuildContext &context) const {
     builder.addNode(std::string(name()), RgPassType::Compute,
                     RgQueueClass::Graphics);
     const auto sampled = [&](RenderImageHandle image, VkImageLayout layout,
@@ -86,7 +87,9 @@ void TaaPass::setup(RenderGraphBuilder &builder,
         builder.useImage({image, RenderImageAccess::SampledRead, layout,
                           layout, frame});
     };
-    sampled(resourceHandles_.hdrColor,
+    sampled(context.features.lightingCompositeRequired
+                ? resourceHandles_.compositedHdrColor
+                : resourceHandles_.hdrColor,
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     sampled(resourceHandles_.surfaceDepth,
             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
@@ -126,6 +129,21 @@ void TaaPass::onViewportResize(const RenderResourceRegistry &resources) {
     createDescriptors(resources);
 }
 
+void TaaPass::onResourceResidencyChanged(
+    const RenderResourceRegistry &resources, uint32_t,
+    const std::vector<RenderImageHandle> &createdImages) {
+    const auto created = [&](RenderImageHandle handle) {
+        return std::find(createdImages.begin(), createdImages.end(), handle) !=
+               createdImages.end();
+    };
+    if (!created(resourceHandles_.taaHistory) &&
+        !created(resourceHandles_.taaDebug)) {
+        return;
+    }
+    releaseViewportResources();
+    onViewportResize(resources);
+}
+
 void TaaPass::recordNode(RenderGraphPassContext &context, uint32_t,
                          const VisibilityFrame &visibility) {
     const RenderFrameContext &frame = context.frame;
@@ -134,6 +152,12 @@ void TaaPass::recordNode(RenderGraphPassContext &context, uint32_t,
     status_.jitterPixels = visibility.history.currentJitterPixels;
     if (!frame.features.taaRequired || !frame.pipelineCache || !frame.view)
         return;
+
+    updateColorSource(
+        resources, frame.frameIndex,
+        frame.features.lightingCompositeRequired
+            ? resourceHandles_.compositedHdrColor
+            : resourceHandles_.hdrColor);
 
     VKL_PROFILE_ZONE("Record TAA");
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "TAA");
@@ -337,6 +361,22 @@ void TaaPass::createDescriptors(
                                static_cast<uint32_t>(writes.size()),
                                writes.data(), 0, nullptr);
     }
+}
+
+void TaaPass::updateColorSource(
+    const RenderResourceRegistry &resources, uint32_t frameIndex,
+    RenderImageHandle source) {
+    VkDescriptorImageInfo info{
+        resources.sampler(resourceHandles_.hdrSampler),
+        resources.image(source, frameIndex).imageView(),
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = descriptorSets_[frameIndex];
+    write.dstBinding = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.descriptorCount = 1;
+    write.pImageInfo = &info;
+    vkUpdateDescriptorSets(device_->logicalDevice(), 1, &write, 0, nullptr);
 }
 
 void TaaPass::freeDescriptors() {

@@ -11,6 +11,13 @@
 #include "include/ddgi_sampling.glsl"
 #include "include/shadow_sampling.glsl"
 
+#ifndef VKL_FORWARD_SPECULAR_OUTPUT
+#define VKL_FORWARD_SPECULAR_OUTPUT 1
+#endif
+#ifndef VKL_FORWARD_DIFFUSE_OUTPUT
+#define VKL_FORWARD_DIFFUSE_OUTPUT 1
+#endif
+
 const float PI = 3.14159265359;
 
 layout(location = 0) in vec3 fragPositionWS;
@@ -22,8 +29,12 @@ layout(location = 5) in vec4 fragColor;
 
 
 layout(location = 0) out vec4 outColor;
+#if VKL_FORWARD_SPECULAR_OUTPUT
 layout(location = 1) out vec4 outBaselineSpecular;
+#endif
+#if VKL_FORWARD_DIFFUSE_OUTPUT
 layout(location = 2) out vec4 outBaselineDiffuse;
+#endif
 
 bool isMaskAlphaMode()
 {
@@ -279,8 +290,12 @@ void main()
     if (!isBlendAlphaMode() && transmissionFactor() <= 0.0 &&
         ddgiIsActive() && ddgiSampling.updateWindow.w != 0u) {
         outColor = vec4(evaluateDdgiDebug(fragPositionWS, n), 1.0);
+#if VKL_FORWARD_SPECULAR_OUTPUT
         outBaselineSpecular = vec4(0.0);
+#endif
+#if VKL_FORWARD_DIFFUSE_OUTPUT
         outBaselineDiffuse = vec4(0.0);
+#endif
         return;
     }
     vec3 color = applyTransmissionApprox(
@@ -297,6 +312,10 @@ void main()
         baselineDiffuse *= aerial.a;
     }
     outColor = vec4(color, materialAlpha(baseColor.a));
+#if VKL_FORWARD_SPECULAR_OUTPUT
     outBaselineSpecular = vec4(baselineSpecular, 1.0);
+#endif
+#if VKL_FORWARD_DIFFUSE_OUTPUT
     outBaselineDiffuse = vec4(baselineDiffuse, materialAo);
+#endif
 }

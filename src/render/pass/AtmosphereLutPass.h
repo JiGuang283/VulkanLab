@@ -36,6 +36,9 @@ class AtmosphereLutPass final : public IRenderPass {
     }
     void setup(RenderGraphBuilder &builder,
                const RenderGraphBuildContext &context) const override;
+    void onResourceResidencyChanged(
+        const RenderResourceRegistry &resources, uint32_t frameIndex,
+        const std::vector<RenderImageHandle> &createdImages) override;
     void recordNode(RenderGraphPassContext &context,
                     uint32_t localNodeIndex,
                     const VisibilityFrame &visibility) override;
