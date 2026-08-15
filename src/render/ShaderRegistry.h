@@ -11,7 +11,9 @@ namespace vkr {
 
 class ShaderRegistry {
   public:
-    static constexpr uint32_t kSchemaVersion = 1;
+    static constexpr uint32_t kSchemaVersion = 2;
+
+    bool supportsBindlessMaterials() const;
 
     static ShaderRegistry load(const std::filesystem::path &manifestPath);
 

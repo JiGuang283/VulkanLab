@@ -13,6 +13,7 @@
 #include "render/FrameGpuData.h"
 #include "render/GpuMaterialData.h"
 #include "render/MaterialInstance.h"
+#include "render/MaterialSystem.h"
 #include "render/MaterialTemplate.h"
 #include "render/Mesh.h"
 #include "render/PipelineCache.h"
@@ -297,6 +298,7 @@ void SurfacePrepass::draw(const RenderFrameContext &frame,
                           const RenderResourceRegistry &resources,
                           const VisibilityFrame &visibility) {
     Pipeline *boundPipeline = nullptr;
+    const MaterialInstance *boundMaterial = nullptr;
     for (RenderItemIndex itemIndex : visibility.cameraOpaque) {
         const RenderItem &item = visibility.items.at(itemIndex);
         if (!item.mesh || !item.material)
@@ -361,18 +363,22 @@ void SurfacePrepass::draw(const RenderFrameContext &frame,
                                     VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     pipeline.layout(), 2, 1,
                                     &frameSets[1], 0, nullptr);
+            frame.materialSystem->bindGlobal(frame.cmd, pipeline.layout());
             boundPipeline = &pipeline;
+            boundMaterial = nullptr;
         }
-        item.material->bindDescriptors(frame.cmd, pipeline.layout(),
-                                       frame.frameIndex);
+        if (frame.materialSystem->activeMode() ==
+                MaterialBindingMode::Legacy &&
+            boundMaterial != item.material) {
+            item.material->bindDescriptors(frame.cmd, pipeline.layout(),
+                                           frame.frameIndex);
+            boundMaterial = item.material;
+        }
 
         GpuPushBlock block{};
         block.model = item.world;
-        block.baseColorFactor = params.baseColorFactor;
-        block.emissiveMetallic.w = params.metallicFactor;
-        block.roughnessAlpha.x = params.roughnessFactor;
-        block.roughnessAlpha.y = params.alphaCutoff;
-        block.reserved.z = params.normalScale;
+        block.indices =
+            glm::uvec4(item.materialIndex, itemIndex, 0u, 0u);
         vkCmdPushConstants(frame.cmd, pipeline.layout(),
                            VK_SHADER_STAGE_VERTEX_BIT |
                                VK_SHADER_STAGE_FRAGMENT_BIT,

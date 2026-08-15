@@ -11,6 +11,7 @@ namespace vkr {
 
 class Device;
 class DescriptorAllocator;
+class MaterialSystem;
 class Scene;
 class UploadContext;
 class CancellationToken;
@@ -39,7 +40,7 @@ struct SceneLoadContext {
 /// material templates; Application builds the shared opaque pipeline from the
 /// scene's primary template.
 using SceneFactory = std::function<std::unique_ptr<Scene>(
-    Device &, UploadContext &, DescriptorAllocator &,
+    Device &, UploadContext &, DescriptorAllocator &, MaterialSystem &,
     const SceneLoadContext &)>;
 
 using ModelPrepareFactory = std::function<PreparedModelData(

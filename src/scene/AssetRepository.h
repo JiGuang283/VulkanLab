@@ -14,6 +14,7 @@ namespace vkr {
 
 class DescriptorAllocator;
 class Device;
+class MaterialSystem;
 
 enum class ModelAssetRequestPolicy { UseCached, Reload };
 
@@ -53,7 +54,8 @@ struct AssetRepositorySnapshot {
 
 class AssetRepository {
   public:
-    AssetRepository(Device &device, DescriptorAllocator &descriptorAllocator);
+    AssetRepository(Device &device, DescriptorAllocator &descriptorAllocator,
+                    MaterialSystem &materialSystem);
     ~AssetRepository();
 
     AssetRepository(const AssetRepository &) = delete;

@@ -88,6 +88,17 @@ void Buffer::invalidate(VkDeviceSize offset, VkDeviceSize size) {
                                      size));
 }
 
+void Buffer::flush(VkDeviceSize offset, VkDeviceSize size) {
+    if (offset > size_)
+        throw std::out_of_range("buffer flush range is out of bounds");
+    if (size == VK_WHOLE_SIZE)
+        size = size_ - offset;
+    if (size > size_ - offset)
+        throw std::out_of_range("buffer flush range is out of bounds");
+    VK_CHECK(vmaFlushAllocation(device_->allocator(), allocation_, offset,
+                                size));
+}
+
 void Buffer::unmap() {
     if (mapped_) {
         vmaUnmapMemory(device_->allocator(), allocation_);

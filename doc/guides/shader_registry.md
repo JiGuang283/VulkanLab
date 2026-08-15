@@ -1,8 +1,8 @@
 # Shader Registry
 
 > Status: Current
-> Last verified: 2026-08-02
-> Verified against: DDGI v1 implementation
+> Last verified: 2026-08-15
+> Verified against: Bindless Material Resources v1
 
 Shader 注册的唯一权威来源是
 [`shader/manifest.json`](../../shader/manifest.json)。运行时不会扫描目录或根据
@@ -17,6 +17,7 @@ contract tests 都读取同一份 Manifest。
 - `contract`：`main-forward`、`shadow-depth`、`fullscreen` 或 `compute`。
 - `vertex` / `fragment`：graphics program 的 GLSL 源路径。
 - `compute`：compute program 的 GLSL 源路径，不能与 graphics stage 混用。
+- `materialTextures`：可选布尔值，声明 fragment shader 使用 Material SSBO 和五个材质纹理槽。启用时 CMake 从同一 GLSL 同时生成普通 `*.spv` 和带 `VKL_BINDLESS_MATERIALS=1` 的 `*.bindless.spv`；运行时按启动时选定的材质绑定后端选择其中一份。
 - `sceneLights`：可选布尔值，声明 Main Forward fragment shader 是否读取 `set=0 binding=1` 的 Scene Light SSBO；缺省为 `false`，当前只由两个 PBR program 启用。
 - `atmosphere`：可选布尔值，声明 program 是否使用 Atmosphere UBO/LUT descriptor；缺省为 `false`。两个 PBR program、四个 Atmosphere compute program 和 Atmosphere Sky program 启用该字段。
 - `ddgi`：可选布尔值，只允许 Main Forward program 使用，声明 fragment shader 是否读取固定 `set=5` DDGI sampling descriptor；缺省为 `false`，当前两个 PBR program 启用。
@@ -39,6 +40,12 @@ contract tests 都读取同一份 Manifest。
 所有 stage 路径相对于 `shader/`，使用 `/` 且不得包含 `..`。Manifest 记录
 GLSL 路径，例如 `pbr_lite/forward.vert`；运行时 SPIR-V 路径自动成为
 `shader/pbr_lite/forward.vert.spv`。
+
+Manifest schema v2 要求所有 `materialTextures=true` 的 program 都具有 fragment
+stage。两份 fragment 产物必须分别通过 `spirv-val`，Cook 会同时收集它们，使
+Auto 模式可以在目标设备上选择 Bindless，也可以通过 `--material-binding legacy`
+强制固定 descriptor 路径。材质 Shader 应通过 `material_data.glsl` 和
+`material_textures.glsl` 访问参数与纹理，不能自行声明另一套 set 1 ABI。
 
 ## 新增 Forward Variant
 

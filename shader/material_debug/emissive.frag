@@ -1,33 +1,32 @@
 #version 450
 
 #extension GL_GOOGLE_include_directive : require
-#include "include/material_push.glsl"
+#include "include/material_data.glsl"
+#include "include/material_textures.glsl"
 
 layout(location = 1) in vec2 fragTexCoord;
 layout(location = 5) in vec4 fragColor;
 
-layout(set = 1, binding = 0) uniform sampler2D baseColorTexture;
-layout(set = 1, binding = 4) uniform sampler2D emissiveTexture;
 
 layout(location = 0) out vec4 outColor;
 
 bool isMaskAlphaMode()
 {
-    return abs(push.reserved.x - 1.0) < 0.5;
+    return abs(float(materialData().textureIndices1.z) - 1.0) < 0.5;
 }
 
 void applyAlphaCutoff(float alpha)
 {
-    if (isMaskAlphaMode() && alpha < push.roughnessAlpha.y) discard;
+    if (isMaskAlphaMode() && alpha < materialData().roughnessAlphaOcclusionNormal.y) discard;
 }
 
 void main()
 {
-    float baseAlpha = texture(baseColorTexture, fragTexCoord).a *
-                      push.baseColorFactor.a * fragColor.a;
+    float baseAlpha = sampleBaseColor( fragTexCoord).a *
+                      materialData().baseColorFactor.a * fragColor.a;
     applyAlphaCutoff(baseAlpha);
 
-    vec3 emissive = texture(emissiveTexture, fragTexCoord).rgb *
-                    push.emissiveMetallic.rgb;
+    vec3 emissive = sampleEmissive( fragTexCoord).rgb *
+                    materialData().emissiveMetallic.rgb;
     outColor = vec4(emissive, 1.0);
 }

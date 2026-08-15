@@ -13,7 +13,7 @@ layout(location = 1) out vec4 fragColor;
 
 void main()
 {
-    uint cascadeIndex = uint(push.reserved.y);
+    uint cascadeIndex = push.indices.z;
     gl_Position = ubo.cascadeViewProj[cascadeIndex] * push.model *
                   vec4(inPosition, 1.0);
     fragTexCoord = inTexCoord;

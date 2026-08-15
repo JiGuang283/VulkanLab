@@ -174,6 +174,8 @@ VisibilityFrame VisibilitySystem::build(std::vector<RenderItem> source,
         if (item.sourceOrder == std::numeric_limits<uint32_t>::max())
             item.sourceOrder = index;
         item.primitiveIndex = item.key.primitiveIndex;
+        item.materialIndex =
+            item.material ? item.material->materialIndex() : 0u;
         if (isDefaultKey(item.key))
             item.key.fallbackOrdinal = item.sourceOrder + 1u;
         item.worldBounds = transformBounds(item.localBounds, item.world);

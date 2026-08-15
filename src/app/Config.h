@@ -4,6 +4,7 @@
 
 #include "core/ValidationProfile.h"
 #include "diagnostics/DiagnosticsConfig.h"
+#include "render/MaterialBindingMode.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -35,6 +36,7 @@ struct Config {
                            : ValidationProfile::Off;
     bool enableRuntimeControl = false;
     uint32_t gltfMaxTextureSize = 2048; // 0 = Full resolution
+    MaterialBindingMode materialBindingMode = MaterialBindingMode::Auto;
     AssetImportMode assetImportMode =
         build::kAssetAuthoring ? AssetImportMode::OnDemand
                                : AssetImportMode::ReadOnly;

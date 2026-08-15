@@ -1,8 +1,8 @@
 # 诊断与自动化启动配置
 
 > Status: Current
-> Last verified: 2026-08-01
-> Verified against: `86b809d`
+> Last verified: 2026-08-15
+> Verified against: Bindless Material Resources v1
 
 本文说明当前可用的构建诊断信息、确定性启动参数、独立 Runtime Control endpoint 和截图输出。端到端 smoke/golden 编排见[自动视觉回归](visual_regression.md)。
 
@@ -50,6 +50,11 @@ Debug 和 Release 分别写入 `build/windows-msvc-debug/` 与 `build/windows-ms
 
 Tracy 运行状态位于 `result.diagnostics.tracy`，包含编译状态、版本、是否已连接、GPU timestamp 可用性和连接模式。该状态由渲染器主线程生成，不依赖 Profiler GUI。
 
+材质绑定状态位于 `result.diagnostics.materialBinding`，包含 requested/active
+backend、设备与 Manifest 能力、固定容量、active/retiring/high-water 数量、
+descriptor 写入和 slot 复用/耗尽计数。逐帧运行状态也在
+`render.status.materials` 返回同一结构。
+
 没有 Git 或对应工具时字段明确返回 `unknown`。启用 Runtime Control 后可读取完整信息：
 
 ```powershell
@@ -74,7 +79,10 @@ Tracy 运行状态位于 `result.diagnostics.tracy`，包含编译状态、版�
   --capture-root .\artifacts\captures
 ```
 
-可在同一启动命令中增加 `--validation off|core|sync|gpu`。自动化验证应显式指定 profile，并检查 `system.info.diagnostics.validation.actual` 与 requested 一致。
+可在同一启动命令中增加 `--validation off|core|sync|gpu` 和
+`--material-binding auto|legacy|bindless`。自动化验证应显式指定 Validation
+profile，并检查 `system.info.diagnostics.validation.actual` 与 requested 一致；
+材质后端对比应检查 `system.info.diagnostics.materialBinding.active`。
 
 - `--automation`：禁用用户相机移动输入，并使窗口不可调整大小。
 - `--runtime-control-pipe SUFFIX`：把控制 endpoint 隔离为 `\\.\pipe\VulkanLab.SUFFIX`；最长 64 个字符，只允许 ASCII 字母、数字、`-` 和 `_`。

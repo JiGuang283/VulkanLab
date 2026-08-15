@@ -302,6 +302,47 @@ void checkSceneLightBuffer(const SpvReflectDescriptorBinding &binding,
     }
 }
 
+void checkMaterialBuffer(const SpvReflectDescriptorBinding &binding,
+                         std::string_view path) {
+    requireShader(binding.block.member_count == 1,
+                  "MaterialDataBuffer member count mismatch in " +
+                      std::string(path));
+    const SpvReflectBlockVariable &materials = binding.block.members[0];
+    requireShader(variableName(materials.name) == "materials" &&
+                      materials.array.dims_count == 1 &&
+                      materials.array.dims[0] ==
+                          SPV_REFLECT_ARRAY_DIM_RUNTIME &&
+                      materials.array.stride == sizeof(vkr::GpuMaterial),
+                  "GpuMaterial runtime-array mismatch in " +
+                      std::string(path));
+    static const std::vector<MemberLayout> members = {
+        {"baseColorFactor", offsetof(vkr::GpuMaterial, baseColorFactor)},
+        {"emissiveMetallic", offsetof(vkr::GpuMaterial, emissiveMetallic)},
+        {"roughnessAlphaOcclusionNormal",
+         offsetof(vkr::GpuMaterial, roughnessAlphaOcclusionNormal)},
+        {"transmissionVolume",
+         offsetof(vkr::GpuMaterial, transmissionVolume)},
+        {"attenuationColor", offsetof(vkr::GpuMaterial, attenuationColor)},
+        {"textureIndices0", offsetof(vkr::GpuMaterial, textureIndices0)},
+        {"textureIndices1", offsetof(vkr::GpuMaterial, textureIndices1)},
+        {"reserved", offsetof(vkr::GpuMaterial, reserved)},
+    };
+    requireShader(materials.member_count == members.size(),
+                  "GpuMaterial member count mismatch in " +
+                      std::string(path));
+    for (const auto &[expectedName, expectedOffset] : members) {
+        const auto *member = std::find_if(
+            materials.members, materials.members + materials.member_count,
+            [expectedName](const SpvReflectBlockVariable &candidate) {
+                return candidate.name && candidate.name == expectedName;
+            });
+        requireShader(member != materials.members + materials.member_count &&
+                          member->offset == expectedOffset,
+                      "GpuMaterial." + std::string(expectedName) +
+                          " layout mismatch in " + std::string(path));
+    }
+}
+
 void checkReflectionProbeBuffer(
     const SpvReflectDescriptorBinding &binding, std::string_view path) {
     requireShader(binding.block.member_count == 2,
@@ -451,9 +492,7 @@ void checkPushConstant(const SpvReflectShaderModule &module,
 
     static const std::vector<MemberLayout> materialMembers = {
         {"model", offsetof(vkr::GpuPushBlock, model)},
-        {"baseColorFactor", offsetof(vkr::GpuPushBlock, baseColorFactor)},
-        {"emissiveMetallic", offsetof(vkr::GpuPushBlock, emissiveMetallic)},
-        {"roughnessAlpha", offsetof(vkr::GpuPushBlock, roughnessAlpha)},
+        {"indices", offsetof(vkr::GpuPushBlock, indices)},
         {"reserved", offsetof(vkr::GpuPushBlock, reserved)},
     };
     checkBlockLayout(*blocks[0], sizeof(vkr::GpuPushBlock), materialMembers,
@@ -464,7 +503,9 @@ void checkDescriptors(const ReflectedModule &reflected,
                       vkr::ShaderProgramContract contract,
                       bool expectsSceneLights,
                       bool expectsAtmosphere,
-                      bool expectsScreenSpace) {
+                      bool expectsScreenSpace,
+                      bool expectsMaterialTextures,
+                      bool bindlessMaterialVariant) {
     const auto &module = reflected.module();
     const auto bindings = enumerateVariables<SpvReflectDescriptorBinding>(
         module, spvReflectEnumerateDescriptorBindings, "descriptor bindings",
@@ -822,12 +863,18 @@ void checkDescriptors(const ReflectedModule &reflected,
     bool foundSceneLights = false;
     uint32_t atmosphereBindingCount = 0;
     uint32_t screenSpaceBindingCount = 0;
+    uint32_t materialBindingCount = 0;
 
     for (const SpvReflectDescriptorBinding *binding : bindings) {
         const bool reflectionProbeArray =
             binding->set == 2 && binding->binding == 5 &&
             binding->count == vkr::kMaxReflectionProbes;
-        requireShader(binding->count == 1 || reflectionProbeArray,
+        const bool bindlessTextureArray =
+            bindlessMaterialVariant && binding->set == 1 &&
+            binding->binding == 1 && binding->array.dims_count == 1 &&
+            binding->array.dims[0] == SPV_REFLECT_ARRAY_DIM_RUNTIME;
+        requireShader(binding->count == 1 || reflectionProbeArray ||
+                          bindlessTextureArray,
                       "unexpected descriptor array in " + reflected.path());
         if (toneMap) {
             requireShader(
@@ -875,12 +922,25 @@ void checkDescriptors(const ReflectedModule &reflected,
                     reflected.path());
             checkSceneLightBuffer(*binding, reflected.path());
             foundSceneLights = true;
-        } else if (binding->set == 1 && binding->binding < 5) {
+        } else if (binding->set == 1 && binding->binding == 0) {
             requireShader(
                 binding->descriptor_type ==
+                        SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER &&
+                    stage == VK_SHADER_STAGE_FRAGMENT_BIT,
+                "material buffer contract mismatch in " + reflected.path());
+            checkMaterialBuffer(*binding, reflected.path());
+            ++materialBindingCount;
+        } else if (binding->set == 1 && binding->binding >= 1 &&
+                   binding->binding <= 5) {
+            const bool validBinding =
+                bindlessMaterialVariant ? binding->binding == 1
+                                        : binding->count == 1;
+            requireShader(
+                validBinding && binding->descriptor_type ==
                         SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
                     stage == VK_SHADER_STAGE_FRAGMENT_BIT,
                 "material descriptor contract mismatch in " + reflected.path());
+            ++materialBindingCount;
         } else if (contract == vkr::ShaderProgramContract::SurfacePrepass &&
                    binding->set == 2 && binding->binding == 0) {
             requireShader(
@@ -990,6 +1050,14 @@ void checkDescriptors(const ReflectedModule &reflected,
                       ? "missing screen-space descriptor set in " +
                             reflected.path()
                       : "unexpected screen-space descriptor set in " +
+                            reflected.path());
+    const uint32_t expectedMaterialBindings =
+        expectsMaterialTextures ? (bindlessMaterialVariant ? 2u : 6u) : 0u;
+    requireShader(materialBindingCount == expectedMaterialBindings,
+                  expectsMaterialTextures
+                      ? "material descriptor set mismatch in " +
+                            reflected.path()
+                      : "unexpected material descriptor set in " +
                             reflected.path());
 }
 
@@ -1119,13 +1187,17 @@ void testShaderContracts() {
     std::map<std::string, bool> moduleSceneLightContracts;
     std::map<std::string, bool> moduleAtmosphereContracts;
     std::map<std::string, bool> moduleScreenSpaceContracts;
+    std::map<std::string, bool> moduleMaterialContracts;
+    std::map<std::string, bool> moduleBindlessMaterialContracts;
     const auto reflect =
         [&](const std::string &absolutePath, const std::string &sourcePath,
             SpvReflectShaderStageFlagBits expectedStage,
             vkr::ShaderProgramContract contract,
             bool expectsSceneLights,
             bool expectsAtmosphere,
-            bool expectsScreenSpace) -> ReflectedModule & {
+            bool expectsScreenSpace,
+            bool expectsMaterialTextures,
+            bool bindlessMaterialVariant) -> ReflectedModule & {
         const auto existing = modules.find(absolutePath);
         if (existing != modules.end()) {
             requireShader(moduleContracts.at(absolutePath) == contract,
@@ -1147,6 +1219,13 @@ void testShaderContracts() {
                     expectsScreenSpace,
                 "a shader module is shared across incompatible screen-space "
                 "contracts: " + sourcePath);
+            requireShader(
+                moduleMaterialContracts.at(absolutePath) ==
+                        expectsMaterialTextures &&
+                    moduleBindlessMaterialContracts.at(absolutePath) ==
+                        bindlessMaterialVariant,
+                "a shader module is shared across incompatible material "
+                "contracts: " + sourcePath);
             return *existing->second;
         }
         const std::string runtimePath = "shader/" + sourcePath + ".spv";
@@ -1155,7 +1234,8 @@ void testShaderContracts() {
         requireShader(reflected->module().shader_stage == expectedStage,
                       "stage mismatch in " + runtimePath);
         checkDescriptors(*reflected, contract, expectsSceneLights,
-                         expectsAtmosphere, expectsScreenSpace);
+                         expectsAtmosphere, expectsScreenSpace,
+                         expectsMaterialTextures, bindlessMaterialVariant);
         checkPushConstant(reflected->module(), contract, expectsAtmosphere,
                           reflected->path());
         checkVertexInputs(*reflected, contract);
@@ -1167,6 +1247,10 @@ void testShaderContracts() {
         moduleAtmosphereContracts.emplace(absolutePath, expectsAtmosphere);
         moduleScreenSpaceContracts.emplace(absolutePath,
                                            expectsScreenSpace);
+        moduleMaterialContracts.emplace(absolutePath,
+                                        expectsMaterialTextures);
+        moduleBindlessMaterialContracts.emplace(absolutePath,
+                                                bindlessMaterialVariant);
         return result;
     };
 
@@ -1176,7 +1260,8 @@ void testShaderContracts() {
         if (!program.vertSpvPath.empty()) {
             vertex = &reflect(program.vertSpvPath, program.vertexSourcePath,
                               SPV_REFLECT_SHADER_STAGE_VERTEX_BIT,
-                              program.contract, false, false, false);
+                              program.contract, false, false, false, false,
+                              false);
         }
         if (!program.fragSpvPath.empty()) {
             fragment = &reflect(program.fragSpvPath,
@@ -1184,13 +1269,25 @@ void testShaderContracts() {
                                 SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT,
                                 program.contract, program.usesSceneLights,
                                 program.usesAtmosphere,
-                                program.usesScreenSpace);
+                                program.usesScreenSpace,
+                                program.usesMaterialTextures, false);
+            if (!program.bindlessFragSpvPath.empty()) {
+                ReflectedModule &bindlessFragment = reflect(
+                    program.bindlessFragSpvPath,
+                    program.fragmentSourcePath + ".bindless",
+                    SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT,
+                    program.contract, program.usesSceneLights,
+                    program.usesAtmosphere, program.usesScreenSpace,
+                    program.usesMaterialTextures, true);
+                if (vertex)
+                    checkProgramInterface(*vertex, &bindlessFragment);
+            }
         }
         if (!program.computeSpvPath.empty()) {
             (void)reflect(program.computeSpvPath, program.computeSourcePath,
                           SPV_REFLECT_SHADER_STAGE_COMPUTE_BIT,
                           program.contract, false,
-                          program.usesAtmosphere, false);
+                          program.usesAtmosphere, false, false, false);
         }
         if (vertex)
             checkProgramInterface(*vertex, fragment);

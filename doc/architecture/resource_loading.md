@@ -1,8 +1,8 @@
 # 资源加载
 
 > Status: Current
-> Last verified: 2026-08-07
-> Verified against: Shared Model/Environment repositories, Local Reflection Probes and DDGI v1
+> Last verified: 2026-08-15
+> Verified against: Shared Model/Environment repositories and Bindless Material Resources v1
 
 ## 项目、Catalog 与导入
 
@@ -140,7 +140,7 @@ Stage A 的文件导入事务完成 Catalog 注册后会立即提交派生资产
 
 ## 增量 GPU Build
 
-CPU prepare 完成后，Repository 将记录放入唯一的 GPU build FIFO。`ModelGpuBuilder` 每帧以默认 `32 MiB` 和 `2 ms` 软预算推进：fallback、Texture、Mesh、等待 GPU、Material、ModelAsset finalize。单个不可拆分 Texture/Mesh 可以超过软预算，但不会因大于预算而饥饿。整个过程继续渲染当前 Scene，不执行 scene teardown。
+CPU prepare 完成后，Repository 将记录放入唯一的 GPU build FIFO。`ModelGpuBuilder` 每帧以默认 `32 MiB` 和 `2 ms` 软预算推进：Texture、Mesh、等待 GPU、Material、ModelAsset finalize。全局 fallback texture 由 `MaterialSystem` 在启动时创建，不再由每个 ModelAsset 重复上传。单个不可拆分 Texture/Mesh 可以超过软预算，但不会因大于预算而饥饿。整个过程继续渲染当前 Scene，不执行 scene teardown。
 
 `IncrementalUploadQueue` 使用 graphics queue 和两个延迟创建的 slot。每个 slot 拥有独立的 128 MiB staging、command pool/buffer 和 fence：
 
@@ -148,11 +148,16 @@ CPU prepare 完成后，Repository 将记录放入唯一的 GPU build FIFO。`Mo
 - 当前 slot 放不下时提交，并继续使用另一个空闲 slot。
 - 普通帧只用 `vkGetFenceStatus()` 轮询，不调用无限期 `vkWaitForFences()` 或 `vkQueueWaitIdle()`。
 - fence 完成前不覆盖 staging，也不销毁关联的半成品 Texture/Mesh。
-- 全部上传完成后才创建材质 descriptor 并发布不可变 ModelAsset。
+- 全部上传完成后才向 MaterialSystem 注册 Texture/Material slot，并发布不可变 ModelAsset。
 
 取消或 GPU build 失败会停止记录新资源，提交已经记录的命令，并逐帧轮询在途 fence。相关 fence 完成后才销毁半成品；正常取消路径不使用 device idle。程序退出和显式 teardown 可以 drain。
 
-DescriptorAllocator 创建支持单独释放 set 的 pool。MaterialInstance 析构会归还 descriptor set，因此失败、取消和反复重载不会持续耗尽 pool 容量。
+`MaterialSystem` 是主线程拥有的全局材质资源表。Bindless 后端按 Texture 对象去重并
+写入固定容量的 update-after-bind descriptor array；Legacy 后端为每个 Material
+创建一套不可变 fixed-slot descriptor。两条路径共享 128B `GpuMaterial` SSBO。
+MaterialInstance 析构只提交 handle 退役，Material/Texture slot 和 Legacy set 必须
+等 `FrameSync` completed submission serial 越过最后一次使用后才能回收或复用，
+因此失败、取消和反复重载不会覆盖仍被 GPU 读取的数据。
 
 `RenderResourceRegistry` 不管理这里的 ModelAsset Texture/Mesh 或 Environment Texture，也不参与上传或 residency。它只拥有 Renderer 内部的 HDR、depth、shadow、Bloom、Viewport Color、程序化 Atmosphere LUT、DDGI probe atlas 和 sampler；模型与环境资源分别由 AssetRepository/ModelGpuBuilder、EnvironmentGpuBuilder、Texture/Mesh 与上传队列按上述生命周期管理。Atmosphere 与 DDGI Probe Volume 都是 SceneDocument 中的纯参数数据，不产生独立派生资产或加载任务。支持 Ray Query 时，Mesh 上传会同时构建 BLAS；TLAS 由 Renderer 按当前 frame slot 从 Render Items 动态构建，两者都不是 cache/Cook artifact。
 

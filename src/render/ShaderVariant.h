@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include "render/MaterialBindingMode.h"
 
 namespace vkr {
 
@@ -27,11 +28,20 @@ struct ShaderProgram {
     std::string computeSourcePath;
     std::string vertSpvPath;
     std::string fragSpvPath;
+    std::string bindlessFragSpvPath;
     std::string computeSpvPath;
     bool usesSceneLights = false;
     bool usesAtmosphere = false;
     bool usesScreenSpace = false;
     bool usesDdgi = false;
+    bool usesMaterialTextures = false;
+
+    const std::string &fragmentSpvPath(MaterialBindingMode mode) const {
+        return mode == MaterialBindingMode::Bindless &&
+                       !bindlessFragSpvPath.empty()
+                   ? bindlessFragSpvPath
+                   : fragSpvPath;
+    }
 };
 
 struct ShaderVariant {
@@ -49,6 +59,14 @@ struct ShaderVariant {
         ShaderToneMappingPolicy::PassThrough;
     std::string vertSpvPath;
     std::string fragSpvPath;
+    std::string bindlessFragSpvPath;
+
+    const std::string &fragmentSpvPath(MaterialBindingMode mode) const {
+        return mode == MaterialBindingMode::Bindless &&
+                       !bindlessFragSpvPath.empty()
+                   ? bindlessFragSpvPath
+                   : fragSpvPath;
+    }
 };
 
 } // namespace vkr

@@ -166,6 +166,7 @@ set(VKL_ENGINE_SOURCES
     render/PunctualShadowSliceBuffer.cpp
     render/GltfPreparer.cpp
     render/MaterialInstance.cpp
+    render/MaterialSystem.cpp
     render/MaterialTemplate.cpp
     render/Mesh.cpp
     render/PipelineCache.cpp

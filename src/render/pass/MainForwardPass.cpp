@@ -8,6 +8,7 @@
 #include "core/VulkanCheck.h"
 #include "render/GpuMaterialData.h"
 #include "render/MaterialInstance.h"
+#include "render/MaterialSystem.h"
 #include "render/MaterialTemplate.h"
 #include "render/Mesh.h"
 #include "render/PipelineCache.h"
@@ -202,6 +203,7 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
         ScopedGpuLabel queueLabel(device_->debugUtils(), frame.cmd,
                                   transparent ? "Transparent" : "Opaque");
         Pipeline *boundPipeline = nullptr;
+        const MaterialInstance *boundMaterial = nullptr;
 
         for (uint32_t drawIndex = 0; drawIndex < indices.size(); ++drawIndex) {
             const RenderItemIndex itemIndex = indices[drawIndex];
@@ -235,7 +237,8 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
             pipelineConfig.vertShaderPath =
                 frame.shaderVariant->vertSpvPath;
             pipelineConfig.fragShaderPath =
-                frame.shaderVariant->fragSpvPath;
+                frame.shaderVariant->fragmentSpvPath(
+                    frame.materialSystem->activeMode());
             pipelineConfig.debugName =
                 "Pipeline/MainForward/" + frame.shaderVariant->id + "/" +
                 (transparent ? "Transparent" : "Opaque") + "/" +
@@ -286,6 +289,8 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                     frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                     pipeline.layout(), 0, 1, &frame.globalDescriptorSet, 0,
                     nullptr);
+                frame.materialSystem->bindGlobal(frame.cmd,
+                                                  pipeline.layout());
                 vkCmdBindDescriptorSets(
                     frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                     pipeline.layout(), 2, 1,
@@ -309,25 +314,21 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                         &frame.ddgiDescriptorSet, 0, nullptr);
                 }
                 boundPipeline = &pipeline;
+                boundMaterial = nullptr;
             }
 
-            command.material->bindDescriptors(frame.cmd, pipeline.layout(),
-                                               frame.frameIndex);
+            if (frame.materialSystem->activeMode() ==
+                    MaterialBindingMode::Legacy &&
+                boundMaterial != command.material) {
+                command.material->bindDescriptors(
+                    frame.cmd, pipeline.layout(), frame.frameIndex);
+                boundMaterial = command.material;
+            }
 
             GpuPushBlock block{};
             block.model = command.world;
-            block.baseColorFactor = p.baseColorFactor;
-            block.emissiveMetallic =
-                glm::vec4(p.emissiveFactor * p.emissiveStrength,
-                          p.metallicFactor);
-            block.roughnessAlpha =
-                glm::vec4(p.roughnessFactor, p.alphaCutoff,
-                          glm::clamp(p.occlusionStrength, 0.0f, 1.0f),
-                          p.occlusionTexCoord == 1 ? 1.0f : 0.0f);
-            block.reserved =
-                glm::vec4(alphaModeToShaderValue(p.alphaMode),
-                          glm::clamp(p.transmissionFactor, 0.0f, 1.0f),
-                          glm::max(p.normalScale, 0.0f), 0.0f);
+            block.indices = glm::uvec4(command.materialIndex, itemIndex, 0u,
+                                       0u);
 
             vkCmdPushConstants(frame.cmd, pipeline.layout(),
                                VK_SHADER_STAGE_VERTEX_BIT |

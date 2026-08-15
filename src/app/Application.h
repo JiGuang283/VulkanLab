@@ -37,6 +37,7 @@ class InputManager;
 class VulkanContext;
 class Device;
 class DescriptorAllocator;
+class MaterialSystem;
 class SwapChain;
 class FrameSync;
 class Renderer;
@@ -249,6 +250,7 @@ class Application final
     std::unique_ptr<VulkanContext>       context_;
     std::unique_ptr<Device>              device_;
     std::unique_ptr<DescriptorAllocator> descriptorAllocator_;
+    std::unique_ptr<MaterialSystem>      materialSystem_;
     std::unique_ptr<SwapChain>           swapChain_;
     std::unique_ptr<FrameSync>           frameSync_;
     std::unique_ptr<Renderer>            renderer_;

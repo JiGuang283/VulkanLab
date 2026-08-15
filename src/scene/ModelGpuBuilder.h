@@ -15,7 +15,7 @@ namespace vkr {
 
 class DescriptorAllocator;
 class Device;
-class FallbackTextures;
+class MaterialSystem;
 class IncrementalUploadQueue;
 class MaterialInstance;
 class MaterialTemplate;
@@ -46,8 +46,7 @@ class ModelGpuBuilder {
         std::shared_ptr<MaterialTemplate> materialTemplate;
     };
 
-    ModelGpuBuilder(Device &device,
-                    DescriptorAllocator &descriptorAllocator,
+    ModelGpuBuilder(Device &device, MaterialSystem &materialSystem,
                     Context context,
                     std::unique_ptr<PreparedModelData> prepared);
     ~ModelGpuBuilder();
@@ -70,7 +69,6 @@ class ModelGpuBuilder {
 
   private:
     enum class Phase {
-        Fallbacks,
         Textures,
         Meshes,
         WaitingForGpu,
@@ -89,13 +87,11 @@ class ModelGpuBuilder {
     void finalizeAsset();
 
     Device *device_ = nullptr;
-    DescriptorAllocator *descriptorAllocator_ = nullptr;
+    MaterialSystem *materialSystem_ = nullptr;
     Context context_;
     std::unique_ptr<PreparedModelData> prepared_;
     std::unique_ptr<IncrementalUploadQueue> uploadQueue_;
     std::shared_ptr<ModelAsset> asset_;
-    std::shared_ptr<FallbackTextures> fallbackTextures_;
-    std::vector<std::shared_ptr<Texture>> fallbackBuildTextures_;
     std::vector<std::shared_ptr<Texture>> textures_;
     std::vector<std::shared_ptr<Mesh>> meshes_;
     std::vector<std::shared_ptr<MaterialInstance>> materials_;
@@ -103,7 +99,7 @@ class ModelGpuBuilder {
     size_t textureIndex_ = 0;
     size_t meshIndex_ = 0;
     size_t materialIndex_ = 0;
-    Phase phase_ = Phase::Fallbacks;
+    Phase phase_ = Phase::Textures;
     bool failurePending_ = false;
     std::string error_;
     std::chrono::steady_clock::time_point buildStart_ =

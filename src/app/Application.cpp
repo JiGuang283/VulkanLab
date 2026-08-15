@@ -47,6 +47,7 @@
 #include "render/DirectionalShadow.h"
 #include "render/PunctualShadow.h"
 #include "render/MaterialInstance.h"
+#include "render/MaterialSystem.h"
 #include "render/MaterialTextureSlot.h"
 #include "render/PipelineCache.h"
 #include "render/RenderView.h"
@@ -286,6 +287,31 @@ std::string artifactStatusKey(const std::string &sceneId,
 }
 
 #if VKL_ENABLE_RUNTIME_CONTROL
+ControlJson materialBindingStatusToJson(
+    const MaterialBindingStatus &status) {
+    return {
+        {"requested", materialBindingModeName(status.requested)},
+        {"active", materialBindingModeName(status.active)},
+        {"deviceSupported", status.deviceSupported},
+        {"shaderManifestSupported", status.shaderManifestSupported},
+        {"textureCapacity", status.textureCapacity},
+        {"materialCapacity", status.materialCapacity},
+        {"fallbackReason", status.fallbackReason.empty()
+                               ? ControlJson(nullptr)
+                               : ControlJson(status.fallbackReason)},
+        {"activeTextures", status.activeTextures},
+        {"activeMaterials", status.activeMaterials},
+        {"retiringTextures", status.retiringTextures},
+        {"retiringMaterials", status.retiringMaterials},
+        {"textureHighWaterMark", status.textureHighWaterMark},
+        {"materialHighWaterMark", status.materialHighWaterMark},
+        {"descriptorWrites", status.descriptorWrites},
+        {"textureSlotReuses", status.textureSlotReuses},
+        {"materialSlotReuses", status.materialSlotReuses},
+        {"textureCapacityFailures", status.textureCapacityFailures},
+        {"materialCapacityFailures", status.materialCapacityFailures}};
+}
+
 ControlJson assetImportTaskToJson(
     const std::shared_ptr<AssetImportTask> &task) {
     if (!task)
@@ -938,8 +964,22 @@ void Application::init() {
     context_ = std::make_unique<VulkanContext>(
         [this](VkInstance inst) { return window_->createSurface(inst); },
         std::move(extensions), contextOptions);
-    device_ = std::make_unique<Device>(*context_);
+    device_ = std::make_unique<Device>(*context_,
+                                       config_.materialBindingMode);
     descriptorAllocator_ = std::make_unique<DescriptorAllocator>(*device_);
+    materialSystem_ = std::make_unique<MaterialSystem>(
+        *device_, *descriptorAllocator_, config_.materialBindingMode,
+        shaderRegistry_.supportsBindlessMaterials());
+    VKR_LOG_INFO(
+        "Material",
+        "Material binding: requested={} active={} textures={} materials={}{}",
+        materialBindingModeName(config_.materialBindingMode),
+        materialBindingModeName(materialSystem_->activeMode()),
+        materialSystem_->status().textureCapacity,
+        materialSystem_->status().materialCapacity,
+        materialSystem_->status().fallbackReason.empty()
+            ? std::string{}
+            : " fallback=" + materialSystem_->status().fallbackReason);
     swapChain_ =
         std::make_unique<SwapChain>(*device_, context_->surface(), [this]() {
             return window_->framebufferExtent();
@@ -1023,22 +1063,28 @@ void Application::init() {
         shaderRegistry_.program("gi.ddgi-trace");
     const ShaderProgram &ddgiUpdate =
         shaderRegistry_.program("gi.ddgi-update");
+    const auto materialFragment = [this](const ShaderProgram &program)
+        -> const std::string & {
+        return program.fragmentSpvPath(materialSystem_->activeMode());
+    };
     RendererShaderPaths shaderPaths;
     shaderPaths.shadowVert = shadowOpaque.vertSpvPath;
-    shaderPaths.shadowMaskFrag = shadowMask.fragSpvPath;
+    shaderPaths.shadowMaskFrag = materialFragment(shadowMask);
     shaderPaths.shadowPunctualVert =
         shadowPointOpaque.vertSpvPath;
     shaderPaths.shadowPointFrag = shadowPointOpaque.fragSpvPath;
-    shaderPaths.shadowPointMaskFrag = shadowPointMask.fragSpvPath;
+    shaderPaths.shadowPointMaskFrag = materialFragment(shadowPointMask);
     if (shadowSpotOpaque.vertSpvPath !=
         shaderPaths.shadowPunctualVert) {
         throw std::runtime_error(
             "point and spot shadow programs must share the punctual vertex shader");
     }
-    shaderPaths.shadowSpotMaskFrag = shadowSpotMask.fragSpvPath;
+    shaderPaths.shadowSpotMaskFrag = materialFragment(shadowSpotMask);
     shaderPaths.surfacePrepassVert = surfacePrepassOpaque.vertSpvPath;
-    shaderPaths.surfacePrepassOpaqueFrag = surfacePrepassOpaque.fragSpvPath;
-    shaderPaths.surfacePrepassMaskFrag = surfacePrepassMask.fragSpvPath;
+    shaderPaths.surfacePrepassOpaqueFrag =
+        materialFragment(surfacePrepassOpaque);
+    shaderPaths.surfacePrepassMaskFrag =
+        materialFragment(surfacePrepassMask);
     shaderPaths.visibilityHiZInitComp = visibilityHiZInit.computeSpvPath;
     shaderPaths.visibilityHiZReduceComp = visibilityHiZReduce.computeSpvPath;
     shaderPaths.visibilityOcclusionComp = visibilityOcclusion.computeSpvPath;
@@ -1078,6 +1124,7 @@ void Application::init() {
     shaderPaths.atmosphereSkyFrag = atmosphereSky.fragSpvPath;
     renderer_ = std::make_unique<Renderer>(
         *device_, *swapChain_, *frameSync_, *descriptorAllocator_,
+        *materialSystem_,
         std::move(shaderPaths));
 #if VKL_ENABLE_CAPTURE
     if (!projectContext_.cookedPackage) {
@@ -1114,7 +1161,7 @@ void Application::init() {
     }
     pipelineCache_ = std::make_unique<PipelineCache>(*device_);
     assetRepository_ = std::make_unique<AssetRepository>(
-        *device_, *descriptorAllocator_);
+        *device_, *descriptorAllocator_, *materialSystem_);
     sceneLoadManager_ = std::make_unique<SceneLoadManager>();
     environmentAssetRepository_ =
         std::make_unique<EnvironmentAssetRepository>(*device_);
@@ -1233,6 +1280,7 @@ void Application::loadScene(int index, bool replaceCurrent) {
                     UploadContext::kDefaultStagingCapacity, entry.name);
                 loadedScene = entry.factory(*device_, upload,
                                             *descriptorAllocator_,
+                                            *materialSystem_,
                                             sceneLoadContext_);
                 upload.finish();
             } else {
@@ -2060,6 +2108,10 @@ void Application::collectRetiredScenes() {
     if (assetRepository_) {
         assetRepository_->releaseUnused(frameSync_->lastSubmittedSerial(),
                                         completed);
+    }
+    if (materialSystem_) {
+        materialSystem_->updateSubmissionSerials(
+            frameSync_->lastSubmittedSerial(), completed);
     }
     if (environmentAssetRepository_) {
         environmentAssetRepository_->releaseUnused(
@@ -3311,6 +3363,7 @@ ControlJson Application::runtimeSystemInfo() {
     if (config_.diagnostics.automationMode)
         capabilities.push_back("window_resize");
     const ShaderVariant *shader = &currentShaderVariant();
+    const MaterialBindingStatus &materialBinding = materialSystem_->status();
     const ValidationStatus validation = context_->validationStatus();
     const ControlJson validationFallback =
         validation.fallbackReason.empty()
@@ -3378,7 +3431,7 @@ ControlJson Application::runtimeSystemInfo() {
             {"fallbackReason", validationFallback},
             {"warningCount", validation.warningCount},
             {"errorCount", validation.errorCount}}},
-          {"tracy",
+           {"tracy",
            {{"compiled", device_->tracyProfiler().compiled()},
             {"version",
              std::string(device_->tracyProfiler().version())},
@@ -3388,7 +3441,9 @@ ControlJson Application::runtimeSystemInfo() {
             {"connectionMode",
              device_->tracyProfiler().compiled()
                  ? "on-demand-localhost"
-                 : "disabled"}}}}},
+                  : "disabled"}}},
+           {"materialBinding",
+            materialBindingStatusToJson(materialBinding)}}},
         {"projectRoot", projectContext_.projectRoot.u8string()},
         {"runtimeRoot", projectContext_.runtimeRoot.u8string()},
         {"assetMode", assetImportModeName(config_.assetImportMode)},
@@ -3411,7 +3466,9 @@ ControlJson Application::runtimeSystemInfo() {
           {"toneMapping",
            shaderToneMappingPolicyName(shader->toneMapping)},
           {"vertexSha256", sha256File(shader->vertSpvPath)},
-          {"fragmentSha256", sha256File(shader->fragSpvPath)}}},
+          {"fragmentSha256",
+           sha256File(shader->fragmentSpvPath(
+               materialSystem_->activeMode()))}}},
         {"loadTask", sceneLoadTaskToJson(latestSceneLoadTask_)}};
 }
 
@@ -4190,7 +4247,8 @@ ControlJson Application::runtimeRenderStatus() {
 #endif
     const AssetRepositorySnapshot repository =
         assetRepository_ ? assetRepository_->snapshot()
-                         : AssetRepositorySnapshot{};
+                          : AssetRepositorySnapshot{};
+    const MaterialBindingStatus &materialBinding = materialSystem_->status();
     ControlJson repositoryRecords = ControlJson::array();
     for (const ModelAssetRecordSnapshot &record : repository.records) {
         repositoryRecords.push_back(
@@ -4535,6 +4593,7 @@ ControlJson Application::runtimeRenderStatus() {
           {"readyHits", repository.readyHits},
           {"coalescedRequests", repository.coalescedRequests},
           {"entries", std::move(repositoryRecords)}}},
+        {"materials", materialBindingStatusToJson(materialBinding)},
         {"captureQueue", std::move(captureQueue)},
         {"capture",
          {{"enabled", captureEnabled},
@@ -7265,6 +7324,13 @@ void Application::drawLightingPanel() {
 
 void Application::drawMaterialsPanel() {
     EditorUiState &ui = *editorUi_;
+    const MaterialBindingStatus &bindingStatus = materialSystem_->status();
+    ImGui::TextDisabled("GPU binding: %s", materialBindingModeName(
+                                              bindingStatus.active));
+    ImGui::SameLine();
+    ImGui::TextDisabled("%u / %u materials", bindingStatus.activeMaterials,
+                        bindingStatus.materialCapacity);
+    ImGui::Separator();
     std::vector<std::shared_ptr<MaterialInstance>> selectedMaterials;
     const std::vector<std::shared_ptr<MaterialInstance>> *materialsView =
         currentScene_ ? &currentScene_->materials() : nullptr;
@@ -7382,6 +7448,8 @@ void Application::drawMaterialsPanel() {
                                     : params.debugName.c_str());
         beginProperty("Index");
         ImGui::Text("%zu", ui.selectedMaterialIndex);
+        beginProperty("GPU Material Index");
+        ImGui::Text("%u", material->materialIndex());
         beginProperty("Alpha Mode");
         ImGui::TextUnformatted(alphaModeName(params.alphaMode));
         beginProperty("Alpha Cutoff");
@@ -7422,13 +7490,27 @@ void Application::drawMaterialsPanel() {
                                 ImGuiTreeNodeFlags_DefaultOpen) &&
         beginPropertyTable("TextureProperties")) {
         const auto &textures = material->textures();
+        const GpuMaterial *gpuMaterial =
+            materialSystem_->gpuMaterial(material->materialHandle());
+        const std::array<uint32_t, kMaterialTextureSlotCount> gpuSlots{
+            gpuMaterial ? gpuMaterial->textureIndices0.x : 0u,
+            gpuMaterial ? gpuMaterial->textureIndices0.y : 0u,
+            gpuMaterial ? gpuMaterial->textureIndices0.z : 0u,
+            gpuMaterial ? gpuMaterial->textureIndices0.w : 0u,
+            gpuMaterial ? gpuMaterial->textureIndices1.x : 0u};
         for (size_t slotIndex = 0; slotIndex < kMaterialTextureSlotCount;
              ++slotIndex) {
             const auto slot =
                 static_cast<MaterialTextureSlot>(slotIndex);
             beginProperty(slotName(slot));
-            ImGui::TextUnformatted(textures[slotIndex] ? "Bound"
-                                                       : "Missing");
+            if (!textures[slotIndex]) {
+                ImGui::TextUnformatted("Missing");
+            } else if (bindingStatus.active ==
+                       MaterialBindingMode::Bindless) {
+                ImGui::Text("Bound (slot %u)", gpuSlots[slotIndex]);
+            } else {
+                ImGui::Text("Bound (fixed binding %zu)", slotIndex + 1);
+            }
         }
         editor::endPropertyGrid();
     }
@@ -7812,6 +7894,32 @@ void Application::drawLoadStatsPanel() {
                     signedBytesToMiB(blockDelta));
     } else if (!lastSceneLoadStats_) {
         ImGui::TextDisabled("No scene load statistics are available.");
+    }
+
+    if (ImGui::CollapsingHeader("Material Resources",
+                                ImGuiTreeNodeFlags_DefaultOpen)) {
+        const MaterialBindingStatus &status = materialSystem_->status();
+        ImGui::Text("Requested %s  Active %s",
+                    materialBindingModeName(status.requested),
+                    materialBindingModeName(status.active));
+        if (!status.fallbackReason.empty())
+            ImGui::TextWrapped("Fallback: %s", status.fallbackReason.c_str());
+        ImGui::Text("Textures %u / %u  Retiring %u", status.activeTextures,
+                    status.textureCapacity, status.retiringTextures);
+        ImGui::Text("Materials %u / %u  Retiring %u", status.activeMaterials,
+                    status.materialCapacity, status.retiringMaterials);
+        ImGui::Text("High water: textures %u  materials %u",
+                    status.textureHighWaterMark,
+                    status.materialHighWaterMark);
+        ImGui::Text("Descriptor writes %llu  Slot reuse T/M %llu / %llu",
+                    static_cast<unsigned long long>(status.descriptorWrites),
+                    static_cast<unsigned long long>(status.textureSlotReuses),
+                    static_cast<unsigned long long>(status.materialSlotReuses));
+        ImGui::Text("Capacity failures T/M %llu / %llu",
+                    static_cast<unsigned long long>(
+                        status.textureCapacityFailures),
+                    static_cast<unsigned long long>(
+                        status.materialCapacityFailures));
     }
 
     if (ImGui::CollapsingHeader("Model Asset Repository",

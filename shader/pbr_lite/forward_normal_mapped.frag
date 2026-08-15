@@ -3,7 +3,8 @@
 #extension GL_GOOGLE_include_directive : require
 #include "include/global_frame.glsl"
 #include "include/scene_lights.glsl"
-#include "include/material_push.glsl"
+#include "include/material_data.glsl"
+#include "include/material_textures.glsl"
 #include "include/ibl.glsl"
 #include "include/atmosphere.glsl"
 #include "include/screen_space_lighting.glsl"
@@ -19,11 +20,6 @@ layout(location = 3) in vec4 fragTangentWS;
 layout(location = 4) in vec2 fragTexCoord1;
 layout(location = 5) in vec4 fragColor;
 
-layout(set = 1, binding = 0) uniform sampler2D baseColorTexture;
-layout(set = 1, binding = 1) uniform sampler2D normalTexture;
-layout(set = 1, binding = 2) uniform sampler2D metallicRoughnessTexture;
-layout(set = 1, binding = 3) uniform sampler2D occlusionTexture;
-layout(set = 1, binding = 4) uniform sampler2D emissiveTexture;
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outBaselineSpecular;
@@ -31,22 +27,22 @@ layout(location = 2) out vec4 outBaselineDiffuse;
 
 bool isMaskAlphaMode()
 {
-    return abs(push.reserved.x - 1.0) < 0.5;
+    return abs(float(materialData().textureIndices1.z) - 1.0) < 0.5;
 }
 
 bool isBlendAlphaMode()
 {
-    return abs(push.reserved.x - 2.0) < 0.5;
+    return abs(float(materialData().textureIndices1.z) - 2.0) < 0.5;
 }
 
 void applyAlphaCutoff(float alpha)
 {
-    if (isMaskAlphaMode() && alpha < push.roughnessAlpha.y) discard;
+    if (isMaskAlphaMode() && alpha < materialData().roughnessAlphaOcclusionNormal.y) discard;
 }
 
 float transmissionFactor()
 {
-    return clamp(push.reserved.y, 0.0, 1.0);
+    return clamp(materialData().transmissionVolume.x, 0.0, 1.0);
 }
 
 float materialAlpha(float baseAlpha)
@@ -73,14 +69,14 @@ vec3 applyTransmissionApprox(vec3 color, vec3 n, vec3 v, float roughness)
 
 vec2 occlusionTexCoord()
 {
-    return abs(push.roughnessAlpha.w - 1.0) < 0.5 ? fragTexCoord1
+    return abs(float(materialData().textureIndices1.y) - 1.0) < 0.5 ? fragTexCoord1
                                                   : fragTexCoord;
 }
 
 float materialOcclusion()
 {
-    float sampled = texture(occlusionTexture, occlusionTexCoord()).r;
-    float strength = clamp(push.roughnessAlpha.z, 0.0, 1.0);
+    float sampled = sampleOcclusion( occlusionTexCoord()).r;
+    float strength = clamp(materialData().roughnessAlphaOcclusionNormal.z, 0.0, 1.0);
     return mix(1.0, sampled, strength);
 }
 
@@ -237,28 +233,28 @@ vec3 normalFromMap()
     vec3 t = normalize(fragTangentWS.xyz);
     t = normalize(t - n * dot(n, t));
     vec3 b = normalize(cross(n, t) * fragTangentWS.w);
-    vec3 tangentNormal = texture(normalTexture, fragTexCoord).xyz * 2.0 - 1.0;
-    tangentNormal.xy *= max(push.reserved.z, 0.0);
+    vec3 tangentNormal = sampleNormal( fragTexCoord).xyz * 2.0 - 1.0;
+    tangentNormal.xy *= max(materialData().roughnessAlphaOcclusionNormal.w, 0.0);
     return normalize(mat3(t, b, n) * tangentNormal);
 }
 
 void main()
 {
-    vec4 baseSample = texture(baseColorTexture, fragTexCoord);
-    vec4 baseColor = baseSample * push.baseColorFactor * fragColor;
+    vec4 baseSample = sampleBaseColor( fragTexCoord);
+    vec4 baseColor = baseSample * materialData().baseColorFactor * fragColor;
     applyAlphaCutoff(baseColor.a);
 
-    vec4 mr = texture(metallicRoughnessTexture, fragTexCoord);
-    float roughness = clamp(mr.g * push.roughnessAlpha.x, 0.04, 1.0);
-    float metallic = clamp(mr.b * push.emissiveMetallic.w, 0.0, 1.0);
+    vec4 mr = sampleMetallicRoughness( fragTexCoord);
+    float roughness = clamp(mr.g * materialData().roughnessAlphaOcclusionNormal.x, 0.04, 1.0);
+    float metallic = clamp(mr.b * materialData().emissiveMetallic.w, 0.0, 1.0);
     float materialAo = materialOcclusion();
     float screenAo =
         (!isBlendAlphaMode() && transmissionFactor() <= 0.0)
             ? screenSpaceAmbientOcclusion()
             : 1.0;
     float occlusion = materialAo * screenAo;
-    vec3 emissive = texture(emissiveTexture, fragTexCoord).rgb *
-                    push.emissiveMetallic.rgb;
+    vec3 emissive = sampleEmissive( fragTexCoord).rgb *
+                    materialData().emissiveMetallic.rgb;
 
     vec3 n = normalFromMap();
     if (!gl_FrontFacing)

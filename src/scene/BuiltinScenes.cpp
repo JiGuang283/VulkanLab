@@ -6,9 +6,9 @@
 #include "core/PipelineConfigBuilder.h"
 #include "core/UploadContext.h"
 #include "diagnostics/SceneLoadStats.h"
-#include "render/FallbackTextures.h"
 #include "render/GltfPreparer.h"
 #include "render/MaterialInstance.h"
+#include "render/MaterialSystem.h"
 #include "render/MaterialTemplate.h"
 #include "render/Mesh.h"
 #include "render/Texture.h"
@@ -36,14 +36,14 @@ SceneFactory vikingRoomSceneFactory(std::string model, std::string tex) {
     return [model = std::move(model), tex = std::move(tex)](
                Device &device, UploadContext &upload,
                DescriptorAllocator &descriptorAllocator,
+               MaterialSystem &materialSystem,
                const SceneLoadContext &loadContext)
                -> std::unique_ptr<Scene> {
         auto scene = std::make_unique<Scene>();
 
         auto materialTemplate = std::make_shared<MaterialTemplate>(
-            device, makeStandardConfig(device));
-        auto fallbackTextures =
-            std::make_shared<FallbackTextures>(device, upload);
+            makeStandardConfig(device),
+            materialSystem.descriptorSetLayout());
         auto texture = std::make_shared<Texture>(device, upload, tex);
         MaterialParams params;
         params.debugName = "Viking Room Material";
@@ -54,8 +54,8 @@ SceneFactory vikingRoomSceneFactory(std::string model, std::string tex) {
                     ? &loadContext.loadStats->materialSetupMs
                     : nullptr);
             material = std::make_shared<MaterialInstance>(
-                device, descriptorAllocator, materialTemplate,
-                MaterialInstance::makeTextureSet(texture, *fallbackTextures),
+                materialSystem, materialTemplate,
+                MaterialInstance::makeTextureSet(texture, materialSystem),
                 params);
         }
         auto mesh = std::shared_ptr<Mesh>(

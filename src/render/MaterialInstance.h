@@ -1,9 +1,8 @@
 #pragma once
 
 #include "MaterialTextureSlot.h"
+#include "MaterialSystem.h"
 #include "Texture.h"
-#include "core/DescriptorAllocator.h"
-#include "core/FrameSync.h"
 
 #include <glm/glm.hpp>
 
@@ -15,7 +14,6 @@
 
 namespace vkr {
 
-class FallbackTextures;
 class MaterialTemplate;
 
 enum class AlphaMode {
@@ -48,7 +46,7 @@ using MaterialTextureSet =
 
 class MaterialInstance {
   public:
-    MaterialInstance(Device &device, DescriptorAllocator &descriptorAllocator,
+    MaterialInstance(MaterialSystem &materialSystem,
                      std::shared_ptr<MaterialTemplate> materialTemplate,
                      MaterialTextureSet textures,
                      MaterialParams params = {});
@@ -59,7 +57,7 @@ class MaterialInstance {
 
     static MaterialTextureSet makeTextureSet(
         std::shared_ptr<Texture> baseColor,
-        const FallbackTextures &fallbackTextures);
+        const MaterialSystem &materialSystem);
 
     void bindDescriptors(VkCommandBuffer cmd, VkPipelineLayout layout,
                          uint32_t frameIndex) const;
@@ -69,17 +67,16 @@ class MaterialInstance {
     const MaterialTemplate &materialTemplate() const;
     const MaterialParams &params() const { return params_; }
     const MaterialTextureSet &textures() const { return textures_; }
+    MaterialHandle materialHandle() const { return materialHandle_; }
+    uint32_t materialIndex() const { return materialHandle_.index; }
 
   private:
-    void createDescriptorSets();
-
-    Device              *device_ = nullptr;
-    DescriptorAllocator *descriptorAllocator_ = nullptr;
+    MaterialSystem *materialSystem_ = nullptr;
 
     std::shared_ptr<MaterialTemplate> materialTemplate_;
     MaterialTextureSet textures_{};
     MaterialParams params_;
-    std::vector<VkDescriptorSet> descriptorSets_;
+    MaterialHandle materialHandle_{};
 };
 
 } // namespace vkr

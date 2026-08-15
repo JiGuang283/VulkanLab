@@ -12,6 +12,7 @@
 #include "render/FrameGpuData.h"
 #include "render/EnvironmentGpuResources.h"
 #include "render/GuiSystem.h"
+#include "render/MaterialSystem.h"
 #include "render/PipelineCache.h"
 #include "render/RenderFrame.h"
 #include "render/RenderResourceRegistry.h"
@@ -70,9 +71,11 @@ uint32_t nextSceneLightCapacity(uint32_t required) {
 
 Renderer::Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
                    DescriptorAllocator &descriptorAllocator,
+                   MaterialSystem &materialSystem,
                    RendererShaderPaths shaderPaths)
     : device_(&device), swapChain_(&swapChain), frameSync_(&frameSync),
       descriptorAllocator_(&descriptorAllocator),
+      materialSystem_(&materialSystem),
       uniformBufferSize_(sizeof(GlobalFrameUbo)),
       shaderPaths_(std::move(shaderPaths)) {
     rayTracingScene_ = std::make_unique<RayTracingScene>(device);
@@ -324,6 +327,7 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.ddgiDescriptorSetLayout =
         ddgiPass_->samplingDescriptorSetLayout();
     renderFrame.pipelineCache = &pipelineCache;
+    renderFrame.materialSystem = materialSystem_;
     renderFrame.debugUtils = &device_->debugUtils();
     renderFrame.tracyProfiler = &device_->tracyProfiler();
     renderFrame.gui = gui;

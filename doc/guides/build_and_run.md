@@ -1,8 +1,8 @@
 # 构建与运行
 
 > Status: Current
-> Last verified: 2026-08-06
-> Verified against: optional FidelityFX CACAO comparison integration
+> Last verified: 2026-08-15
+> Verified against: Bindless Material Resources v1
 
 ## 环境要求
 
@@ -126,7 +126,7 @@ cmake --build build --config Release
 
 构建会生成 Git revision/dirty、configuration、compiler、Vulkan SDK 和 `glslc` 版本信息。启用 Runtime Control 后可通过 `VulkanLabCtl.exe --json info` 查看。确定性窗口、fixed delta、无 GUI 和诊断输出配置见 [诊断与自动化启动配置](diagnostics.md)。
 
-CMake 将 `shader/` 下由 Manifest 引用的 24 个 GLSL 源增量编译到 `build-*/generated/<Config>/shader/`，每个产物通过 `spirv-val` 后再 stage 到可执行文件旁的 `shader/`。共享 ABI include 会作为依赖触发相关 shader 重编译。源码树不保存 SPIR-V，也没有独立的 `compile.bat`；普通 C++ rebuild 不会重新调用 `glslc`，修改一个 Shader 只更新对应产物。需要单独构建 Shader 时使用：
+CMake 将 `shader/` 下由 Manifest 引用的 GLSL 源增量编译到 `build-*/generated/<Config>/shader/`，每个产物通过 `spirv-val` 后再 stage 到可执行文件旁的 `shader/`。标记 `materialTextures=true` 的 fragment 还会生成 Bindless SPIR-V。共享 ABI include 会作为依赖触发相关 shader 重编译。源码树不保存 SPIR-V，也没有独立的 `compile.bat`；普通 C++ rebuild 不会重新调用 `glslc`，修改一个 Shader 只更新对应产物。需要单独构建 Shader 时使用：
 
 ```powershell
 cmake --build build-debug --config Debug --target VulkanLabShaders
@@ -194,6 +194,19 @@ Vulkan Validation 默认使用 `core`，也可以显式选择 `off/core/sync/gpu
 ```
 
 `off` 不会关闭非 Cooked 构建中的 RenderDoc 标签。各 profile、回退规则和抓帧方式见 [RenderDoc 与 Vulkan Validation](renderdoc_validation.md)。
+
+材质绑定默认使用 `auto`：设备与 Shader Manifest 支持完整 Descriptor Indexing
+时选择 Bindless，否则记录原因并回退 Legacy。可以在启动时强制后端：
+
+```powershell
+.\VulkanLab.exe --material-binding auto
+.\VulkanLab.exe --material-binding legacy
+.\VulkanLab.exe --material-binding bindless
+```
+
+强制 `bindless` 时不允许回退，能力不足会在场景加载前退出。选择结果、容量和
+slot 使用量可在启动日志、Diagnostics -> Material Resources、
+`system.info.diagnostics.materialBinding` 和 `render.status.materials` 中查看。
 
 并行运行或自动化时应为实例指定唯一 endpoint：
 

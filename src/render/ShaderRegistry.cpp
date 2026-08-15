@@ -120,11 +120,12 @@ std::string validateSourcePath(const std::string &value,
 
 std::string resolveSpirvPath(const std::filesystem::path &shaderRoot,
                              const std::string &sourcePath,
-                             const std::string &field) {
+                             const std::string &field,
+                             std::string_view suffix = ".spv") {
     if (sourcePath.empty())
         return {};
     const std::filesystem::path result =
-        shaderRoot / std::filesystem::u8path(sourcePath + ".spv");
+        shaderRoot / std::filesystem::u8path(sourcePath + std::string(suffix));
     if (!std::filesystem::is_regular_file(result))
         throw fieldError(field, "SPIR-V file is missing: " + result.string());
     return std::filesystem::absolute(result).lexically_normal().string();
@@ -198,7 +199,7 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
                 item, field,
                 {"id", "contract", "vertex", "fragment", "compute",
                  "sceneLights", "atmosphere", "screenSpace", "ddgi",
-                 "targetEnv"});
+                 "materialTextures", "targetEnv"});
 
             ShaderProgram program;
             program.id = requiredString(item, "id", field);
@@ -214,6 +215,8 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
             program.usesAtmosphere = item.value("atmosphere", false);
             program.usesScreenSpace = item.value("screenSpace", false);
             program.usesDdgi = item.value("ddgi", false);
+            program.usesMaterialTextures =
+                item.value("materialTextures", false);
 
             const std::string targetEnv =
                 optionalString(item, "targetEnv", field);
@@ -270,6 +273,15 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
                 shaderRoot, program.vertexSourcePath, field + ".vertex");
             program.fragSpvPath = resolveSpirvPath(
                 shaderRoot, program.fragmentSourcePath, field + ".fragment");
+            if (program.usesMaterialTextures) {
+                if (program.fragmentSourcePath.empty()) {
+                    throw fieldError(field + ".materialTextures",
+                                     "requires a fragment stage");
+                }
+                program.bindlessFragSpvPath = resolveSpirvPath(
+                    shaderRoot, program.fragmentSourcePath,
+                    field + ".fragment", ".bindless.spv");
+            }
             program.computeSpvPath = resolveSpirvPath(
                 shaderRoot, program.computeSourcePath, field + ".compute");
             registry.programs_.push_back(std::move(program));
@@ -325,6 +337,7 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
             variant.order = item.at("order").get<int32_t>();
             variant.vertSpvPath = program.vertSpvPath;
             variant.fragSpvPath = program.fragSpvPath;
+            variant.bindlessFragSpvPath = program.bindlessFragSpvPath;
             if (variant.isDefault) {
                 ++defaultCount;
                 defaultId = variant.id;
@@ -400,12 +413,21 @@ std::vector<std::filesystem::path> ShaderRegistry::spirvPaths() const {
     for (const ShaderProgram &program : programs_) {
         for (const std::string *path : {&program.vertSpvPath,
                                         &program.fragSpvPath,
+                                        &program.bindlessFragSpvPath,
                                         &program.computeSpvPath}) {
             if (!path->empty())
                 unique.insert(std::filesystem::path(*path));
         }
     }
     return {unique.begin(), unique.end()};
+}
+
+bool ShaderRegistry::supportsBindlessMaterials() const {
+    return std::all_of(
+        programs_.begin(), programs_.end(), [](const ShaderProgram &program) {
+            return !program.usesMaterialTextures ||
+                   !program.bindlessFragSpvPath.empty();
+        });
 }
 
 const char *shaderProgramContractName(ShaderProgramContract contract) {

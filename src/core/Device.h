@@ -10,6 +10,7 @@
 #include "VulkanTypes.h"
 #include "diagnostics/SceneLoadStats.h"
 #include "render/TextureTranscodeTarget.h"
+#include "render/MaterialBindingMode.h"
 #include "vk_mem_alloc.h"
 
 namespace vkr {
@@ -92,9 +93,18 @@ struct DdgiSupport {
     std::string reason;
 };
 
+struct MaterialBindingDeviceSupport {
+    bool supported = false;
+    uint32_t textureCapacity = 0;
+    uint32_t materialCapacity = 0;
+    std::string reason;
+};
+
 class Device {
   public:
-    Device(VulkanContext &ctx);
+    Device(VulkanContext &ctx,
+           MaterialBindingMode materialBindingMode =
+               MaterialBindingMode::Auto);
     ~Device();
 
     Device(const Device &) = delete;
@@ -133,6 +143,9 @@ class Device {
         return rayQuerySupport_;
     }
     const DdgiSupport &ddgiSupport() const { return ddgiSupport_; }
+    const MaterialBindingDeviceSupport &materialBindingSupport() const {
+        return materialBindingSupport_;
+    }
 
     VkDeviceAddress bufferDeviceAddress(VkBuffer buffer) const;
     VkAccelerationStructureKHR createAccelerationStructure(
@@ -165,6 +178,9 @@ class Device {
     void pickPhysicalDevice();
     void queryRayQuerySupport();
     void queryDdgiSupport();
+    void queryMaterialBindingSupport();
+    MaterialBindingDeviceSupport
+    inspectMaterialBindingSupport(VkPhysicalDevice device) const;
     void createLogicalDevice();
 
     bool               isDeviceSuitable(VkPhysicalDevice device);
@@ -192,6 +208,9 @@ class Device {
     CacaoSupport cacaoSupport_{};
     RayQuerySupport rayQuerySupport_{};
     DdgiSupport ddgiSupport_{};
+    MaterialBindingMode requestedMaterialBindingMode_ =
+        MaterialBindingMode::Auto;
+    MaterialBindingDeviceSupport materialBindingSupport_{};
     std::vector<const char *> enabledDeviceExtensions_;
     PFN_vkCreateAccelerationStructureKHR createAccelerationStructure_ =
         nullptr;

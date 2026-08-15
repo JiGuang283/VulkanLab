@@ -25,6 +25,8 @@ class ShaderRegistryFixture {
         std::filesystem::create_directories(root / "main");
         std::ofstream(root / "main/test.vert.spv", std::ios::binary) << "SPV";
         std::ofstream(root / "main/test.frag.spv", std::ios::binary) << "SPV";
+        std::ofstream(root / "main/test.frag.bindless.spv", std::ios::binary)
+            << "SPV";
         std::ofstream(root / "main/test.comp.spv", std::ios::binary) << "SPV";
     }
 
@@ -64,7 +66,7 @@ std::string validManifest(std::string variants = R"(
       }
     ])") {
     return R"({
-      "schemaVersion":1,
+      "schemaVersion":2,
       "programs":[
         {
           "id":"forward.test",
@@ -109,6 +111,34 @@ void testRegistryLoadsAndSortsVariants() {
         "shader tone mapping policy was not parsed");
     requireRegistry(registry.spirvPaths().size() == 2,
                     "shader SPIR-V paths were not deduplicated");
+}
+
+void testRegistryLoadsMaterialBindingVariants() {
+    ShaderRegistryFixture fixture;
+    std::string manifest = validManifest();
+    const size_t fragment = manifest.find(
+        R"("fragment":"main/test.frag")");
+    requireRegistry(fragment != std::string::npos,
+                    "fixture fragment field is missing");
+    manifest.insert(fragment + std::string(
+                        R"("fragment":"main/test.frag")").size(),
+                    R"(,"materialTextures":true)");
+    fixture.write(manifest);
+    const vkr::ShaderRegistry registry =
+        vkr::ShaderRegistry::load(fixture.manifest());
+    requireRegistry(registry.supportsBindlessMaterials(),
+                    "bindless material program was not recognized");
+    const vkr::ShaderProgram &program = registry.program("forward.test");
+    requireRegistry(!program.bindlessFragSpvPath.empty(),
+                    "bindless fragment path was not resolved");
+    requireRegistry(program.fragmentSpvPath(vkr::MaterialBindingMode::Legacy) ==
+                        program.fragSpvPath &&
+                        program.fragmentSpvPath(
+                            vkr::MaterialBindingMode::Bindless) ==
+                            program.bindlessFragSpvPath,
+                    "material backend did not select the expected SPIR-V");
+    requireRegistry(registry.spirvPaths().size() == 3,
+                    "bindless SPIR-V was omitted from package paths");
 }
 
 void testProjectManifestPreservesPublicVariants() {
@@ -165,6 +195,10 @@ void testProjectManifestPreservesPublicVariants() {
                     "project default shader must support Atmosphere");
     requireRegistry(registry.defaultVariant().supportsScreenSpace,
                     "project default shader must support screen-space effects");
+    requireRegistry(registry.supportsBindlessMaterials() &&
+                        !registry.defaultVariant()
+                             .bindlessFragSpvPath.empty(),
+                    "project material shaders must provide bindless variants");
 }
 
 void testRegistryRejectsDuplicateDisplayName() {
@@ -240,7 +274,7 @@ void testRegistryRejectsUnknownPolicyAndStageConflict() {
                     "unknown tone mapping policy was accepted");
 
     fixture.write(R"({
-      "schemaVersion":1,
+      "schemaVersion":2,
       "programs":[
         {
           "id":"invalid.compute",
@@ -265,6 +299,7 @@ void testRegistryRejectsUnknownPolicyAndStageConflict() {
 
 void runShaderRegistryTests() {
     testRegistryLoadsAndSortsVariants();
+    testRegistryLoadsMaterialBindingVariants();
     testProjectManifestPreservesPublicVariants();
     testRegistryRejectsDuplicateDisplayName();
     testRegistryRejectsMissingDefault();

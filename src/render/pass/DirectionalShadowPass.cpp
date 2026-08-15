@@ -9,6 +9,7 @@
 #include "render/DirectionalShadow.h"
 #include "render/GpuMaterialData.h"
 #include "render/MaterialInstance.h"
+#include "render/MaterialSystem.h"
 #include "render/MaterialTemplate.h"
 #include "render/Mesh.h"
 #include "render/PipelineCache.h"
@@ -101,6 +102,7 @@ void DirectionalShadowPass::drawCasters(
         return;
 
     Pipeline *boundPipeline = nullptr;
+    const MaterialInstance *boundMaterial = nullptr;
     for (RenderItemIndex itemIndex :
          visibility.directionalShadowCasters[cascadeIndex]) {
         const RenderItem &command = visibility.items.at(itemIndex);
@@ -131,9 +133,7 @@ void DirectionalShadowPass::drawCasters(
             .msaa(VK_SAMPLE_COUNT_1_BIT)
             .descriptorLayout(globalDescriptorSetLayout_)
             .pushConstant({pushStages, 0, sizeof(GpuPushBlock)});
-        if (alphaMasked)
-            builder.descriptorLayout(
-                materialTemplate.descriptorSetLayout());
+        builder.descriptorLayout(materialTemplate.descriptorSetLayout());
         PipelineConfig config = builder.build();
         config.debugName =
             "Pipeline/DirectionalShadow/" +
@@ -156,19 +156,23 @@ void DirectionalShadowPass::drawCasters(
                 frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                 pipeline.layout(), 0, 1,
                 &frame.globalDescriptorSet, 0, nullptr);
+            frame.materialSystem->bindGlobal(frame.cmd, pipeline.layout());
             boundPipeline = &pipeline;
+            boundMaterial = nullptr;
         }
-        if (alphaMasked) {
+        if (alphaMasked &&
+            frame.materialSystem->activeMode() ==
+                MaterialBindingMode::Legacy &&
+            boundMaterial != command.material) {
             command.material->bindDescriptors(
                 frame.cmd, pipeline.layout(), frame.frameIndex);
+            boundMaterial = command.material;
         }
 
         GpuPushBlock block{};
         block.model = command.world;
-        block.baseColorFactor = params.baseColorFactor;
-        block.roughnessAlpha.y = params.alphaCutoff;
-        block.reserved.x = alphaMasked ? 1.0f : 0.0f;
-        block.reserved.y = static_cast<float>(cascadeIndex);
+        block.indices = glm::uvec4(command.materialIndex, itemIndex,
+                                   cascadeIndex, 0u);
         vkCmdPushConstants(frame.cmd, pipeline.layout(), pushStages, 0,
                            sizeof(block), &block);
         command.mesh->bind(frame.cmd);

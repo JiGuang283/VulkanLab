@@ -11,7 +11,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 file(READ "${VKL_SHADER_MANIFEST}" VKL_SHADER_MANIFEST_JSON)
 string(JSON VKL_SHADER_SCHEMA_VERSION ERROR_VARIABLE VKL_SHADER_JSON_ERROR
     GET "${VKL_SHADER_MANIFEST_JSON}" schemaVersion)
-if(VKL_SHADER_JSON_ERROR OR NOT VKL_SHADER_SCHEMA_VERSION EQUAL 1)
+if(VKL_SHADER_JSON_ERROR OR NOT VKL_SHADER_SCHEMA_VERSION EQUAL 2)
     message(FATAL_ERROR
         "shader/manifest.json has an unsupported or missing schemaVersion")
 endif()
@@ -25,6 +25,12 @@ endif()
 set(VKL_SHADER_SOURCES)
 math(EXPR VKL_SHADER_PROGRAM_LAST "${VKL_SHADER_PROGRAM_COUNT} - 1")
 foreach(PROGRAM_INDEX RANGE 0 ${VKL_SHADER_PROGRAM_LAST})
+    string(JSON PROGRAM_MATERIAL_TEXTURES ERROR_VARIABLE MATERIAL_TEXTURES_ERROR
+        GET "${VKL_SHADER_MANIFEST_JSON}"
+        programs ${PROGRAM_INDEX} materialTextures)
+    if(MATERIAL_TEXTURES_ERROR)
+        set(PROGRAM_MATERIAL_TEXTURES OFF)
+    endif()
     string(JSON PROGRAM_TARGET_ENV ERROR_VARIABLE TARGET_ENV_ERROR
         GET "${VKL_SHADER_MANIFEST_JSON}"
         programs ${PROGRAM_INDEX} targetEnv)
@@ -79,6 +85,9 @@ foreach(PROGRAM_INDEX RANGE 0 ${VKL_SHADER_PROGRAM_LAST})
                     "Shader source has conflicting target environments: ${SHADER_SOURCE}")
             endif()
             set(${SHADER_TARGET_VARIABLE} "${PROGRAM_TARGET_ENV}")
+            if(STAGE_NAME STREQUAL "fragment" AND PROGRAM_MATERIAL_TEXTURES)
+                set("VKL_SHADER_BINDLESS_${SHADER_SOURCE_ID}" ON)
+            endif()
         endif()
     endforeach()
 endforeach()
@@ -127,6 +136,42 @@ foreach(SHADER_SOURCE IN LISTS VKL_SHADER_SOURCES)
         VERBATIM
     )
     list(APPEND VKL_RUNTIME_SHADER_OUTPUTS "${SHADER_RUNTIME_OUTPUT}")
+
+    if(DEFINED VKL_SHADER_BINDLESS_${SHADER_SOURCE_ID})
+        set(SHADER_BINDLESS_GENERATED_OUTPUT
+            "${VKL_GENERATED_SHADER_ROOT}/${SHADER_SOURCE}.bindless.spv")
+        set(SHADER_BINDLESS_RUNTIME_OUTPUT
+            "${VKL_RUNTIME_SHADER_ROOT}/${SHADER_SOURCE}.bindless.spv")
+        add_custom_command(
+            OUTPUT "${SHADER_BINDLESS_GENERATED_OUTPUT}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "${VKL_GENERATED_SHADER_ROOT}/${SHADER_SUBDIRECTORY}"
+            COMMAND ${GLSLC} --target-env=vulkan1.2
+                -DVKL_BINDLESS_MATERIALS=1
+                -I "${CMAKE_CURRENT_SOURCE_DIR}"
+                "${SHADER_INPUT}" -o "${SHADER_BINDLESS_GENERATED_OUTPUT}"
+            COMMAND ${SPIRV_VAL} --target-env vulkan1.2
+                "${SHADER_BINDLESS_GENERATED_OUTPUT}"
+            DEPENDS "${SHADER_INPUT}" ${VKL_SHADER_INCLUDES}
+            COMMENT "Compiling bindless shader ${SHADER_SOURCE}"
+            VERBATIM
+        )
+        add_custom_command(
+            OUTPUT "${SHADER_BINDLESS_RUNTIME_OUTPUT}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "${VKL_RUNTIME_SHADER_ROOT}/${SHADER_SUBDIRECTORY}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${SHADER_BINDLESS_GENERATED_OUTPUT}"
+                "${SHADER_BINDLESS_RUNTIME_OUTPUT}"
+            COMMAND ${CMAKE_COMMAND} -E touch
+                "${SHADER_BINDLESS_RUNTIME_OUTPUT}"
+            DEPENDS "${SHADER_BINDLESS_GENERATED_OUTPUT}"
+            COMMENT "Staging bindless shader ${SHADER_SOURCE}"
+            VERBATIM
+        )
+        list(APPEND VKL_RUNTIME_SHADER_OUTPUTS
+            "${SHADER_BINDLESS_RUNTIME_OUTPUT}")
+    endif()
 endforeach()
 
 set(VKL_RUNTIME_SHADER_MANIFEST

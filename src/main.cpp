@@ -48,6 +48,7 @@ void printUsage(std::ostream &out) {
     out << "Usage: VulkanLab.exe [--project <path>] [--runtime-control] "
            "[--runtime-control-pipe <suffix>] [--validation <profile>] "
            "[--asset-mode <mode>] [--cache-root <path>] [diagnostics] "
+           "[--material-binding <mode>] "
            "[--help]\n"
         << "\n"
         << "Options:\n"
@@ -65,6 +66,8 @@ void printUsage(std::ostream &out) {
         << "  --cache-root <path>  Override the derived asset cache root.\n"
         << "  --validation <profile>  Use off, core, sync, or gpu "
            "validation (default: core).\n"
+        << "  --material-binding <mode>  Use auto, legacy, or bindless "
+           "material resources (default: auto).\n"
         << "  --automation      Enable deterministic automation behavior.\n"
         << "  --window-size <WxH>  Use a fixed, non-resizable window size.\n"
         << "  --fixed-delta <seconds>  Advance scene simulation by a fixed "
@@ -238,6 +241,16 @@ bool parseArguments(int argc, wchar_t **argv, vkr::Config &config) {
             }
 #endif
             config.validationProfile = profile;
+        } else if (argument == L"--material-binding") {
+            if (++i >= argc)
+                throw std::invalid_argument(
+                    "--material-binding requires a mode");
+            try {
+                config.materialBindingMode = vkr::parseMaterialBindingMode(
+                    utf8Argument(argv[i]));
+            } catch (const char *message) {
+                throw std::invalid_argument(message);
+            }
         } else if (argument == L"--help") {
             return false;
         } else {

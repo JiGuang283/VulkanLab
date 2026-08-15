@@ -67,6 +67,7 @@ struct RenderItem {
     Bounds worldBounds{};
     RenderItemKey key{};
     uint32_t primitiveIndex = 0;
+    uint32_t materialIndex = 0;
     uint32_t sourceOrder = std::numeric_limits<uint32_t>::max();
     bool historyValid = false;
 };

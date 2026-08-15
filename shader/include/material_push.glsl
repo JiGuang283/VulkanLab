@@ -3,10 +3,8 @@
 
 layout(push_constant) uniform PushConstants {
     mat4 model;
-    vec4 baseColorFactor;
-    vec4 emissiveMetallic;
-    vec4 roughnessAlpha;
-    vec4 reserved;
+    uvec4 indices;
+    vec4 reserved[3];
 } push;
 
 #endif

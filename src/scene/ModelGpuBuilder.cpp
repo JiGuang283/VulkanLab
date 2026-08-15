@@ -1,14 +1,13 @@
 #include "ModelGpuBuilder.h"
 
 #include "PreparedModelData.h"
-#include "core/DescriptorAllocator.h"
 #include "core/Device.h"
 #include "core/IncrementalUploadQueue.h"
 #include "core/Log.h"
 #include "diagnostics/Profiling.h"
 #include "diagnostics/SceneLoadStats.h"
-#include "render/FallbackTextures.h"
 #include "render/MaterialInstance.h"
+#include "render/MaterialSystem.h"
 #include "render/MaterialTemplate.h"
 #include "render/Mesh.h"
 #include "render/Texture.h"
@@ -48,9 +47,9 @@ class UploadPumpStatsScope {
 } // namespace
 
 ModelGpuBuilder::ModelGpuBuilder(
-    Device &device, DescriptorAllocator &descriptorAllocator,
+    Device &device, MaterialSystem &materialSystem,
     Context context, std::unique_ptr<PreparedModelData> prepared)
-    : device_(&device), descriptorAllocator_(&descriptorAllocator),
+    : device_(&device), materialSystem_(&materialSystem),
       context_(std::move(context)), prepared_(std::move(prepared)) {
     if (!prepared_ || !context_.progress || !context_.stats ||
         !context_.cancellation || !context_.materialTemplate ||
@@ -113,36 +112,6 @@ void ModelGpuBuilder::pump(const Budget &budget) {
         const auto start = std::chrono::steady_clock::now();
         const std::string debugRoot = "Model/" + context_.modelId + "/" +
                                       context_.profileId;
-
-        if (phase_ == Phase::Fallbacks) {
-            static constexpr std::array<std::array<uint8_t, 4>, 3>
-                fallbackPixels{{{255, 255, 255, 255},
-                                {0, 0, 0, 255},
-                                {128, 128, 255, 255}}};
-            while (fallbackBuildTextures_.size() < fallbackPixels.size()) {
-                UploadRecorder *recorder = uploadQueue_->acquire(4);
-                if (!recorder)
-                    return;
-                const size_t index = fallbackBuildTextures_.size();
-                TextureCreateInfo info{};
-                info.pixels = fallbackPixels[index].data();
-                info.width = 1;
-                info.height = 1;
-                info.generateMipmaps = false;
-                info.format = index == 2 ? VK_FORMAT_R8G8B8A8_UNORM
-                                         : VK_FORMAT_R8G8B8A8_SRGB;
-                info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-                info.debugName = debugRoot + "/FallbackTexture/" +
-                                 std::to_string(index);
-                fallbackBuildTextures_.push_back(
-                    std::make_shared<Texture>(*device_, *recorder, info));
-                recordedBytes += 4;
-            }
-            fallbackTextures_ = std::make_shared<FallbackTextures>(
-                fallbackBuildTextures_[0], fallbackBuildTextures_[1],
-                fallbackBuildTextures_[2]);
-            phase_ = Phase::Textures;
-        }
 
         while (phase_ == Phase::Textures &&
                textureIndex_ < prepared_->textures.size()) {
@@ -246,9 +215,8 @@ void ModelGpuBuilder::pump(const Budget &budget) {
             MaterialParams params{};
             params.debugName = "Fallback Material";
             fallbackMaterial_ = std::make_shared<MaterialInstance>(
-                *device_, *descriptorAllocator_, context_.materialTemplate,
-                MaterialInstance::makeTextureSet(fallbackTextures_->white(),
-                                                 *fallbackTextures_),
+                *materialSystem_, context_.materialTemplate,
+                MaterialInstance::makeTextureSet({}, *materialSystem_),
                 params);
         }
 
@@ -266,10 +234,10 @@ void ModelGpuBuilder::pump(const Budget &budget) {
                     textureIndex >= 0 &&
                             textureIndex < static_cast<int32_t>(textures_.size())
                         ? textures_[static_cast<size_t>(textureIndex)]
-                        : fallbackTextures_->textureFor(slot);
+                        : materialSystem_->fallbackTexture(slot);
             }
             materials_.push_back(std::make_shared<MaterialInstance>(
-                *device_, *descriptorAllocator_, context_.materialTemplate,
+                *materialSystem_, context_.materialTemplate,
                 std::move(textureSet), std::move(source.params)));
             ++materialIndex_;
         }
@@ -286,12 +254,7 @@ void ModelGpuBuilder::pump(const Budget &budget) {
 }
 
 void ModelGpuBuilder::finalizeAsset() {
-    asset_->textures.reserve(fallbackBuildTextures_.size() + textures_.size());
-    asset_->textures.insert(asset_->textures.end(),
-                            fallbackBuildTextures_.begin(),
-                            fallbackBuildTextures_.end());
-    asset_->textures.insert(asset_->textures.end(), textures_.begin(),
-                            textures_.end());
+    asset_->textures = textures_;
     asset_->meshes = meshes_;
     asset_->materials = materials_;
     asset_->materials.push_back(fallbackMaterial_);

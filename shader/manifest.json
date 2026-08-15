@@ -1,17 +1,19 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "programs": [
     {
       "id": "forward.legacy",
       "contract": "main-forward",
       "vertex": "legacy/forward.vert",
-      "fragment": "legacy/forward.frag"
+      "fragment": "legacy/forward.frag",
+      "materialTextures": true
     },
     {
       "id": "forward.pbr-lite",
       "contract": "main-forward",
       "vertex": "pbr_lite/forward.vert",
       "fragment": "pbr_lite/forward.frag",
+      "materialTextures": true,
       "sceneLights": true,
       "atmosphere": true,
       "screenSpace": true,
@@ -22,6 +24,7 @@
       "contract": "main-forward",
       "vertex": "pbr_lite/forward_normal_mapped.vert",
       "fragment": "pbr_lite/forward_normal_mapped.frag",
+      "materialTextures": true,
       "sceneLights": true,
       "atmosphere": true,
       "screenSpace": true,
@@ -31,49 +34,57 @@
       "id": "debug.base-color",
       "contract": "main-forward",
       "vertex": "material_debug/material.vert",
-      "fragment": "material_debug/base_color.frag"
+      "fragment": "material_debug/base_color.frag",
+      "materialTextures": true
     },
     {
       "id": "debug.normal",
       "contract": "main-forward",
       "vertex": "material_debug/material.vert",
-      "fragment": "material_debug/normal.frag"
+      "fragment": "material_debug/normal.frag",
+      "materialTextures": true
     },
     {
       "id": "debug.roughness",
       "contract": "main-forward",
       "vertex": "material_debug/material.vert",
-      "fragment": "material_debug/roughness.frag"
+      "fragment": "material_debug/roughness.frag",
+      "materialTextures": true
     },
     {
       "id": "debug.metallic",
       "contract": "main-forward",
       "vertex": "material_debug/material.vert",
-      "fragment": "material_debug/metallic.frag"
+      "fragment": "material_debug/metallic.frag",
+      "materialTextures": true
     },
     {
       "id": "debug.occlusion",
       "contract": "main-forward",
       "vertex": "material_debug/material.vert",
-      "fragment": "material_debug/occlusion.frag"
+      "fragment": "material_debug/occlusion.frag",
+      "materialTextures": true
     },
     {
       "id": "debug.emissive",
       "contract": "main-forward",
       "vertex": "material_debug/material.vert",
-      "fragment": "material_debug/emissive.frag"
+      "fragment": "material_debug/emissive.frag",
+      "materialTextures": true
     },
     {
       "id": "debug.alpha",
       "contract": "main-forward",
       "vertex": "material_debug/material.vert",
-      "fragment": "material_debug/alpha.frag"
+      "fragment": "material_debug/alpha.frag",
+      "materialTextures": true
     },
     {
       "id": "debug.transmission",
       "contract": "main-forward",
       "vertex": "material_debug/material.vert",
-      "fragment": "material_debug/transmission.frag"
+      "fragment": "material_debug/transmission.frag",
+      "materialTextures": true
     },
     {
       "id": "debug.shadow",
@@ -85,13 +96,15 @@
       "id": "debug.ibl-diffuse",
       "contract": "main-forward",
       "vertex": "pbr_lite/forward.vert",
-      "fragment": "material_debug/ibl_diffuse.frag"
+      "fragment": "material_debug/ibl_diffuse.frag",
+      "materialTextures": true
     },
     {
       "id": "debug.ibl-specular",
       "contract": "main-forward",
       "vertex": "pbr_lite/forward.vert",
-      "fragment": "material_debug/ibl_specular.frag"
+      "fragment": "material_debug/ibl_specular.frag",
+      "materialTextures": true
     },
     {
       "id": "shadow.opaque",
@@ -102,7 +115,8 @@
       "id": "shadow.mask",
       "contract": "shadow-depth",
       "vertex": "shadow/depth.vert",
-      "fragment": "shadow/depth_mask.frag"
+      "fragment": "shadow/depth_mask.frag",
+      "materialTextures": true
     },
     {
       "id": "shadow.point-opaque",
@@ -114,7 +128,8 @@
       "id": "shadow.point-mask",
       "contract": "punctual-shadow-depth",
       "vertex": "shadow/depth_punctual.vert",
-      "fragment": "shadow/depth_point_mask.frag"
+      "fragment": "shadow/depth_point_mask.frag",
+      "materialTextures": true
     },
     {
       "id": "shadow.spot-opaque",
@@ -125,19 +140,22 @@
       "id": "shadow.spot-mask",
       "contract": "punctual-shadow-depth",
       "vertex": "shadow/depth_punctual.vert",
-      "fragment": "shadow/depth_mask.frag"
+      "fragment": "shadow/depth_mask.frag",
+      "materialTextures": true
     },
     {
       "id": "surface.prepass-opaque",
       "contract": "surface-prepass",
       "vertex": "visibility/surface.vert",
-      "fragment": "visibility/surface_opaque.frag"
+      "fragment": "visibility/surface_opaque.frag",
+      "materialTextures": true
     },
     {
       "id": "surface.prepass-mask",
       "contract": "surface-prepass",
       "vertex": "visibility/surface.vert",
-      "fragment": "visibility/surface_mask.frag"
+      "fragment": "visibility/surface_mask.frag",
+      "materialTextures": true
     },
     {
       "id": "visibility.hiz-init",

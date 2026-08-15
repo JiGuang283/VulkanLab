@@ -10,6 +10,7 @@ namespace vkr {
 class GuiSystem;
 class GpuDebugUtils;
 class PipelineCache;
+class MaterialSystem;
 class TracyProfiler;
 struct RenderView;
 struct ShaderVariant;
@@ -69,6 +70,7 @@ struct RenderFrameContext {
     VkDescriptorSet ddgiDescriptorSet = VK_NULL_HANDLE;
     VkDescriptorSetLayout ddgiDescriptorSetLayout = VK_NULL_HANDLE;
     PipelineCache  *pipelineCache = nullptr;
+    MaterialSystem *materialSystem = nullptr;
     const GpuDebugUtils *debugUtils = nullptr;
     const TracyProfiler *tracyProfiler = nullptr;
     GuiSystem      *gui = nullptr;

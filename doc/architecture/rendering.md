@@ -1,8 +1,8 @@
 # 渲染流程
 
 > Status: Current
-> Last verified: 2026-08-13
-> Verified against: Vulkan 1.3 RenderGraph, Dynamic Rendering, CSM/punctual shadows, screen-space effects, reflection probes and DDGI v1
+> Last verified: 2026-08-15
+> Verified against: Vulkan 1.3 RenderGraph and Bindless Material Resources v1
 
 ## 帧图与 Pass 顺序
 
@@ -285,7 +285,13 @@ SkyBackgroundPass 在 Atmosphere 未接管背景时，使用 fullscreen triangle
 
 ## Pipeline、材质与 Descriptor
 
-MaterialTemplate 保存基础 PipelineConfig 和材质 descriptor layout。MaterialInstance 保存材质参数及 BaseColor、Normal、MetallicRoughness、Occlusion、Emissive 五个纹理槽。缺失槽由 fallback texture 填充，因此 `VulkanLab -> Materials` 中的 Bound 只表示 descriptor 已绑定。
+MaterialTemplate 保存基础 PipelineConfig，并引用 MaterialSystem 提供的活动 set 1 layout。MaterialInstance 保存 CPU 材质参数、BaseColor、Normal、MetallicRoughness、Occlusion、Emissive 五个纹理引用，以及带 generation 的 GPU MaterialHandle。缺失槽统一引用 MaterialSystem 的全局 fallback texture，不再按 ModelAsset 重复创建。
+
+材质后端在进程启动时确定。Auto 在设备和 Shader Manifest 均支持时使用 Bindless；
+否则回退 Legacy。Bindless 使用固定容量的全局 Material SSBO 和 combined-image-sampler
+数组，纹理索引通过 `nonuniformEXT()` 访问，pipeline 切换时只绑定一次全局 set 1。
+Legacy 使用同一 Material SSBO，但每个材质持有一套 binding 1..5 的不可变 descriptor，
+材质变化时绑定。两条路径共用相同 `GpuMaterial` 和 draw push ABI。
 
 PipelineConfig 支持零或多个 color blend attachment、零 vertex binding、可选 fragment shader、topology 和 depth bias。`PipelineCache::getOrCreate()` 接收完整 `PipelineConfig` 和 Graph 提供的 `PipelineRenderingSignature`，由 cache 内部规范化并生成 key。Key 覆盖 shader 路径、vertex layout、topology、raster/depth/blend/MSAA 状态、descriptor layouts、push ranges，以及 Dynamic Rendering 的 color/depth/stencil formats、sample count、view mask 和 blend attachment 数量；不再包含 pass、材质指针、ShaderVariant、queue 或 alpha-masked 等语义标签，也不依赖 `VkRenderPass/subpass`。Pipeline 创建直接使用 key 内保存的 config，因此不存在手工 key 与实际 Vulkan 状态分叉。
 
@@ -295,7 +301,9 @@ Forward descriptor 约定为：
 
 - `set=0, binding=0`：每帧 GlobalUBO，包含相机、灯光计数、directional shadow 和 Atmosphere frame 数据。
 - `set=0, binding=1`：PBR fragment shader 使用的 Scene Light SSBO。
-- `set=1, binding=0..4`：五个材质纹理槽。
+- `set=1, binding=0`：全局只读 `GpuMaterial[]` SSBO。
+- Bindless 的 `set=1, binding=1`：runtime `sampler2D materialTextures[]`。
+- Legacy 的 `set=1, binding=1..5`：BaseColor、Normal、MetallicRoughness、Occlusion、Emissive 固定纹理槽。
 - `set=2`：统一 Lighting descriptor。
   - binding 0：共享 Directional CSM 2D-array comparison map。
   - binding 1：Irradiance cubemap。
@@ -320,7 +328,7 @@ Forward descriptor 约定为：
   - binding 1：Irradiance 2D-array atlas。
   - binding 2：Distance-moments 2D-array atlas。
   - binding 3：Probe state SSBO。
-- 128 字节 push constant：model matrix 和材质因子。
+- 128 字节 `GpuDrawPushBlock`：model matrix、material index、render item index、shadow slice/pass flags 和预留字段；材质因子不再逐 draw push。
 
 Lighting 的九个 binding 始终绑定真实资源或合法 fallback，不依赖 partially-bound descriptor。Point/Spot Shadow Pass 另外使用 pass-local `UNIFORM_BUFFER_DYNAMIC`：每个 frame slot 预写 24 个 Point face slice 和 4 个 Spot slice，draw 只切换对齐后的 dynamic offset，不在录制期间覆盖同一 UBO 数据。局部 Reflection Probe 按 priority 和 Entity UUID 稳定选择最多 8 个；Box/Sphere influence 与 box parallax correction 在 PBR fragment shader 中完成。SSR 使用 confidence 替换 `Local Probe -> Global IBL` 的 specular baseline，global diffuse irradiance 不被局部探针替换。sampler array 通过常量 switch 访问，因此不要求 sampled-image array dynamic indexing。ToneMap 使用固定五 binding 的 pass-local descriptor：当前 HDR、Bloom、Surface Normal-Roughness、Motion 和按当前 debug mode 选择的单一 Debug Source。Depth/Color pyramid、AO、TAA、GTAO、SSR 与 SSGI 调试图像都在 CPU 更新 descriptor 时映射到该动态 source，避免每新增一个算法就扩大 ToneMap descriptor ABI。未在本帧生成的输入绑定已初始化 fallback，push constant 禁止采样。Present 使用另一个 pass-local descriptor，只包含当前 frame slot 的 Viewport Color。
 

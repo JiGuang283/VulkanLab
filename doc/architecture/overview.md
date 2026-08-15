@@ -41,7 +41,7 @@ schema v3 Cooked package 中 `projectRoot == runtimeRoot == package root`，cach
 
 1. ProjectContext、SceneCatalog、SceneWorkflowController 和模型预览 SceneRegistry，此时尚未创建窗口。
 2. Window 和 InputManager。
-3. VulkanContext、Device 和 DescriptorAllocator。
+3. VulkanContext、Device、DescriptorAllocator 和启动时选定后端的 MaterialSystem。
 4. SwapChain 和 FrameSync。
 5. Renderer、全局 UBO、Lighting descriptor generation、物理 render resource registry、Vulkan 1.3 RenderGraph、GPU timestamp profiler 和开发模式 CaptureService。
 6. PipelineCache、AssetRepository/EnvironmentAssetRepository worker、SceneLoadManager 操作 facade、ArtifactIndex 和初始 Scene/environment admission；只有 OnDemand 创建 AssetImportManager supervisor。
@@ -66,7 +66,7 @@ Device 或图像所有权。窗口位置、尺寸和 docking 状态继续由 ImG
 
 ## 线程模型
 
-主线程拥有 GLFW、ImGui、DescriptorAllocator 和全部 Vulkan/VMA 对象。它每帧轮询 upload fence、按预算记录上传命令，并在资源全部可用后发布 Scene 或新的 Environment descriptor generation。
+主线程拥有 GLFW、ImGui、DescriptorAllocator、MaterialSystem 和全部 Vulkan/VMA 对象。它每帧轮询 upload fence、按预算记录上传命令，并在资源全部可用后发布 Scene 或新的 Environment descriptor generation。材质与纹理 slot 的注册、descriptor 更新和 submission-serial 回收同样只在主线程执行。
 
 AssetRepository 持有一个长期 FIFO worker。worker 只执行 glTF 文件读取、解析、图片解码/缩放、顶点转换、tangent、bounds 和 hierarchy，输出不包含 Vulkan handle 的 `PreparedModelData`。主线程按预算推进唯一活动 `ModelGpuBuilder`，并把完成结果发布为共享 `ModelAsset`。相同 `(modelId, profileId)` 请求会 Ready hit 或合并到同一 generation。
 

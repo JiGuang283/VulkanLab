@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <limits>
 #include <set>
 #include <string>
 #include <vector>
@@ -25,8 +26,15 @@ constexpr std::array<const char *, 3> rayQueryExtensions = {
 
 namespace vkr {
 
-Device::Device(VulkanContext &ctx) : ctx_(ctx) {
+Device::Device(VulkanContext &ctx, MaterialBindingMode materialBindingMode)
+    : ctx_(ctx), requestedMaterialBindingMode_(materialBindingMode) {
     pickPhysicalDevice();
+    queryMaterialBindingSupport();
+    if (requestedMaterialBindingMode_ == MaterialBindingMode::Bindless &&
+        !materialBindingSupport_.supported) {
+        throw std::runtime_error("Bindless material binding is unavailable: " +
+                                 materialBindingSupport_.reason);
+    }
     queryRayQuerySupport();
     queryDdgiSupport();
     createLogicalDevice();
@@ -50,6 +58,72 @@ Device::Device(VulkanContext &ctx) : ctx_(ctx) {
                                                      : "unavailable");
     }
     createAllocator();
+}
+
+void Device::queryMaterialBindingSupport() {
+    materialBindingSupport_ = inspectMaterialBindingSupport(physicalDevice_);
+}
+
+MaterialBindingDeviceSupport Device::inspectMaterialBindingSupport(
+    VkPhysicalDevice device) const {
+    MaterialBindingDeviceSupport support{};
+    VkPhysicalDeviceDescriptorIndexingFeatures indexing{};
+    indexing.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+    VkPhysicalDeviceFeatures2 features{};
+    features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    features.pNext = &indexing;
+    vkGetPhysicalDeviceFeatures2(device, &features);
+
+    VkPhysicalDeviceDescriptorIndexingProperties indexingProperties{};
+    indexingProperties.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES;
+    VkPhysicalDeviceProperties2 properties{};
+    properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    properties.pNext = &indexingProperties;
+    vkGetPhysicalDeviceProperties2(device, &properties);
+
+    constexpr uint32_t gpuMaterialSize = 128;
+    support.materialCapacity =
+        static_cast<uint32_t>(std::min<uint64_t>(
+            65536u, properties.properties.limits.maxStorageBufferRange /
+                         gpuMaterialSize));
+
+    const bool featuresAvailable =
+        indexing.runtimeDescriptorArray &&
+        indexing.shaderSampledImageArrayNonUniformIndexing &&
+        indexing.descriptorBindingSampledImageUpdateAfterBind &&
+        indexing.descriptorBindingUpdateUnusedWhilePending &&
+        indexing.descriptorBindingPartiallyBound;
+    if (!featuresAvailable) {
+        support.reason =
+            "required Vulkan descriptor indexing features are unavailable";
+        return support;
+    }
+
+    constexpr uint32_t targetTextures = 8192;
+    const uint32_t textureLimit = std::min(
+        {targetTextures,
+         indexingProperties.maxPerStageDescriptorUpdateAfterBindSamplers,
+         indexingProperties.maxPerStageDescriptorUpdateAfterBindSampledImages,
+         indexingProperties.maxDescriptorSetUpdateAfterBindSamplers,
+         indexingProperties.maxDescriptorSetUpdateAfterBindSampledImages,
+         indexingProperties.maxUpdateAfterBindDescriptorsInAllPools});
+    const uint32_t materialLimit = support.materialCapacity;
+    support.textureCapacity = textureLimit;
+    support.materialCapacity = materialLimit;
+    if (textureLimit < 2048) {
+        support.reason =
+            "bindless sampled-image capacity is below 2048";
+        return support;
+    }
+    if (materialLimit < 4096) {
+        support.reason =
+            "GPU material storage capacity is below 4096";
+        return support;
+    }
+    support.supported = true;
+    return support;
 }
 Device::~Device() {
     vmaDestroyAllocator(allocator_);
@@ -104,8 +178,6 @@ void Device::pickPhysicalDevice() {
     std::vector<VkPhysicalDevice> devices(deviceCount);
     vkEnumeratePhysicalDevices(ctx_.instance(), &deviceCount, devices.data());
 
-    VkPhysicalDevice fallbackDevice = VK_NULL_HANDLE;
-
     auto printDeviceInfo = [](const VkPhysicalDeviceProperties &props) {
         std::string typeStr;
         switch (props.deviceType) {
@@ -133,36 +205,53 @@ void Device::pickPhysicalDevice() {
                      VK_VERSION_PATCH(props.apiVersion));
     };
 
+    int bestScore = std::numeric_limits<int>::min();
     for (const auto &device : devices) {
         if (!isDeviceSuitable(device))
             continue;
 
         VkPhysicalDeviceProperties deviceProperties;
         vkGetPhysicalDeviceProperties(device, &deviceProperties);
+        const MaterialBindingDeviceSupport bindless =
+            inspectMaterialBindingSupport(device);
+        if (requestedMaterialBindingMode_ == MaterialBindingMode::Bindless &&
+            !bindless.supported)
+            continue;
 
-        if (deviceProperties.deviceType ==
-            VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
-            physicalDevice_ = device;
-            msaaSamples_ = getMaxUsableSampleCount();
-            printDeviceInfo(deviceProperties);
+        int score = 0;
+        switch (deviceProperties.deviceType) {
+        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+            score = 1000;
+            break;
+        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+            score = 500;
+            break;
+        case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
+            score = 250;
+            break;
+        default:
             break;
         }
-
-        if (fallbackDevice == VK_NULL_HANDLE) {
-            fallbackDevice = device;
+        if (requestedMaterialBindingMode_ != MaterialBindingMode::Legacy &&
+            bindless.supported)
+            score += 10000;
+        if (score > bestScore) {
+            bestScore = score;
+            physicalDevice_ = device;
         }
     }
 
     if (physicalDevice_ == VK_NULL_HANDLE) {
-        if (fallbackDevice != VK_NULL_HANDLE) {
-            physicalDevice_ = fallbackDevice;
-            VkPhysicalDeviceProperties deviceProperties;
-            vkGetPhysicalDeviceProperties(physicalDevice_, &deviceProperties);
-            printDeviceInfo(deviceProperties);
-        } else {
-            throw std::runtime_error("failed to find a suitable GPU!");
-        }
+        if (requestedMaterialBindingMode_ == MaterialBindingMode::Bindless)
+            throw std::runtime_error(
+                "failed to find a Vulkan 1.3 GPU with bindless material support");
+        throw std::runtime_error("failed to find a suitable GPU!");
     }
+
+    VkPhysicalDeviceProperties selectedProperties{};
+    vkGetPhysicalDeviceProperties(physicalDevice_, &selectedProperties);
+    msaaSamples_ = getMaxUsableSampleCount();
+    printDeviceInfo(selectedProperties);
 
     enabledDeviceExtensions_ = requiredDeviceExtensions;
 
@@ -774,18 +863,24 @@ void Device::createLogicalDevice() {
     acceleration.accelerationStructure =
         rayQuerySupport_.available ? VK_TRUE : VK_FALSE;
     acceleration.pNext = &rayQuery;
-    VkPhysicalDeviceBufferDeviceAddressFeatures bufferAddress{};
-    bufferAddress.sType =
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
-    bufferAddress.bufferDeviceAddress =
-        rayQuerySupport_.available ? VK_TRUE : VK_FALSE;
-    bufferAddress.pNext = &acceleration;
-
     VkPhysicalDeviceVulkan13Features vulkan13{};
     vulkan13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     vulkan13.dynamicRendering = VK_TRUE;
     vulkan13.synchronization2 = VK_TRUE;
-    vulkan13.pNext = rayQuerySupport_.available ? &bufferAddress : nullptr;
+    VkPhysicalDeviceVulkan12Features vulkan12{};
+    vulkan12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    const bool enableBindless =
+        requestedMaterialBindingMode_ != MaterialBindingMode::Legacy &&
+        materialBindingSupport_.supported;
+    vulkan12.runtimeDescriptorArray = enableBindless;
+    vulkan12.shaderSampledImageArrayNonUniformIndexing = enableBindless;
+    vulkan12.descriptorBindingSampledImageUpdateAfterBind = enableBindless;
+    vulkan12.descriptorBindingUpdateUnusedWhilePending = enableBindless;
+    vulkan12.descriptorBindingPartiallyBound = enableBindless;
+    vulkan12.bufferDeviceAddress =
+        rayQuerySupport_.available ? VK_TRUE : VK_FALSE;
+    vulkan12.pNext = rayQuerySupport_.available ? &acceleration : nullptr;
+    vulkan13.pNext = &vulkan12;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

@@ -27,6 +27,7 @@
 namespace vkr {
 
 class DescriptorAllocator;
+class MaterialSystem;
 struct EnvironmentGpuResources;
 class GuiSystem;
 class MainForwardPass;
@@ -169,6 +170,7 @@ class Renderer {
   public:
     Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
              DescriptorAllocator &descriptorAllocator,
+             MaterialSystem &materialSystem,
              RendererShaderPaths shaderPaths);
     ~Renderer();
 
@@ -276,6 +278,7 @@ class Renderer {
     SwapChain *swapChain_;
     FrameSync *frameSync_;
     DescriptorAllocator *descriptorAllocator_;
+    MaterialSystem *materialSystem_;
 
     std::vector<std::unique_ptr<Buffer>> uniformBuffers_;
     std::array<FrameSceneLightStorage, MAX_FRAMES_IN_FLIGHT>

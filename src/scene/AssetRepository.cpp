@@ -8,6 +8,7 @@
 #include "core/PipelineConfigBuilder.h"
 #include "diagnostics/Profiling.h"
 #include "render/MaterialTemplate.h"
+#include "render/MaterialSystem.h"
 
 #include <algorithm>
 #include <atomic>
@@ -169,10 +170,13 @@ ModelAssetHandleSnapshot ModelAssetHandle::snapshot() const {
 
 class AssetRepository::Impl {
   public:
-    Impl(Device &device, DescriptorAllocator &descriptorAllocator)
+    Impl(Device &device, DescriptorAllocator &descriptorAllocator,
+         MaterialSystem &materialSystem)
         : device_(&device), descriptorAllocator_(&descriptorAllocator),
           materialTemplate_(std::make_shared<MaterialTemplate>(
-              device, standardPipelineConfig(device))),
+              standardPipelineConfig(device),
+              materialSystem.descriptorSetLayout())),
+          materialSystem_(&materialSystem),
           worker_([this] { workerLoop(); }) {}
 
     ~Impl() { shutdown(); }
@@ -347,7 +351,7 @@ class AssetRepository::Impl {
             context.materialTemplate = materialTemplate_;
             gpuRecord_ = record;
             gpuBuilder_ = std::make_unique<ModelGpuBuilder>(
-                *device_, *descriptorAllocator_, std::move(context),
+                *device_, *materialSystem_, std::move(context),
                 std::move(prepared));
             record->state = ModelAssetState::Uploading;
             ++gpuBuildStarts_;
@@ -622,6 +626,7 @@ class AssetRepository::Impl {
     Device *device_ = nullptr;
     DescriptorAllocator *descriptorAllocator_ = nullptr;
     std::shared_ptr<MaterialTemplate> materialTemplate_;
+    MaterialSystem *materialSystem_ = nullptr;
     std::unordered_map<ModelAssetKey, std::shared_ptr<Record>,
                        ModelAssetKeyHash>
         active_;
@@ -643,8 +648,10 @@ class AssetRepository::Impl {
 };
 
 AssetRepository::AssetRepository(Device &device,
-                                 DescriptorAllocator &descriptorAllocator)
-    : impl_(std::make_unique<Impl>(device, descriptorAllocator)) {}
+                                 DescriptorAllocator &descriptorAllocator,
+                                 MaterialSystem &materialSystem)
+    : impl_(std::make_unique<Impl>(device, descriptorAllocator,
+                                  materialSystem)) {}
 
 AssetRepository::~AssetRepository() = default;
 

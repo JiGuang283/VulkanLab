@@ -1,8 +1,8 @@
 # 编辑器 Docking 与 Scene Viewport
 
 > Status: Current
-> Last verified: 2026-08-07
-> Verified against: Local Reflection Probes and DDGI v1
+> Last verified: 2026-08-15
+> Verified against: Bindless Material Resources v1
 
 VulkanLab 的开发 UI 使用 Dear ImGui `v1.92.7-docking`，在主 GLFW
 窗口内创建一个全屏 DockSpace。Viewport、Outliner、Inspector、Scenes、Assets、
@@ -128,7 +128,10 @@ Diagnostics。不可用功能保留控件位置，并通过禁用状态或 toolt
 ### Materials
 
 Materials 仍是只读诊断窗口。模型预览时显示整个预览的材质；Native Scene 中优先
-显示 Outliner 当前选中 ModelInstance 所共享的 ModelAsset 材质。
+显示 Outliner 当前选中 ModelInstance 所共享的 ModelAsset 材质。窗口顶部显示当前
+GPU binding backend 和 Material Table 用量；单个材质显示稳定 GPU material index。
+Bindless 模式下五个纹理槽显示全局 texture slot index，Legacy 模式下显示固定
+descriptor binding。
 
 ### Diagnostics
 
