@@ -2,7 +2,7 @@
 
 > Status: Active
 > Last verified: 2026-08-15
-> Verified against: `e8ef4dd`
+> Verified against: `180d7c2`
 
 ## Progress
 
@@ -16,8 +16,9 @@
 | 5. Complete SceneWorkflowController | Complete | Catalog, artifact, validation, import and asset task state moved behind typed Workflow snapshots/actions |
 | 6. Render Settings And Feature Ownership | Complete | Typed requested/active settings, centralized validation, deterministic frame feature resolution and feature-owned Shader program families |
 | 7. Extract EditorController | Complete | Editor workspace, authoring session, viewport, capture and panels moved behind an editor-only controller |
-| 8. Isolate Runtime Control | Next | Pending implementation |
-| 9-10 | Pending | Execute in order after each preceding stage is verified |
+| 8. Isolate Runtime Control | Complete | Pipe lifecycle, dispatch, protocol serialization and Host implementation moved behind an optional adapter |
+| 9. Final Application Composition | Next | Pending implementation |
+| 10 | Pending | Execute after Stage 9 is verified |
 
 ## Summary
 
@@ -731,6 +732,16 @@ Panel只能保存展示状态，不持有GPU资源或后台任务。
 - Runtime Control关闭时不创建queue、pipe、adapter或JSON状态。
 - `windows-msvc-runtime`不链接Runtime Control实现。
 - CLI现有非Viking命令保持兼容。
+
+### Stage 8 Completion Record
+
+- 新增 `RuntimeControlAdapter`，集中拥有 Named Pipe、`RuntimeCommandQueue`、Dispatcher、pending quit response handshake 和全部协议 JSON 序列化。
+- `Application` 不再继承 `RuntimeControlHost`，不再声明或实现任何 `runtime*()`/`ControlJson` 方法；主循环只调用 `processOne()` 并处理最终 quit intent。
+- Adapter 通过 `RuntimeControlServices` 读取平台、场景、渲染和诊断状态，通过 `RuntimeControlActions` 调用现有 Scene/Environment/Settings action，不持有 `Application&`。
+- 共享 Application action 不再抛出协议层错误；SceneWorkflow、SceneRuntime 和 RenderSettings 的领域错误只在 Adapter 边界映射为稳定协议错误码。
+- 只有 `VKL_ENABLE_RUNTIME_CONTROL=ON` 且启动参数显式启用时才创建 Adapter、Queue 和 Pipe；Runtime preset 不编译 Adapter，也不链接 Runtime Control 实现。
+- `Application.cpp` 从约 3,270 行降至约 1,245 行，`Application.h` 从约 215 行降至约 158 行。
+- dev-fast Debug、完整 Debug 控制工具和 runtime Release 均构建成功；实际验证 `ping`、`system.info`、`scene.current`、`render-settings get`、`unknown_environment` 错误码与 `quit` 响应后退出。Runtime Release 持续启动 6 秒，日志无 error/critical；未运行测试套件。
 
 ## Stage 9: Final Application Composition
 
