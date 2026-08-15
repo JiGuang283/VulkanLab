@@ -1,8 +1,8 @@
 # 自动视觉回归
 
 > Status: Current
-> Last verified: 2026-07-26
-> Verified against: `9092755`
+> Last verified: 2026-08-15
+> Verified against: Renderer Smoke Scene migration
 
 `VulkanLabRenderTest.exe` 是独立的开发测试程序。它通过 Runtime Control 启动并控制 `VulkanLab.exe`，固定场景、Shader、相机、窗口尺寸和时间步，等待画面稳定后截图，再执行 smoke 或 golden 比较。测试程序不链接渲染器或 Vulkan；实际 GPU 能力仍由被测 `VulkanLab.exe` 提供。
 
@@ -15,13 +15,13 @@ cmake --build --preset windows-msvc-debug
 .\build\windows-msvc-debug\Debug\VulkanLabRenderTest.exe run `
   --project . `
   --runtime .\build\windows-msvc-debug\Debug\VulkanLab.exe `
-  --spec .\tests\render\viking_legacy_smoke.json `
+  --spec .\tests\render\renderer_smoke_legacy.json `
   --output .\artifacts\render-tests
 ```
 
 Runner 会为每次运行创建唯一 Named Pipe、capture root 和结果目录。工作目录由 Runner 显式设置，不依赖调用命令时的当前目录；进程树由 Windows Job Object 管理，正常结束发送 `app.quit`，异常或超时则终止整个 Job。
 
-Runner 会从 `scene.list` 核对 spec 的 scene/profile，并在加载场景前应用该 profile 的纹理限制。报告中的 `runtime.requestedProfile.textureLimit` 和 `loadStats.textureLimit` 应一致；不一致属于测试配置失败。
+Runner 会从 `scene.list` 核对 spec 的 scene。Model Preview spec 必须提供 `profileId`，Runner 会在加载前应用对应纹理限制；Native Scene spec 不提供 `profileId`，其模型分别使用 Catalog 中的 profile。
 
 ## CTest 测试集
 
@@ -41,33 +41,30 @@ ctest --test-dir build/windows-msvc-release -C Release --output-on-failure
 
 当前快速视觉集包含：
 
-- Viking Room + Legacy Forward smoke；
+- Renderer Smoke Scene + Legacy Forward smoke；
 - Sheen Chair + PBR-lite NormalMapped smoke；
 - Sheen Chair + Debug BaseColor smoke；
-- Viking Room + PBR-lite NormalMapped shadow smoke；
-- Viking Room + Debug Shadow smoke；
+- Renderer Smoke Scene + PBR-lite NormalMapped shadow smoke；
+- Renderer Smoke Scene + Debug Shadow smoke；
 - 运行时生成 tiny HDR/KTX2 后执行 Skybox rotation、Debug IBL Diffuse 和 Debug IBL Specular smoke；
-- Viking Room + Legacy Forward reference golden。
+- 当前不提交 Renderer Smoke Scene golden；人工确认候选后再建立新 baseline。
 
 Main Sponza 只作为本地扩展 smoke 和 LoadStats 场景，不进入快速默认测试集。
 
-`viking_pbr_shadow_golden.json` 是待审核候选。仓库当前不包含其 baseline；只有人工检查 `actual.png` 并显式 `--accept` 后，CMake 才会把它注册为 golden CTest。
+## Spec v1-v4
 
-## Spec v1、v2 与 v3
-
-规格文件位于 `tests/render/`，使用稳定 scene/profile/environment ID，而不是 UI index。解析器继续接受 schema v1，并使用默认 `RenderSettings`；schema v2 可增加可选 `renderSettings`，从而固定阴影、bias、曝光和 Tone Mapper。schema v3 进一步增加可选 `environmentId` 以及 IBL、Skybox、环境强度和旋转设置。v1/v2 强制使用 `None` 且关闭 IBL/Skybox，因此旧 golden 不会因 Catalog default environment 改变。解析器拒绝未知字段、非法范围和缺失字段。
+规格文件位于 `tests/render/`，使用稳定 scene/profile/environment ID，而不是 UI index。解析器继续接受 schema v1；schema v2 增加 `renderSettings`，schema v3 增加环境，schema v4 增加 Bloom。Model Preview 需要 `profileId`，Native Scene 省略该字段。解析器拒绝未知字段和非法范围。
 
 ```json
 {
   "schemaVersion": 2,
-  "name": "viking-pbr-shadow-smoke",
-  "sceneId": "viking-room",
-  "profileId": "desktop_2048",
+  "name": "renderer-smoke-pbr-shadow",
+  "sceneId": "renderer-smoke",
   "shader": "PBR-lite NormalMapped",
   "camera": {
-    "position": [2.0, 2.0, 2.0],
-    "yaw": -135.0,
-    "pitch": -30.0
+    "position": [0.0, -7.0, 3.1],
+    "yaw": 90.0,
+    "pitch": -24.0
   },
   "viewport": [800, 600],
   "fixedDelta": 0.000001,
@@ -94,15 +91,14 @@ IBL 测试使用 schema v3，例如：
 ```json
 {
   "schemaVersion": 3,
-  "name": "viking-ibl-smoke",
-  "sceneId": "viking-room",
-  "profileId": "desktop_2048",
+  "name": "renderer-smoke-ibl",
+  "sceneId": "renderer-smoke",
   "environmentId": "studio",
   "shader": "PBR-lite NormalMapped",
   "camera": {
-    "position": [2.0, 2.0, 2.0],
-    "yaw": -135.0,
-    "pitch": -30.0
+    "position": [0.0, -7.0, 3.1],
+    "yaw": 90.0,
+    "pitch": -24.0
   },
   "viewport": [800, 600],
   "fixedDelta": 0.000001,
@@ -155,7 +151,7 @@ Smoke 检查尺寸、非黑像素比例和主导纯色比例，用于发现黑�
 
 基线包含 PNG 和同名 metadata JSON。Metadata 固定 scene/profile、Shader、viewport、fixed delta、BuildInfo、GPU vendor/device、Shader hash、尺寸和 PNG SHA-256。Golden 只在当前 GPU 的 vendor/device 与 reference 相同时作为阻塞测试；其他 GPU 返回 `125`，但仍必须先通过 smoke。
 
-更新流程必须人工审核：
+仓库目前没有已接受的 Renderer Smoke Scene golden。建立新基线时必须人工审核：
 
 1. 先正常运行 golden spec，查看失败目录中的 `actual.png` 和 `diff.png`。
 2. 确认画面变化符合预期后，显式执行一次 `--accept`。
@@ -166,7 +162,7 @@ Smoke 检查尺寸、非黑像素比例和主导纯色比例，用于发现黑�
 .\build\windows-msvc-debug\Debug\VulkanLabRenderTest.exe run `
   --project . `
   --runtime .\build\windows-msvc-debug\Debug\VulkanLab.exe `
-  --spec .\tests\render\viking_legacy_golden.json `
+  --spec .\tests\render\renderer_smoke_legacy_golden.json `
   --output .\artifacts\golden-review `
   --accept
 ```

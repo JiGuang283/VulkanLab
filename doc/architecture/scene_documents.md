@@ -10,7 +10,7 @@ VulkanLab 已将“导入模型”“可保存场景”和“运行时世界”�
 
 ```text
 CatalogModel
-  -> glTF/GLB 或 builtin
+  -> glTF/GLB 或 engine primitive
   -> 单模型预览 SceneEntry
 
 CatalogSceneDocument
@@ -65,7 +65,7 @@ Catalog v3 的顶层资产集合为：
 }
 ```
 
-- `models[]` 保存 builtin 或 glTF/GLB 模型、导入 profile、optional 状态和可选 `previewCamera`。
+- `models[]` 保存 glTF/GLB 模型、导入 profile、optional 状态和可选 `previewCamera`；程序化基础几何由保留 ID 的 engine primitive 提供。
 - `scenes[]` 保存原生场景 ID、显示名和项目内 `.vkscene.json` 路径。
 - `environments[]` 保持现有 HDR/IBL 语义。
 - Model ID 与 SceneDocument ID 在同一个命名空间内必须唯一。
@@ -144,7 +144,7 @@ Native Scene 加载事务先在 worker 解析文档，再按 Catalog profile 向
 
 ## Cook 与发布运行时
 
-Stage 7 以 Native SceneDocument 作为 Cook root。`CookClosureResolver` 从 Entity 的 `modelInstance`、顶层 environment 和所有 Reflection Probe environment 收集唯一依赖；每个模型使用自己的 Catalog `importProfile`，重复实例只打包一个 Model artifact，同一环境被多个用途引用时也只打包一次。builtin/OBJ 不能进入闭包，Validator Error、缺失/过期 artifact 或非 Native BC7 profile 都会阻止发布。
+Stage 7 以 Native SceneDocument 作为 Cook root。`CookClosureResolver` 从 Entity 的 `modelInstance`、顶层 environment 和所有 Reflection Probe environment 收集唯一依赖；每个模型使用自己的 Catalog `importProfile`，重复实例只打包一个 Model artifact，同一环境被多个用途引用时也只打包一次。Validator Error、缺失/过期 artifact 或非 Native BC7 profile 都会阻止发布。
 
 Cook 会将旧文档规范化为 schema v5 写入 staging，但不修改项目源文件。Atmosphere 和 DDGI Probe Volume 是纯程序化 SceneDocument 数据；Reflection Probe 参数同样保存在文档中，但其 Environment/KTX2 进入资产闭包。DDGI compute/PBR SPIR-V 由现有 Shader Manifest 闭包带入包，BLAS/TLAS 是 runtime GPU 数据，不是 Cook artifact。最小 cooked Catalog 只包含已选 SceneDocuments 及其引用的 Models、Environments 和 profiles；包内 Artifact Index 使用 `Model / Environment / SceneDocument` 三类 record，并在 SceneDocument record 中保存精确 asset references。
 
@@ -155,7 +155,7 @@ schema v3 package manifest 保存有序 `sceneIds` 和 `startupSceneId`。Cooked
 - 一次只打开一个 Native Scene 编辑会话；模型预览仍作为独立兼容入口。
 - Viewport picking 只使用 ModelAsset bounds，暂不支持 primitive picking、重叠对象循环选择或 GPU Object-ID Pass。
 - Gizmo 暂不支持 snapping；编辑器仍只支持单选和一个 Scene Viewport。
-- builtin/OBJ 模型不能放入 Native Scene；Viking Room 继续使用 legacy preview。
+- Catalog 模型必须是 glTF/GLB；程序化基础几何通过 engine primitive ID 放入 Native Scene。
 - Directional、Point 和 Spot 共享 256 盏有效灯光上限。超限 Light Entity 仍会保存，并由 RenderView 的精确上传结果在 Outliner/Inspector 标记为未上传；当前 Forward shader 会直接遍历所有已上传灯光。
 - 一个 Native Scene 最多包含一个程序化 Atmosphere 和一个 index 0 Atmosphere Sun；当前只支持地面附近视角，不支持太空尺度相机。
 - 一个 Native Scene 最多包含一个 DDGI Probe Volume 和 2048 probes；不支持多个或滚动 volume。

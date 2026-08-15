@@ -1,23 +1,15 @@
 #include "Mesh.h"
-#include "TangentGenerator.h"
 #include "Vertex.h"
 #include "core/Device.h"
 #include "core/GpuBarrier.h"
 #include "core/AccelerationStructure.h"
-#include "core/Log.h"
 #include "core/UploadRecorder.h"
 #include "diagnostics/SceneLoadStats.h"
-
-#include <tiny_obj_loader.h>
 
 #include <algorithm>
 #include <array>
 #include <cstring>
-#include <filesystem>
 #include <limits>
-#include <stdexcept>
-#include <unordered_map>
-#include <vector>
 
 namespace vkr {
 
@@ -200,66 +192,6 @@ VkDeviceAddress Mesh::indexDeviceAddress() const {
 
 void Mesh::releaseAccelerationBuildScratch() {
     accelerationBuildScratch_.reset();
-}
-
-std::unique_ptr<Mesh> Mesh::fromOBJ(Device &device, UploadRecorder &upload,
-                                    const std::string &path) {
-    tinyobj::attrib_t                attrib;
-    std::vector<tinyobj::shape_t>    shapes;
-    std::vector<tinyobj::material_t> materials;
-    std::string                      err;
-
-    if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &err, path.c_str())) {
-        throw std::runtime_error(err);
-    }
-
-    std::vector<Vertex>                  vertices;
-    std::vector<uint32_t>                indices;
-    std::unordered_map<Vertex, uint32_t> uniqueVertices;
-
-    for (const auto &shape : shapes) {
-        for (const auto &index : shape.mesh.indices) {
-            Vertex vertex{};
-            vertex.pos = {attrib.vertices[3 * index.vertex_index + 0],
-                          attrib.vertices[3 * index.vertex_index + 1],
-                          attrib.vertices[3 * index.vertex_index + 2]};
-            if (!attrib.texcoords.empty() && index.texcoord_index >= 0) {
-                vertex.texCoord = {
-                    attrib.texcoords[2 * index.texcoord_index + 0],
-                    1.0f - attrib.texcoords[2 * index.texcoord_index + 1]};
-            } else {
-                vertex.texCoord = {0.0f, 0.0f};
-            }
-            vertex.texCoord1 = vertex.texCoord;
-            if (!attrib.normals.empty() && index.normal_index >= 0) {
-                vertex.normal = {
-                    attrib.normals[3 * index.normal_index + 0],
-                    attrib.normals[3 * index.normal_index + 1],
-                    attrib.normals[3 * index.normal_index + 2],
-                };
-            } else {
-                vertex.normal = {0.0f, 1.0f, 0.0f};
-            }
-
-            if (uniqueVertices.count(vertex) == 0) {
-                uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
-                vertices.push_back(vertex);
-            }
-            indices.push_back(uniqueVertices[vertex]);
-        }
-    }
-
-    generateTangents(vertices, indices);
-
-    VKR_LOG_DEBUG("Mesh", "Loaded OBJ '{}': vertices={}, indices={}", path,
-                  vertices.size(), indices.size());
-
-    return std::make_unique<Mesh>(
-        device, upload, vertices.data(),
-        static_cast<VkDeviceSize>(sizeof(Vertex) * vertices.size()),
-        indices.data(), static_cast<uint32_t>(indices.size()),
-        "Scene/OBJ/Mesh/" +
-            std::filesystem::path(path).filename().string());
 }
 
 void Mesh::bind(VkCommandBuffer cmd) const {

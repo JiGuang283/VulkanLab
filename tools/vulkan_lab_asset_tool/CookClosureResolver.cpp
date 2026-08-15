@@ -98,11 +98,6 @@ CookClosure resolveCookClosure(
     for (const CatalogModel &model : catalog.models) {
         if (modelIds.count(model.id) == 0)
             continue;
-        if (model.type == "builtin") {
-            throw std::runtime_error(
-                "model_not_instanceable: native scene references builtin "
-                "model '" + model.id + "'");
-        }
         if (model.type != "gltf") {
             throw std::runtime_error("unsupported cooked model type for '" +
                                      model.id + "': " + model.type);

@@ -1,13 +1,12 @@
 {
   "schemaVersion": 1,
-  "name": "viking-legacy-smoke",
-  "sceneId": "viking-room",
-  "profileId": "desktop_2048",
+  "name": "renderer-smoke-legacy",
+  "sceneId": "renderer-smoke",
   "shader": "Legacy Forward",
   "camera": {
-    "position": [2.0, 2.0, 2.0],
-    "yaw": -135.0,
-    "pitch": -30.0
+    "position": [0.0, -7.0, 3.1],
+    "yaw": 90.0,
+    "pitch": -24.0
   },
   "viewport": [800, 600],
   "fixedDelta": 0.016666667,

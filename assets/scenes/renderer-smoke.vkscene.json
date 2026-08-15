@@ -1,0 +1,143 @@
+{
+  "schemaVersion": 5,
+  "id": "renderer-smoke",
+  "displayName": "Renderer Smoke Scene",
+  "activeCamera": "d1000000-0000-4000-8000-000000000001",
+  "ambient": {
+    "color": [0.035, 0.04, 0.05],
+    "intensity": 0.8
+  },
+  "environment": null,
+  "entities": [
+    {
+      "id": "d1000000-0000-4000-8000-000000000001",
+      "name": "Camera",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [0.0, -7.0, 3.1],
+        "rotation": [0.580971505, 0.0, 0.0, 0.813923897],
+        "scale": [1.0, 1.0, 1.0]
+      },
+      "components": {
+        "camera": {
+          "verticalFovRadians": 0.959931089,
+          "nearPlane": 0.05,
+          "farPlane": 80.0
+        }
+      }
+    },
+    {
+      "id": "d1000000-0000-4000-8000-000000000002",
+      "name": "Sun",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [0.0, 0.0, 0.0],
+        "rotation": [0.258165074, -0.097001684, -0.338086270, 0.899799501],
+        "scale": [1.0, 1.0, 1.0]
+      },
+      "components": {
+        "light": {
+          "type": "directional",
+          "castsShadow": true,
+          "atmosphereSunIndex": null,
+          "sourceAngularRadiusRadians": 0.004675,
+          "color": [1.0, 0.96, 0.88],
+          "intensity": 2.4,
+          "range": null,
+          "innerConeRadians": 0.0,
+          "outerConeRadians": 0.785398163
+        }
+      }
+    },
+    {
+      "id": "d1000000-0000-4000-8000-000000000003",
+      "name": "Fill Light",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [-2.0, -1.5, 3.0],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.0, 1.0, 1.0]
+      },
+      "components": {
+        "light": {
+          "type": "point",
+          "castsShadow": true,
+          "atmosphereSunIndex": null,
+          "sourceAngularRadiusRadians": 0.004675,
+          "color": [0.32, 0.56, 1.0],
+          "intensity": 22.0,
+          "range": 9.0,
+          "innerConeRadians": 0.0,
+          "outerConeRadians": 0.785398163
+        }
+      }
+    },
+    {
+      "id": "d1000000-0000-4000-8000-000000000004",
+      "name": "Ground",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [0.0, 0.0, 0.0],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [12.0, 12.0, 1.0]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-plane"
+        }
+      }
+    },
+    {
+      "id": "d1000000-0000-4000-8000-000000000005",
+      "name": "White Cube",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [-1.3, 0.2, 0.75],
+        "rotation": [0.0, 0.0, 0.173648178, 0.984807753],
+        "scale": [1.5, 1.5, 1.5]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cube-white"
+        }
+      }
+    },
+    {
+      "id": "d1000000-0000-4000-8000-000000000006",
+      "name": "Sphere",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [1.2, 0.6, 0.75],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.5, 1.5, 1.5]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-sphere"
+        }
+      }
+    },
+    {
+      "id": "d1000000-0000-4000-8000-000000000007",
+      "name": "Emissive Cube",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [0.0, 2.0, 0.3],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [0.6, 0.6, 0.6]
+      },
+      "components": {
+        "modelInstance": {
+          "model": "vkl-primitive-cube-emissive"
+        }
+      }
+    }
+  ]
+}

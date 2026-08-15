@@ -8,7 +8,7 @@
 
 `ProjectContextResolver` 先检查可执行文件旁的 `package_manifest.json`。存在时完整校验 package 并返回只读 package root、Catalog、cache root 和 profile，禁止 `--project` 覆盖。否则按开发规则优先使用 `--project <path>`，再读取可执行文件旁由 CMake 生成的 `vulkanlab_project.json`，最后才从当前目录祖先查找 Catalog。解析结果明确区分 `projectRoot`、`runtimeRoot`、`cacheRoot` 和 `captureRoot`；后续 subsystem 只消费已经解析的路径，不再按当前工作目录拼接资源。Debug、Release 和资产工具因此指向同一个源码 `assets/catalog.json`。Catalog schema v3 将 `models[]`、原生 `scenes[]` 和 `environments[]` 分开；schema v1/v2 的旧 `scenes[]` 继续按模型预览读取，且只读启动不会改写旧文件。具体模型和环境不再硬编码在 `main.cpp`。
 
-开发模式下 Catalog model、Native SceneDocument、glTF/GLB、外部 buffer/image 以及 Viking Room 的 OBJ/PNG 从 `projectRoot` 读取，SPIR-V 和 sibling 工具从 executable 所在的 `runtimeRoot` 读取。Cooked package 中 `projectRoot` 与 `runtimeRoot` 都是 package root，`cacheRoot` 固定为包内 `runtime_assets`。Native `.vkscene.json` 由 `SceneLoadManager` 解析，再通过 `AssetRepository` 和 Environment loader 事务性构造 `RuntimeWorld`。
+开发模式下 Catalog model、Native SceneDocument、glTF/GLB 和外部 buffer/image 从 `projectRoot` 读取，SPIR-V 和 sibling 工具从 executable 所在的 `runtimeRoot` 读取。Cooked package 中 `projectRoot` 与 `runtimeRoot` 都是 package root，`cacheRoot` 固定为包内 `runtime_assets`。Native `.vkscene.json` 由 `SceneLoadManager` 解析，再通过 `AssetRepository` 和 Environment loader 事务性构造 `RuntimeWorld`。
 
 `VulkanLab -> Scene -> Scenes` 的 `Import Model...` 通过 Win32 `IFileOpenDialog` 选择 `.gltf/.glb`。新源文件先由 `ModelImportService::preflight` 检查本地 URI 与依赖闭包，再由独立 `VulkanLabAssetTool validate scene` 进程运行固定版本 Khronos glTF Validator。只有 `Valid/Warnings` 才能继续；`Unavailable` 需要用户显式勾选未校验导入；`Invalid/Stale/Failed/NotChecked` 都会阻止复制、Catalog 写入和后续 BC7 构建。
 
@@ -29,10 +29,7 @@ HDR 环境导入只接受本地 2:1 equirectangular `.hdr`。UI 或 `VulkanLabAs
 
 ## 加载入口
 
-`SceneWorkflowController` 从 Catalog 的 `models[]` 构建 SceneRegistry；原生 `scenes[]` 当前被有意忽略，直到 RuntimeWorld 阶段。SceneRegistry 的 `SceneEntry` 可以提供两种入口：
-
-- `SceneFactory`：同步创建完整 GPU Scene，当前用于 Viking Room 和初始化兼容路径。
-- `ModelPrepareFactory`：只产生 `PreparedModelData`，当前用于全部 glTF 模型；`ScenePrepareFactory` 暂时保留为兼容别名。
+`SceneWorkflowController` 从 Catalog 的 `models[]` 和 `scenes[]` 构建 SceneRegistry。Model Preview 通过 `ModelPrepareFactory` 只产生 `PreparedModelData`；Native Scene 由 `SceneLoadManager` 解析 SceneDocument 并解析其模型依赖。两类入口都使用异步任务与事务性发布，不存在同步 GPU Scene factory。
 
 `PreparedModelData` 保存纹理 payload、sampler/format 描述、材质参数、vertex/index、`localToAsset` primitive、asset-space 灯光和预览相机，不包含 Vulkan handle、VMA allocation 或 descriptor set。纹理 payload 可以是运行时解码的 RGBA8 base level，也可以是 KTX2 读取后带完整 mip chain 的数据。主线程随后由 `ModelGpuBuilder` 把它转换为不可变、可共享的 `ModelAsset`。
 
@@ -169,7 +166,7 @@ MaterialInstance 析构只提交 handle 退役，Material/Texture slot 和 Legac
 - 被替换的 Scene 进入 submission-serial retirement queue；其最后一个 ModelAsset lease 释放后，Repository 再按同一 serial 边界销毁共享 GPU 资源。
 - Environment prepare/upload 始终保留当前 Scene 和旧 Environment；只有完整新 generation 可以原子替换。
 - CPU prepare、GPU build 失败或取消都保留当前 Scene。
-- 同步 Viking Room 切换会先取消后台任务，旧 generation 不能在稍后覆盖同步场景。
+- 场景切换只发布最新 generation；被取消或过期的任务不能覆盖当前 World。
 - Application 关闭前先停止控制服务和 source import future，再取消并 join AssetImportManager/完整工具进程树和 AssetRepository worker，等待设备空闲后按所有权顺序销毁 Scene、ModelAsset 与 Vulkan 对象。
 
 ## LoadStats
@@ -187,7 +184,7 @@ VMA 快照在 ModelGpuBuilder 完成并发布后采集；Repository 面板另外
 
 ## Cook 与 packaged runtime
 
-`VulkanLabAssetTool cook` 将开发项目和共享 cache 转换成只读运行目录。发布根固定为一个或多个 Native `SceneDocument`；模型预览、builtin/OBJ 和显式 model/environment/profile 选择不再是 Cook 入口。省略 `--scene-id` 时选择 Catalog 中 `optional=false` 的 Native Scene，`--startup-scene` 省略时使用 Catalog 顺序中的第一个已选场景。
+`VulkanLabAssetTool cook` 将开发项目和共享 cache 转换成只读运行目录。发布根固定为一个或多个 Native `SceneDocument`；模型预览和显式 model/environment/profile 选择不是 Cook 入口。省略 `--scene-id` 时选择 Catalog 中 `optional=false` 的 Native Scene，`--startup-scene` 省略时使用 Catalog 顺序中的第一个已选场景。
 
 `CookClosureResolver` 加载并验证 SceneDocument，按 Catalog 顺序建立只读闭包：
 
@@ -235,4 +232,4 @@ Native BC7 是当前 Windows desktop platform artifact。采用它的直接原�
 - Windows desktop profiles 统一使用 BC7，不使用 BC5 normal 或 BC4 AO，也不对 Native BC7 blob 使用 Zstd；开发设备无 BC7 时回退源 RGBA8，Cooked package 要求 BC7。
 - 环境只支持本地 RGBE `.hdr` 与离线 KTX2 bake；全局环境和最多 8 个局部 Reflection Probe 共享 Repository。没有 EXR、runtime convolution、自动 probe 更新、diffuse SH、BC6H 或 environment streaming。
 - 没有渲染进程内编码、mip streaming、LRU residency、virtual texturing 或新旧大模型重叠时的显存 admission 策略；OnDemand 重建由独立 AssetTool 进程完成。
-- Viking Room 仍使用同步 OBJ/PNG factory；开发模式从 `projectRoot` 读取，正式包使用 Cook 闭包。
+- Model Preview 与 Native Scene 的模型依赖都通过 `AssetRepository` 和异步 `ModelGpuBuilder` 发布。

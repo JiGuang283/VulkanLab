@@ -17,7 +17,7 @@
 #include "scene/Camera.h"
 #include "scene/IRenderWorld.h"
 #include "scene/Scene.h"
-#include "scene/SceneFactory.h"
+#include "scene/SceneEntry.h"
 
 #include <glm/glm.hpp>
 
@@ -151,7 +151,6 @@ class Application final
     void reloadArtifactIndex();
     void persistArtifactIndex();
 
-    void loadScene(int index, bool replaceCurrent = false);
     uint64_t reloadCurrentScene();
     void switchScene(int index);
     uint64_t requestSceneLoad(int index, bool sourceFallback = false,

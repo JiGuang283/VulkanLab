@@ -69,7 +69,7 @@ cmake --build --preset windows-msvc-tracy
 New-Item -ItemType Directory -Force artifacts\tracy
 
 .\external\tools\tracy\0.13.1\tracy-capture.exe `
-  -o artifacts\tracy\viking.tracy `
+  -o artifacts\tracy\renderer-smoke.tracy `
   -a 127.0.0.1 `
   -s 10
 ```
@@ -78,10 +78,10 @@ New-Item -ItemType Directory -Force artifacts\tracy
 
 ```powershell
 .\external\tools\tracy\0.13.1\tracy-csvexport.exe `
-  -f "Application Frame" artifacts\tracy\viking.tracy
+  -f "Application Frame" artifacts\tracy\renderer-smoke.tracy
 
 .\external\tools\tracy\0.13.1\tracy-csvexport.exe `
-  -g -f "MainForward" artifacts\tracy\viking.tracy
+  -g -f "MainForward" artifacts\tracy\renderer-smoke.tracy
 ```
 
 `-g` 输出每次 GPU zone 事件，不是聚合统计。分析 Main Sponza 加载通常只需在发出 `scene load` 前开始 6 到 10 秒采集；长时间稳定帧采集会迅速增加 trace 体积。
@@ -147,7 +147,7 @@ Tracy preset 应报告 `compiled=true`、`version=0.13.1`、`connectionMode=on-d
 
 实现验收时在 RTX 4060 Laptop GPU 上完成了两类 capture：
 
-- Viking Room：CPU frame/renderer zone 与 DirectionalShadow、MainForward、ToneMap GPU zone 可导出。
+- Renderer Smoke Scene：CPU frame/renderer zone 与 DirectionalShadow、PointShadow、MainForward、ToneMap GPU zone 可导出。
 - Main Sponza 2048 的旧 Stage 2A 基线为：worker prepare 约 783 ms，旧 `SceneGpuBuilder::pump` 分布在 77 次主线程调用，5 个 `SceneUpload` batch 出现在同一 GPU timeline；本次完整场景加载约 1.1 秒。Stage 2 之后应以 `ModelGpuBuilder::pump` 和 `ModelUpload` label 重新采集，不直接横向比较旧 zone 名称。
 
 这些数字只证明链路可用，不是跨机器性能目标。后续性能结论必须记录 GPU、驱动、分辨率、场景/profile、Shader、commit 和 capture 版本。

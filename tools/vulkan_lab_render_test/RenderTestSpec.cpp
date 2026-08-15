@@ -351,10 +351,16 @@ RenderTestSpec parseRenderTestSpec(const nlohmann::json &document,
             "renderSettings requires render test schemaVersion 2");
     spec.name = requiredString(document, "name", 128);
     spec.sceneId = requiredString(document, "sceneId", 128);
-    spec.profileId = requiredString(document, "profileId", 128);
-    if (!isStableAssetId(spec.sceneId) || !isStableAssetId(spec.profileId))
+    const auto profile = document.find("profileId");
+    if (profile != document.end()) {
+        if (!profile->is_string())
+            throw std::invalid_argument("field 'profileId' must be a string");
+        spec.profileId = profile->get<std::string>();
+    }
+    if (!isStableAssetId(spec.sceneId) ||
+        (!spec.profileId.empty() && !isStableAssetId(spec.profileId)))
         throw std::invalid_argument(
-            "sceneId and profileId must be stable lowercase asset IDs");
+            "sceneId and optional profileId must be stable lowercase asset IDs");
     spec.shader = requiredString(document, "shader", 256);
     const auto environment = document.find("environmentId");
     if (environment != document.end()) {
@@ -485,7 +491,6 @@ nlohmann::json renderTestSpecToJson(const RenderTestSpec &spec) {
         {"schemaVersion", RenderTestSpec::kSchemaVersion},
         {"name", spec.name},
         {"sceneId", spec.sceneId},
-        {"profileId", spec.profileId},
         {"shader", spec.shader},
         {"camera",
          {{"position", spec.camera.position},
@@ -531,6 +536,8 @@ nlohmann::json renderTestSpecToJson(const RenderTestSpec &spec) {
     }
     if (spec.environmentId)
         result["environmentId"] = *spec.environmentId;
+    if (!spec.profileId.empty())
+        result["profileId"] = spec.profileId;
     return result;
 }
 

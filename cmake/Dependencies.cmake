@@ -218,11 +218,6 @@ add_library(VulkanLab::tinygltf_headers ALIAS vkl_tinygltf_headers)
 target_include_directories(vkl_tinygltf_headers SYSTEM INTERFACE
     "${PROJECT_SOURCE_DIR}/external/gltf")
 
-add_library(vkl_tinyobj_headers INTERFACE)
-add_library(VulkanLab::tinyobj_headers ALIAS vkl_tinyobj_headers)
-target_include_directories(vkl_tinyobj_headers SYSTEM INTERFACE
-    "${PROJECT_SOURCE_DIR}/external/tiny_obj_loader.h")
-
 add_library(vkl_vma_headers INTERFACE)
 add_library(VulkanLab::vma_headers ALIAS vkl_vma_headers)
 target_include_directories(vkl_vma_headers SYSTEM INTERFACE
@@ -259,13 +254,6 @@ target_compile_options(vkl_gltf_parser PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/utf-8 /FS>
 )
 target_link_libraries(vkl_gltf_parser PUBLIC vkl_tinygltf_headers)
-
-add_library(vkl_obj_parser STATIC
-    "${PROJECT_SOURCE_DIR}/src/tiny_obj_loader.cpp"
-)
-add_library(VulkanLab::ObjParser ALIAS vkl_obj_parser)
-target_compile_features(vkl_obj_parser PRIVATE cxx_std_17)
-target_link_libraries(vkl_obj_parser PUBLIC vkl_tinyobj_headers)
 
 add_library(vkl_vma_impl STATIC
     "${PROJECT_SOURCE_DIR}/src/vk_mem_alloc.cpp"

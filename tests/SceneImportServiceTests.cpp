@@ -34,7 +34,7 @@ class ImportFixture {
               "projectId":"import-test",
               "defaultImportProfile":"desktop_1024",
               "importProfiles":{"desktop_1024":{"textureLimit":1024}},
-              "scenes":[{"id":"builtin","displayName":"Builtin","type":"builtin","builtinFactory":"viking_room"}]
+              "scenes":[{"id":"existing","displayName":"Existing","type":"gltf","source":"models/existing.glb","optional":true}]
             })";
         std::ofstream(source / "mesh.bin", std::ios::binary) << "mesh";
         std::ofstream(source / "textures/deep/base.png", std::ios::binary)

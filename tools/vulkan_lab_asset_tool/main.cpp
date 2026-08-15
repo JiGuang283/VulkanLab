@@ -1141,7 +1141,8 @@ int main(int argc, char **argv) {
             throw std::invalid_argument(
                 "--model-id must name a glTF model in assets/catalog.json");
         if (scene->type != "gltf")
-            throw std::invalid_argument("builtin scenes have no texture cache");
+            throw std::invalid_argument(
+                "only glTF models can have a texture cache");
         if (profileId.empty()) {
             const vkr::ImportProfile &sceneProfile =
                 catalog.profile(scene->importProfile);

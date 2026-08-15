@@ -1,4 +1,5 @@
 #include "Scene.h"
+
 #include "ModelAsset.h"
 #include "ModelLight.h"
 #include "render/MaterialInstance.h"
@@ -6,17 +7,11 @@
 #include "render/RenderCommand.h"
 #include "scene/BoundsMath.h"
 
-#include <algorithm>
 #include <stdexcept>
 #include <unordered_set>
 #include <utility>
 
 namespace vkr {
-
-void Scene::addObject(SceneObject obj) {
-    objects_.push_back(std::move(obj));
-    rebuildDerivedState();
-}
 
 size_t Scene::addModelInstance(ModelInstance instance) {
     if (!instance.asset || !instance.asset.asset())
@@ -38,19 +33,10 @@ bool Scene::removeModelInstance(size_t index) {
 
 void Scene::rebuildDerivedState() {
     bounds_ = {};
-    materials_ = legacyMaterials_;
-    lights_ = legacyLights_;
+    materials_.clear();
+    lights_.clear();
 
     std::unordered_set<const MaterialInstance *> seenMaterials;
-    for (const auto &material : materials_)
-        seenMaterials.insert(material.get());
-
-    for (const SceneObject &object : objects_) {
-        if (object.mesh)
-            includeTransformedBounds(bounds_, object.mesh->localBounds(),
-                                     object.transform);
-    }
-
     for (size_t instanceIndex = 0; instanceIndex < modelInstances_.size();
          ++instanceIndex) {
         const ModelInstance &instance = modelInstances_[instanceIndex];
@@ -79,29 +65,6 @@ void Scene::rebuildDerivedState() {
 
 void Scene::collectRenderItems(std::vector<RenderItem> &items) const {
     uint32_t sourceIndex = 0;
-    for (const auto &obj : objects_) {
-        const auto *material = obj.material.get();
-        const auto *params = material ? &material->params() : nullptr;
-        const bool transparent =
-            params && (params->alphaMode == AlphaMode::Blend ||
-                       params->transmissionFactor > 0.0f);
-        const RenderQueueType queueType = transparent
-                                              ? RenderQueueType::Transparent
-                                              : RenderQueueType::Opaque;
-        RenderItem item{};
-        item.mesh = obj.mesh.get();
-        item.material = obj.material.get();
-        item.world = obj.transform;
-        item.queue = queueType;
-        if (item.mesh)
-            item.localBounds = item.mesh->localBounds();
-        item.key.ownerKind = RenderItemOwnerKind::LegacyObject;
-        item.key.fallbackOrdinal = sourceIndex + 1u;
-        item.sourceOrder = sourceIndex;
-        items.push_back(std::move(item));
-        ++sourceIndex;
-    }
-
     uint32_t instanceIndex = 0;
     for (const ModelInstance &instance : modelInstances_) {
         if (!instance.visible) {
@@ -153,7 +116,7 @@ RenderWorldFrameSnapshot Scene::buildRenderSnapshot() const {
 }
 
 size_t Scene::renderableCount() const {
-    size_t count = objects_.size();
+    size_t count = 0;
     for (const ModelInstance &instance : modelInstances_) {
         if (instance.visible) {
             if (const auto asset = instance.asset.asset())

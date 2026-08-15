@@ -1,6 +1,5 @@
 #include "SceneWorkflowController.h"
 
-#include "Config.h"
 #include "scene/SceneRegistryBuilder.h"
 
 #include <algorithm>
@@ -25,16 +24,15 @@ bool asciiEqualsIgnoreCase(const std::string &left,
 } // namespace
 
 SceneWorkflowController::SceneWorkflowController(
-    const Config &config, const ProjectContext &projectContext,
-    SceneCatalog catalog)
+    const ProjectContext &projectContext, SceneCatalog catalog)
     : catalog_(std::move(catalog)),
-      entries_(buildSceneRegistry(catalog_, projectContext, config)) {}
+      entries_(buildSceneRegistry(catalog_, projectContext)) {}
 
 void SceneWorkflowController::refresh(
-    const Config &config, const ProjectContext &projectContext) {
+    const ProjectContext &projectContext) {
     catalog_ = SceneCatalog::load(projectContext.catalogPath,
                                   projectContext.projectRoot);
-    entries_ = buildSceneRegistry(catalog_, projectContext, config);
+    entries_ = buildSceneRegistry(catalog_, projectContext);
 }
 
 int SceneWorkflowController::findEntryByName(const std::string &name) const {
@@ -66,7 +64,6 @@ SceneWorkflowSnapshot SceneWorkflowController::snapshot() const {
                                        entry.name,
                                        entry.sourcePath,
                                        entry.profileId,
-                                       entry.builtin,
                                        entry.available,
                                        entry.unavailableReason};
         if (entry.isNativeScene())

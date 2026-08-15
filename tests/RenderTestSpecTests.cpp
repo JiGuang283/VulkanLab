@@ -28,8 +28,8 @@ void requireInvalidSpec(Callback callback, const char *message) {
 Json validSpec() {
     return {
         {"schemaVersion", 1},
-        {"name", "viking-legacy"},
-        {"sceneId", "viking-room"},
+        {"name", "renderer-smoke-legacy"},
+        {"sceneId", "renderer-smoke"},
         {"profileId", "desktop_2048"},
         {"shader", "Legacy Forward"},
         {"camera",
@@ -50,11 +50,11 @@ Json validSpec() {
 void testValidSmokeSpec() {
     const auto source =
         std::filesystem::temp_directory_path() / "render-tests" /
-        "viking.json";
+        "renderer-smoke.json";
     const auto spec =
         vkr::render_test::parseRenderTestSpec(validSpec(), source);
-    requireSpec(spec.name == "viking-legacy" &&
-                    spec.sceneId == "viking-room" &&
+    requireSpec(spec.name == "renderer-smoke-legacy" &&
+                    spec.sceneId == "renderer-smoke" &&
                     spec.profileId == "desktop_2048" &&
                     spec.shader == "Legacy Forward",
                 "valid render test identity changed");
@@ -72,6 +72,21 @@ void testValidSmokeSpec() {
                 "schema v1 did not retain default render settings");
 }
 
+void testNativeSceneSpecWithoutProfile() {
+    Json document = validSpec();
+    document.erase("profileId");
+    const auto source = std::filesystem::temp_directory_path() /
+                        "render-tests" / "native-scene.json";
+    const auto spec =
+        vkr::render_test::parseRenderTestSpec(document, source);
+    requireSpec(spec.profileId.empty(),
+                "native scene spec invented a model profile");
+    const Json serialized =
+        vkr::render_test::renderTestSpecToJson(spec);
+    requireSpec(!serialized.contains("profileId"),
+                "native scene spec serialized an empty model profile");
+}
+
 void testSchemaV2RenderSettings() {
     Json document = validSpec();
     document["schemaVersion"] = 2;
@@ -85,7 +100,7 @@ void testSchemaV2RenderSettings() {
     };
     const auto source =
         std::filesystem::temp_directory_path() / "render-tests" /
-        "viking-v2.json";
+        "renderer-smoke-v2.json";
     const auto spec =
         vkr::render_test::parseRenderTestSpec(document, source);
     requireSpec(!spec.renderSettings.shadowsEnabled &&
@@ -172,8 +187,8 @@ void testValidGoldenSpecAndResolvedPaths() {
     Json document = validSpec();
     document["mode"] = "golden";
     document["golden"] = {
-        {"baselineImage", "goldens/viking.png"},
-        {"baselineMetadata", "goldens/viking.json"},
+        {"baselineImage", "goldens/renderer-smoke.png"},
+        {"baselineMetadata", "goldens/renderer-smoke.json"},
         {"perChannelAbsoluteThreshold", {2, 3, 4, 0}},
         {"maximumMae", 1.25},
         {"maximumRmse", 2.5},
@@ -181,13 +196,13 @@ void testValidGoldenSpecAndResolvedPaths() {
     };
     const auto source =
         std::filesystem::temp_directory_path() / "render-tests" /
-        "viking-golden.json";
+        "renderer-smoke-golden.json";
     const auto spec =
         vkr::render_test::parseRenderTestSpec(document, source);
     requireSpec(spec.golden.has_value() &&
                     spec.golden->baselineImage ==
                         std::filesystem::absolute(source.parent_path() /
-                                                  "goldens/viking.png")
+                                                  "goldens/renderer-smoke.png")
                             .lexically_normal() &&
                     spec.golden->thresholds.perChannelAbsoluteThreshold ==
                         std::array<uint8_t, 4>{2, 3, 4, 0},
@@ -308,6 +323,7 @@ void testGoldenPathConfinement() {
 
 void runRenderTestSpecTests() {
     testValidSmokeSpec();
+    testNativeSceneSpecWithoutProfile();
     testSchemaV2RenderSettings();
     testSchemaV3Environment();
     testSchemaV4Bloom();

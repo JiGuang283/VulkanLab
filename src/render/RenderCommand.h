@@ -21,11 +21,10 @@ enum class RenderQueueType {
 enum class RenderItemOwnerKind : uint8_t {
     NativeEntity,
     PreviewInstance,
-    LegacyObject,
 };
 
 struct RenderItemKey {
-    RenderItemOwnerKind ownerKind = RenderItemOwnerKind::LegacyObject;
+    RenderItemOwnerKind ownerKind = RenderItemOwnerKind::PreviewInstance;
     PersistentEntityId entityId{};
     uint64_t assetGeneration = 0;
     uint32_t primitiveIndex = 0;

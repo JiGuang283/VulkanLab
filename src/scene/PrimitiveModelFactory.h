@@ -1,6 +1,6 @@
 #pragma once
 
-#include "SceneFactory.h"
+#include "ModelPrepareFactory.h"
 #include "scene_data/PrimitiveModelDefinitions.h"
 
 namespace vkr {

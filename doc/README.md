@@ -19,7 +19,7 @@
 - [系统概览](architecture/overview.md)：模块边界、初始化顺序、线程所有权和每帧流程。
 - [渲染流程](architecture/rendering.md)：RenderQueue、Forward Pass、Pipeline、材质、Shader 和光源。
 - [RenderGraph](architecture/render_graph.md)：帧内依赖、资源版本、自动同步、Dynamic Rendering 和诊断边界。
-- [资源加载](architecture/resource_loading.md)：SceneFactory、glTF、KTX2、Artifact Index、Cook/package、批量上传和加载统计。
+- [资源加载](architecture/resource_loading.md)：Model prepare、glTF、KTX2、Artifact Index、Cook/package、批量上传和加载统计。
 - [场景数据与 Catalog](architecture/scene_documents.md)：Catalog v3、持久 Entity ID、SceneDocument schema 与当前运行边界。
 
 ## 文档状态

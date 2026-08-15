@@ -7,7 +7,7 @@
 #include "assets/ProjectContext.h"
 #include "assets/SceneCatalog.h"
 #include "assets/SceneImportService.h"
-#include "scene/SceneFactory.h"
+#include "scene/SceneEntry.h"
 #include "workflows/SceneWorkflowTypes.h"
 
 #include <array>
@@ -22,8 +22,6 @@
 #include <vector>
 
 namespace vkr {
-
-struct Config;
 
 struct ModelImportWorkerState {
     std::atomic<bool> cancel{false};
@@ -71,8 +69,7 @@ struct SceneAssetOperationState {
 
 class SceneWorkflowController {
   public:
-    SceneWorkflowController(const Config &config,
-                            const ProjectContext &projectContext,
+    SceneWorkflowController(const ProjectContext &projectContext,
                             SceneCatalog catalog);
 
     SceneCatalog &catalog() { return catalog_; }
@@ -82,7 +79,7 @@ class SceneWorkflowController {
     ModelImportUiState &modelImport() { return modelImport_; }
     SceneAssetOperationState &assetOperations() { return assetOperations_; }
 
-    void refresh(const Config &config, const ProjectContext &projectContext);
+    void refresh(const ProjectContext &projectContext);
     int findEntryByName(const std::string &name) const;
     int findEntryById(const std::string &id) const;
     SceneWorkflowSnapshot snapshot() const;

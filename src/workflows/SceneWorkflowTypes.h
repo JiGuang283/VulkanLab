@@ -17,7 +17,6 @@ struct SceneWorkflowItemSnapshot {
     std::string displayName;
     std::string sourcePath;
     std::string profileId;
-    bool builtin = false;
     bool available = true;
     std::string unavailableReason;
     std::string artifactState = "Unknown";

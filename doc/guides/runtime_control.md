@@ -135,8 +135,8 @@ GPU timing 在对应 frame slot 的正常 fence 已完成后读取，不使用 q
 ### 异步截图
 
 ```powershell
-.\VulkanLabCtl.exe capture screenshot suite\viking.png --no-gui
-.\VulkanLabCtl.exe capture screenshot suite\viking-ui.png --include-gui
+.\VulkanLabCtl.exe capture screenshot suite\renderer-smoke.png --no-gui
+.\VulkanLabCtl.exe capture screenshot suite\renderer-smoke-ui.png --include-gui
 .\VulkanLabCtl.exe capture status 1
 .\VulkanLabCtl.exe capture status 1 --json
 .\VulkanLabCtl.exe capture cancel 1
@@ -370,14 +370,14 @@ $app = Start-Process `
 
 try {
   & "$runtime\VulkanLabCtl.exe" --pipe $suffix ping
-  & "$runtime\VulkanLabCtl.exe" --pipe $suffix scene load "Viking Room"
+  & "$runtime\VulkanLabCtl.exe" --pipe $suffix scene load "Renderer Smoke Scene"
   & "$runtime\VulkanLabCtl.exe" --pipe $suffix camera set `
     --position 2,2,2 --yaw -135 --pitch -30
   & "$runtime\VulkanLabCtl.exe" --pipe $suffix render wait `
     --stable-frames 8 --timeout-ms 30000
 
   $capture = & "$runtime\VulkanLabCtl.exe" --pipe $suffix --json `
-    capture screenshot "suite\viking.png" --no-gui | ConvertFrom-Json
+    capture screenshot "suite\renderer-smoke.png" --no-gui | ConvertFrom-Json
   $taskId = $capture.result.taskId
 
   do {
@@ -414,7 +414,7 @@ Runtime Control 当前协议版本为 `3`。客户端连接目标 Named Pipe 后
   "id": 1,
   "method": "capture.screenshot",
   "params": {
-    "path": "suite/viking.png",
+    "path": "suite/renderer-smoke.png",
     "includeGui": false
   }
 }

@@ -21,7 +21,6 @@ struct Config {
     std::string windowTitle = "Vulkan Renderer";
 
     // ---- 资源路径 ----
-    std::string texturePath = "textures/viking_room.png";
     std::string derivedTextureCachePath;
     std::filesystem::path projectPath;
     std::string assetToolPath;

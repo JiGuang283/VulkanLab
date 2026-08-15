@@ -15,7 +15,7 @@ file(WRITE "${TEST_ROOT}/project/assets/catalog.json" [=[
   "defaultImportProfile": "desktop_512",
   "importProfiles": {"desktop_512": {"textureLimit": 512}},
   "scenes": [
-    {"id":"builtin","displayName":"Builtin","type":"builtin","builtinFactory":"viking_room"}
+    {"id":"existing","displayName":"Existing","type":"gltf","source":"models/existing.glb","optional":true}
   ]
 }
 ]=])
@@ -82,9 +82,9 @@ endif()
 file(READ "${TEST_ROOT}/project/assets/catalog.json" catalog)
 string(JSON schema_version GET "${catalog}" schemaVersion)
 string(FIND "${catalog}" "\"id\": \"cli-studio\"" environment_id_position)
-if(NOT schema_version EQUAL 2 OR environment_id_position EQUAL -1)
+if(NOT schema_version EQUAL 3 OR environment_id_position EQUAL -1)
     message(FATAL_ERROR
-        "Catalog was not upgraded to schema v2 with the environment")
+        "Catalog was not upgraded to schema v3 with the environment")
 endif()
 
 file(REMOVE_RECURSE "${TEST_ROOT}")

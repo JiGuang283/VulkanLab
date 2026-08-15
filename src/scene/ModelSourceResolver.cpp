@@ -1,6 +1,6 @@
 #include "ModelSourceResolver.h"
 
-#include "BuiltinScenes.h"
+#include "GltfModelPrepareFactory.h"
 #include "PrimitiveModelFactory.h"
 #include "assets/ProjectContext.h"
 #include "assets/SceneCatalog.h"
@@ -35,22 +35,14 @@ resolveModelSource(const SceneCatalog &catalog,
     result.id = modelId;
     result.displayName = model->displayName;
     result.profileId = model->importProfile;
-    if (model->type == "builtin") {
-        result.kind = ModelSourceKind::LegacyBuiltin;
-        result.available = true;
-        result.unavailableReason =
-            "Legacy builtin models cannot be instanced";
-        return result;
-    }
-
     result.kind = ModelSourceKind::Gltf;
     result.instanceable = true;
     result.textureLimit = catalog.profile(model->importProfile).textureLimit;
     result.sourcePath = projectContext.resolveProjectPath(model->source);
     result.available = std::filesystem::is_regular_file(result.sourcePath);
     if (result.available) {
-        result.prepareFactory = gltfSceneFactory(result.sourcePath.string(),
-                                                  model->previewCamera);
+        result.prepareFactory = gltfModelPrepareFactory(
+            result.sourcePath.string(), model->previewCamera);
     } else {
         result.unavailableReason = "Source file is missing: " +
                                    result.sourcePath.string();

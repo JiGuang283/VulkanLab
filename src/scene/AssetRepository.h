@@ -2,7 +2,7 @@
 
 #include "ModelAssetHandle.h"
 #include "ModelGpuBuilder.h"
-#include "SceneFactory.h"
+#include "ModelPrepareFactory.h"
 
 #include <filesystem>
 #include <memory>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "SceneFactory.h"
+#include "ModelPrepareFactory.h"
 #include "scene_data/SceneIds.h"
 
 #include <cstdint>
@@ -16,7 +16,6 @@ class SceneCatalog;
 enum class ModelSourceKind {
     Gltf,
     Primitive,
-    LegacyBuiltin,
 };
 
 struct ResolvedModelSource {

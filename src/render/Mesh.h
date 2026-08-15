@@ -14,10 +14,6 @@ class AccelerationStructure;
 
 class Mesh {
   public:
-    static std::unique_ptr<Mesh> fromOBJ(Device &device,
-                                         UploadRecorder &upload,
-                                         const std::string &path);
-
     Mesh(Device &device, UploadRecorder &upload, const void *vertexData,
          VkDeviceSize vertexSize, const uint32_t *indexData,
          uint32_t indexCount, std::string debugName = {});

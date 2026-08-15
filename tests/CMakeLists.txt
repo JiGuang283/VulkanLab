@@ -106,15 +106,15 @@ if(WIN32)
     endfunction()
 
     vulkanlab_add_visual_test(
-        VulkanLabRenderSmokeViking viking_legacy_smoke.json)
+        VulkanLabRenderSmokeRendererLegacy renderer_smoke_legacy.json)
     vulkanlab_add_visual_test(
         VulkanLabRenderSmokeSheenNormal sheen_normal_smoke.json)
     vulkanlab_add_visual_test(
         VulkanLabRenderSmokeSheenBaseColor sheen_basecolor_smoke.json)
     vulkanlab_add_visual_test(
-        VulkanLabRenderSmokeVikingPbrShadow viking_pbr_shadow_smoke.json)
+        VulkanLabRenderSmokeRendererPbrShadow renderer_smoke_pbr_shadow.json)
     vulkanlab_add_visual_test(
-        VulkanLabRenderSmokeVikingDebugShadow viking_debug_shadow_smoke.json)
+        VulkanLabRenderSmokeRendererDebugShadow renderer_smoke_debug_shadow.json)
     add_test(
         NAME VulkanLabRenderSmokeEnvironmentIbl
         COMMAND ${CMAKE_COMMAND}
@@ -131,15 +131,4 @@ if(WIN32)
         TIMEOUT 660
     )
 
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/render/goldens/viking-legacy.png"
-       AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/render/goldens/viking-legacy.json")
-        vulkanlab_add_visual_test(
-            VulkanLabRenderGoldenViking viking_legacy_golden.json)
-    endif()
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/render/goldens/viking-pbr-shadow.png"
-       AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/render/goldens/viking-pbr-shadow.json")
-        vulkanlab_add_visual_test(
-            VulkanLabRenderGoldenVikingPbrShadow
-            viking_pbr_shadow_golden.json)
-    endif()
 endif()

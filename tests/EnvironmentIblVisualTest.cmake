@@ -8,10 +8,9 @@ if(NOT DEFINED RUNTIME OR NOT EXISTS "${RUNTIME}")
     message(FATAL_ERROR "VulkanLab runtime was not provided")
 endif()
 if(NOT DEFINED SOURCE_DIR OR
-   NOT EXISTS "${SOURCE_DIR}/models/viking_room.obj" OR
-   NOT EXISTS "${SOURCE_DIR}/models/SheenChair.glb" OR
-   NOT EXISTS "${SOURCE_DIR}/textures/viking_room.png")
-    message(FATAL_ERROR "Viking Room fixture assets were not provided")
+   NOT EXISTS "${SOURCE_DIR}/assets/scenes/renderer-smoke.vkscene.json" OR
+   NOT EXISTS "${SOURCE_DIR}/models/SheenChair.glb")
+    message(FATAL_ERROR "Renderer smoke fixture assets were not provided")
 endif()
 if(NOT DEFINED TEST_ROOT)
     message(FATAL_ERROR "TEST_ROOT was not provided")
@@ -29,14 +28,12 @@ else()
 endif()
 file(REMOVE_RECURSE "${TEST_ROOT}" "${cache_root}")
 file(MAKE_DIRECTORY
-    "${project}/assets/environments" "${project}/models"
-    "${project}/textures" "${spec_root}" "${result_root}")
-file(COPY "${SOURCE_DIR}/models/viking_room.obj"
-     DESTINATION "${project}/models")
+    "${project}/assets/environments" "${project}/assets/scenes"
+    "${project}/models" "${spec_root}" "${result_root}")
+file(COPY "${SOURCE_DIR}/assets/scenes/renderer-smoke.vkscene.json"
+     DESTINATION "${project}/assets/scenes")
 file(COPY "${SOURCE_DIR}/models/SheenChair.glb"
      DESTINATION "${project}/models")
-file(COPY "${SOURCE_DIR}/textures/viking_room.png"
-     DESTINATION "${project}/textures")
 
 execute_process(
     COMMAND powershell -NoProfile -Command
@@ -49,7 +46,7 @@ endif()
 
 file(WRITE "${project}/assets/catalog.json" [=[
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "projectId": "ibl-visual-test",
   "defaultImportProfile": "desktop_2048",
   "importProfiles": {
@@ -72,19 +69,20 @@ file(WRITE "${project}/assets/catalog.json" [=[
     "source": "assets/environments/test.hdr",
     "environmentProfile": "tiny-ibl"
   }],
-  "scenes": [
-    {
-      "id": "viking-room",
-      "displayName": "Viking Room",
-      "type": "builtin",
-      "builtinFactory": "viking_room",
-      "importProfile": "desktop_2048"
-    },
+  "models": [
     {
       "id": "sheen-chair",
       "displayName": "Sheen Chair",
+      "type": "gltf",
       "source": "models/SheenChair.glb",
       "importProfile": "desktop_2048"
+    }
+  ],
+  "scenes": [
+    {
+      "id": "renderer-smoke",
+      "displayName": "Renderer Smoke Scene",
+      "source": "assets/scenes/renderer-smoke.vkscene.json"
     }
   ]
 }
@@ -105,14 +103,18 @@ if(NOT bake_result EQUAL 0)
         "IBL fixture bake failed (${bake_result})\n${bake_output}\n${bake_error}")
 endif()
 
-function(write_ibl_spec path name scene shader skybox rotation
+function(write_ibl_spec path name scene profile shader skybox rotation
          position yaw pitch)
+    if(profile STREQUAL "")
+        set(profile_field "")
+    else()
+        set(profile_field "  \"profileId\": \"${profile}\",\n")
+    endif()
     file(WRITE "${path}" "{
   \"schemaVersion\": 3,
   \"name\": \"${name}\",
   \"sceneId\": \"${scene}\",
-  \"profileId\": \"desktop_2048\",
-  \"environmentId\": \"studio\",
+${profile_field}  \"environmentId\": \"studio\",
   \"shader\": \"${shader}\",
   \"camera\": {
     \"position\": [${position}],
@@ -143,20 +145,20 @@ endfunction()
 
 write_ibl_spec(
     "${spec_root}/skybox-rotation-0.json"
-    "ibl-skybox-rotation-0" "viking-room"
+    "ibl-skybox-rotation-0" "renderer-smoke" ""
     "PBR-lite NormalMapped" true 0.0 "2.0, 2.0, 2.0" -135.0 -30.0)
 write_ibl_spec(
     "${spec_root}/skybox-rotation-90.json"
-    "ibl-skybox-rotation-90" "viking-room"
+    "ibl-skybox-rotation-90" "renderer-smoke" ""
     "PBR-lite NormalMapped" true 1.57079632679
     "2.0, 2.0, 2.0" -135.0 -30.0)
 write_ibl_spec(
     "${spec_root}/debug-diffuse.json"
-    "ibl-debug-diffuse" "sheen-chair"
+    "ibl-debug-diffuse" "sheen-chair" "desktop_2048"
     "Debug IBL Diffuse" false 0.0 "1.5, 1.5, 1.0" -135.0 -20.0)
 write_ibl_spec(
     "${spec_root}/debug-specular.json"
-    "ibl-debug-specular" "sheen-chair"
+    "ibl-debug-specular" "sheen-chair" "desktop_2048"
     "Debug IBL Specular" false 0.0 "1.5, 1.5, 1.0" -135.0 -20.0)
 
 function(run_ibl_spec spec output actual_variable)

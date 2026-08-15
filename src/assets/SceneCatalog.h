@@ -36,7 +36,6 @@ struct CatalogModel {
     std::string id;
     std::string displayName;
     std::string type = "gltf";
-    std::string builtinFactory;
     std::filesystem::path source;
     std::string importProfile;
     bool optional = false;

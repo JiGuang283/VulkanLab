@@ -82,7 +82,7 @@ Jobs / Cache 显示项目 cache、当前任务、取消、日志和历史。
 
 打开 Native Scene 后，可实例化的 glTF 模型行可以直接拖入 Viewport。拖动 payload
 只保存稳定 `modelId`；释放后创建 root Model Entity，并复用 AssetRepository 的异步
-绑定与共享 GPU 资源。builtin、缺失模型或没有 Native Scene 会话时不会提供拖放。
+绑定与共享 GPU 资源。缺失模型或没有 Native Scene 会话时不会提供拖放。
 
 ### Outliner 与 Inspector
 

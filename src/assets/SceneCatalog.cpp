@@ -206,7 +206,6 @@ CatalogModel parseModel(const Json &item, const std::string &field,
     model.id = item.at("id").get<std::string>();
     model.displayName = item.at("displayName").get<std::string>();
     model.type = item.value("type", std::string("gltf"));
-    model.builtinFactory = item.value("builtinFactory", std::string{});
     model.importProfile =
         item.value("importProfile", catalog.defaultImportProfile);
     model.optional = item.value("optional", false);
@@ -221,10 +220,12 @@ CatalogModel parseModel(const Json &item, const std::string &field,
     if (catalog.importProfiles.count(model.importProfile) == 0)
         throw fieldError(field + ".importProfile", "unknown profile ID");
     if (model.type == "builtin") {
-        if (model.builtinFactory.empty())
-            throw fieldError(field + ".builtinFactory",
-                             "cannot be empty for builtin models");
-    } else if (model.type == "gltf") {
+        throw fieldError(
+            field + ".type",
+            "catalog_builtin_model_unsupported: builtin models were removed; "
+            "import the source as glTF or reference an engine primitive");
+    }
+    if (model.type == "gltf") {
         model.source = std::filesystem::path(
                            item.at("source").get<std::string>())
                            .lexically_normal();

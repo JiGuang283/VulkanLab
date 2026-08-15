@@ -88,7 +88,7 @@ try {
         throw "Validation reported $($validation.errorCount) errors during startup."
     }
 
-    Invoke-ControlJson -CommandArgs @('scene', 'load', 'Viking Room') |
+    Invoke-ControlJson -CommandArgs @('scene', 'load', 'Renderer Smoke Scene') |
         Out-Null
     Invoke-ControlJson -CommandArgs @(
         'shader', 'set', 'PBR-lite NormalMapped'

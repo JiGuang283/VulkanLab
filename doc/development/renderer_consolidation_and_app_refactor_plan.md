@@ -9,8 +9,9 @@
 | Stage | Status | Evidence |
 |---|---|---|
 | 0. Baseline And Scope Lock | Complete | [Stage 0 baseline](renderer_consolidation_baseline.md) |
-| 1. Retire Viking Room And Legacy OBJ | Next | Pending implementation |
-| 2-10 | Pending | Execute in order after each preceding stage is verified |
+| 1. Retire Viking Room And Legacy OBJ | Complete | Renderer Smoke Scene replaces Viking; async ModelAsset/Native Scene loading is the only scene path |
+| 2. Remove RenderGraph Migration Debt | Next | Pending implementation |
+| 3-10 | Pending | Execute in order after each preceding stage is verified |
 
 ## Summary
 
@@ -473,6 +474,13 @@ Sheen Chair继续承担 glTF/PBR/material smoke。
 - 构建图中不存在 tinyobj target。
 - Application启动只走异步 ModelAsset或Native Scene加载。
 - Model Preview不再触发 `vkDeviceWaitIdle()`或Pipeline Cache clear。
+
+### Completion Record
+
+- `Renderer Smoke Scene` 已作为可提交的 Native Scene 加入 Catalog，并替代 Validation、RenderTest 和 IBL fixture 中的 Viking 入口。
+- Viking OBJ/PNG、tinyobj target、同步 `SceneFactory`、`SceneObject` 和 Application 同步加载路径已删除。
+- Debug 原生 Smoke Scene与无 Editor Runtime 模型预览均已实际启动；场景加载只通过异步 Repository/Native Scene 状态机发布。
+- 全功能 Debug 的 VulkanLab、AssetTool、Ctl 和 RenderTest 已构建；CPU test target仍有与本阶段无关的既有接口漂移，未执行测试套件。
 
 ## Stage 2: Remove RenderGraph Migration Debt
 

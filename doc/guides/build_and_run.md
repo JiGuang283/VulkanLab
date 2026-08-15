@@ -272,7 +272,7 @@ slot 使用量可在启动日志、Diagnostics -> Material Resources、
 
 ## 模型预览资产
 
-模型由源码项目的 `assets/catalog.json` 注册，新增可选 glTF 不需要修改或重新编译 `main.cpp`。`Viking Room` 使用内建 factory；其余 model 条目由项目相对 `source` 创建单模型预览 factory。可选源文件缺失时仍显示为 `Unavailable`，但不阻止启动。
+模型由源码项目的 `assets/catalog.json` 注册，新增可选 glTF 不需要修改或重新编译 `main.cpp`。所有 `models[]` 条目从项目相对 `source` 创建异步单模型预览；`scenes[]` 注册原生 SceneDocument。可选源文件缺失时仍显示为 `Unavailable`，但不阻止启动。旧 Catalog 的 `type=builtin` 已不再支持，会返回 `catalog_builtin_model_unsupported`。
 
 `VulkanLab -> Scene -> Scenes` 显示 `Model Previews`，提供搜索、单击选择、双击/`Load`、`Reimport`、显式 source fallback、保存预览相机和从 Catalog 移除 model。`Import Model...` 选择 `.glb/.gltf` 后先执行本地依赖安全检查和 Validator，再显示名称、稳定 model ID、profile、Copy/Reference、验证 issues/扩展兼容性和是否自动加载。`.gltf` 的本地 `.bin` 与图片依赖会一起复制到 `models/imported/<model-id>/`；远程、缺失、逃逸依赖或 Validator Error 不会写入 Catalog。Catalog 注册成功后会自动提交 Native BC7 import，勾选自动加载时再连续执行 CPU prepare 和 GPU upload。已有 Catalog glTF 可在模型详情中按需 `Validate/Revalidate` 和打开完整报告。
 

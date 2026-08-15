@@ -69,7 +69,7 @@ Application 在 UI 编辑完成后调用 `IRenderWorld::buildRenderSnapshot()`�
 
 ## RenderQueue 与 Forward
 
-`Scene::collectRenderCommands()` 为每个 SceneObject 生成 Mesh、MaterialInstance、world transform 和 queue 类型。材质满足 `alphaMode == Blend` 或 `transmissionFactor > 0` 时进入 Transparent，其余 Opaque 与 Mask 材质进入 Opaque。
+`IRenderWorld::collectRenderCommands()` 从 Model Preview 的共享 `ModelInstance` 或 Native `RuntimeWorld` Entity 生成 Mesh、MaterialInstance、world transform 和 queue 类型。材质满足 `alphaMode == Blend` 或 `transmissionFactor > 0` 时进入 Transparent，其余 Opaque 与 Mask 材质进入 Opaque。
 
 - Opaque 使用 MaterialTemplate、MaterialInstance、Mesh 地址排序，减少 pipeline、descriptor 和 vertex/index buffer 切换。
 - Transparent 使用对象 world translation 到相机的距离从远到近排序。这是对象级近似，没有使用 mesh bounds，也不是 order-independent transparency。

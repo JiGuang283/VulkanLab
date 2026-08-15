@@ -25,7 +25,6 @@
 #include "core/Log.h"
 #include "core/ResourcePoolSelfTest.h"
 #include "core/SwapChain.h"
-#include "core/UploadContext.h"
 #include "core/VulkanContext.h"
 #include "diagnostics/BuildInfo.h"
 #include "diagnostics/CaptureService.h"
@@ -61,7 +60,7 @@
 #include "scene/ModelAsset.h"
 #include "scene/ModelInstance.h"
 #include "scene/ModelSourceResolver.h"
-#include "scene/SceneFactory.h"
+#include "scene/SceneEntry.h"
 #include "scene/SceneLight.h"
 #include "scene/SceneLoadManager.h"
 #include "scene/SceneLoadTask.h"
@@ -837,7 +836,7 @@ Application::Application(const Config &config, ProjectContext projectContext,
                          SceneCatalog catalog)
     : config_(config), projectContext_(std::move(projectContext)),
       sceneWorkflow_(std::make_unique<SceneWorkflowController>(
-          config_, projectContext_, std::move(catalog))),
+          projectContext_, std::move(catalog))),
       catalog_(sceneWorkflow_->catalog()),
       sceneRegistry_(sceneWorkflow_->entries()) {
     if (config_.derivedTextureCachePath.empty())
@@ -1208,10 +1207,7 @@ void Application::init() {
         }
     }
     sceneAssetOperations_->selectedSceneIndex = start;
-    if (sceneRegistry_[start].builtin)
-        loadScene(start);
-    else
-        requestSceneOperation(start);
+    requestSceneOperation(start);
 
 #if VKL_ENABLE_EDITOR_UI
     if (config_.diagnostics.guiVisible) {
@@ -1222,127 +1218,6 @@ void Application::init() {
         bindViewportTextures();
     }
 #endif
-}
-
-void Application::loadScene(int index, bool replaceCurrent) {
-    const auto &entry = sceneRegistry_[index];
-    if (!entry.available)
-        throw RuntimeCommandError("scene_unavailable",
-                                  entry.unavailableReason);
-    if (entry.isNativeScene()) {
-        throw std::logic_error(
-            "Native scenes must use the asynchronous load path");
-    }
-    sceneLoadContext_.sceneId = entry.id;
-    sceneLoadContext_.modelId = entry.id;
-    sceneLoadContext_.profileId = profileIdForTextureLimit(entry);
-    SceneLoadStats stats{};
-    stats.sceneName = entry.name;
-    stats.maxTextureSize = sceneLoadContext_.maxTextureSize;
-    const auto totalStart = std::chrono::steady_clock::now();
-
-    if (replaceCurrent) {
-        {
-            ScopedLoadTimer idleTimer(&stats.deviceIdleMs);
-            ++stats.deviceWaitIdleCalls;
-            vkDeviceWaitIdle(device_->logicalDevice());
-            frameSync_->markAllSubmissionsCompleted();
-        }
-        {
-            ScopedLoadTimer teardownTimer(&stats.teardownMs);
-            pipelineCache_->clear();
-            currentScene_.reset();
-            retiredScenes_.clear();
-            if (assetRepository_) {
-                assetRepository_->releaseUnused(
-                    frameSync_->lastSubmittedSerial(),
-                    frameSync_->completedSubmissionSerial());
-            }
-            if (environmentAssetRepository_) {
-                environmentAssetRepository_->releaseUnused(
-                    frameSync_->lastSubmittedSerial(),
-                    frameSync_->completedSubmissionSerial());
-            }
-        }
-    }
-
-    stats.allocatorBefore = device_->allocatorMemorySnapshot();
-    const UploadSyncCounters syncBefore = frameSync_->uploadSyncCounters();
-    sceneLoadContext_.loadStats = &stats;
-
-    try {
-        std::unique_ptr<Scene> loadedScene;
-        {
-            ScopedLoadTimer factoryTimer(&stats.sceneFactoryMs);
-            if (entry.factory) {
-                UploadContext upload(
-                    *device_, &stats.resources,
-                    UploadContext::kDefaultStagingCapacity, entry.name);
-                loadedScene = entry.factory(*device_, upload,
-                                            *descriptorAllocator_,
-                                            *materialSystem_,
-                                            sceneLoadContext_);
-                upload.finish();
-            } else {
-                throw std::runtime_error(
-                    "Synchronous scene loading requires a SceneFactory");
-            }
-        }
-        sceneLoadContext_.loadStats = nullptr;
-
-        stats.materialCount = loadedScene ? loadedScene->materials().size() : 0;
-        stats.objectCount = loadedScene ? loadedScene->renderableCount() : 0;
-        stats.primitiveCount = stats.objectCount;
-        populateSceneLightStats(stats, loadedScene.get());
-        stats.allocatorAfter = device_->allocatorMemorySnapshot();
-        const UploadSyncCounters syncAfter = frameSync_->uploadSyncCounters();
-        stats.resources.singleTimeSubmits +=
-            syncAfter.singleTimeSubmits - syncBefore.singleTimeSubmits;
-        stats.resources.queueWaitIdleCalls +=
-            syncAfter.queueWaitIdleCalls - syncBefore.queueWaitIdleCalls;
-
-        currentScene_ = std::move(loadedScene);
-#if VKL_ENABLE_EDITOR_UI
-        if (sceneEditorSession_)
-            sceneEditorSession_->detach();
-#endif
-        currentSceneIndex_ = index;
-        ++sceneGeneration_;
-        shadowSystem_.reset();
-        if (const auto initialCamera = currentScene_->initialEditorCamera()) {
-            const auto &p = *initialCamera;
-            camera_.setPosition(p.position);
-            camera_.setYawPitch(p.yaw, p.pitch);
-        }
-        applySceneCameraDefaults();
-        stats.success = true;
-        if (artifactIndex_ && !entry.builtin) {
-            artifactIndex_->touch(entry.id, sceneLoadContext_.profileId);
-            persistArtifactIndex();
-        }
-    } catch (...) {
-        sceneLoadContext_.loadStats = nullptr;
-        stats.allocatorAfter = device_->allocatorMemorySnapshot();
-        const UploadSyncCounters syncAfter = frameSync_->uploadSyncCounters();
-        stats.resources.singleTimeSubmits +=
-            syncAfter.singleTimeSubmits - syncBefore.singleTimeSubmits;
-        stats.resources.queueWaitIdleCalls +=
-            syncAfter.queueWaitIdleCalls - syncBefore.queueWaitIdleCalls;
-        stats.totalMs = std::chrono::duration<double, std::milli>(
-                            std::chrono::steady_clock::now() - totalStart)
-                            .count();
-        lastSceneLoadStats_ = stats;
-        validateSceneLoadStats(stats);
-        logSceneLoadStats(stats);
-        throw;
-    }
-
-    stats.totalMs = std::chrono::duration<double, std::milli>(
-                        std::chrono::steady_clock::now() - totalStart)
-                        .count();
-    lastSceneLoadStats_ = stats;
-    validateSceneLoadStats(stats);
-    logSceneLoadStats(stats);
 }
 
 uint64_t Application::reloadCurrentScene() {
@@ -1448,17 +1323,10 @@ uint64_t Application::requestSceneLoad(int index, bool sourceFallback,
     sceneLoadContext_.profileId =
         sourceFallback ? std::string("explicit_source_fallback")
                        : profileIdForTextureLimit(entry);
-    if (!entry.prepareFactory) {
-        if (sceneLoadManager_) {
-            if (latestSceneLoadTask_)
-                sceneLoadManager_->cancel(latestSceneLoadTask_->id);
-            else
-                sceneLoadManager_->cancelActive();
-        }
-        latestSceneLoadTask_.reset();
-        loadScene(index, true);
-        return 0;
-    }
+    if (!entry.prepareFactory)
+        throw RuntimeCommandError(
+            "model_prepare_unavailable",
+            "Model Preview has no asynchronous prepare factory.");
     if (!assetRepository_)
         throw std::runtime_error("Model AssetRepository is unavailable");
 
@@ -2230,7 +2098,7 @@ void Application::finalizeSceneLoad(
     if (success && artifactIndex_ && task->sceneIndex >= 0 &&
         task->sceneIndex < static_cast<int>(sceneRegistry_.size())) {
         const SceneEntry &entry = sceneRegistry_[task->sceneIndex];
-        if (entry.isModelPreview() && !entry.builtin) {
+        if (entry.isModelPreview()) {
             std::string profileId;
             const auto preferred = catalog_.importProfiles.find(entry.profileId);
             if (preferred != catalog_.importProfiles.end() &&
@@ -2579,14 +2447,6 @@ void Application::refreshArtifactStatus(int sceneIndex, bool admission) {
         return;
     const std::string profileId = profileIdForTextureLimit(entry);
     const std::string key = artifactStatusKey(entry.id, profileId);
-    if (entry.builtin) {
-        ArtifactStatus status;
-        status.state = ArtifactState::Ready;
-        status.reason = "builtin scene";
-        sceneAssetOperations_->statuses[key] = std::move(status);
-        return;
-    }
-
     ArtifactStatus status;
     if (!entry.available) {
         status.state = ArtifactState::Missing;
@@ -2640,7 +2500,7 @@ void Application::refreshValidationStatus(int sceneIndex) {
         return;
     AssetValidationQuery query;
     const CatalogModel *catalogModel = catalog_.findModel(entry.id);
-    if (entry.builtin || !catalogModel || catalogModel->type != "gltf") {
+    if (!catalogModel || catalogModel->type != "gltf") {
         query.state = AssetValidationState::NotApplicable;
         query.reason = "validation applies only to Catalog glTF scenes";
     } else {
@@ -2690,9 +2550,6 @@ uint64_t Application::requestSceneOperation(int index, bool sourceFallback,
         return requestSceneLoad(index, false, reloadAsset);
     }
 
-    if (entry.builtin) {
-        return loadAfter ? requestSceneLoad(index, false, reloadAsset) : 0;
-    }
     if (sourceFallback) {
         if (config_.assetImportMode == AssetImportMode::CookedOnly) {
             throw RuntimeCommandError(
@@ -5114,7 +4971,7 @@ void Application::refreshSceneRegistry(const std::string &selectSceneId) {
             sceneRegistry_[sceneAssetOperations_->selectedSceneIndex].id;
     }
 
-    sceneWorkflow_->refresh(config_, projectContext_);
+    sceneWorkflow_->refresh(projectContext_);
     if (assetRepository_) {
         for (const auto &[modelId, sourcePath] : previousModelSources) {
             const auto found = std::find_if(
@@ -5328,10 +5185,8 @@ void Application::drawScenePanel(bool modelsOnly) {
             }
             item.current = item.index == currentSceneIndex_;
             item.canAuthor =
-                !entry.builtin &&
                 config_.assetImportMode == AssetImportMode::OnDemand;
             item.canLoadSource =
-                !entry.builtin &&
                 config_.assetImportMode != AssetImportMode::CookedOnly;
             item.canEditCatalog =
                 projectContext_.catalogWritable &&
@@ -5341,8 +5196,7 @@ void Application::drawScenePanel(bool modelsOnly) {
             item.canInstantiate =
                 sceneEditorSession_ && sceneEditorSession_->active() &&
                 projectContext_.catalogWritable && item.available &&
-                !entry.builtin && catalogModel &&
-                catalogModel->type != "builtin";
+                catalogModel != nullptr;
         }
         for (SceneWorkflowItemSnapshot &item : snapshot.nativeScenes)
             item.current = item.index == currentSceneIndex_;
@@ -8223,8 +8077,7 @@ void Application::drawSceneAuthoringDialogs() {
         const bool previewValid =
             currentSceneIndex_ >= 0 &&
             currentSceneIndex_ < static_cast<int>(sceneRegistry_.size()) &&
-            sceneRegistry_[currentSceneIndex_].isModelPreview() &&
-            !sceneRegistry_[currentSceneIndex_].builtin;
+            sceneRegistry_[currentSceneIndex_].isModelPreview();
         const bool valid = previewValid &&
                            ui.sceneDisplayName[0] != '\0' &&
                            isStableAssetId(ui.sceneId.data());
@@ -8737,8 +8590,7 @@ void Application::drawInspectorPanel() {
         }
     }
     for (const CatalogModel &model : catalog_.models) {
-        snapshot.models.push_back(
-            {model.id, model.displayName, model.type != "builtin"});
+        snapshot.models.push_back({model.id, model.displayName, true});
     }
     for (const PrimitiveModelDefinition &primitive :
          primitiveModelDefinitions()) {

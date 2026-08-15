@@ -23,7 +23,7 @@ void testCatalogEdits() {
     const auto catalogPath = root / "assets/catalog.json";
     {
         std::ofstream output(catalogPath);
-        output << R"({"schemaVersion":1,"projectId":"test-project","defaultImportProfile":"desktop_512","importProfiles":{"desktop_512":{"textureLimit":512,"textureEncoder":"uastc","qualityPreset":"development"}},"scenes":[{"id":"permanent","displayName":"Permanent","type":"builtin","builtinFactory":"viking_room","importProfile":"desktop_512"},{"id":"temporary","displayName":"Temporary","type":"builtin","builtinFactory":"viking_room","importProfile":"desktop_512"}]})";
+        output << R"({"schemaVersion":1,"projectId":"test-project","defaultImportProfile":"desktop_512","importProfiles":{"desktop_512":{"textureLimit":512,"textureEncoder":"uastc","qualityPreset":"development"}},"scenes":[{"id":"permanent","displayName":"Permanent","type":"gltf","source":"models/permanent.glb","optional":true,"importProfile":"desktop_512"},{"id":"temporary","displayName":"Temporary","type":"gltf","source":"models/temporary.glb","optional":true,"importProfile":"desktop_512"}]})";
     }
     vkr::ProjectContext project;
     project.projectRoot = root;

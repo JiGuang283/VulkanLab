@@ -1,8 +1,8 @@
 # 系统架构概览
 
 > Status: Current
-> Last verified: 2026-08-12
-> Verified against: Vulkan 1.3 RenderGraph and Dynamic Rendering implementation
+> Last verified: 2026-08-15
+> Verified against: Vulkan 1.3 RenderGraph and async-only scene loading
 
 VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Application` 为组合根，场景、渲染提交、GPU 资源和调试控制之间保持显式所有权，不使用全局引擎服务定位器。
 
@@ -19,7 +19,7 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 | `src/core/` | Vulkan instance/device、SwapChain、FrameSync、Buffer/Image、AccelerationStructure、Descriptor、Pipeline、VMA、同步与增量上传。 |
 | `src/render/` | Mesh、Texture、材质、纯 CPU glTF prepare、Environment GPU build、RenderView、RenderQueue、RenderGraph、物理 RenderResourceRegistry、RayTracingScene、PipelineCache、Renderer、GPU profiler 和 Shader variant。 |
 | `src/render/pass/` | RenderGraph 的 graphics/compute/transfer/external pass，包括 Atmosphere、Shadow、Surface/Visibility、AO、DDGI、Forward、SSR/SSGI、TAA、Bloom、ToneMap、Present 和 Capture。 |
-| `src/scene/` | IRenderWorld、RuntimeWorld、兼容 Scene facade、ModelAsset/ModelInstance、AssetRepository、ModelGpuBuilder、Native Scene 加载任务、Camera、SceneFactory 和内建场景。 |
+| `src/scene/` | IRenderWorld、RuntimeWorld、Model Preview facade、ModelAsset/ModelInstance、AssetRepository、ModelGpuBuilder、Native Scene 加载任务、Camera 和模型 prepare factory。 |
 | `src/window/` | GLFW 窗口和输入状态。 |
 | `src/platform/` | Win32 原生文件选择等平台适配。 |
 | `src/diagnostics/` | 场景加载耗时、资源上传量、VMA 快照、截图与自动化诊断。 |
@@ -33,7 +33,7 @@ VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Applicati
 
 ## 启动与所有权
 
-`wmain()` 解析 `--help`、`--project`、`--runtime-control`、`--runtime-control-pipe`、`--asset-mode`、确定性诊断参数与可选 cache/tool override，入口和路径全程保留 Windows Unicode。`--build-info-json` 在日志、Window 和 Vulkan 初始化前输出机器可读的构建配置。`ProjectContextResolver` 优先识别 executable 旁的 runtime package；否则定位源码项目和 `assets/catalog.json`，并一次性确定 `projectRoot`、`runtimeRoot`、`cacheRoot` 与 `captureRoot`。Catalog/glTF/GLB、外部依赖和 builtin 源资产从 `projectRoot` 解析；executable、运行时工具、locator 和 SPIR-V 从 `runtimeRoot` 解析。package file hash、Catalog schema、稳定 ID、profile、路径和必需源文件都会在创建 Window/Vulkan 前验证。开发项目中 `SceneRegistryBuilder` 先把 `models[]` 适配为单模型预览，再追加 Catalog v3 `scenes[]` 对应的 Native Scene Entry，保持旧预览索引稳定；`main.cpp` 不再逐个登记 glTF 模型。
+`wmain()` 解析 `--help`、`--project`、`--runtime-control`、`--runtime-control-pipe`、`--asset-mode`、确定性诊断参数与可选 cache/tool override，入口和路径全程保留 Windows Unicode。`--build-info-json` 在日志、Window 和 Vulkan 初始化前输出机器可读的构建配置。`ProjectContextResolver` 优先识别 executable 旁的 runtime package；否则定位源码项目和 `assets/catalog.json`，并一次性确定 `projectRoot`、`runtimeRoot`、`cacheRoot` 与 `captureRoot`。Catalog、glTF/GLB、SceneDocument 和外部依赖从 `projectRoot` 解析；executable、运行时工具、locator 和 SPIR-V 从 `runtimeRoot` 解析。package file hash、Catalog schema、稳定 ID、profile、路径和必需源文件都会在创建 Window/Vulkan 前验证。开发项目中 `SceneRegistryBuilder` 先把 `models[]` 适配为单模型预览，再追加 Catalog v3 `scenes[]` 对应的 Native Scene Entry；所有条目统一通过异步加载状态机发布。
 
 schema v3 Cooked package 中 `projectRoot == runtimeRoot == package root`，cache 固定为包内 `runtime_assets`；它使用只读最小 Catalog、强制 CookedOnly，只注册 Native Scene，并自动加载 manifest 的 `startupSceneId`。Model 各自使用 Catalog import profile，Environment 由 SceneDocument 选择。`windows-msvc-runtime` 在编译期移除 Editor、Runtime Control、Capture、Asset Authoring 和开发诊断；外部 project/cache/asset tool override 会在初始化前被拒绝。旧 schema v1/v2 package 继续注册 Model Preview。开发运行默认 OnDemand，保留 CMake locator、writable Catalog 和共享用户 cache。当前工作目录不参与 subsystem 的资源拼接。
 
@@ -94,7 +94,7 @@ CaptureService 的主线程部分按请求为最终 Swapchain Workspace、per-fr
 4. 轮询场景导入 future，构建全屏 DockSpace 及 Viewport、Scenes、Assets、Render、Materials 和 Diagnostics 窗口；Viewport 报告内容区尺寸和交互状态，并显示对应 frame slot 的 Viewport Color。
 5. `FrameSync::beginFrame()` 获取 frame index、swapchain image 和 command buffer。
 6. Application 组装 `RenderViewInput`；纯函数 `buildRenderView()` 完成默认 Sun、灯光截断/GPU 打包、阴影拟合、Atmosphere Sun 选择、大气 frame data 和 DDGI Probe Volume frame data，生成不可变 `RenderView`。
-7. 当前 `IRenderWorld` 从 legacy SceneObject/预览 ModelInstance 或 RuntimeWorld Entity 生成 RenderCommand；Native Scene 实例矩阵使用 `entityWorld * localToAsset`，RenderQueue 分别排序 opaque 与 transparent 命令。
+7. 当前 `IRenderWorld` 从 Model Preview 的共享 `ModelInstance` 或 Native `RuntimeWorld` Entity 生成 RenderCommand；预览矩阵使用 `rootToWorld * localToAsset`，Native Scene 实例矩阵使用 `entityWorld * localToAsset`，RenderQueue 分别排序 opaque 与 transparent 命令。
 8. Renderer 上传 Global UBO、Scene Light SSBO 和 Atmosphere UBO，按需从 canonical Render Items 构建当前 frame slot TLAS，并组装 RenderFrameContext；RenderGraph 根据 FrameRenderFeatures 构建/复用拓扑，自动生成 Synchronization2 barrier，并通过 Dynamic Rendering、Compute、Transfer 和 External 节点执行 Atmosphere/Shadow/Surface/Visibility、AO、可选 DDGI、SkyBackground、Forward、SSR/SSGI composite、Transparent、TAA、Bloom、ToneMap 与 Present + ImGui。每个活动节点由稳定 Graph Pass ID 的 timestamp query 包围。
 9. 若有截图任务，条件 ScreenshotCopy Transfer 节点在同一个 frame command buffer 中复制最终 Swapchain Workspace、Viewport Color 或 HDR source；资源 layout 由 Graph 恢复。
 10. `FrameSync::endFrame()` 提交和 present；操作系统窗口变化只重建 Swapchain/Present 资源，稳定后的 Viewport 内容区变化只重建 viewport-dependent Registry 资源。后续帧推进 completed submission serial，并把已完成截图交给 CPU worker。

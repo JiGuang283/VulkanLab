@@ -82,10 +82,7 @@ Json serializeCatalog(const SceneCatalog &catalog) {
                      {"type", model.type},
                      {"importProfile", model.importProfile},
                      {"optional", model.optional}};
-        if (model.type == "builtin")
-            item["builtinFactory"] = model.builtinFactory;
-        else
-            item["source"] = model.source.generic_string();
+        item["source"] = model.source.generic_string();
         if (model.previewCamera)
             item["previewCamera"] = cameraJson(*model.previewCamera);
         root["models"].push_back(std::move(item));

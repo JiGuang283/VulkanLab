@@ -35,8 +35,7 @@ glm::vec3 cameraForward(const glm::mat4 &view) {
 }
 
 bool isDefaultKey(const RenderItemKey &key) {
-    return key.ownerKind == RenderItemOwnerKind::LegacyObject &&
-           key.entityId.empty() && key.assetGeneration == 0 &&
+    return key.entityId.empty() && key.assetGeneration == 0 &&
            key.primitiveIndex == 0 && key.fallbackOrdinal == 0;
 }
 

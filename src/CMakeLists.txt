@@ -206,7 +206,7 @@ set(VKL_ENGINE_SOURCES
     render/pass/SkyBackgroundPass.cpp
     render/pass/ToneMapPass.cpp
     render/pass/PresentPass.cpp
-    scene/BuiltinScenes.cpp
+    scene/GltfModelPrepareFactory.cpp
     scene/Camera.cpp
     scene/BoundsMath.cpp
     scene/Scene.cpp
@@ -302,7 +302,6 @@ target_link_libraries(vkl_engine
     PRIVATE
         vkl_image_codecs
         vkl_gltf_parser
-        vkl_obj_parser
         vkl_vma_impl
         vkl_glfw
         ktx_read

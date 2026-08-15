@@ -143,7 +143,7 @@ Release 示例：
   -Configuration Release
 ```
 
-脚本会使用唯一 Named Pipe，启动 automation 模式，加载 Viking Room，切换到 `PBR-lite NormalMapped`，运行时 resize 到 `1024x720`，等待稳定帧，截图并检查最终 Validation 状态。GPU-AV 允许更长超时，不加载 Main Sponza。
+脚本会使用唯一 Named Pipe，启动 automation 模式，加载 `Renderer Smoke Scene`，切换到 `PBR-lite NormalMapped`，运行时 resize 到 `1024x720`，等待稳定帧，截图并检查最终 Validation 状态。该场景只依赖 engine primitive，适合 core/sync/GPU-AV 的快速诊断；GPU-AV 不加载 Main Sponza。
 
 输出位于：
 

@@ -307,8 +307,7 @@ void ScenesPanel::draw(const SceneWorkflowSnapshot &snapshot,
                 actions.savePreviewCamera)
                 actions.savePreviewCamera(item.index);
             if (ImGui::MenuItem("Remove Model From Catalog", nullptr, false,
-                                item.canEditCatalog && !item.builtin &&
-                                    !item.current))
+                                item.canEditCatalog && !item.current))
                 pendingRemoveIndex_ = item.index;
             ImGui::EndPopup();
         }

@@ -38,14 +38,6 @@
   "defaultEnvironment": null,
   "models": [
     {
-      "id": "viking-room",
-      "displayName": "Viking Room",
-      "type": "builtin",
-      "importProfile": "desktop_2048",
-      "optional": false,
-      "builtinFactory": "viking_room"
-    },
-    {
       "id": "sheen-chair",
       "displayName": "Sheen Chair",
       "type": "gltf",
@@ -456,6 +448,12 @@
     }
   ],
   "scenes": [
+    {
+      "id": "renderer-smoke",
+      "displayName": "Renderer Smoke Scene",
+      "source": "assets/scenes/renderer-smoke.vkscene.json",
+      "optional": false
+    },
     {
       "id": "algorithm-playground",
       "displayName": "Algorithm Playground",
