@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-15
-> Verified against: Shared Model/Environment repositories and Bindless Material Resources v1
+> Verified against: `62f6cc4`
 
 ## 项目、Catalog 与导入
 
@@ -106,14 +106,14 @@ manifest schema v3 记录 project/scene/profile 稳定身份、scene、texture l
 
 ## Artifact Index 与依赖失效
 
-`ArtifactIndex` schema v2 是 `%LOCALAPPDATA%` 共享 cache 中的可丢弃 JSON 加速层，不是 artifact 的事实来源。每条记录用 `assetKind + assetId + profileId` 区分 Scene 和 Environment，保存 manifest identity、source dependency 的 size/mtime/SHA-256、blob 闭包、schema/encoder settings、最后成功 import task、访问时间和最近失败诊断。读取 schema v1 时旧记录按 Scene 解释。索引缺失、JSON 损坏、schema 或 project ID 不匹配时，会从 Catalog 和已发布 manifest 自动重建并原子替换。
+`ArtifactIndex` schema v4 是 `%LOCALAPPDATA%` 共享 cache 中的可丢弃 JSON 加速层，不是 artifact 的事实来源。每条记录用 `assetKind + assetId + profileId` 区分 Model、Environment 和 SceneDocument，保存 manifest/document identity、source dependency 的 size/mtime/SHA-256、asset references、blob 闭包、schema/encoder settings、最后成功 import task、访问时间和最近失败诊断。旧 `Scene` kind 按 Model 兼容读取。索引缺失、JSON 损坏、schema 或 project ID 不匹配时，会从 Catalog、SceneDocument 和已发布 manifest 自动重建并原子替换。
 
 状态查询分两级：
 
 1. `Fast` 用于启动、Scenes/Assets 列表和普通 Runtime Control 查询。size 与 mtime 未变化时不读取文件内容；stamp 可疑时才计算共享 BCrypt SHA-256。内容 hash 相同会更新 stamp 并继续 Ready，内容变化只使引用该 dependency 的 scene/profile 返回 Stale。
 2. `Admission` 在真正 scene load 前额外验证每个 blob 的文件大小和 KTX2 identifier。损坏或缺失 blob 返回 Invalid，不能进入正常 cache load。
 
-资产工具只有在 manifest 成功发布后，才在同一个 cache mutation transaction 中刷新索引。Application 重新载入工具发布的记录，并单独合并访问时间、成功 task 和失败日志。索引写入使用短时命名 mutex、临时文件和 `MoveFileEx(REPLACE_EXISTING | WRITE_THROUGH)`；不同进程只合并脏记录，旧 UI 遥测不会覆盖 importer 的新 manifest 记录。
+资产工具只有在 manifest 成功发布后，才在同一个 cache mutation transaction 中刷新索引。`SceneWorkflowController` 重新载入工具发布的记录，并单独合并访问时间、成功 task 和失败日志。索引写入使用短时命名 mutex、临时文件和 `MoveFileEx(REPLACE_EXISTING | WRITE_THROUGH)`；不同进程只合并脏记录，旧 UI 遥测不会覆盖 importer 的新 manifest 记录。
 
 所有会修改 manifest/blob 的 import、migration、index rebuild 和 prune execute 共享按 cache root 命名的 Windows mutex。`cache prune` 先从全部可读 manifest 建立保护闭包；默认只 dry-run，`--execute` 获得 mutation lock 后重新计算候选，只删除超过保留期且没有任何 manifest 引用的 `.ktx2`。损坏 manifest 或非法 blob 引用会拒绝清理，不会猜测引用关系。
 
@@ -121,7 +121,7 @@ manifest schema v3 记录 project/scene/profile 稳定身份、scene、texture l
 
 ## 自动按需导入
 
-Application 使用 ArtifactIndex 的 Fast 查询展示精确 scene/profile 的 `Ready`、`Missing`、`Stale` 或 `Invalid`，在提交 glTF `SceneLoadManager` 前执行 Admission 查询。索引不可用时保留 `inspectTextureArtifacts()` 完整扫描作为兼容回退。正在执行的同一 scene/profile task 在 UI 中投影为 `Importing`。
+`SceneWorkflowController` 使用 ArtifactIndex 的 Fast 查询展示精确 model/profile 的 `Ready`、`Missing`、`Stale` 或 `Invalid`，并在请求 `SceneRuntimeCoordinator` 加载模型前执行 Admission 查询。索引不可用时保留 `inspectTextureArtifacts()` 完整扫描作为恢复路径。正在执行的同一 model/profile task 在 UI 中投影为 `Importing`。
 
 运行模式是显式 Config/启动参数，不依赖构建类型：
 
@@ -156,7 +156,7 @@ MaterialInstance 析构只提交 handle 退役，Material/Texture slot 和 Legac
 等 `FrameSync` completed submission serial 越过最后一次使用后才能回收或复用，
 因此失败、取消和反复重载不会覆盖仍被 GPU 读取的数据。
 
-`RenderResourceRegistry` 不管理这里的 ModelAsset Texture/Mesh 或 Environment Texture，也不参与上传或 residency。它只拥有 Renderer 内部的 HDR、depth、shadow、Bloom、Viewport Color、程序化 Atmosphere LUT、DDGI probe atlas 和 sampler；模型与环境资源分别由 AssetRepository/ModelGpuBuilder、EnvironmentGpuBuilder、Texture/Mesh 与上传队列按上述生命周期管理。Atmosphere 与 DDGI Probe Volume 都是 SceneDocument 中的纯参数数据，不产生独立派生资产或加载任务。支持 Ray Query 时，Mesh 上传会同时构建 BLAS；TLAS 由 Renderer 按当前 frame slot 从 Render Items 动态构建，两者都不是 cache/Cook artifact。
+`RenderResourcePool` 不管理这里的 ModelAsset Texture/Mesh 或 Environment Texture，也不参与上传或 asset residency。它只拥有 Renderer 帧图内部的 HDR、depth、shadow、Bloom、Viewport Color、程序化 Atmosphere LUT、DDGI probe atlas 和 sampler；模型与环境资源分别由 AssetRepository/ModelGpuBuilder、EnvironmentGpuBuilder、Texture/Mesh 与上传队列按上述生命周期管理。Atmosphere 与 DDGI Probe Volume 都是 SceneDocument 中的纯参数数据，不产生独立派生资产或加载任务。支持 Ray Query 时，Mesh 上传会同时构建 BLAS；TLAS 由 Renderer 按当前 frame slot 从 Render Items 动态构建，两者都不是 cache/Cook artifact。
 
 ## 发布与失败语义
 
@@ -167,7 +167,7 @@ MaterialInstance 析构只提交 handle 退役，Material/Texture slot 和 Legac
 - Environment prepare/upload 始终保留当前 Scene 和旧 Environment；只有完整新 generation 可以原子替换。
 - CPU prepare、GPU build 失败或取消都保留当前 Scene。
 - 场景切换只发布最新 generation；被取消或过期的任务不能覆盖当前 World。
-- Application 关闭前先停止控制服务和 source import future，再取消并 join AssetImportManager/完整工具进程树和 AssetRepository worker，等待设备空闲后按所有权顺序销毁 Scene、ModelAsset 与 Vulkan 对象。
+- Application 关闭前先停止 RuntimeControlAdapter，再调用 SceneWorkflowController 与 SceneRuntimeCoordinator 的 shutdown；它们分别取消并 join import/工具任务与 Repository worker。最后等待设备完成并按所有权逆序销毁 World、ModelAsset、Renderer 和 Vulkan 对象。
 
 ## LoadStats
 

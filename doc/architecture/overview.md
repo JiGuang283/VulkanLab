@@ -2,101 +2,177 @@
 
 > Status: Current
 > Last verified: 2026-08-15
-> Verified against: Vulkan 1.3 RenderGraph and async-only scene loading
+> Verified against: `62f6cc4`
 
-VulkanLab 是一个 Windows Vulkan Forward Renderer。当前架构以 `Application` 为组合根，场景、渲染提交、GPU 资源和调试控制之间保持显式所有权，不使用全局引擎服务定位器。
+VulkanLab 是一个开发中的 Windows Vulkan 1.3 实时渲染器。当前架构以
+`Application` 为组合根，以类型化 service、snapshot、action 和 submission
+serial 明确场景、渲染、编辑器与开发工具之间的所有权；不存在全局引擎 service
+locator。
 
-## 模块边界
+## 运行时所有权
 
-| 目录 | 职责 |
+```text
+Application
+  |-- PlatformServices
+  |     Window / Input / VulkanContext / Device / FrameSync
+  |     DescriptorAllocator / MaterialSystem / Renderer / PipelineCache
+  |-- RuntimeServices
+  |     SceneWorkflowController
+  |     SceneRuntimeCoordinator
+  |     RenderSettingsController
+  |-- OptionalTooling
+  |     EditorController              [optional]
+  |     RuntimeControlAdapter         [optional]
+  |     CaptureService                [optional]
+  `-- FrameState
+        Camera / ShadowSystem / VisibilitySystem / current frame snapshots
+```
+
+`Application` 只负责依赖装配、平台生命周期、主循环顺序、少量跨 service
+协调和显式逆序关闭。它不绘制具体 ImGui 页面、不解析 Runtime Control JSON、
+不执行 scene load phase 状态机，也不持有 Catalog/ArtifactIndex 的第二份可变状态。
+
+三个主要 Controller 的职责固定为：
+
+- `SceneWorkflowController`：Catalog、Scene Registry、验证、导入、派生资产、
+  Artifact Index、任务状态和统一 UI/Runtime Control workflow action。
+- `SceneRuntimeCoordinator`：Asset/Environment Repository、SceneLoadManager、当前
+  和退役 World、异步发布、environment generation、加载统计和 GPU 生命周期。
+- `RenderSettingsController`：Shader variant、requested settings、参数校验、设备
+  capability fallback、active runtime state 和 `FrameRenderFeatures` 解析。
+
+`EditorController` 只在 `VKL_ENABLE_EDITOR_UI=ON` 时存在，拥有 Docking workspace、
+Viewport、authoring session、Undo/Redo、panels 和纯 UI 状态。
+`RuntimeControlAdapter` 只在编译支持且启动参数显式开启时存在，负责 Named Pipe
+协议与 typed service/action 的边界映射。两者复用相同的 workflow、scene runtime
+和 render settings action，不复制业务规则。
+
+## 源码模块
+
+| 目录 | 当前职责 |
 |---|---|
-| `src/app/` | 应用生命周期、SceneWorkflowController、模型预览切换、相机、RenderView 输入和命令执行。 |
-| `src/editor/` | ImGui DockSpace、独立 Scene Viewport、SceneEditorSession、Outliner/Inspector/Scenes/Assets panel、主题、共享控件和纯 UI 状态。 |
-| `src/assets/` | ProjectContext、Model/SceneDocument/Environment Catalog、类型化存储事务、RuntimePackage、ArtifactIndex/依赖校验、cache prune、资产工具进程监督、manifest 和 KTX2 cache 读取。 |
-| `src/scene_data/` | 无 Renderer/ImGui 依赖的持久 Entity ID、SceneDocument DTO、严格验证和原子存储。 |
-| `src/workflows/` | UI 与 Application 之间的只读 workflow snapshot 和 action DTO。 |
-| `src/control/` | Windows Named Pipe 服务、运行时命令队列和 JSON 协议。 |
-| `src/core/` | Vulkan instance/device、SwapChain、FrameSync、Buffer/Image、AccelerationStructure、Descriptor、Pipeline、VMA、同步与增量上传。 |
-| `src/render/` | Mesh、Texture、材质、纯 CPU glTF prepare、Environment GPU build、RenderView、RenderQueue、RenderGraph、物理 RenderResourceRegistry、RayTracingScene、PipelineCache、Renderer、GPU profiler 和 Shader variant。 |
-| `src/render/pass/` | RenderGraph 的 graphics/compute/transfer/external pass，包括 Atmosphere、Shadow、Surface/Visibility、AO、DDGI、Forward、SSR/SSGI、TAA、Bloom、ToneMap、Present 和 Capture。 |
-| `src/scene/` | IRenderWorld、RuntimeWorld、Model Preview facade、ModelAsset/ModelInstance、AssetRepository、ModelGpuBuilder、Native Scene 加载任务、Camera 和模型 prepare factory。 |
-| `src/window/` | GLFW 窗口和输入状态。 |
-| `src/platform/` | Win32 原生文件选择等平台适配。 |
-| `src/diagnostics/` | 场景加载耗时、资源上传量、VMA 快照、截图与自动化诊断。 |
-| `tools/` | 独立资产、Runtime Control 和视觉回归程序；不拥有渲染器内部对象。 |
+| `src/app/` | `Application` 组合根、启动配置和 canonical frame scheduling。 |
+| `src/core/` | Vulkan instance/device、SwapChain、FrameSync、Buffer/Image、descriptor、VMA、上传和底层同步。 |
+| `src/render/` | Renderer facade、feature graph 和只读 world contract。 |
+| `src/render/frame/` | Render settings、feature resolution、RenderView、frame GPU ABI 和灯光 DTO。 |
+| `src/render/graph/` | RenderGraph、`IRenderPass`、External nodes 与物理 `RenderResourcePool`。 |
+| `src/render/geometry/` | Mesh、Vertex、bounds、RenderItem、RenderQueue 和 tangent。 |
+| `src/render/material/` | Texture、Material、fallback resources 和全局 MaterialSystem。 |
+| `src/render/pipeline/` | Graphics/Compute pipeline config、cache 和完整 state key。 |
+| `src/render/shader/` | Shader Manifest registry、variant 和 Renderer program catalog。 |
+| `src/render/features/` | 按功能族组织的全部 Graph Pass 和算法实现。 |
+| `src/scene/` | `IRenderWorld` 实现、RuntimeWorld、ModelAsset、Repository、GPU builder 和场景加载。 |
+| `src/scene_data/` | 无 Vulkan/Renderer/ImGui 依赖的 SceneDocument DTO、持久 ID、验证和原子存储。 |
+| `src/assets/` | Project/Catalog、manifest、artifact/cache、验证、导入和 package 数据层。 |
+| `src/workflows/` | 项目级 Scene/Asset workflow controller 与 typed snapshots/actions。 |
+| `src/editor/` | Editor controller、Docking UI、Viewport、authoring session 和 panels。 |
+| `src/control/` | Named Pipe、命令队列、协议、客户端与可选 runtime adapter。 |
+| `src/diagnostics/` | BuildInfo、加载统计、Capture、Tracy wrapper 和 submission diagnostics。 |
+| `src/window/`, `src/platform/` | GLFW 输入/窗口和 Win32 平台适配。 |
+| `tools/` | AssetTool、VulkanLabCtl 和 RenderTest 等进程外开发工具。 |
 
-## 编译期模块装配
+Renderer 的功能目录直接对应维护边界：
 
-`cmake/BuildFeatures.cmake` 是可选开发基础设施的唯一构建期开关入口，生成的 `BuildFeatures.h` 同时提供 `0/1` 宏和 `vkr::build` 常量。CMake 在 target/source 边界选择真实实现或空实现：Editor 可移除 ImGui，Runtime Control 可移除 Named Pipe 控制库，Capture 可移除截图后端并停止请求 swapchain transfer-source usage，Asset Authoring 可替换进程 supervisor，GPU Debug Utils 和 GPU Profiler 可替换为 no-op 实现。
+```text
+src/render/features/
+  core_forward/             Forward, Surface, HDR Composite, ToneMap, Present
+  shadows_visibility/       CSM, Point/Spot Shadow, Visibility, Hi-Z
+  ambient_occlusion/        SSAO, GTAO, CACAO adapter/backend
+  reflections/              SSR
+  global_illumination/      SSGI, DDGI, Ray Query scene
+  atmosphere_environment/   Atmosphere LUTs and sky background
+  temporal_post_process/    TAA, Bloom and shared screen pyramids
+```
 
-这些开关不参与渲染算法选择。Directional Shadow、HDR/Tone Mapping、Compute Bloom、IBL、Skybox、程序化 Atmosphere、Global UBO、descriptor layout、push constant、材质布局和 Shader Manifest 在所有 preset 中保持同一契约。运行时算法仍由 `RenderSettings`、SceneDocument component 和 Shader variant 控制，避免不同二进制产生不兼容资产或 Shader ABI。
+这些目录属于同一个 `vkl_renderer_runtime` target。没有把每个算法强拆成静态库，
+因为它们共享稳定的 RenderGraph、frame ABI、Pipeline 和 resource handle contract；
+物理目录和 CMake source group 用于明确所有权，而不是制造 target 间循环依赖。
 
-## 启动与所有权
+## CMake 模块边界
 
-`wmain()` 解析 `--help`、`--project`、`--runtime-control`、`--runtime-control-pipe`、`--asset-mode`、确定性诊断参数与可选 cache/tool override，入口和路径全程保留 Windows Unicode。`--build-info-json` 在日志、Window 和 Vulkan 初始化前输出机器可读的构建配置。`ProjectContextResolver` 优先识别 executable 旁的 runtime package；否则定位源码项目和 `assets/catalog.json`，并一次性确定 `projectRoot`、`runtimeRoot`、`cacheRoot` 与 `captureRoot`。Catalog、glTF/GLB、SceneDocument 和外部依赖从 `projectRoot` 解析；executable、运行时工具、locator 和 SPIR-V 从 `runtimeRoot` 解析。package file hash、Catalog schema、稳定 ID、profile、路径和必需源文件都会在创建 Window/Vulkan 前验证。开发项目中 `SceneRegistryBuilder` 先把 `models[]` 适配为单模型预览，再追加 Catalog v3 `scenes[]` 对应的 Native Scene Entry；所有条目统一通过异步加载状态机发布。
+`src/CMakeLists.txt` 以真实依赖建立以下 target：
 
-schema v3 Cooked package 中 `projectRoot == runtimeRoot == package root`，cache 固定为包内 `runtime_assets`；它使用只读最小 Catalog、强制 CookedOnly，只注册 Native Scene，并自动加载 manifest 的 `startupSceneId`。Model 各自使用 Catalog import profile，Environment 由 SceneDocument 选择。`windows-msvc-runtime` 在编译期移除 Editor、Runtime Control、Capture、Asset Authoring 和开发诊断；外部 project/cache/asset tool override 会在初始化前被拒绝。旧 schema v1/v2 package 继续注册 Model Preview。开发运行默认 OnDemand，保留 CMake locator、writable Catalog 和共享用户 cache。当前工作目录不参与 subsystem 的资源拼接。
+- `vkl_foundation`, `vkl_gpu_runtime`, `vkl_platform_runtime`
+- `vkl_shader_catalog`, `vkl_renderer_runtime`
+- `vkl_scene_data`, `vkl_asset_core`, `vkl_asset_runtime`
+- `vkl_scene_runtime`, `vkl_scene_workflow`
+- `vkl_capture`
+- `vkl_editor` 和 `vkl_runtime_control_adapter`（条件构建）
 
-初始化顺序为：
+`VulkanLab` executable 只直接编译 `main.cpp` 与 `app/Application.cpp`，再链接所需
+模块。`vkl_engine` 目前是无源码的过渡 INTERFACE aggregate，只用于已有测试和
+下游 target 的兼容，不代表一个重新集中所有实现的 monolith。
 
-1. ProjectContext、SceneCatalog、SceneWorkflowController 和模型预览 SceneRegistry，此时尚未创建窗口。
-2. Window 和 InputManager。
-3. VulkanContext、Device、DescriptorAllocator 和启动时选定后端的 MaterialSystem。
-4. SwapChain 和 FrameSync。
-5. Renderer、全局 UBO、Lighting descriptor generation、物理 render resource registry、Vulkan 1.3 RenderGraph、GPU timestamp profiler 和开发模式 CaptureService。
-6. PipelineCache、AssetRepository/EnvironmentAssetRepository worker、SceneLoadManager 操作 facade、ArtifactIndex 和初始 Scene/environment admission；只有 OnDemand 创建 AssetImportManager supervisor。
-7. GuiSystem。
-8. 可选的 Runtime Control 命令队列和 Named Pipe 线程。
+构建开关只裁剪开发基础设施，不切换渲染算法 ABI。Editor、Runtime Control、
+Capture、Asset Authoring、Validation、Debug Utils、GPU Profiler 和 Tracy 可以独立
+移除；Global UBO、Material ABI、Shader Manifest 和 SceneDocument 不因这些开关
+产生不同版本。
 
-这些对象由 `Application` 持有，并通过成员声明与显式停止逻辑按相反方向销毁。Vulkan 资源的创建、使用、场景替换和销毁都发生在主线程。
+## 初始化与关闭
 
-## UI 所有权
+`wmain()` 在窗口和 Vulkan 初始化前解析 project/package、构建能力和启动参数。
+`Application::init()` 随后按三个阶段装配：
 
-`Application::drawGui()` 是 DockSpace 与编辑器窗口的组合入口。`EditorDockWorkspace`
-创建 Viewport、Outliner、Inspector、Scenes、Assets、Render、Materials 和 Diagnostics 顶层窗口，并
-提供 Viewport、Debugging 和 Compact 三种 preset。`EditorTheme` 统一字体、DPI、
-颜色和间距，`EditorWidgets` 提供属性表、语义状态、路径显示和模式选择。
-`EditorUiState` 只保存筛选、选中 index 和短期性能历史；`EditorViewportState`
-只报告图像矩形、逻辑/物理尺寸以及 visible、hovered、focused，不持有 Scene、
-Device 或图像所有权。窗口位置、尺寸和 docking 状态继续由 ImGui ini 管理。
+1. `initPlatformAndRenderer()`：Window/Input、VulkanContext、Device、descriptor、
+   MaterialSystem、SwapChain、FrameSync、Renderer、RenderSettings capability 和
+   PipelineCache。
+2. `initSceneRuntime()`：SceneLoadContext、SceneRuntimeCoordinator、workflow
+   callbacks、Catalog/Artifact workflow 和初始异步 scene/environment request。
+3. `initOptionalTooling()`：Capture、Editor 和显式启用的 Runtime Control。
 
-`ScenesPanel`、`AssetsPanel`、`OutlinerPanel` 与 `InspectorPanel` 位于 `src/editor/panels/`，只消费 snapshot 和 action callback，不持有 Catalog、future、Application 或 Vulkan 对象。`SceneEditorSession` 与 `EditorCommandStack` 维护文档路径、Dirty/Undo 状态和 UUID selection；实际编辑数据只存在于共享 `RuntimeWorld`。Catalog、registry、模型导入和资产任务状态由 `SceneWorkflowController` 统一持有；Application 只组装需要窗口、相机或 Vulkan 生命周期的 action。
+`shutdown()` 是幂等的。它先停止外部控制和后台 workflow/runtime，再等待最后的
+GPU submission，收割退役 World/asset/capture，最后按
+Optional Tooling -> Scene Runtime -> frame state -> Vulkan platform 的逆依赖顺序
+销毁。普通场景切换和 feature 切换不使用 `vkDeviceWaitIdle()`。
 
-具体页面入口见 [编辑器 UI 工作区](../guides/editor_ui.md)，场景数据边界见[场景数据与 Catalog](scene_documents.md)。
+## Canonical Frame Order
+
+每帧顺序由 `Application::mainLoop()` 固定：
+
+```text
+Window::pollEvents
+RuntimeControlAdapter::processOne                 [optional]
+SceneWorkflowController::pump
+SceneRuntimeCoordinator::pump
+EditorController::beginFrame/draw                [optional]
+apply editor/runtime actions
+FrameSync::beginFrame
+IRenderWorld::buildRenderSnapshot
+ShadowSystem::buildPlan
+RenderSettingsController::resolve
+buildRenderView
+VisibilitySystem::build
+Renderer::renderFrame
+FrameSync::endFrame / present
+capture completion and serial retirement
+```
+
+UI 修改完成后才构建一次不可变 `RenderWorldFrameSnapshot`。RenderView、Shadow、
+Visibility、Renderer 和 diagnostics 使用相同 generation，避免同一帧混用编辑前后
+的 Transform、灯光或 bounds。Renderer 内部由 `FrameRenderFeatures` 选择 Graph
+拓扑和物理资源；Pass 不回到 Application 推导执行条件。
 
 ## 线程模型
 
-主线程拥有 GLFW、ImGui、DescriptorAllocator、MaterialSystem 和全部 Vulkan/VMA 对象。它每帧轮询 upload fence、按预算记录上传命令，并在资源全部可用后发布 Scene 或新的 Environment descriptor generation。材质与纹理 slot 的注册、descriptor 更新和 submission-serial 回收同样只在主线程执行。
+主线程拥有 GLFW、ImGui、所有 Vulkan/VMA 对象、MaterialSystem、descriptor 更新、
+GPU builder pump 和资源发布。后台线程只产生 CPU 数据或监督进程：
 
-AssetRepository 持有一个长期 FIFO worker。worker 只执行 glTF 文件读取、解析、图片解码/缩放、顶点转换、tangent、bounds 和 hierarchy，输出不包含 Vulkan handle 的 `PreparedModelData`。主线程按预算推进唯一活动 `ModelGpuBuilder`，并把完成结果发布为共享 `ModelAsset`。相同 `(modelId, profileId)` 请求会 Ready hit 或合并到同一 generation。
+- AssetRepository worker：glTF 解析、图片准备、geometry/tangent/bounds。
+- SceneLoadManager worker：SceneDocument 解析和引用解析。
+- Environment worker：派生 KTX2 读取和校验。
+- Asset import supervisor：Validator/AssetTool 子进程和 NDJSON 进度。
+- Capture worker：已经完成 readback 的 PNG 编码与哈希。
+- Named Pipe thread：请求 I/O 和排队，不读取 Renderer/World 或调用 Vulkan。
 
-SceneLoadManager 的单 worker 负责解析和验证 Native SceneDocument；主线程随后请求文档中的唯一 ModelAsset 集合并等待 environment。全部依赖 Ready 后构造 `RuntimeWorld` 并原子替换当前 `IRenderWorld`。加载失败、取消或发布前出现新的未保存编辑时保留旧 World；旧 World 按 submission serial 延迟销毁。
+GPU 对象只在主线程发布。ModelAsset、Environment、World、Material slot 和 Graph
+resource 都使用 FrameSync submission serial 延迟回收，不依赖后台线程猜测 GPU
+完成状态。
 
-EnvironmentAssetRepository 持有独立 FIFO worker，只读取和校验已经离线 bake 的四个浮点 KTX2，输出 `PreparedEnvironment`。主线程使用唯一活动 EnvironmentGpuBuilder 和增量上传队列创建 cubemap/LUT；全局环境与 Reflection Probe 对相同 `(environmentId, profileId)` 共享 generation 和 consumer lease。完整新 generation 发布前保留旧环境，旧 descriptor/resources 按 submission serial 延迟销毁。
+## 相关文档
 
-`VulkanLab -> Scene -> Scenes` 的文件对话框在主线程打开；选定文件后的依赖 preflight 和 `ModelImportService` 事务由独立 `std::async` worker 执行。该 worker 可以读取/复制源文件并通过 `SceneCatalogStore` 原子更新源码项目 Catalog，但不能访问 GLFW、ImGui 或 Vulkan。Application 只轮询 controller 中的 future 和进度；退出时先请求取消并等待导入 worker 收束。
-
-AssetImportManager 持有一个 supervisor thread，串行监督资产工具进程；scene texture 工具内部再按 worker/内存预算并行启动 `ktx.exe`，environment 工具执行确定性 CPU bake。supervisor 只读取 NDJSON、日志和进程状态，不解析 glTF/HDR、不访问 Application Scene，也不创建 Vulkan 对象。Windows Job Object 拥有完整子进程树，取消和退出会终止工具及其编码子进程。主线程轮询任务状态，并由 `AssetLoadCoordinator` 保证只有最新 operation generation 可以从 import 接续到 scene load。
-
-ArtifactIndex 由 Application 主线程持有；Fast/Admission 查询和 UI 快照不跨线程访问。独立资产工具负责 manifest/blob 和索引核心记录的发布，Application 只合并访问/失败遥测。不同进程通过短时 index mutex 原子更新 JSON；改变 cache 内容的工具命令还持有覆盖完整事务的 cache mutation mutex。
-
-Named Pipe 线程只读取带长度前缀的 JSON 请求，把 `RuntimeCommand` 放入队列并等待主线程填写响应。它不能读取 Scene、Camera、Shader、统计数据，也不能调用 Vulkan 或 GLFW。Runtime Control v3 的 scene/capture 请求快速返回 taskId；加载等待和稳定帧等待都由 VulkanLabCtl 使用短连接轮询 `load.status`、`render.status` 或 `capture.status`，服务端不会阻塞等待未来帧。每个自动化实例可以使用独立 pipe suffix。
-
-CaptureService 的主线程部分按请求为最终 Swapchain Workspace、per-frame Viewport Color 或 HDR source 创建 readback buffer；Renderer 把实际 image copy 注册为条件 RenderGraph Transfer 节点，并按 FrameSync completed submission serial 收割 GPU 结果。惰性启动的编码 worker 只处理已复制到 CPU 的 RGBA bytes、PNG 和 SHA-256，不访问 Vulkan、GLFW、ImGui 或 Scene。
-
-`VulkanLabRenderTest` 是渲染器进程外的测试工具，不链接 Application、Renderer 或 Vulkan。它使用唯一 Named Pipe 和 Win32 Job Object 启动并监督 `VulkanLab.exe`，通过 Runtime Control 完成场景加载、稳定帧等待和异步截图，再在 CPU 上比较 PNG。Runner 崩溃或超时关闭 Job 时会终止完整子进程树。
-
-## 每帧数据流
-
-1. 轮询窗口和输入，收割 asset import 结果，执行一条待处理控制命令。
-2. 轮询 worker 结果与 upload fence，在软预算内推进 AssetRepository/ModelGpuBuilder 和 EnvironmentGpuBuilder；收割达到 submission serial 的旧 Scene/ModelAsset。
-3. 应用待切换场景，更新计时、输入模式、相机和 Scene tick。
-4. 轮询场景导入 future，构建全屏 DockSpace 及 Viewport、Scenes、Assets、Render、Materials 和 Diagnostics 窗口；Viewport 报告内容区尺寸和交互状态，并显示对应 frame slot 的 Viewport Color。
-5. `FrameSync::beginFrame()` 获取 frame index、swapchain image 和 command buffer。
-6. Application 组装 `RenderViewInput`；纯函数 `buildRenderView()` 完成默认 Sun、灯光截断/GPU 打包、阴影拟合、Atmosphere Sun 选择、大气 frame data 和 DDGI Probe Volume frame data，生成不可变 `RenderView`。
-7. 当前 `IRenderWorld` 从 Model Preview 的共享 `ModelInstance` 或 Native `RuntimeWorld` Entity 生成 RenderCommand；预览矩阵使用 `rootToWorld * localToAsset`，Native Scene 实例矩阵使用 `entityWorld * localToAsset`，RenderQueue 分别排序 opaque 与 transparent 命令。
-8. Renderer 上传 Global UBO、Scene Light SSBO 和 Atmosphere UBO，按需从 canonical Render Items 构建当前 frame slot TLAS，并组装 RenderFrameContext；RenderGraph 根据 FrameRenderFeatures 构建/复用拓扑，自动生成 Synchronization2 barrier，并通过 Dynamic Rendering、Compute、Transfer 和 External 节点执行 Atmosphere/Shadow/Surface/Visibility、AO、可选 DDGI、SkyBackground、Forward、SSR/SSGI composite、Transparent、TAA、Bloom、ToneMap 与 Present + ImGui。每个活动节点由稳定 Graph Pass ID 的 timestamp query 包围。
-9. 若有截图任务，条件 ScreenshotCopy Transfer 节点在同一个 frame command buffer 中复制最终 Swapchain Workspace、Viewport Color 或 HDR source；资源 layout 由 Graph 恢复。
-10. `FrameSync::endFrame()` 提交和 present；操作系统窗口变化只重建 Swapchain/Present 资源，稳定后的 Viewport 内容区变化只重建 viewport-dependent Registry 资源。后续帧推进 completed submission serial，并把已完成截图交给 CPU worker。
-
-详细渲染行为见 [渲染流程](rendering.md)，场景创建与上传见 [资源加载](resource_loading.md)。
+- [渲染流程](rendering.md)
+- [RenderGraph](render_graph.md)
+- [资源加载](resource_loading.md)
+- [场景数据与 Catalog](scene_documents.md)
+- [编辑器 UI](../guides/editor_ui.md)
+- [Runtime Control](../guides/runtime_control.md)

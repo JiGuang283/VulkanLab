@@ -1,8 +1,8 @@
 # VulkanLab 渲染器收口与 Application 重构计划
 
-> Status: Active
+> Status: Complete
 > Last verified: 2026-08-15
-> Verified against: `ff80960`
+> Verified against: `62f6cc4`
 
 ## Progress
 
@@ -18,7 +18,7 @@
 | 7. Extract EditorController | Complete | Editor workspace, authoring session, viewport, capture and panels moved behind an editor-only controller |
 | 8. Isolate Runtime Control | Complete | Pipe lifecycle, dispatch, protocol serialization and Host implementation moved behind an optional adapter |
 | 9. Final Application Composition | Complete | Application reduced to grouped composition, staged initialization, canonical frame scheduling and explicit shutdown |
-| 10. Documentation And Closeout | Next | Update current README and architecture documentation against the consolidated implementation |
+| 10. Documentation And Closeout | Complete | README, Current architecture/guides and plan indexes now describe the consolidated implementation |
 
 ## Summary
 
@@ -34,7 +34,7 @@ VulkanLab 当前已经从早期单模型 Vulkan 示例演进为包含 RenderGrap
 6. 保留 SSAO、GTAO、CACAO、SSR、SSGI、DDGI、TAA、Atmosphere 等现有算法作为正式维护的核心渲染能力，并按功能族组织，而不是通过删除算法解决复杂度。
 7. 更新 README 和 Current 文档，使代码结构、产品定位和实际运行行为一致。
 
-目标架构：
+目标架构。下图表达运行时所有权和组合关系，不要求磁盘目录机械嵌套；实际源码按 `app/scene/workflows/render/editor/control` 等领域目录放置：
 
 ```text
 Application
@@ -800,6 +800,14 @@ Panel只能保存展示状态，不持有GPU资源或后台任务。
 
 - 完成后将本计划移入`doc/archive/plans/engineering/`。
 - 旧`engineering_refactor_plan.md`中被本计划替代的Application部分标记为superseded或在全部完成后归档。
+
+### Stage 10 Completion Record
+
+- README 已将项目定位为开发中的 Vulkan 1.3 实时渲染器，并区分核心渲染能力、Scene/Asset 工作流、Developer Tooling 和当前限制。
+- Current architecture 文档已按实际 `Application` composition、Controller 边界、RenderGraph-only 执行、Dynamic Rendering、feature-owned 源码目录和 `RenderResourcePool` 驻留语义重新核对。
+- 资源、SceneDocument、Runtime Control、RenderDoc/Validation 与 Tracy 文档已移除当前路径中的 Viking/OBJ/同步 SceneFactory 叙述，并更新到 Renderer Smoke Scene 和 preset build 路径。
+- 本计划、Stage 0 基线和被其取代的旧工程重构计划已归档到 `doc/archive/plans/engineering/`；历史基线与旧结论保留用于追溯，不再作为 Current 实现依据。
+- Current Markdown 相对链接、旧源码路径和当前文档状态已完成静态检查；最终源码构建与启动证据沿用 Stage 9 后的 `62f6cc4` 验证记录，Stage 10 仅修改文档，按项目策略未运行测试套件。
 
 ## Diagnostics And Error Handling
 

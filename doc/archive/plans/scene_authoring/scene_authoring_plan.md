@@ -39,11 +39,11 @@ VulkanLab 当前可以导入、准备、上传并渲染一个完整 glTF/GLB，�
 - Stage 6 已完成：场景灯光迁入 per-frame SSBO，Directional/Point/Spot 共享 256 灯上限；SceneDocument schema v2 持久化 `castsShadow`，阴影方向光按稳定身份确定性选择。
 - 下一阶段是 Stage 7 的 Cook closure。
 
-当前事实说明见[场景数据与 Catalog](../architecture/scene_documents.md)。
+当前事实说明见[场景数据与 Catalog](../../../architecture/scene_documents.md)。
 
 ## Baseline At Plan Creation
 
-当前实现以[资源加载架构](../architecture/resource_loading.md)和[编辑器 UI 工作区](../guides/editor_ui.md)为准：
+当前实现以[资源加载架构](../../../architecture/resource_loading.md)和[编辑器 UI 工作区](../../../guides/editor_ui.md)为准：
 
 - Catalog schema v2 的 `CatalogScene` 直接引用一个 builtin、glTF 或 GLB 源文件。
 - `GltfPreparer` 在 worker 中产生 `PreparedSceneData`，其中包含纹理、材质、mesh、展平后的对象矩阵、静态世界空间灯光和建议相机。
@@ -54,7 +54,7 @@ VulkanLab 当前可以导入、准备、上传并渲染一个完整 glTF/GLB，�
 - `Scene::bounds()` 只在添加对象时累计。修改对象矩阵不会自动更新 bounds，因此不能直接用于可编辑 Transform。
 - RenderView 当前最多上传一盏 Directional 和八盏 Point/Spot；第一盏有效 Directional 可以使用现有方向光阴影。
 - Docking、独立 Viewport、Scenes、Assets、Render、Materials 和 Diagnostics 已存在，但没有 Outliner、实体 Inspector、对象拾取、Gizmo 或 Undo/Redo。
-- `Application.cpp` 仍承担大量场景工作流与 Panel 逻辑；[工程结构计划](engineering_refactor_plan.md)中未完成的 `SceneWorkflowController` 和 Editor Panel 边界与本计划直接相关。
+- `Application.cpp` 仍承担大量场景工作流与 Panel 逻辑；[工程结构计划](../engineering/engineering_refactor_plan.md)中未完成的 `SceneWorkflowController` 和 Editor Panel 边界与本计划直接相关。
 
 这些能力说明不需要重写 Renderer 或资产导入器，但必须修正“导入模型等于最终场景”的领域模型。
 

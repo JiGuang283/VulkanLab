@@ -1,16 +1,16 @@
 # VulkanLab 工程结构与构建系统重构计划
 
-> Status: Active
-> Last verified: 2026-08-01
-> Verified against: `86b809d`
+> Status: Archived (superseded and completed by later execution plans)
+> Last verified: 2026-08-15
+> Verified against: `62f6cc4`
 
-> Progress: target-based CMake、build-tree Shader、ProjectContext、RuntimeCommandDispatcher、Presets 和 BuildInfo 已由归档的 M0-M7 执行切片完成。Editor Panels、SceneWorkflowController 等剩余范围仍未实施。
+> Final note: target-based CMake、build-tree Shader、ProjectContext、RuntimeCommandDispatcher、Presets 和 BuildInfo 由 M0-M7 完成；剩余 Application、Editor 和 Workflow 收口随后由 `renderer_consolidation_and_app_refactor_plan.md` 完成。本文仅保留历史设计背景。
 
 ## Summary
 
 VulkanLab 当前的源码目录已经形成 `app/assets/control/core/render/scene/window` 等基本领域边界，不需要重新设计整个渲染器。但构建系统仍接近项目早期形态：根 `CMakeLists.txt` 同时管理依赖、应用、工具、测试、Shader 和运行资源；全局 include/link path 泄漏到所有 target；应用通过递归 glob 收集整个 `src/`；资产源码在 VulkanLab、AssetTool 和 CPU tests 中重复列举并重复编译；Shader 每次构建都写回源码树；开发构建继续扫描和复制完整 `models/`。
 
-与此同时，[Application.cpp](../../src/app/Application.cpp) 已承担主循环、场景工作流、资产导入、Runtime Control、所有 ImGui 面板和统计编排。继续直接加入截图、RenderDoc、Validator 和自动化任务会进一步放大耦合。
+与此同时，[Application.cpp](../../../../src/app/Application.cpp) 已承担主循环、场景工作流、资产导入、Runtime Control、所有 ImGui 面板和统计编排。继续直接加入截图、RenderDoc、Validator 和自动化任务会进一步放大耦合。
 
 本计划进行一次有边界、行为保持的工程化重构：
 
@@ -31,9 +31,9 @@ Application 单体
   -> composition root + controller/dispatcher/panel 服务
 ```
 
-本计划是[开发诊断与自动化工具链计划](development_toolchain_plan.md) Stage 0/1 的前置工作。完成 target、Shader 和开发资源布局后，再实施异步截图与视觉回归，避免在即将废弃的构建和 Application 边界上继续叠加功能。
+本计划是[开发诊断与自动化工具链计划](../../../development/development_toolchain_plan.md) Stage 0/1 的前置工作。完成 target、Shader 和开发资源布局后，再实施异步截图与视觉回归，避免在即将废弃的构建和 Application 边界上继续叠加功能。
 
-已完成的 Stage 0 到工具链 Stage 1 实施切片及验收记录见[工程基础到自动视觉回归执行记录](../archive/plans/engineering/engineering_to_visual_regression_execution_plan.md)。
+已完成的 Stage 0 到工具链 Stage 1 实施切片及验收记录见[工程基础到自动视觉回归执行记录](engineering_to_visual_regression_execution_plan.md)。
 
 ## Current Baseline
 
@@ -503,7 +503,7 @@ VulkanLabAssetToolTests
 
 ## Stage 6: Presets, Build Metadata And Developer Workflow
 
-该阶段与[开发工具链计划 Stage 0](development_toolchain_plan.md#stage-0-baseline-and-configuration-foundation)共享交付物；由本计划完成后，工具链 Stage 0 直接消费，不重复实现。
+该阶段与[开发工具链计划 Stage 0](../../../development/development_toolchain_plan.md#stage-0-baseline-and-configuration-foundation)共享交付物；由本计划完成后，工具链 Stage 0 直接消费，不重复实现。
 
 ### CMake Presets
 
@@ -682,4 +682,4 @@ Stage 1B 内部库可以按依赖风险拆成更多小提交。不要把 tracked
 - Debug、Release、全部 CTest、Main Sponza、Runtime Control 和独立 Cook package 无行为回归。
 - 构建结束后工作树干净，无生成文件污染源码目录。
 
-完成后使用 `git mv` 将本文移入 `doc/archive/plans/engineering/`，并更新 Current architecture/build guide。后续自动截图工作按[开发诊断与自动化工具链计划](development_toolchain_plan.md)继续。
+完成后使用 `git mv` 将本文移入 `doc/archive/plans/engineering/`，并更新 Current architecture/build guide。后续自动截图工作按[开发诊断与自动化工具链计划](../../../development/development_toolchain_plan.md)继续。

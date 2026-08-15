@@ -1,8 +1,8 @@
 # RenderGraph 架构
 
 > Status: Current
-> Last verified: 2026-08-13
-> Verified against: Vulkan 1.3 RenderGraph and Dynamic Rendering implementation
+> Last verified: 2026-08-15
+> Verified against: `62f6cc4`
 
 ## 目标与边界
 
@@ -45,13 +45,13 @@ Compiler 负责：
 
 Graph image handle 带逻辑 version，image use 可以精确到 mip、array layer 和 aspect。lifetime 分为：
 
-- `Transient`：逻辑瞬时资源；v1 仍由物理池长期持有，不做 alias。
+- `Transient`：只在对应 feature topology 活跃及安全 retirement 期间驻留；v1 不做 alias。
 - `PerFrame`：按 frame slot 分配。
 - `History`：支持 Current/Previous 访问。
 - `Persistent`：跨帧共享，例如 Shadow 和 DDGI atlas。
 - `Imported`：外部初始化或 Swapchain 资源。
 
-`RenderResourceRegistry` 是物理 image/view/sampler 池。Graph executor 按实际 `VkImage + frame + mip + layer + aspect` 持久跟踪：
+`RenderResourcePool` 是物理 image/view/sampler 池。Graph executor 按实际 `VkImage + frame + mip + layer + aspect` 持久跟踪：
 
 ```text
 stageMask2 + accessMask2 + layout + initialized
@@ -69,9 +69,39 @@ buffer 以实际 `VkBuffer` 跟踪 stage/access/initialized。Executor 只在 ha
 - Viewport/Workspace/HDR -> Screenshot transfer read -> 原 layout。
 - Swapchain `PRESENT -> COLOR_ATTACHMENT -> PRESENT`。
 
-当前 v1 在 Renderer 初始化时为设备能力支持的已注册图像创建物理资源，而不是等某个 feature 首次进入活动拓扑后再创建。`active bytes` 表示当前编译图实际引用的资源估算，`resident bytes` 表示物理池已经持有的资源；关闭 SSAO、SSR、Bloom 等功能会裁剪 Pass 和 GPU 工作，但不会立即归还对应 resident 显存。这样可以保持现有 Pass 构造期 descriptor 绑定稳定，代价是功能关闭时仍有资源驻留。
+`CompiledRenderGraph` 输出 active physical image handle 和 active owner Pass。每帧在 Graph 执行前调用：
 
-真正的按需驻留需要先把 descriptor 生命周期从 Pass 构造函数中拆出，形成 `compile active topology -> realize newly active resources -> rebind active pass descriptors` 的事务。本版本不提供该行为，也不把 `Transient` lifetime 宣称为 Vulkan 内存瞬时分配。
+```text
+compile/reuse topology
+  -> synchronize active resources at the current frame-slot safe point
+  -> refresh descriptors for newly created resources
+  -> execute nodes
+```
+
+物理状态为：
+
+- `Unallocated`：没有 Vulkan image，不计入 resident bytes。
+- `Resident`：当前 topology 使用，或者设置了 persistent residency。
+- `Retiring`：已经失活，但最后一次引用它的 submission 尚未完成。
+
+新激活资源从 `Unallocated` 创建为 `Resident`。资源失活时记录
+`lastSubmittedSerial` 并进入 `Retiring`；只有 `completedSerial` 到达后才销毁。
+Retiring 期间重新激活会取消回收并复用原图像。资源创建后，Graph 只通知声明
+使用它的 owner Pass 执行 `onResourceResidencyChanged()`，避免更新其他 frame slot
+仍在使用的 descriptor set。
+
+诊断语义固定为：
+
+- `logical bytes`：所有已声明资源的理论总量。
+- `active bytes`：当前 compiled topology 引用的资源量。
+- `resident bytes`：实际持有 Vulkan image 的资源量。
+- `retiring bytes`：resident 中正在等待 submission serial 的部分。
+
+当前仍有一个明确的启动限制：`RenderResourcePool::realize()` 在 Renderer 构造期会
+短暂创建全部注册图像，以满足部分 Pass 的初始 descriptor 构造；首帧
+`prepareResources()` 会把 inactive 图像退役并在 serial 安全后释放。因此稳态是
+feature-aware residency，但首次启动峰值还不是完全 lazy allocation。`Transient`
+lifetime 也不表示内存 alias。
 
 ## Dynamic Rendering
 
@@ -106,7 +136,7 @@ External node 用于 Graph 无法完全推导内部资源、但仍需参与帧�
 - active/culled node 和执行顺序。
 - dependency edge 和自动 barrier 数量。
 - layout/hazard barrier 分类。
-- image active/resident bytes。
+- image logical/active/resident/retiring bytes。
 - image/buffer version、lifetime、producer 和 consumer。
 
 `render.status.renderGraph` 返回同一数据。UI 可导出：
@@ -120,9 +150,9 @@ RenderDoc label、Tracy zone 和 GPU timestamp 由 Graph node/group 自动组织
 
 ## 后续扩展
 
-在引入 Bindless/GPU-driven 或 Deferred Renderer 前，RenderGraph v1 已提供稳定的帧内依赖和 attachment contract。后续扩展优先级是：
+RenderGraph v1 已提供稳定的帧内依赖和 attachment contract。Bindless Material 已建立在该基础上；GPU-driven 或 Deferred Renderer 仍应复用同一 Graph。后续扩展优先级是：
 
-1. 解耦 Pass descriptor 初始化，并按活动 topology 延迟实例化 transient resource。
+1. 消除构造期全资源 bootstrap，实现首帧前完全 lazy realization。
 2. 基于已验证 lifetime 的 transient resource aliasing。
 3. secondary command buffer 并行录制。
 4. 独立 Compute/Transfer queue 调度和 timeline semaphore。

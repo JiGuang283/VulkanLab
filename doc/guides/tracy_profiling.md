@@ -1,8 +1,8 @@
 # Tracy 性能分析
 
 > Status: Current
-> Last verified: 2026-08-01
-> Verified against: `86b809d`
+> Last verified: 2026-08-15
+> Verified against: `62f6cc4`
 
 VulkanLab 使用 Tracy v0.13.1 提供 CPU 与 Vulkan GPU 统一时间线。Tracy 只在专用构建中启用，采用 on-demand、localhost-only 模式；普通 Debug、Release、dev-fast、runtime 和 Cooked package 均不启动 Tracy 网络线程。
 
@@ -100,20 +100,27 @@ CPU 线程使用稳定名称：
 
 主要 CPU zone 包括 frame、Runtime command、UI、RenderView、RenderQueue、frame fence、acquire/submit/present、swapchain resize、glTF parse/material/mesh/hierarchy、AssetRepository/ModelGpuBuilder、staging/upload、环境加载、截图编码和 pipeline cache miss。
 
-Vulkan GPU 时间线包含：
+Vulkan GPU zone 由 RenderGraph 节点和少量节点内阶段生成。实际列表随活动功能裁剪；Renderer Smoke Scene 的基础帧以及打开高级功能后的代表性结构为：
 
 ```text
-DirectionalShadow
-  ShadowCasters
-Skybox
+DirectionalShadow/Cascade0..3
+PointShadow/LightN/FaceN
+SpotShadow/LightN
+SurfacePrepass
+HiZBuild/MipN
+OcclusionCull/Dispatch
+Atmosphere/*
+SkyBackground
 MainForward
   Opaque
   Transparent
-Bloom
-  Bloom Downsample
-  Bloom Upsample
-ToneMap + UI
-  FullscreenToneMap
+SSAO/* | GTAO/* | CACAO
+SSR/* | SSGI/* | DDGI/*
+TAA
+Bloom/Downsample/LN
+Bloom/Upsample/LN
+ToneMap
+Present + UI
   ImGui
 ScreenshotCopy
 ModelUpload model=<id> profile=<profile> batch=<n>

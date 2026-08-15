@@ -27,7 +27,7 @@ clean checkout
 
 本执行计划组合并细化两份长期计划：
 
-- [工程结构与构建系统重构计划](../../../development/engineering_refactor_plan.md)
+- [工程结构与构建系统重构计划](engineering_refactor_plan.md)
 - [开发诊断与自动化工具链计划](../../../development/development_toolchain_plan.md)
 
 它只覆盖工程重构中支撑自动化所必需的部分，以及工具链 Stage 1 的完整实现。Editor Panels 全量拆分、SceneWorkflowController、完整测试框架迁移、RenderDoc、GPU-AV profile、glTF Validator、Tracy、Shader reflection、CI 和 geometry optimization 不在本轮范围内。

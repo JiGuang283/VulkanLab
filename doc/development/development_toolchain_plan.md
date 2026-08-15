@@ -25,7 +25,7 @@ VulkanLab 已具备 Runtime Control v3、响应式场景加载、KTX2 派生纹�
 
 实施顺序以自动化收益为优先。阶段 1 至 6 是近期计划；glTF 优化、显存 residency 和厂商 profiler 属于有量化门槛的后续阶段，不因为工具可用就提前改变运行时格式或架构。
 
-前置工作由[工程结构与构建系统重构计划](engineering_refactor_plan.md)负责。该计划完成 target 化、build-tree Shader 和开发资源布局后，本计划 Stage 0 直接复用其 CMake Presets/build metadata，Stage 1 再接入截图服务；两份计划不重复实现同一构建基础。
+前置工作由[工程结构与构建系统重构计划](../archive/plans/engineering/engineering_refactor_plan.md)负责。该计划完成 target 化、build-tree Shader 和开发资源布局后，本计划 Stage 0 直接复用其 CMake Presets/build metadata，Stage 1 再接入截图服务；两份计划不重复实现同一构建基础。
 
 Stage 0-1 的具体提交和验收见[工程基础到自动视觉回归执行记录](../archive/plans/engineering/engineering_to_visual_regression_execution_plan.md)。Stage 2-5 已进入当前 guides/architecture；后续从本文 Stage 6 顺序继续。
 
@@ -95,7 +95,7 @@ CI 默认执行前两层和无需显示设备的 package 测试。GPU smoke、�
 
 ## Stage 0: Baseline And Configuration Foundation
 
-> CMake target 化、Presets 和 build metadata 的实现归属 [工程结构与构建系统重构计划](engineering_refactor_plan.md)。若前置计划已完成，本阶段只核对并消费这些能力。
+> CMake target 化、Presets 和 build metadata 的实现归属 [工程结构与构建系统重构计划](../archive/plans/engineering/engineering_refactor_plan.md)。若前置计划已完成，本阶段只核对并消费这些能力。
 
 ### Scope
 

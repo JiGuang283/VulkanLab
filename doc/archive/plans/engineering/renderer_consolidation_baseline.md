@@ -1,6 +1,6 @@
 # VulkanLab 渲染器收口 Stage 0 基线
 
-> Status: Current Baseline
+> Status: Archived Baseline
 > Last verified: 2026-08-15
 > Verified against: `e75be09d6af0d04a49a1dcafeff85a0bcd795ab6`
 
@@ -362,4 +362,3 @@ For later performance/resource comparisons:
 - The feature retention matrix explicitly preserves all current rendering algorithms.
 - README now positions VulkanLab as a Vulkan 1.3 real-time renderer under active development and distinguishes its authoring/tooling roles.
 - No renderer algorithm or behavior was removed during Stage 0.
-

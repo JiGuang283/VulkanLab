@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-15
-> Verified against: Bindless Material Resources v1
+> Verified against: `62f6cc4`
 
 ## 环境要求
 
@@ -129,7 +129,7 @@ cmake --build build --config Release
 CMake 将 `shader/` 下由 Manifest 引用的 GLSL 源增量编译到 `build-*/generated/<Config>/shader/`，每个产物通过 `spirv-val` 后再 stage 到可执行文件旁的 `shader/`。标记 `materialTextures=true` 的 fragment 还会生成 Bindless SPIR-V。共享 ABI include 会作为依赖触发相关 shader 重编译。源码树不保存 SPIR-V，也没有独立的 `compile.bat`；普通 C++ rebuild 不会重新调用 `glslc`，修改一个 Shader 只更新对应产物。需要单独构建 Shader 时使用：
 
 ```powershell
-cmake --build build-debug --config Debug --target VulkanLabShaders
+cmake --build --preset windows-msvc-dev-fast --target VulkanLabShaders
 ```
 
 启用 `BUILD_TESTING` 时，`VulkanLabCpuTests` 会静态链接 SPIRV-Reflect 并读取上述实际 SPIR-V，校验 shader stage、descriptor、共享 UBO/push ABI、vertex input、varying 和 fragment output。SPIRV-Reflect 不链接进 `VulkanLab.exe`。
@@ -137,17 +137,17 @@ cmake --build build-debug --config Debug --target VulkanLabShaders
 开发构建只把 executable、运行时工具、`vulkanlab_project.json` locator 和生成的 SPIR-V 放入输出目录，不复制完整 `models/` 或 `textures/`。开发场景直接通过 ProjectContext 从源码项目读取源资产；Release 交付使用后文的 `cook` 命令生成经过校验的最小闭包。Windows 构建还会生成运行时控制工具。
 
 ```text
-build-debug/Debug/VulkanLab.exe
-build-debug/Debug/VulkanLabCtl.exe
-build/Release/VulkanLab.exe
-build/Release/VulkanLabCtl.exe
+build/windows-msvc-debug/Debug/VulkanLab.exe
+build/windows-msvc-debug/Debug/VulkanLabCtl.exe
+build/windows-msvc-release/Release/VulkanLab.exe
+build/windows-msvc-release/Release/VulkanLabCtl.exe
 ```
 
 阶段三的资产工具接入构建后还会生成：
 
 ```text
-build-debug/Debug/VulkanLabAssetTool.exe
-build/Release/VulkanLabAssetTool.exe
+build/windows-msvc-debug/Debug/VulkanLabAssetTool.exe
+build/windows-msvc-release/Release/VulkanLabAssetTool.exe
 ```
 
 开发构建还会生成独立视觉测试程序，它不进入 Cook package：
@@ -171,7 +171,7 @@ ctest --preset windows-msvc-test -L visual --output-on-failure
 程序不依赖当前工作目录。下面是从输出目录启动的常用方式：
 
 ```powershell
-cd build-debug\Debug
+cd build\windows-msvc-dev-fast\Debug
 .\VulkanLab.exe
 ```
 
@@ -372,7 +372,7 @@ Catalog 当前包含以下初始 glTF model 条目：
 使用输出目录启动渲染器时，locator 仍会选择相同的用户级共享缓存：
 
 ```powershell
-cd build-debug\Debug
+cd build\windows-msvc-dev-fast\Debug
 .\VulkanLab.exe --runtime-control
 ```
 

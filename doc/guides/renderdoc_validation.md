@@ -1,8 +1,8 @@
 # RenderDoc 与 Vulkan Validation
 
 > Status: Current
-> Last verified: 2026-08-09
-> Verified against: shared CSM and punctual shadow resources
+> Last verified: 2026-08-15
+> Verified against: `62f6cc4`
 
 本文说明 VulkanLab 的 RenderDoc 外部抓帧工作流、GPU 事件标签、Vulkan 对象命名和 Validation Profiles。当前实现不链接 RenderDoc SDK，也不提供进程内触发抓帧；抓帧由 RenderDoc UI 启动程序或注入已运行进程。
 
@@ -57,8 +57,8 @@ Cooked package 保留 requested profile 供诊断，但 actual 强制为 `off`�
 
 在 RenderDoc 的 **Launch Application** 中填写：
 
-- Executable Path：`<repo>\build-debug\Debug\VulkanLab.exe`
-- Working Directory：`<repo>\build-debug\Debug`
+- Executable Path：`<repo>\build\windows-msvc-dev-fast\Debug\VulkanLab.exe`
+- Working Directory：`<repo>\build\windows-msvc-dev-fast\Debug`
 - Command-line Arguments：建议先用 `--validation off`，需要同时查看 Core Validation 时改为 `--validation core`
 - Capture API：Vulkan
 
@@ -69,7 +69,7 @@ Cooked package 保留 requested profile 供诊断，但 actual 强制为 `off`�
 也可以先从终端启动：
 
 ```powershell
-cd build-debug\Debug
+cd build\windows-msvc-dev-fast\Debug
 .\VulkanLab.exe --validation off
 ```
 
@@ -77,7 +77,7 @@ cd build-debug\Debug
 
 ## Event Browser
 
-正常渲染帧应显示以下层级：
+事件层级由编译后的 RenderGraph group/node 自动生成。默认功能和设备能力会裁剪未使用节点；启用相应功能后可看到以下代表性结构：
 
 ```text
 Frame N
@@ -89,22 +89,26 @@ Frame N
   SpotShadow
     Light 0..3
   SurfacePrepass
-  HiZBuild
-  OcclusionCull
+  HiZBuild/Mip0..N
+  OcclusionCull/Dispatch
+  SSAO | GTAO | CACAO
+  Atmosphere
   SkyBackground
   MainForward
     Opaque
     Transparent
+  SSR | SSGI | DDGI
+  TAA
+  Bloom
   ToneMap
   Present + UI
     ImGui
   ScreenshotCopy
 ```
 
-只有实际执行截图复制时才会出现 `ScreenshotCopy`。legacy 同步加载、共享模型增量加载和其他增量上传分别使用：
+只有实际执行截图复制时才会出现 `ScreenshotCopy`。模型和其他增量上传使用稳定的任务、模型与批次标签，例如：
 
 ```text
-SceneUpload scene=<name> batch=<n>
 ModelUpload model=<model-id> profile=<profile-id> batch=<n>
 SceneUpload task=<id> batch=<n>
 ```
@@ -118,7 +122,7 @@ Frame/0/CommandBuffer
 RenderTarget/HDR Color/Frame0
 Scene/Main Sponza/Texture/42/Image42/Normal
 Pipeline/MainForward/pbr-lite-normal-mapped/Opaque/CullBack
-Pass/ToneMap/Framebuffer/Image0
+RenderTarget/ViewportColor/Frame0
 Capture/Task1/ReadbackBuffer
 ```
 
@@ -139,7 +143,7 @@ Release 示例：
 ```powershell
 .\tools\validation\Run-ValidationSmoke.ps1 `
   -Profile sync `
-  -BuildDirectory build-release `
+  -BuildDirectory build/windows-msvc-release `
   -Configuration Release
 ```
 

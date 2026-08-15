@@ -1,10 +1,10 @@
-# VulkanLab Runtime Control 使用说明
+# Runtime Control 开发自动化接口
 
 > Status: Current
-> Last verified: 2026-08-09
-> Verified against: CSM and punctual shadow correctness fixes
+> Last verified: 2026-08-15
+> Verified against: `62f6cc4`
 
-Runtime Control 通过 Windows Named Pipe 控制已经运行的 VulkanLab。它面向本机开发、诊断和自动化，可以查询状态、加载模型预览或 Native Scene、设置环境、相机、Shader 与渲染参数、等待渲染稳定、异步截图并安全退出程序。`scene.list.entries[]` 同时返回 `kind: "modelPreview"` 和 `kind: "nativeScene"`；Native Scene 条目使用稳定 SceneDocument ID，模型预览继续返回兼容 `sceneId`、`modelId`、Catalog profile ID 和纹理限制。
+Runtime Control 是面向本机开发、诊断和自动化的可选接口，不是普通用户运行时功能。它通过 Windows Named Pipe 控制已经运行的 VulkanLab，可以查询状态、加载模型预览或 Native Scene、设置环境、相机、Shader 与渲染参数、等待渲染稳定、异步截图并安全退出程序。`scene.list.entries[]` 同时返回 `kind: "modelPreview"` 和 `kind: "nativeScene"`；Native Scene 条目使用稳定 SceneDocument ID，模型预览继续返回兼容 `sceneId`、`modelId`、Catalog profile ID 和纹理限制。
 
 Runtime Control 默认关闭。启用时必须显式传入 `--runtime-control`；Named Pipe 拒绝远程客户端，不开放网络端口。
 

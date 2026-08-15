@@ -5,7 +5,7 @@ param(
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Debug',
 
-    [string]$BuildDirectory = 'build-debug',
+    [string]$BuildDirectory = 'build/windows-msvc-debug',
 
     [string]$CaptureRoot = ''
 )

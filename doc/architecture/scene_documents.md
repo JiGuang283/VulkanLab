@@ -1,8 +1,8 @@
 # 场景数据与 Catalog
 
 > Status: Current
-> Last verified: 2026-08-02
-> Verified against: SceneDocument schema v5 and DDGI v1
+> Last verified: 2026-08-15
+> Verified against: `62f6cc4`
 
 VulkanLab 已将“导入模型”“可保存场景”和“运行时世界”拆成三个领域对象。模型预览与 Native Scene 都通过 `AssetRepository` 共享 `ModelAsset`；`.vkscene.json` 由 `RuntimeWorld` 实例化，并可在编辑器中修改、撤销和原子保存。
 
@@ -20,7 +20,7 @@ CatalogSceneDocument
   -> RenderQueue / RenderView
 ```
 
-`vkl_scene_data` 是独立静态库，提供持久 ID 与 SceneDocument DTO、解析、验证和原子存储。它不依赖 Renderer、Vulkan、ImGui、`vkl_engine` 或 `vkl_asset_core`；`vkl_asset_core` 和 `vkl_engine` 反向依赖它。
+`vkl_scene_data` 是独立静态库，提供持久 ID 与 SceneDocument DTO、解析、验证和原子存储。它不依赖 Renderer、Vulkan、ImGui 或 `vkl_asset_core`；Asset、Renderer 和 Scene Runtime 等具体 target 按需依赖它。`vkl_engine` 目前只是兼容构建入口使用的 `INTERFACE` 聚合 target，不拥有实现源码。
 
 ## Engine Primitives
 
@@ -130,7 +130,7 @@ v5 最多允许一个 DDGI Probe Volume，可以位于场景层级并使用其�
 
 ## 工作流与 UI 边界
 
-`SceneWorkflowController` 持有 Catalog、模型预览 registry、选择状态和导入/派生资产任务状态，不依赖 ImGui 或 Vulkan。Application 注入加载、相机和窗口相关 action，并继续拥有实际 Vulkan Scene、GPU builder 与 Renderer。
+`SceneWorkflowController` 持有 Catalog、Scene Registry、选择状态和导入/派生资产任务状态，不依赖 ImGui 或 Vulkan。它通过类型化 action 请求 `SceneRuntimeCoordinator` 执行加载，不持有 World 或 GPU 对象。`SceneRuntimeCoordinator` 统一拥有 Repository、加载状态机、当前/退役 World、环境发布和 submission-serial 回收；`Application` 只负责创建这些服务并固定每帧调用顺序。
 
 `ScenesPanel`、`AssetsPanel`、`OutlinerPanel` 和 `InspectorPanel` 位于 `src/editor/panels/`。它们只接收 snapshot 与回调 action，只保存搜索文本、modal 草稿和选中项等临时 UI 状态。
 
@@ -152,7 +152,7 @@ schema v3 package manifest 保存有序 `sceneIds` 和 `startupSceneId`。Cooked
 
 ## 当前限制
 
-- 一次只打开一个 Native Scene 编辑会话；模型预览仍作为独立兼容入口。
+- 一次只打开一个 Native Scene 编辑会话；开发构建仍提供单模型预览入口用于资产检查。
 - Viewport picking 只使用 ModelAsset bounds，暂不支持 primitive picking、重叠对象循环选择或 GPU Object-ID Pass。
 - Gizmo 暂不支持 snapping；编辑器仍只支持单选和一个 Scene Viewport。
 - Catalog 模型必须是 glTF/GLB；程序化基础几何通过 engine primitive ID 放入 Native Scene。
