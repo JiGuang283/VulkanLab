@@ -2,7 +2,7 @@
 
 > Status: Active
 > Last verified: 2026-08-15
-> Verified against: `180d7c2`
+> Verified against: `ff80960`
 
 ## Progress
 
@@ -17,8 +17,8 @@
 | 6. Render Settings And Feature Ownership | Complete | Typed requested/active settings, centralized validation, deterministic frame feature resolution and feature-owned Shader program families |
 | 7. Extract EditorController | Complete | Editor workspace, authoring session, viewport, capture and panels moved behind an editor-only controller |
 | 8. Isolate Runtime Control | Complete | Pipe lifecycle, dispatch, protocol serialization and Host implementation moved behind an optional adapter |
-| 9. Final Application Composition | Next | Pending implementation |
-| 10 | Pending | Execute after Stage 9 is verified |
+| 9. Final Application Composition | Complete | Application reduced to grouped composition, staged initialization, canonical frame scheduling and explicit shutdown |
+| 10. Documentation And Closeout | Next | Update current README and architecture documentation against the consolidated implementation |
 
 ## Summary
 
@@ -765,6 +765,15 @@ Panel只能保存展示状态，不持有GPU资源或后台任务。
 - `Application.h`目标不超过约300行，并且不包含UI modal/task内部结构。
 - Application成员按Platform、Runtime、Optional Tooling聚合，而不是暴露每个子对象。
 - `src/app`不成为资产、编辑器和控制协议的实现目录。
+
+### Stage 9 Completion Record
+
+- `Application` 的所有权按 `PlatformServices`、`RuntimeServices`、`OptionalTooling` 和 `FrameState` 四组收口；没有再引入一个转发所有行为的 `AppComposition` 大对象。
+- 初始化拆为平台与 Renderer、Scene Runtime、可选 Tooling 三个明确阶段，主循环只保留 scene/workflow pump、editor/input、snapshot/view/visibility 构建、render/submit 的 canonical frame order。
+- 新增幂等 `shutdown()`：先停止外部控制和后台场景工作，再等待 GPU submission 完成，最后按 Editor/Capture、Scene Runtime、frame state、Vulkan platform 的逆依赖顺序销毁。
+- Catalog 和 Scene Registry 仍由 `SceneWorkflowController` 单点拥有；Scene Runtime、Editor 和 Runtime Control 的跨模块引用改为只读，写入继续通过 Workflow action/event 完成。
+- 删除无调用的 Application wrapper、旧 helper 和迁移后遗留 include；`Application.cpp` 约 1,190 行，`Application.h` 约 64 行，低于原目标且不包含 UI、资产任务或协议内部结构。
+- `windows-msvc-dev-fast` Debug 与 `windows-msvc-runtime` Release 构建成功；dev-fast 实际执行 `ping -> quit`，响应成功、进程以 0 退出且新日志无 Validation error。Runtime Release 持续启动 6 秒。按项目策略未运行测试套件。
 
 ## Stage 10: Documentation And Closeout
 
