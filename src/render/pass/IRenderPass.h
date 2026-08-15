@@ -30,21 +30,16 @@ class IRenderPass {
                               const RenderResourceRegistry &,
                               const VisibilityFrame &) {}
     virtual void setup(RenderGraphBuilder &builder,
-                       const RenderGraphBuildContext &context) const;
-    virtual void record(RenderGraphPassContext &context,
-                        const VisibilityFrame &visibility);
+                       const RenderGraphBuildContext &context) const = 0;
     virtual void recordNode(RenderGraphPassContext &context,
                             uint32_t localNodeIndex,
-                            const VisibilityFrame &visibility);
+                            const VisibilityFrame &visibility) = 0;
     virtual bool managesDeclaredTransitionsInternally() const { return false; }
     virtual uint64_t topologySignature() const { return 0; }
     virtual void releaseViewportResources() {}
     virtual void onViewportResize(const RenderResourceRegistry &) {}
     virtual void releaseSwapChainResources() {}
     virtual void onSwapChainResize(const SwapChain &) {}
-    virtual void execute(const RenderFrameContext &frame,
-                         const RenderResourceRegistry &resources,
-                         const VisibilityFrame &visibility) = 0;
 };
 
 } // namespace vkr

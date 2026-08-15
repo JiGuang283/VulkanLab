@@ -6,7 +6,7 @@
 #include "assets/AssetValidation.h"
 #include "assets/ProjectContext.h"
 #include "assets/SceneCatalog.h"
-#include "assets/SceneImportService.h"
+#include "assets/ModelImportService.h"
 #include "scene/SceneEntry.h"
 #include "workflows/SceneWorkflowTypes.h"
 

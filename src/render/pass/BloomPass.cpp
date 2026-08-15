@@ -5,7 +5,6 @@
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
 #include "core/GpuDebugUtils.h"
-#include "core/GpuBarrier.h"
 #include "core/Image.h"
 #include "core/VulkanCheck.h"
 #include "render/FrameGpuData.h"
@@ -32,26 +31,6 @@ constexpr uint32_t kWorkgroupSize = 8;
 
 uint32_t dispatchCount(uint32_t extent) {
     return (extent + kWorkgroupSize - 1u) / kWorkgroupSize;
-}
-
-VkImageMemoryBarrier imageBarrier(
-    VkImage image, VkAccessFlags sourceAccess, VkAccessFlags destinationAccess,
-    VkImageLayout oldLayout, VkImageLayout newLayout) {
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.srcAccessMask = sourceAccess;
-    barrier.dstAccessMask = destinationAccess;
-    barrier.oldLayout = oldLayout;
-    barrier.newLayout = newLayout;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = image;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = 1;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
-    return barrier;
 }
 
 } // namespace
@@ -147,176 +126,11 @@ void BloomPass::recordNode(
 
 void BloomPass::releaseViewportResources() {
     freeDescriptors();
-    initialized_.fill(false);
 }
 
 void BloomPass::onViewportResize(
     const RenderResourceRegistry &resources) {
     createDescriptors(resources);
-    initialized_.fill(false);
-}
-
-void BloomPass::execute(const RenderFrameContext &frame,
-                        const RenderResourceRegistry &resources,
-                        const VisibilityFrame &) {
-    VKL_PROFILE_ZONE("Record Bloom");
-    if (!frame.pipelineCache || !frame.view || !frame.shaderVariant)
-        return;
-
-    initializeImages(frame, resources);
-    const bool active = frame.view->settings.bloomEnabled &&
-                        frame.shaderVariant->supportsBloom;
-    if (!active)
-        return;
-    VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "Bloom");
-
-    const bool useTaa = frame.features.taaActive &&
-                        resourceHandles_.taaHistory.valid();
-    const RenderImageHandle primarySource =
-        useTaa ? resourceHandles_.taaHistory : resourceHandles_.hdrColor;
-    const RenderSamplerHandle primarySampler =
-        useTaa ? resourceHandles_.taaSampler : resourceHandles_.hdrSampler;
-    updatePrimarySource(resources, frame.frameIndex, primarySource,
-                        primarySampler);
-
-    prepareImagesForCompute(frame, resources);
-
-    VkImageMemoryBarrier sourceBarrier = imageBarrier(
-        resources.image(primarySource, frame.frameIndex).handle(),
-        useTaa ? VK_ACCESS_SHADER_WRITE_BIT
-               : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-        VK_ACCESS_SHADER_READ_BIT,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    cmdPipelineBarrier2Compat(
-        frame.cmd,
-        useTaa ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
-               : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0,
-        nullptr, 0, nullptr, 1, &sourceBarrier);
-
-    const VkPushConstantRange pushRange{
-        VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(BloomPushConstants)};
-    ComputePipelineConfig downsampleConfig{};
-    downsampleConfig.debugName = "Pipeline/Bloom/Downsample";
-    downsampleConfig.computeShaderPath = downsampleShaderPath_;
-    downsampleConfig.descriptorLayouts = {descriptorSetLayout_};
-    downsampleConfig.pushConstants = {pushRange};
-    ComputePipeline &downsamplePipeline =
-        frame.pipelineCache->getOrCreateCompute(
-            std::move(downsampleConfig));
-
-    vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                      downsamplePipeline.handle());
-    const uint32_t levels = activeLevelCount(resources);
-    {
-        VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd,
-                             "Bloom Downsample");
-        for (uint32_t level = 0; level < levels; ++level) {
-            ScopedGpuLabel label(device_->debugUtils(), frame.cmd,
-                                 "Downsample L" +
-                                     std::to_string(level));
-            const VkDescriptorSet set =
-                downsampleSets_[frame.frameIndex][level];
-            vkCmdBindDescriptorSets(
-                frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                downsamplePipeline.layout(), 0, 1, &set, 0, nullptr);
-
-            BloomPushConstants push{};
-            push.threshold = frame.view->settings.bloomThreshold;
-            push.softKnee = frame.view->settings.bloomSoftKnee;
-            push.applyThreshold = level == 0 ? 1u : 0u;
-            vkCmdPushConstants(frame.cmd, downsamplePipeline.layout(),
-                               VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push),
-                               &push);
-
-            const VkExtent2D extent =
-                resources.extent(resourceHandles_.bloomLevels[level]);
-            vkCmdDispatch(frame.cmd, dispatchCount(extent.width),
-                          dispatchCount(extent.height), 1);
-
-            VkImageMemoryBarrier barrier = imageBarrier(
-                resources
-                    .image(resourceHandles_.bloomLevels[level],
-                           frame.frameIndex)
-                    .handle(),
-                VK_ACCESS_SHADER_WRITE_BIT,
-                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
-            cmdPipelineBarrier2Compat(
-                frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                VK_DEPENDENCY_BY_REGION_BIT, 0, nullptr, 0, nullptr, 1,
-                &barrier);
-        }
-    }
-
-    if (levels > 1) {
-        VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd,
-                             "Bloom Upsample");
-        ComputePipelineConfig upsampleConfig{};
-        upsampleConfig.debugName = "Pipeline/Bloom/Upsample";
-        upsampleConfig.computeShaderPath = upsampleShaderPath_;
-        upsampleConfig.descriptorLayouts = {descriptorSetLayout_};
-        upsampleConfig.pushConstants = {pushRange};
-        ComputePipeline &upsamplePipeline =
-            frame.pipelineCache->getOrCreateCompute(
-                std::move(upsampleConfig));
-        vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                          upsamplePipeline.handle());
-
-        for (uint32_t sourceLevel = levels - 1; sourceLevel > 0;
-             --sourceLevel) {
-            const uint32_t destinationLevel = sourceLevel - 1;
-            ScopedGpuLabel label(
-                device_->debugUtils(), frame.cmd,
-                "Upsample L" + std::to_string(sourceLevel) + " -> L" +
-                    std::to_string(destinationLevel));
-            const VkDescriptorSet set =
-                upsampleSets_[frame.frameIndex][destinationLevel];
-            vkCmdBindDescriptorSets(
-                frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                upsamplePipeline.layout(), 0, 1, &set, 0, nullptr);
-
-            BloomPushConstants push{};
-            push.filterRadius = 1.0f;
-            vkCmdPushConstants(frame.cmd, upsamplePipeline.layout(),
-                               VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                               sizeof(push), &push);
-
-            const VkExtent2D extent =
-                resources.extent(
-                    resourceHandles_.bloomLevels[destinationLevel]);
-            vkCmdDispatch(frame.cmd, dispatchCount(extent.width),
-                          dispatchCount(extent.height), 1);
-
-            VkImageMemoryBarrier barrier = imageBarrier(
-                resources
-                    .image(resourceHandles_.bloomLevels[destinationLevel],
-                           frame.frameIndex)
-                    .handle(),
-                VK_ACCESS_SHADER_WRITE_BIT,
-                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
-            cmdPipelineBarrier2Compat(
-                frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                VK_DEPENDENCY_BY_REGION_BIT, 0, nullptr, 0, nullptr, 1,
-                &barrier);
-        }
-    }
-
-    VkImageMemoryBarrier toneMapBarrier = imageBarrier(
-        resources
-            .image(resourceHandles_.bloomLevels.front(), frame.frameIndex)
-            .handle(),
-        VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-        VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
-    cmdPipelineBarrier2Compat(
-        frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        VK_DEPENDENCY_BY_REGION_BIT, 0, nullptr, 0, nullptr, 1,
-        &toneMapBarrier);
 }
 
 void BloomPass::recordDownsample(
@@ -548,51 +362,6 @@ void BloomPass::freeDescriptors() {
             set = VK_NULL_HANDLE;
         }
     }
-}
-
-void BloomPass::initializeImages(
-    const RenderFrameContext &frame,
-    const RenderResourceRegistry &resources) {
-    if (initialized_[frame.frameIndex])
-        return;
-
-    std::array<VkImageMemoryBarrier, kLevelCount> barriers{};
-    for (uint32_t level = 0; level < kLevelCount; ++level) {
-        barriers[level] = imageBarrier(
-            resources
-                .image(resourceHandles_.bloomLevels[level],
-                       frame.frameIndex)
-                .handle(),
-            0, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
-    }
-    cmdPipelineBarrier2Compat(
-        frame.cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
-        static_cast<uint32_t>(barriers.size()), barriers.data());
-    initialized_[frame.frameIndex] = true;
-}
-
-void BloomPass::prepareImagesForCompute(
-    const RenderFrameContext &frame,
-    const RenderResourceRegistry &resources) const {
-    std::array<VkImageMemoryBarrier, kLevelCount> barriers{};
-    for (uint32_t level = 0; level < kLevelCount; ++level) {
-        barriers[level] = imageBarrier(
-            resources
-                .image(resourceHandles_.bloomLevels[level],
-                       frame.frameIndex)
-                .handle(),
-            VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-            VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-            VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
-    }
-    cmdPipelineBarrier2Compat(
-        frame.cmd,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
-        static_cast<uint32_t>(barriers.size()), barriers.data());
 }
 
 uint32_t BloomPass::activeLevelCount(

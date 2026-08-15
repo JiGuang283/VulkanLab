@@ -37,9 +37,6 @@ class SurfacePrepass final : public IRenderPass {
     void recordNode(RenderGraphPassContext &context,
                     uint32_t localNodeIndex,
                     const VisibilityFrame &visibility) override;
-    void execute(const RenderFrameContext &frame,
-                 const RenderResourceRegistry &resources,
-                 const VisibilityFrame &visibility) override;
 
     uint32_t historyCapacity(uint32_t frameIndex) const;
     uint64_t allocatedBytes() const;

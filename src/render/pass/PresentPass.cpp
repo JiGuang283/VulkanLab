@@ -61,9 +61,9 @@ void PresentPass::onViewportResize(
     updateDescriptors(resources);
 }
 
-void PresentPass::execute(const RenderFrameContext &frame,
-                          const RenderResourceRegistry &,
-                          const VisibilityFrame &) {
+void PresentPass::recordNode(RenderGraphPassContext &context, uint32_t,
+                             const VisibilityFrame &) {
+    const RenderFrameContext &frame = context.frame;
     VKL_PROFILE_ZONE("Record Present And UI");
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "Present + UI");
     if (!frame.pipelineCache)

@@ -74,14 +74,6 @@ void SpotShadowPass::recordNode(
     recordLight(context.frame, visibility, localNodeIndex);
 }
 
-void SpotShadowPass::execute(const RenderFrameContext &frame,
-                             const RenderResourceRegistry &resources,
-                             const VisibilityFrame &visibility) {
-    (void)frame;
-    (void)resources;
-    (void)visibility;
-}
-
 void SpotShadowPass::writeSlices(const RenderFrameContext &frame) {
     if (!frame.view)
         return;

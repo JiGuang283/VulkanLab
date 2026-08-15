@@ -1,7 +1,7 @@
 #pragma once
 
 #include "SceneTypes.h"
-#include "render/RenderCommand.h"
+#include "render/RenderItem.h"
 #include "scene/SceneLight.h"
 #include "scene_data/SceneDocument.h"
 

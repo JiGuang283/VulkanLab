@@ -8,7 +8,7 @@
 #include "assets/SceneCatalog.h"
 #include "control/RuntimeCommandDispatcher.h"
 #include "diagnostics/SceneLoadStats.h"
-#include "render/RenderCommand.h"
+#include "render/RenderItem.h"
 #include "render/Visibility.h"
 #include "render/RenderSettings.h"
 #include "render/RenderView.h"
@@ -89,7 +89,6 @@ class Application final
     void run();
 
     /// 注册一个场景条目。必须在 `run()` 之前调用。
-    void registerScene(SceneEntry entry);
 
   private:
     void init();
@@ -186,9 +185,6 @@ class Application final
     void refreshAllValidationStatuses();
     void retireCurrentScene();
     void collectRetiredScenes();
-    void runModelAssetSharingSmoke(
-        const std::shared_ptr<SceneLoadTask> &task,
-        const std::shared_ptr<const ModelAsset> &asset);
 
 #if VKL_ENABLE_RUNTIME_CONTROL
     ControlJson runtimeSystemInfo() override;
@@ -350,7 +346,6 @@ class Application final
     std::string captureUiError_;
     uint64_t sceneGeneration_ = 0;
     uint64_t presentedFrameCount_ = 0;
-    bool modelAssetSharingSmokeComplete_ = false;
 
     // 输入模式
     InputMode  mode_ = InputMode::UI;

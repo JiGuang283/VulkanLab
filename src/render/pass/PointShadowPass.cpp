@@ -82,14 +82,6 @@ void PointShadowPass::recordNode(
     recordFace(context.frame, visibility, localNodeIndex);
 }
 
-void PointShadowPass::execute(const RenderFrameContext &frame,
-                              const RenderResourceRegistry &resources,
-                              const VisibilityFrame &visibility) {
-    (void)frame;
-    (void)resources;
-    (void)visibility;
-}
-
 void PointShadowPass::writeSlices(const RenderFrameContext &frame) {
     if (!frame.view)
         return;

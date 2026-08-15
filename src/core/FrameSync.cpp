@@ -163,48 +163,6 @@ void FrameSync::onSwapChainRecreated() {
     swapChainOutOfDate_ = false;
 }
 
-// ---- 单次命令辅助 ----
-
-VkCommandBuffer FrameSync::beginSingleTimeCommands() {
-    VkCommandBufferAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandPool = commandPool_;
-    allocInfo.commandBufferCount = 1;
-
-    VkCommandBuffer commandBuffer;
-    vkAllocateCommandBuffers(device_->logicalDevice(), &allocInfo,
-                             &commandBuffer);
-    device_->debugUtils().setObjectName(
-        VK_OBJECT_TYPE_COMMAND_BUFFER, commandBuffer,
-        "FrameSync/SingleTimeCommandBuffer");
-
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-    vkBeginCommandBuffer(commandBuffer, &beginInfo);
-
-    return commandBuffer;
-}
-
-void FrameSync::endSingleTimeCommands(VkCommandBuffer commandBuffer) {
-    vkEndCommandBuffer(commandBuffer);
-
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &commandBuffer;
-
-    ++uploadSyncCounters_.singleTimeSubmits;
-    vkQueueSubmit(device_->graphicsQueue(), 1, &submitInfo, VK_NULL_HANDLE);
-    ++uploadSyncCounters_.queueWaitIdleCalls;
-    vkQueueWaitIdle(device_->graphicsQueue());
-
-    vkFreeCommandBuffers(device_->logicalDevice(), commandPool_, 1,
-                         &commandBuffer);
-}
-
 // ---- 内部创建 ----
 
 void FrameSync::createCommandPool() {

@@ -32,9 +32,8 @@ void CacaoPass::releaseViewportResources() {}
 
 void CacaoPass::onViewportResize(const RenderResourceRegistry &) {}
 
-void CacaoPass::execute(const RenderFrameContext &,
-                        const RenderResourceRegistry &,
-                        const VisibilityFrame &) {
+void CacaoPass::recordNode(RenderGraphPassContext &, uint32_t,
+                           const VisibilityFrame &) {
     status_.active = false;
 }
 

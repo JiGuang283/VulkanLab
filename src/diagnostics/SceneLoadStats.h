@@ -48,8 +48,6 @@ struct ResourceLoadStats {
     uint64_t vertexUploadBytes = 0;
     uint64_t indexUploadBytes = 0;
 
-    uint64_t singleTimeSubmits = 0;
-    uint64_t queueWaitIdleCalls = 0;
     uint64_t batchSubmits = 0;
     uint64_t completedBatchSubmits = 0;
     uint64_t fenceWaitCalls = 0;

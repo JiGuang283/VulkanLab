@@ -71,8 +71,5 @@ struct RenderItem {
     bool historyValid = false;
 };
 
-// Transitional alias for code outside the canonical visibility path.
-using RenderCommand = RenderItem;
-
 } // namespace vkr
 

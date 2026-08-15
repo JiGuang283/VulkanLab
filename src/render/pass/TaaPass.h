@@ -41,9 +41,8 @@ class TaaPass final : public IRenderPass {
                const RenderGraphBuildContext &context) const override;
     void releaseViewportResources() override;
     void onViewportResize(const RenderResourceRegistry &resources) override;
-    void execute(const RenderFrameContext &frame,
-                 const RenderResourceRegistry &resources,
-                 const VisibilityFrame &visibility) override;
+    void recordNode(RenderGraphPassContext &context, uint32_t localNodeIndex,
+                    const VisibilityFrame &visibility) override;
 
     const TaaPassStatus &status() const { return status_; }
 

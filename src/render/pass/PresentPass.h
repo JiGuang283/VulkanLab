@@ -39,9 +39,8 @@ class PresentPass final : public IRenderPass {
         const RenderResourceRegistry &resources) override;
     void releaseSwapChainResources() override {}
     void onSwapChainResize(const SwapChain &) override {}
-    void execute(const RenderFrameContext &frame,
-                 const RenderResourceRegistry &resources,
-                 const VisibilityFrame &visibility) override;
+    void recordNode(RenderGraphPassContext &context, uint32_t localNodeIndex,
+                    const VisibilityFrame &visibility) override;
 
   private:
     void createDescriptors(const RenderResourceRegistry &resources);

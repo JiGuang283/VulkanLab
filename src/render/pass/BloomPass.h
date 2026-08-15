@@ -38,9 +38,6 @@ class BloomPass final : public IRenderPass {
     void releaseViewportResources() override;
     void onViewportResize(
         const RenderResourceRegistry &resources) override;
-    void execute(const RenderFrameContext &frame,
-                 const RenderResourceRegistry &resources,
-                 const VisibilityFrame &visibility) override;
 
   private:
     static constexpr uint32_t kLevelCount =
@@ -53,11 +50,6 @@ class BloomPass final : public IRenderPass {
                              RenderImageHandle source,
                              RenderSamplerHandle sampler);
     void freeDescriptors();
-    void initializeImages(const RenderFrameContext &frame,
-                          const RenderResourceRegistry &resources);
-    void prepareImagesForCompute(
-        const RenderFrameContext &frame,
-        const RenderResourceRegistry &resources) const;
     uint32_t activeLevelCount(
         const RenderResourceRegistry &resources) const;
     void recordDownsample(const RenderFrameContext &frame,
@@ -79,7 +71,6 @@ class BloomPass final : public IRenderPass {
     std::array<std::array<VkDescriptorSet, kLevelCount - 1>,
                MAX_FRAMES_IN_FLIGHT>
         upsampleSets_{};
-    std::array<bool, MAX_FRAMES_IN_FLIGHT> initialized_{};
 };
 
 } // namespace vkr

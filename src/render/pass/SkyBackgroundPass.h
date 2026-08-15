@@ -30,9 +30,8 @@ class SkyBackgroundPass final : public IRenderPass {
     std::string_view name() const override { return "SkyBackground"; }
     void setup(RenderGraphBuilder &builder,
                const RenderGraphBuildContext &context) const override;
-    void execute(const RenderFrameContext &frame,
-                 const RenderResourceRegistry &resources,
-                 const VisibilityFrame &visibility) override;
+    void recordNode(RenderGraphPassContext &context, uint32_t localNodeIndex,
+                    const VisibilityFrame &visibility) override;
 
   private:
     Device *device_ = nullptr;

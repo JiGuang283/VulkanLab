@@ -232,22 +232,6 @@ void OcclusionCullPass::prepareFrame(uint32_t frameIndex,
     }
 }
 
-void OcclusionCullPass::execute(const RenderFrameContext &frame,
-                                const RenderResourceRegistry &resources,
-                                const VisibilityFrame &) {
-    FrameStorage &storage = *frames_.at(frame.frameIndex);
-    if (!frame.features.occlusionRequired || !storage.active ||
-        storage.activeCount == 0 || !frame.pipelineCache ||
-        !frame.view) {
-        return;
-    }
-    VKL_PROFILE_ZONE("Record OcclusionCull");
-    VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "OcclusionCull");
-    vkCmdFillBuffer(frame.cmd, storage.counter->handle(), 0,
-                    sizeof(GpuVisibilityCounter), 0);
-    recordCull(frame, resources);
-}
-
 void OcclusionCullPass::recordCull(
     const RenderFrameContext &frame,
     const RenderResourceRegistry &resources) {

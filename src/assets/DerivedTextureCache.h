@@ -2,7 +2,7 @@
 
 #include "DerivedTextureManifest.h"
 #include "render/TextureTranscodeTarget.h"
-#include "scene/PreparedSceneData.h"
+#include "scene/PreparedModelData.h"
 
 #include <filesystem>
 #include <memory>

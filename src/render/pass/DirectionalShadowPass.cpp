@@ -68,13 +68,6 @@ void DirectionalShadowPass::recordNode(
     recordCascade(context.frame, visibility, localNodeIndex);
 }
 
-void DirectionalShadowPass::execute(const RenderFrameContext &frame,
-                                    const RenderResourceRegistry &,
-                                    const VisibilityFrame &visibility) {
-    (void)frame;
-    (void)visibility;
-}
-
 void DirectionalShadowPass::recordCascade(
     const RenderFrameContext &frame, const VisibilityFrame &visibility,
     uint32_t cascade) {

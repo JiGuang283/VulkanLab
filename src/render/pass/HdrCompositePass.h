@@ -28,9 +28,6 @@ class HdrCompositePass final : public IRenderPass {
                     const VisibilityFrame &visibility) override;
     void releaseViewportResources() override;
     void onViewportResize(const RenderResourceRegistry &resources) override;
-    void execute(const RenderFrameContext &frame,
-                 const RenderResourceRegistry &resources,
-                 const VisibilityFrame &visibility) override;
 
   private:
     Device *device_ = nullptr;
@@ -39,7 +36,6 @@ class HdrCompositePass final : public IRenderPass {
     std::string shaderPath_;
     VkDescriptorSetLayout descriptorLayout_ = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> descriptorSets_{};
-    std::array<bool, MAX_FRAMES_IN_FLIGHT> initialized_{};
 
     void createLayout();
     void createDescriptors(const RenderResourceRegistry &resources);

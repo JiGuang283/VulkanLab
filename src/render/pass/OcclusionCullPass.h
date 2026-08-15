@@ -42,9 +42,6 @@ class OcclusionCullPass final : public IRenderPass {
     uint64_t topologySignature() const override;
     void releaseViewportResources() override;
     void onViewportResize(const RenderResourceRegistry &resources) override;
-    void execute(const RenderFrameContext &frame,
-                 const RenderResourceRegistry &resources,
-                 const VisibilityFrame &visibility) override;
 
     void prepareFrame(uint32_t frameIndex, uint64_t frameSerial,
                       const VisibilityFrame &visibility,

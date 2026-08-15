@@ -1,8 +1,8 @@
 add_executable(VulkanLabCpuTests
-    PreparedSceneDataTests.cpp
+    PreparedModelDataTests.cpp
     DerivedTextureManifestTests.cpp
     SceneCatalogTests.cpp
-    SceneImportServiceTests.cpp
+    ModelImportServiceTests.cpp
     TextureCachePipelineTests.cpp
     ArtifactStatusTests.cpp
     ArtifactIndexTests.cpp

@@ -57,7 +57,7 @@ std::string extensionNote(const std::string &extension,
 }
 
 std::vector<GltfExtensionDiagnostic>
-extensionDiagnostics(const SceneImportPreflight &preflight) {
+extensionDiagnostics(const ModelImportPreflight &preflight) {
     std::set<std::string> required(preflight.extensionsRequired.begin(),
                                    preflight.extensionsRequired.end());
     std::set<std::string> all(preflight.extensionsUsed.begin(),
@@ -82,7 +82,7 @@ DerivedFileStamp sourceStamp(const std::filesystem::path &source,
 }
 
 std::vector<DerivedFileStamp>
-dependencyStamps(const SceneImportPreflight &preflight) {
+dependencyStamps(const ModelImportPreflight &preflight) {
     std::vector<DerivedFileStamp> stamps;
     stamps.reserve(preflight.dependencies.size());
     for (const auto &dependency : preflight.dependencies) {
@@ -100,7 +100,7 @@ void finalizeIdentity(AssetValidationReport &report) {
                        report.inputFingerprint + ".json";
 }
 
-AssetValidationReport baseReport(const SceneImportPreflight &preflight) {
+AssetValidationReport baseReport(const ModelImportPreflight &preflight) {
     AssetValidationReport report;
     report.validatorVersion = kGltfValidatorVersion;
     report.sourceSha256 = sha256File(preflight.sourcePath);

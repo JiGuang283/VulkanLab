@@ -43,8 +43,6 @@ struct CatalogModel {
 };
 
 // Compatibility name for code that still treats a model as its preview scene.
-using CatalogScene = CatalogModel;
-
 struct CatalogSceneDocument {
     std::string id;
     std::string displayName;

@@ -3,7 +3,7 @@
 #include "ProcessRunner.h"
 
 #include "assets/AssetValidation.h"
-#include "assets/SceneImportService.h"
+#include "assets/ModelImportService.h"
 
 #include <atomic>
 #include <filesystem>
@@ -23,7 +23,7 @@ struct GltfValidationOptions {
 };
 
 struct GltfValidationResult {
-    SceneImportPreflight preflight;
+    ModelImportPreflight preflight;
     AssetValidationReport report;
     std::filesystem::path reportPath;
     bool reused = false;

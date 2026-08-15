@@ -14,7 +14,7 @@ void RenderQueue::clear() {
     transparent_.clear();
 }
 
-void RenderQueue::add(RenderCommand command) {
+void RenderQueue::add(RenderItem command) {
     if (command.sourceOrder == std::numeric_limits<uint32_t>::max())
         command.sourceOrder = static_cast<uint32_t>(drawCount());
     switch (command.queue) {
@@ -29,7 +29,7 @@ void RenderQueue::add(RenderCommand command) {
 
 void RenderQueue::sortOpaque() {
     std::stable_sort(opaque_.begin(), opaque_.end(),
-                     [](const RenderCommand &a, const RenderCommand &b) {
+                     [](const RenderItem &a, const RenderItem &b) {
                          const auto *at = a.material
                                               ? &a.material->materialTemplate()
                                               : nullptr;
@@ -46,8 +46,8 @@ void RenderQueue::sortOpaque() {
 
 void RenderQueue::sortTransparent(const glm::vec3 &cameraPosition) {
     std::stable_sort(transparent_.begin(), transparent_.end(),
-                     [&cameraPosition](const RenderCommand &a,
-                                       const RenderCommand &b) {
+                     [&cameraPosition](const RenderItem &a,
+                                       const RenderItem &b) {
                          const glm::vec3 apos(a.world[3]);
                          const glm::vec3 bpos(b.world[3]);
                          const float     ad = glm::dot(apos - cameraPosition,

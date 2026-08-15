@@ -136,17 +136,6 @@ void SurfacePrepass::recordNode(
     draw(context.frame, context.resources, visibility);
 }
 
-void SurfacePrepass::execute(const RenderFrameContext &frame,
-                             const RenderResourceRegistry &resources,
-                             const VisibilityFrame &visibility) {
-    if (!frame.features.surfaceDataRequired || !frame.pipelineCache)
-        return;
-
-    (void)frame;
-    (void)resources;
-    (void)visibility;
-}
-
 uint32_t SurfacePrepass::historyCapacity(uint32_t frameIndex) const {
     return frames_.at(frameIndex)->historyCapacity;
 }

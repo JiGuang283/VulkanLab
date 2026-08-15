@@ -841,24 +841,6 @@ void RenderGraphBuilder::setActive(bool active) {
     currentPass_->active = currentPass_->active && active;
 }
 
-void IRenderPass::setup(RenderGraphBuilder &builder,
-                        const RenderGraphBuildContext &) const {
-    builder.addNode(std::string(name()), passType(), queueClass());
-}
-
-void IRenderPass::record(RenderGraphPassContext &context,
-                         const VisibilityFrame &visibility) {
-    execute(context.frame, context.resources, visibility);
-}
-
-void IRenderPass::recordNode(RenderGraphPassContext &context,
-                             uint32_t localNodeIndex,
-                             const VisibilityFrame &visibility) {
-    if (localNodeIndex != 0)
-        throw std::out_of_range("RenderGraph pass received an invalid local node");
-    record(context, visibility);
-}
-
 CompiledRenderGraph RenderGraphCompiler::compile(
     const std::vector<std::unique_ptr<IRenderPass>> &passes,
     const RenderResourceRegistry &resources,

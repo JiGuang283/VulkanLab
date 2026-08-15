@@ -4,7 +4,6 @@
 #include "core/ComputePipelineConfig.h"
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
-#include "core/GpuBarrier.h"
 #include "core/GpuDebugUtils.h"
 #include "core/Image.h"
 #include "core/VulkanCheck.h"
@@ -127,29 +126,6 @@ void ScreenSpacePyramidPass::recordNode(
     const VisibilityFrame &) {
     if (localNodeIndex < context.resources.mipLevelCount(pyramid_))
         recordMip(context.frame, context.resources, localNodeIndex);
-}
-
-void ScreenSpacePyramidPass::execute(
-    const RenderFrameContext &frame, const RenderResourceRegistry &resources,
-    const VisibilityFrame &) {
-    const bool required =
-        kind_ == ScreenSpacePyramidKind::NearestDepth
-            ? frame.features.screenDepthPyramidRequired
-            : frame.features.sceneColorPyramidRequired;
-    if (!required || !frame.pipelineCache)
-        return;
-
-    const bool useAlternateSource =
-        kind_ == ScreenSpacePyramidKind::SceneColor &&
-        frame.features.taaActive && alternateSource_.valid();
-    updateInitialSource(resources, frame.frameIndex, useAlternateSource);
-
-    VKL_PROFILE_ZONE("Record ScreenSpacePyramid");
-    VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, name_.c_str());
-    const uint32_t mipCount = resources.mipLevelCount(pyramid_);
-    for (uint32_t mip = 0; mip < mipCount; ++mip) {
-        recordMip(frame, resources, mip);
-    }
 }
 
 void ScreenSpacePyramidPass::recordMip(

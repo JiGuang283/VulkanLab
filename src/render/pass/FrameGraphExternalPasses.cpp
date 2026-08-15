@@ -15,14 +15,15 @@ void RayTracingSceneBuildPass::prepareFrame(
 
 void RayTracingSceneBuildPass::setup(
     RenderGraphBuilder &builder,
-    const RenderGraphBuildContext &context) const {
-    IRenderPass::setup(builder, context);
+    const RenderGraphBuildContext &) const {
+    builder.addNode(std::string(name()), passType(), queueClass());
     builder.setSideEffect();
 }
 
-void RayTracingSceneBuildPass::execute(
-    const RenderFrameContext &frame, const RenderResourceRegistry &,
+void RayTracingSceneBuildPass::recordNode(
+    RenderGraphPassContext &context, uint32_t,
     const VisibilityFrame &visibility) {
+    const RenderFrameContext &frame = context.frame;
     scene_->build(frame.cmd, frame.frameIndex, visibility);
 }
 
@@ -56,9 +57,10 @@ void ScreenshotCopyPass::setup(
     builder.setSideEffect();
 }
 
-void ScreenshotCopyPass::execute(
-    const RenderFrameContext &frame, const RenderResourceRegistry &,
-    const VisibilityFrame &) {
+void ScreenshotCopyPass::recordNode(RenderGraphPassContext &context,
+                                    uint32_t,
+                                    const VisibilityFrame &) {
+    const RenderFrameContext &frame = context.frame;
     if (frame.screenshotCopy)
         frame.screenshotCopy(frame.cmd);
 }

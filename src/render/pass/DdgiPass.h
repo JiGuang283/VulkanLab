@@ -56,9 +56,6 @@ class DdgiPass final : public IRenderPass {
                     uint32_t localNodeIndex,
                     const VisibilityFrame &visibility) override;
     uint64_t topologySignature() const override;
-    void execute(const RenderFrameContext &frame,
-                 const RenderResourceRegistry &resources,
-                 const VisibilityFrame &visibility) override;
 
     VkDescriptorSetLayout samplingDescriptorSetLayout() const {
         return samplingDescriptorSetLayout_;

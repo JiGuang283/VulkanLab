@@ -4,7 +4,6 @@
 #include "core/ComputePipelineConfig.h"
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
-#include "core/GpuBarrier.h"
 #include "core/GpuDebugUtils.h"
 #include "core/Image.h"
 #include "core/VulkanCheck.h"
@@ -91,9 +90,11 @@ void CacaoNormalAdapterPass::onViewportResize(
     createDescriptors(resources);
 }
 
-void CacaoNormalAdapterPass::execute(
-    const RenderFrameContext &frame,
-    const RenderResourceRegistry &resources, const VisibilityFrame &) {
+void CacaoNormalAdapterPass::recordNode(
+    RenderGraphPassContext &context, uint32_t,
+    const VisibilityFrame &) {
+    const RenderFrameContext &frame = context.frame;
+    const RenderResourceRegistry &resources = context.resources;
     if (!frame.features.cacaoRequired || !frame.pipelineCache)
         return;
 

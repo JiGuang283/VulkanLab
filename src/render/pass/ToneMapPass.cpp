@@ -246,9 +246,10 @@ void ToneMapPass::onViewportResize(
     updateDescriptors(resources);
 }
 
-void ToneMapPass::execute(const RenderFrameContext &frame,
-                          const RenderResourceRegistry &resources,
-                          const VisibilityFrame &) {
+void ToneMapPass::recordNode(RenderGraphPassContext &context, uint32_t,
+                             const VisibilityFrame &) {
+    const RenderFrameContext &frame = context.frame;
+    const RenderResourceRegistry &resources = context.resources;
     VKL_PROFILE_ZONE("Record ToneMap");
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "ToneMap");
     if (!frame.pipelineCache || !frame.view || !frame.shaderVariant)

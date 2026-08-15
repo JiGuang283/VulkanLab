@@ -10,7 +10,7 @@
 #include "assets/AssetLoadCoordinator.h"
 #include "assets/AssetImportManager.h"
 #include "assets/EnvironmentLoadManager.h"
-#include "assets/SceneImportService.h"
+#include "assets/ModelImportService.h"
 #include "assets/SceneCatalogEditor.h"
 #include "assets/SceneCatalogStore.h"
 #if VKL_ENABLE_RUNTIME_CONTROL
@@ -23,7 +23,6 @@
 #include "core/FrameSync.h"
 #include "core/GpuDebugUtils.h"
 #include "core/Log.h"
-#include "core/ResourcePoolSelfTest.h"
 #include "core/SwapChain.h"
 #include "core/VulkanContext.h"
 #include "diagnostics/BuildInfo.h"
@@ -487,9 +486,7 @@ ControlJson sceneLoadStatsToJson(const SceneLoadStats &stats) {
           {"uploadPumpCalls", r.uploadPumpCalls},
           {"maxUploadBytesPerPump", r.maxUploadBytesPerPump}}},
         {"synchronization",
-         {{"legacySubmits", r.singleTimeSubmits},
-          {"queueWaitIdleCalls", r.queueWaitIdleCalls},
-          {"batchSubmits", r.batchSubmits},
+         {{"batchSubmits", r.batchSubmits},
           {"completedBatchSubmits", r.completedBatchSubmits},
           {"fenceWaitCalls", r.fenceWaitCalls},
           {"fencePollCalls", r.fencePollCalls},
@@ -691,8 +688,7 @@ void logSceneLoadStats(const SceneLoadStats &stats) {
         "lights={}/{} (dir={} point={} spot={}) cache={}/{} "
         "nativeBc7={} basis={} transcodes={} "
         "upload={:.2f}MiB "
-        "legacySubmits={} batchSubmits={} queueWaits={} fenceWaits={} "
-        "fencePolls={} "
+        "batchSubmits={} fenceWaits={} fencePolls={} "
         "vmaAllocationDelta={:.2f}MiB vmaBlockDelta={:.2f}MiB",
         stats.sceneName, stats.success,
         stats.maxTextureSize == 0 ? std::string("Full")
@@ -712,9 +708,7 @@ void logSceneLoadStats(const SceneLoadStats &stats) {
         bytesToMiB(stats.resources.textureUploadBytes +
                    stats.resources.vertexUploadBytes +
                    stats.resources.indexUploadBytes),
-        stats.resources.singleTimeSubmits,
         stats.resources.batchSubmits,
-        stats.resources.queueWaitIdleCalls,
         stats.resources.fenceWaitCalls,
         stats.resources.fencePollCalls,
         signedBytesToMiB(allocationDelta), signedBytesToMiB(blockDelta));
@@ -939,15 +933,7 @@ void Application::run() {
 #endif
 }
 
-void Application::registerScene(SceneEntry entry) {
-    sceneRegistry_.push_back(std::move(entry));
-}
-
 void Application::init() {
-#ifndef NDEBUG
-    runResourcePoolSelfTest();
-#endif
-
     window_ = std::make_unique<Window>(
         config_.windowWidth, config_.windowHeight, config_.windowTitle,
         config_.diagnostics.windowResizable());
@@ -1139,8 +1125,9 @@ void Application::init() {
                       static_cast<float>(swapChain_->extent().height));
 
     if (sceneRegistry_.empty())
-        throw std::runtime_error("No scenes registered; call "
-                                 "Application::registerScene before run().");
+        throw std::runtime_error(
+            "No model previews or native scenes are registered in the "
+            "scene catalog.");
 
     int start = std::clamp(config_.defaultSceneIndex, 0,
                            static_cast<int>(sceneRegistry_.size()) - 1);
@@ -1565,7 +1552,6 @@ void Application::updateSceneLoading() {
         latestSceneLoadTask_->stats.primitiveCount =
             asset->primitives.size();
 
-        runModelAssetSharingSmoke(latestSceneLoadTask_, asset);
 
         auto preview = std::make_unique<Scene>();
         preview->initialCamera = asset->previewCamera;
@@ -1985,86 +1971,6 @@ void Application::collectRetiredScenes() {
         environmentAssetRepository_->releaseUnused(
             frameSync_->lastSubmittedSerial(), completed);
     }
-}
-
-void Application::runModelAssetSharingSmoke(
-    const std::shared_ptr<SceneLoadTask> &task,
-    const std::shared_ptr<const ModelAsset> &asset) {
-#ifdef NDEBUG
-    (void)task;
-    (void)asset;
-#else
-    if (modelAssetSharingSmokeComplete_ || projectContext_.cookedPackage ||
-        !task || !asset || task->sceneIndex < 0 ||
-        task->sceneIndex >= static_cast<int>(sceneRegistry_.size())) {
-        return;
-    }
-
-    const SceneEntry &entry = sceneRegistry_[task->sceneIndex];
-    if (!entry.prepareFactory)
-        return;
-    const AssetRepositorySnapshot before = assetRepository_->snapshot();
-    ModelAssetRequest request{};
-    request.key = {ModelAssetId(task->modelId), task->profileId};
-    request.displayName = task->sceneName;
-    request.sourcePath = std::filesystem::u8path(entry.sourcePath);
-    request.prepareFactory = entry.prepareFactory;
-    request.loadContext = sceneLoadContext_;
-    request.loadContext.modelId = task->modelId;
-    request.loadContext.sceneId = task->modelId;
-    request.loadContext.profileId = task->profileId;
-    request.loadContext.maxTextureSize = task->textureLimit;
-    request.loadContext.loadStats = nullptr;
-    bool hit = false;
-    bool coalesced = false;
-    ModelAssetHandle duplicate = assetRepository_->requestModel(
-        request, &hit, &coalesced);
-    const AssetRepositorySnapshot after = assetRepository_->snapshot();
-    if (!hit || coalesced || duplicate.generation() != asset->generation ||
-        duplicate.asset().get() != asset.get() ||
-        after.gpuBuildStarts != before.gpuBuildStarts) {
-        throw std::logic_error(
-            "ModelAsset sharing smoke failed: ready request was rebuilt");
-    }
-
-    Scene smokeScene;
-    smokeScene.addModelInstance({duplicate, glm::mat4(1.0f), true});
-    smokeScene.addModelInstance(
-        {duplicate,
-         glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f)),
-         true});
-    std::vector<RenderItem> smokeItems;
-    smokeScene.collectRenderItems(smokeItems);
-    if (smokeItems.size() != asset->primitives.size() * 2) {
-        throw std::logic_error(
-            "ModelAsset sharing smoke failed: unexpected draw count");
-    }
-    const auto verifySharedItems = [](const auto &items) {
-        const size_t half = items.size() / 2;
-        for (size_t i = 0; i < half; ++i) {
-            const RenderItem &left = items[i];
-            const RenderItem &right = items[i + half];
-            if (left.mesh != right.mesh ||
-                left.material != right.material ||
-                glm::length(glm::vec3(right.world[3] - left.world[3])) <
-                    1.0f) {
-                return false;
-            }
-        }
-        return true;
-    };
-    if (!verifySharedItems(smokeItems)) {
-        throw std::logic_error(
-            "ModelAsset sharing smoke failed: instances do not share GPU "
-            "resources or transforms");
-    }
-    modelAssetSharingSmokeComplete_ = true;
-    VKR_LOG_INFO(
-        "ModelAsset",
-        "Sharing smoke passed for '{}:{}' generation {} ({} primitives)",
-        task->modelId, task->profileId, asset->generation,
-        asset->primitives.size());
-#endif
 }
 
 void Application::finalizeSceneLoad(
@@ -7711,11 +7617,6 @@ void Application::drawLoadStatsPanel() {
         ImGui::Text("Mesh upload: %.2f MiB",
                     bytesToMiB(resources.vertexUploadBytes +
                                resources.indexUploadBytes));
-        ImGui::Text("Legacy submits: %llu  Queue waits: %llu",
-                    static_cast<unsigned long long>(
-                        resources.singleTimeSubmits),
-                    static_cast<unsigned long long>(
-                        resources.queueWaitIdleCalls));
         ImGui::Text("Batch submits: %llu  Fence waits: %llu",
                     static_cast<unsigned long long>(resources.batchSubmits),
                     static_cast<unsigned long long>(

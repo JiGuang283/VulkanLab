@@ -32,9 +32,6 @@ class SsaoPass final : public IRenderPass {
                     const VisibilityFrame &visibility) override;
     void releaseViewportResources() override;
     void onViewportResize(const RenderResourceRegistry &resources) override;
-    void execute(const RenderFrameContext &frame,
-                 const RenderResourceRegistry &resources,
-                 const VisibilityFrame &visibility) override;
 
   private:
     void createDescriptorSetLayout();

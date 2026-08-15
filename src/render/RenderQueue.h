@@ -1,6 +1,6 @@
 #pragma once
 
-#include "RenderCommand.h"
+#include "RenderItem.h"
 
 #include <cstddef>
 #include <glm/glm.hpp>
@@ -11,16 +11,16 @@ namespace vkr {
 class RenderQueue {
   public:
     void clear();
-    void add(RenderCommand command);
+    void add(RenderItem command);
     void sortOpaque();
     void sortTransparent(const glm::vec3 &cameraPosition);
 
-    const std::vector<RenderCommand> &opaque() const { return opaque_; }
-    const std::vector<RenderCommand> &transparent() const {
+    const std::vector<RenderItem> &opaque() const { return opaque_; }
+    const std::vector<RenderItem> &transparent() const {
         return transparent_;
     }
-    std::vector<RenderCommand> &mutableOpaque() { return opaque_; }
-    std::vector<RenderCommand> &mutableTransparent() {
+    std::vector<RenderItem> &mutableOpaque() { return opaque_; }
+    std::vector<RenderItem> &mutableTransparent() {
         return transparent_;
     }
 
@@ -29,8 +29,8 @@ class RenderQueue {
     size_t uniqueMeshCount() const;
 
   private:
-    std::vector<RenderCommand> opaque_;
-    std::vector<RenderCommand> transparent_;
+    std::vector<RenderItem> opaque_;
+    std::vector<RenderItem> transparent_;
 };
 
 } // namespace vkr

@@ -13,7 +13,7 @@
 #include "assets/RuntimePackage.h"
 #include "assets/SceneCatalog.h"
 #include "assets/SceneCatalogEditor.h"
-#include "assets/SceneImportService.h"
+#include "assets/ModelImportService.h"
 
 #include <json.hpp>
 

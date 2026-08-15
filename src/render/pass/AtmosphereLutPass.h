@@ -39,9 +39,6 @@ class AtmosphereLutPass final : public IRenderPass {
     void recordNode(RenderGraphPassContext &context,
                     uint32_t localNodeIndex,
                     const VisibilityFrame &visibility) override;
-    void execute(const RenderFrameContext &frame,
-                 const RenderResourceRegistry &resources,
-                 const VisibilityFrame &visibility) override;
 
     bool readyFor(uint64_t staticLutKey) const;
     const AtmosphereRuntimeStatus &status() const { return status_; }

@@ -5,7 +5,6 @@
 #include "core/DescriptorAllocator.h"
 #include "core/Device.h"
 #include "core/GpuDebugUtils.h"
-#include "core/GpuBarrier.h"
 #include "core/Image.h"
 #include "core/VulkanCheck.h"
 #include "diagnostics/Profiling.h"
@@ -106,22 +105,6 @@ void HiZBuildPass::recordNode(
     const VisibilityFrame &visibility) {
     recordMip(context.frame, context.resources, visibility,
               localNodeIndex);
-}
-
-void HiZBuildPass::execute(const RenderFrameContext &frame,
-                           const RenderResourceRegistry &resources,
-                           const VisibilityFrame &visibility) {
-    if (!frame.pipelineCache || !frame.view ||
-        !frame.features.hiZRequired ||
-        visibility.cpuStats.occlusionCandidates == 0) {
-        return;
-    }
-    VKL_PROFILE_ZONE("Record HiZBuild");
-    VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "HiZBuild");
-    const uint32_t mipCount =
-        resources.mipLevelCount(resourceHandles_.visibilityHiZ);
-    for (uint32_t mip = 0; mip < mipCount; ++mip)
-        recordMip(frame, resources, visibility, mip);
 }
 
 void HiZBuildPass::recordMip(

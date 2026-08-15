@@ -63,7 +63,7 @@ if(VKL_ENABLE_ASSET_AUTHORING OR VKL_BUILD_ASSET_TOOL OR BUILD_TESTING)
     list(APPEND VKL_ASSET_CORE_SOURCES
         assets/SceneCatalogEditor.cpp
         assets/SceneCatalogStore.cpp
-        assets/SceneImportService.cpp
+        assets/ModelImportService.cpp
     )
 endif()
 
@@ -150,7 +150,6 @@ set(VKL_ENGINE_SOURCES
     core/IncrementalUploadQueue.cpp
     core/Pipeline.cpp
     core/PipelineConfigBuilder.cpp
-    core/ResourcePoolSelfTest.cpp
     core/SwapChain.cpp
     core/UploadContext.cpp
     core/ValidationProfile.cpp

@@ -42,9 +42,6 @@ class SsgiPass final : public IRenderPass {
                     const VisibilityFrame &visibility) override;
     void releaseViewportResources() override;
     void onViewportResize(const RenderResourceRegistry &resources) override;
-    void execute(const RenderFrameContext &frame,
-                 const RenderResourceRegistry &resources,
-                 const VisibilityFrame &visibility) override;
 
     const SsgiPassStatus &status() const { return status_; }
 
@@ -78,7 +75,6 @@ class SsgiPass final : public IRenderPass {
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> temporalSets_{};
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> firstFilterSets_{};
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> secondFilterSets_{};
-    std::array<bool, MAX_FRAMES_IN_FLIGHT> initialized_{};
     std::array<bool, MAX_FRAMES_IN_FLIGHT> historyWritten_{};
     bool currentHistoryValid_ = false;
     uint64_t currentSettingsSignature_ = 0;

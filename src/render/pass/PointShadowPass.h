@@ -2,7 +2,7 @@
 
 #include "render/pass/IRenderPass.h"
 #include "render/PunctualShadow.h"
-#include "render/RenderCommand.h"
+#include "render/RenderItem.h"
 #include "core/FrameSync.h"
 
 #include <array>
@@ -44,9 +44,6 @@ class PointShadowPass final : public IRenderPass {
     void recordNode(RenderGraphPassContext &context,
                     uint32_t localNodeIndex,
                     const VisibilityFrame &visibility) override;
-    void execute(const RenderFrameContext &frame,
-                 const RenderResourceRegistry &resources,
-                 const VisibilityFrame &visibility) override;
 
   private:
     void writeSlices(const RenderFrameContext &frame);

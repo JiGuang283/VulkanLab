@@ -1,6 +1,6 @@
 #include "render/TangentGenerator.h"
 #include "render/TextureData.h"
-#include "scene/PreparedSceneData.h"
+#include "scene/PreparedModelData.h"
 
 #include <cmath>
 #include <chrono>
@@ -15,7 +15,7 @@
 
 void runDerivedTextureManifestTests();
 void runSceneCatalogTests();
-void runSceneImportServiceTests();
+void runModelImportServiceTests();
 void runTextureCachePipelineTests();
 void runArtifactStatusTests();
 void runArtifactIndexTests();
@@ -52,7 +52,7 @@ void require(bool condition, const char *message) {
 }
 
 void testPreparedReferences() {
-    vkr::PreparedSceneData scene;
+    vkr::PreparedModelData scene;
     auto image = std::make_shared<vkr::PreparedImage>();
     image->width = 1;
     image->height = 1;
@@ -71,14 +71,14 @@ void testPreparedReferences() {
     mesh.bounds.min = {0.0f, 0.0f, 0.0f};
     mesh.bounds.max = {1.0f, 1.0f, 0.0f};
     scene.meshes.push_back(std::move(mesh));
-    scene.objects.push_back({0, 0, glm::mat4(1.0f)});
+    scene.primitives.push_back({0, 0, glm::mat4(1.0f)});
 
-    require(scene.objects[0].meshIndex < scene.meshes.size(),
-            "prepared object mesh index is invalid");
-    require(scene.objects[0].materialIndex >= 0 &&
-                static_cast<size_t>(scene.objects[0].materialIndex) <
+    require(scene.primitives[0].meshIndex < scene.meshes.size(),
+            "prepared primitive mesh index is invalid");
+    require(scene.primitives[0].materialIndex >= 0 &&
+                static_cast<size_t>(scene.primitives[0].materialIndex) <
                     scene.materials.size(),
-            "prepared object material index is invalid");
+            "prepared primitive material index is invalid");
     require(scene.materials[0].textureIndices[vkr::indexOf(
                 vkr::MaterialTextureSlot::BaseColor)] == 0,
             "prepared material texture index changed");
@@ -176,7 +176,7 @@ int main(int argc, char **argv) {
         testTextureResize();
         runDerivedTextureManifestTests();
         runSceneCatalogTests();
-        runSceneImportServiceTests();
+        runModelImportServiceTests();
         runTextureCachePipelineTests();
         runArtifactStatusTests();
         runArtifactIndexTests();

@@ -148,18 +148,6 @@ void SsaoPass::recordNode(RenderGraphPassContext &context,
         recordStage(context.frame, context.resources, localNodeIndex);
 }
 
-void SsaoPass::execute(const RenderFrameContext &frame,
-                       const RenderResourceRegistry &resources,
-                       const VisibilityFrame &) {
-    if (!frame.features.ssaoRequired || !frame.pipelineCache || !frame.view)
-        return;
-
-    VKL_PROFILE_ZONE("Record SSAO");
-    VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "SSAO");
-    for (uint32_t stage = 0; stage < 3; ++stage)
-        recordStage(frame, resources, stage);
-}
-
 void SsaoPass::recordStage(const RenderFrameContext &frame,
                            const RenderResourceRegistry &resources,
                            uint32_t stage) {

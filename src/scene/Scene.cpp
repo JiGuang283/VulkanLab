@@ -4,7 +4,7 @@
 #include "ModelLight.h"
 #include "render/MaterialInstance.h"
 #include "render/Mesh.h"
-#include "render/RenderCommand.h"
+#include "render/RenderItem.h"
 #include "scene/BoundsMath.h"
 
 #include <stdexcept>

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "assets/AssetValidation.h"
-#include "assets/SceneImportService.h"
+#include "assets/ModelImportService.h"
 
 #include <filesystem>
 #include <functional>

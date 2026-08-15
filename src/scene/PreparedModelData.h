@@ -75,8 +75,4 @@ struct PreparedModelData {
     std::optional<CameraPose> previewCamera;
 };
 
-// Compatibility aliases while preview-scene call sites migrate to model terms.
-using PreparedSceneData = PreparedModelData;
-using PreparedObject = PreparedModelPrimitive;
-
 } // namespace vkr

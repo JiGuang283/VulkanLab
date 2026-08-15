@@ -13,7 +13,7 @@
 #include "assets/DerivedTextureManifest.h"
 #include "assets/RuntimePackage.h"
 #include "assets/SceneCatalog.h"
-#include "assets/SceneImportService.h"
+#include "assets/ModelImportService.h"
 #include "render/ShaderRegistry.h"
 
 #include <json.hpp>
@@ -81,10 +81,10 @@ void copySceneGeometry(const std::filesystem::path &projectRoot,
     copyFile(source, stagingRoot / scene.source);
     if (scene.source.extension() != ".gltf")
         return;
-    const SceneImportPreflight preflight =
+    const ModelImportPreflight preflight =
         ModelImportService::preflight(source);
     const std::set<std::string> buffers = gltfBufferUris(source);
-    for (const SceneImportDependency &dependency : preflight.dependencies) {
+    for (const ModelImportDependency &dependency : preflight.dependencies) {
         if (buffers.count(dependency.uri) == 0)
             continue;
         copyFile(dependency.sourcePath,
@@ -95,7 +95,7 @@ void copySceneGeometry(const std::filesystem::path &projectRoot,
     for (const std::string &uri : buffers) {
         const auto found = std::find_if(
             preflight.dependencies.begin(), preflight.dependencies.end(),
-            [&](const SceneImportDependency &dependency) {
+            [&](const ModelImportDependency &dependency) {
                 return dependency.uri == uri;
             });
         if (found == preflight.dependencies.end())

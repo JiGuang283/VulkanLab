@@ -79,9 +79,10 @@ void SkyBackgroundPass::setup(
         VkClearColorValue{{0.0f, 0.0f, 0.0f, 1.0f}});
 }
 
-void SkyBackgroundPass::execute(const RenderFrameContext &frame,
-                         const RenderResourceRegistry &resources,
-                         const VisibilityFrame &) {
+void SkyBackgroundPass::recordNode(RenderGraphPassContext &context, uint32_t,
+                                   const VisibilityFrame &) {
+    const RenderFrameContext &frame = context.frame;
+    const RenderResourceRegistry &resources = context.resources;
     VKL_PROFILE_ZONE("Record Sky Background");
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "Sky Background");
     const RenderImageHandle target =

@@ -46,9 +46,8 @@ class CacaoPass final : public IRenderPass {
     bool managesDeclaredTransitionsInternally() const override { return true; }
     void releaseViewportResources() override;
     void onViewportResize(const RenderResourceRegistry &resources) override;
-    void execute(const RenderFrameContext &frame,
-                 const RenderResourceRegistry &resources,
-                 const VisibilityFrame &visibility) override;
+    void recordNode(RenderGraphPassContext &context, uint32_t localNodeIndex,
+                    const VisibilityFrame &visibility) override;
 
     bool reconfigure(const RenderResourceRegistry &resources,
                      CacaoResolution resolution, std::string &error);

@@ -168,9 +168,10 @@ void MainForwardPass::setup(RenderGraphBuilder &builder,
         VkClearDepthStencilValue{1.0f, 0});
 }
 
-void MainForwardPass::execute(const RenderFrameContext &frame,
-                              const RenderResourceRegistry &resources,
-                              const VisibilityFrame &visibility) {
+void MainForwardPass::recordNode(RenderGraphPassContext &context, uint32_t,
+                                 const VisibilityFrame &visibility) {
+    const RenderFrameContext &frame = context.frame;
+    const RenderResourceRegistry &resources = context.resources;
     VKL_PROFILE_ZONE("Record Forward Phase");
     ScopedGpuLabel phaseLabel(
         device_->debugUtils(), frame.cmd,

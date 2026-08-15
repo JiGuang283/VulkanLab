@@ -30,9 +30,4 @@ using ModelPrepareFactory = std::function<PreparedModelData(
     const SceneLoadContext &, const CancellationToken &,
     SceneLoadProgress &)>;
 
-// Transitional names retained while the load diagnostics still use scene
-// terminology for model-preview operations.
-using PreparedSceneData = PreparedModelData;
-using ScenePrepareFactory = ModelPrepareFactory;
-
 } // namespace vkr

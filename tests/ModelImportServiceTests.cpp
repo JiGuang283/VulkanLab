@@ -1,6 +1,6 @@
 #include "assets/ProjectContext.h"
 #include "assets/SceneCatalog.h"
-#include "assets/SceneImportService.h"
+#include "assets/ModelImportService.h"
 
 #include <chrono>
 #include <filesystem>
@@ -67,26 +67,26 @@ class ImportFixture {
 void testCopyImportPublishesClosedDependencySet() {
     ImportFixture fixture;
     const auto checked =
-        vkr::SceneImportService::preflight(fixture.source / "scene.gltf");
+        vkr::ModelImportService::preflight(fixture.source / "scene.gltf");
     requireImport(checked.dependencies.size() == 2,
                   "preflight did not collect the dependency closure");
 
-    vkr::SceneImportRequest request;
+    vkr::ModelImportRequest request;
     request.sourcePath = checked.sourcePath;
     request.displayName = "Imported Scene";
-    request.sceneId = "imported-scene";
+    request.modelId = "imported-scene";
     request.profileId = "desktop_1024";
-    const auto result = vkr::SceneImportService::importScene(
+    const auto result = vkr::ModelImportService::importModel(
         fixture.context(), request);
     const auto destination = fixture.project / "models/imported/imported-scene";
-    requireImport(result.scene.id == "imported-scene",
+    requireImport(result.model.id == "imported-scene",
                   "import returned the wrong scene");
     requireImport(std::filesystem::is_regular_file(destination / "scene.gltf") &&
                       std::filesystem::is_regular_file(destination / "mesh.bin") &&
                       std::filesystem::is_regular_file(
                           destination / "textures/deep/base.png"),
                   "import did not publish an independent dependency closure");
-    (void)vkr::SceneImportService::preflight(destination / "scene.gltf");
+    (void)vkr::ModelImportService::preflight(destination / "scene.gltf");
     const auto catalog = vkr::SceneCatalog::load(
         fixture.project / "assets/catalog.json", fixture.project);
     requireImport(catalog.findScene("imported-scene") != nullptr,
@@ -98,7 +98,7 @@ void testUnsafeAndMissingUrisFailBeforePublication() {
     fixture.writeScene(R"({"asset":{"version":"2.0"},"images":[{"uri":"https://example.com/a.png"}]})");
     bool remoteRejected = false;
     try {
-        (void)vkr::SceneImportService::preflight(fixture.source / "scene.gltf");
+        (void)vkr::ModelImportService::preflight(fixture.source / "scene.gltf");
     } catch (const std::exception &error) {
         remoteRejected = std::string(error.what()).find("URI") !=
                          std::string::npos;
@@ -108,7 +108,7 @@ void testUnsafeAndMissingUrisFailBeforePublication() {
     fixture.writeScene(R"({"asset":{"version":"2.0"},"buffers":[{"uri":"../outside.bin"}]})");
     bool escapeRejected = false;
     try {
-        (void)vkr::SceneImportService::preflight(fixture.source / "scene.gltf");
+        (void)vkr::ModelImportService::preflight(fixture.source / "scene.gltf");
     } catch (const std::exception &error) {
         escapeRejected = std::string(error.what()).find("escapes") !=
                          std::string::npos;
@@ -118,7 +118,7 @@ void testUnsafeAndMissingUrisFailBeforePublication() {
     fixture.writeScene(R"({"asset":{"version":"2.0"},"buffers":[{"uri":"missing.bin"}]})");
     bool missingRejected = false;
     try {
-        (void)vkr::SceneImportService::preflight(fixture.source / "scene.gltf");
+        (void)vkr::ModelImportService::preflight(fixture.source / "scene.gltf");
     } catch (const std::exception &error) {
         missingRejected = std::string(error.what()).find("missing") !=
                           std::string::npos;
@@ -156,14 +156,14 @@ void testGlbSingleFileImport() {
         output.write(json.data(), static_cast<std::streamsize>(json.size()));
     }
 
-    vkr::SceneImportRequest request;
+    vkr::ModelImportRequest request;
     request.sourcePath = glb;
     request.displayName = "Single GLB";
-    request.sceneId = "single-glb";
+    request.modelId = "single-glb";
     request.profileId = "desktop_1024";
     const auto result =
-        vkr::SceneImportService::importScene(fixture.context(), request);
-    requireImport(result.scene.source.extension() == ".glb",
+        vkr::ModelImportService::importModel(fixture.context(), request);
+    requireImport(result.model.source.extension() == ".glb",
                   "GLB import changed the source extension");
     requireImport(std::filesystem::is_regular_file(
                       fixture.project /
@@ -173,14 +173,14 @@ void testGlbSingleFileImport() {
 
 void testCancellationRollsBackStagingAndCatalog() {
     ImportFixture fixture;
-    vkr::SceneImportRequest request;
+    vkr::ModelImportRequest request;
     request.sourcePath = fixture.source / "scene.gltf";
     request.displayName = "Cancelled Scene";
-    request.sceneId = "cancelled-scene";
+    request.modelId = "cancelled-scene";
     request.profileId = "desktop_1024";
     bool cancelled = false;
     try {
-        (void)vkr::SceneImportService::importScene(
+        (void)vkr::ModelImportService::importModel(
             fixture.context(), request, [] { return true; });
     } catch (const std::exception &error) {
         cancelled = std::string(error.what()).find("cancelled") !=
@@ -198,7 +198,7 @@ void testCancellationRollsBackStagingAndCatalog() {
 
 } // namespace
 
-void runSceneImportServiceTests() {
+void runModelImportServiceTests() {
     testCopyImportPublishesClosedDependencySet();
     testUnsafeAndMissingUrisFailBeforePublication();
     testCancellationRollsBackStagingAndCatalog();

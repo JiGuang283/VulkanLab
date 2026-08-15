@@ -1117,9 +1117,6 @@ void printStats(const Json &stats) {
               << "textures: " << counts.at("gpuTextures").get<uint64_t>()
               << ", meshes: " << counts.at("gpuMeshes").get<uint64_t>()
               << ", upload: " << uploadMiB << " MiB\n"
-              << "legacy submits/waits: "
-              << sync.at("legacySubmits").get<uint64_t>() << "/"
-              << sync.at("queueWaitIdleCalls").get<uint64_t>() << '\n'
               << "batch submits/fence waits: "
               << sync.at("batchSubmits").get<uint64_t>() << "/"
               << sync.at("fenceWaitCalls").get<uint64_t>() << '\n';

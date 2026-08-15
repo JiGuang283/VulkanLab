@@ -1,7 +1,6 @@
 #include "render/pass/CacaoPass.h"
 
 #include "core/Device.h"
-#include "core/GpuBarrier.h"
 #include "core/Image.h"
 #include "core/Log.h"
 #include "diagnostics/Profiling.h"
@@ -235,9 +234,9 @@ bool CacaoPass::reconfigure(const RenderResourceRegistry &resources,
     return true;
 }
 
-void CacaoPass::execute(const RenderFrameContext &frame,
-                        const RenderResourceRegistry &resources,
-                        const VisibilityFrame &) {
+void CacaoPass::recordNode(RenderGraphPassContext &context, uint32_t,
+                           const VisibilityFrame &) {
+    const RenderFrameContext &frame = context.frame;
     status_.active = false;
     if (!frame.features.cacaoRequired || !impl_ || !frame.view)
         return;
@@ -253,14 +252,14 @@ void CacaoPass::execute(const RenderFrameContext &frame,
     settings.temporalSupersamplingRadiusOffset = 0.0f;
     settings.generateNormals = FFX_CACAO_FALSE;
 
-    Impl::Context &context = impl_->contexts.at(frame.frameIndex);
+    Impl::Context &cacaoContext = impl_->contexts.at(frame.frameIndex);
     FFX_CACAO_Status result =
-        FFX_CACAO_VkUpdateSettings(context.handle, &settings);
+        FFX_CACAO_VkUpdateSettings(cacaoContext.handle, &settings);
     if (result == FFX_CACAO_STATUS_OK) {
         const FFX_CACAO_Matrix4x4 projection =
             cacaoProjection(frame.view->globalUbo.proj);
         const FFX_CACAO_Matrix4x4 normalsToView = identityMatrix();
-        result = FFX_CACAO_VkDraw(context.handle, frame.cmd, &projection,
+        result = FFX_CACAO_VkDraw(cacaoContext.handle, frame.cmd, &projection,
                                   &normalsToView);
     }
     if (result != FFX_CACAO_STATUS_OK) {

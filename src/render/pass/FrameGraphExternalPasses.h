@@ -19,9 +19,8 @@ class RayTracingSceneBuildPass final : public IRenderPass {
                       const VisibilityFrame &visibility) override;
     void setup(RenderGraphBuilder &builder,
                const RenderGraphBuildContext &context) const override;
-    void execute(const RenderFrameContext &frame,
-                 const RenderResourceRegistry &resources,
-                 const VisibilityFrame &visibility) override;
+    void recordNode(RenderGraphPassContext &context, uint32_t localNodeIndex,
+                    const VisibilityFrame &visibility) override;
 
   private:
     RayTracingScene *scene_ = nullptr;
@@ -37,9 +36,8 @@ class ScreenshotCopyPass final : public IRenderPass {
     RgPassCondition condition() const override { return RgPassCondition::Capture; }
     void setup(RenderGraphBuilder &builder,
                const RenderGraphBuildContext &context) const override;
-    void execute(const RenderFrameContext &frame,
-                 const RenderResourceRegistry &resources,
-                 const VisibilityFrame &visibility) override;
+    void recordNode(RenderGraphPassContext &context, uint32_t localNodeIndex,
+                    const VisibilityFrame &visibility) override;
 
   private:
     RendererResourceHandles resources_{};

@@ -10,8 +10,9 @@
 |---|---|---|
 | 0. Baseline And Scope Lock | Complete | [Stage 0 baseline](renderer_consolidation_baseline.md) |
 | 1. Retire Viking Room And Legacy OBJ | Complete | Renderer Smoke Scene replaces Viking; async ModelAsset/Native Scene loading is the only scene path |
-| 2. Remove RenderGraph Migration Debt | Next | Pending implementation |
-| 3-10 | Pending | Execute in order after each preceding stage is verified |
+| 2. Remove RenderGraph Migration Debt | Complete | Graph setup/recordNode is the only pass path; legacy barriers, startup self-tests, and migration aliases removed |
+| 3. Feature-Aware Resource Residency | Next | Pending implementation |
+| 4-10 | Pending | Execute in order after each preceding stage is verified |
 
 ## Summary
 
@@ -504,6 +505,14 @@ Sheen Chair继续承担 glTF/PBR/material smoke。
 - Graph帧路径不存在 Synchronization1 barrier。
 - 普通启动不执行内部 self-test。
 - 行为和画面保持不变。
+
+### Completion Record
+
+- `IRenderPass::setup()/recordNode()` 已成为唯一执行接口，15 个多节点 Pass 的旧 `execute()` 路径和单节点 adapter 已删除。
+- Graph 帧路径不再包含 Synchronization1 barrier；DDGI 仅保留持久资源初始化和 AS 依赖所需的明确 Synchronization2 局部 barrier。
+- FrameSync 一次性上传 API、legacy 同步统计、普通启动资源池/ModelAsset self-test 和无调用场景注册入口已删除。
+- `RenderItem`、`PreparedModelData` 和 `ModelImportService` 已成为正式命名，旧兼容别名和桥接头文件已移除。
+- 全功能 Debug、dev-fast、runtime Release 和启用 CACAO 的 AO compare 配置均已构建；原生 Renderer Smoke Scene 与无 Editor Runtime 已实际运行，未执行测试套件。
 
 ## Stage 3: Feature-Aware Resource Residency
 

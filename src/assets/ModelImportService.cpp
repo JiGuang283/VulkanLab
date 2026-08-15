@@ -1,4 +1,4 @@
-#include "SceneImportService.h"
+#include "ModelImportService.h"
 
 #include "DerivedTextureManifest.h"
 #include "SceneCatalogStore.h"
@@ -225,7 +225,6 @@ ModelImportService::preflight(const std::filesystem::path &sourcePath) {
     result.sourcePath = normalizedExistingFile(sourcePath);
     result.suggestedDisplayName = displayNameFromStem(result.sourcePath);
     result.suggestedModelId = suggestModelId(result.suggestedDisplayName);
-    result.suggestedSceneId = result.suggestedModelId;
 
     const Json root = readSceneJson(result.sourcePath);
     if (!root.is_object() || !root.contains("asset"))
@@ -261,7 +260,7 @@ ModelImportResult ModelImportService::importModel(
     const ProjectContext &project, const ModelImportRequest &request,
     const ModelImportCancel &cancel,
     const ModelImportProgressCallback &progress) {
-    const std::string modelId = request.resolvedModelId();
+    const std::string &modelId = request.modelId;
     if (!project.catalogWritable)
         throw std::runtime_error("The project Catalog is read-only");
     if (!isStableAssetId(modelId))
@@ -386,7 +385,7 @@ ModelImportResult ModelImportService::importModel(
     const CatalogModel *model = updated.findModel(modelId);
     if (!model)
         throw std::runtime_error("Imported model was not published to Catalog");
-    return {*model, *model, project.projectRoot / model->source};
+    return {*model, project.projectRoot / model->source};
 }
 
 std::string ModelImportService::suggestModelId(const std::string &name) {

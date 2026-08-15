@@ -210,15 +210,6 @@ bool AtmosphereLutPass::readyFor(uint64_t staticLutKey) const {
     return status_.staticLutReady && currentStaticLutKey_ == staticLutKey;
 }
 
-void AtmosphereLutPass::execute(const RenderFrameContext &frame,
-                                const RenderResourceRegistry &resources,
-                                const VisibilityFrame &) {
-    VKL_PROFILE_ZONE("Record Atmosphere LUTs");
-    updateFrameState(frame);
-    for (uint32_t stage = 0; stage < 4; ++stage)
-        recordStage(frame, resources, stage);
-}
-
 void AtmosphereLutPass::createStorageDescriptorLayout() {
     VkDescriptorSetLayoutBinding binding{};
     binding.binding = 0;

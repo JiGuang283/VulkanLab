@@ -126,9 +126,10 @@ void TaaPass::onViewportResize(const RenderResourceRegistry &resources) {
     createDescriptors(resources);
 }
 
-void TaaPass::execute(const RenderFrameContext &frame,
-                      const RenderResourceRegistry &resources,
-                      const VisibilityFrame &visibility) {
+void TaaPass::recordNode(RenderGraphPassContext &context, uint32_t,
+                         const VisibilityFrame &visibility) {
+    const RenderFrameContext &frame = context.frame;
+    const RenderResourceRegistry &resources = context.resources;
     status_.active = frame.features.taaActive;
     status_.jitterPixels = visibility.history.currentJitterPixels;
     if (!frame.features.taaRequired || !frame.pipelineCache || !frame.view)

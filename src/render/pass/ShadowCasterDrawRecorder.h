@@ -1,7 +1,7 @@
 #pragma once
 
 #include "core/PipelineConfig.h"
-#include "render/RenderCommand.h"
+#include "render/RenderItem.h"
 
 #include <string>
 #include <vector>

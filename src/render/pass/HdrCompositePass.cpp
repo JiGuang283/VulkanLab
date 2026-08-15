@@ -4,7 +4,6 @@
 #include "core/ComputePipeline.h"
 #include "core/ComputePipelineConfig.h"
 #include "core/DescriptorAllocator.h"
-#include "core/GpuBarrier.h"
 #include "core/GpuDebugUtils.h"
 #include "core/Image.h"
 #include "core/VulkanCheck.h"
@@ -132,7 +131,6 @@ void HdrCompositePass::recordComposite(
                        VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
     vkCmdDispatch(frame.cmd, (extent.width + 7u) / 8u,
                   (extent.height + 7u) / 8u, 1);
-    initialized_[frame.frameIndex] = true;
 }
 
 void HdrCompositePass::recordCopy(const RenderFrameContext &frame,
@@ -149,143 +147,15 @@ void HdrCompositePass::recordCopy(const RenderFrameContext &frame,
         resources.image(resources_.compositedHdrColor,
                         frame.frameIndex).handle(),
         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-    initialized_[frame.frameIndex] = true;
 }
 
 void HdrCompositePass::releaseViewportResources() {
     freeDescriptors();
-    initialized_.fill(false);
 }
 
 void HdrCompositePass::onViewportResize(
     const RenderResourceRegistry &resources) {
     createDescriptors(resources);
-}
-
-void HdrCompositePass::execute(const RenderFrameContext &frame,
-                               const RenderResourceRegistry &resources,
-                               const VisibilityFrame &) {
-    VKL_PROFILE_ZONE("Record Screen-Space Lighting Composite");
-    VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd,
-                         "ScreenSpaceLightingComposite");
-    const bool ssrActive = frame.features.ssrActive &&
-                           resources_.ssrFiltered.valid();
-    const bool ssgiActive = frame.features.ssgiActive &&
-                            resources_.ssgiFiltered.valid();
-    ScopedGpuLabel label(device_->debugUtils(), frame.cmd,
-                         ssrActive || ssgiActive
-                             ? "ScreenSpaceLightingComposite/ReplaceIndirect"
-                             : "ScreenSpaceLightingComposite/CopyBaseline");
-    const Image &source = resources.image(resources_.hdrColor,
-                                          frame.frameIndex);
-    const Image &destination = resources.image(
-        resources_.compositedHdrColor, frame.frameIndex);
-    if (!descriptorSets_.empty() &&
-        descriptorSets_[frame.frameIndex] != VK_NULL_HANDLE) {
-        updateDescriptor(resources, frame.frameIndex, ssrActive, ssgiActive);
-    }
-    const auto range = colorRange();
-    if ((ssrActive || ssgiActive) && frame.pipelineCache) {
-        cmdImageBarrier(frame.cmd,
-                        initialized_[frame.frameIndex]
-                            ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-                            : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                        initialized_[frame.frameIndex]
-                            ? VK_ACCESS_SHADER_READ_BIT |
-                                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
-                            : 0u,
-                        VK_ACCESS_SHADER_WRITE_BIT, destination.handle(),
-                        initialized_[frame.frameIndex]
-                            ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                            : VK_IMAGE_LAYOUT_UNDEFINED,
-                        VK_IMAGE_LAYOUT_GENERAL, range);
-        struct CompositePush { glm::uvec4 dimensions{}; } push;
-        const VkExtent2D extent = resources.extent(resources_.hdrColor);
-        push.dimensions = {ssrActive ? 1u : 0u,
-                           ssgiActive ? 1u : 0u,
-                           extent.width, extent.height};
-        ComputePipelineConfig config{};
-        config.debugName = "Pipeline/ScreenSpace/LightingComposite";
-        config.computeShaderPath = shaderPath_;
-        config.descriptorLayouts = {descriptorLayout_};
-        config.pushConstants = {{VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                                 sizeof(CompositePush)}};
-        ComputePipeline &pipeline =
-            frame.pipelineCache->getOrCreateCompute(std::move(config));
-        vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                          pipeline.handle());
-        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                pipeline.layout(), 0, 1,
-                                &descriptorSets_[frame.frameIndex], 0,
-                                nullptr);
-        vkCmdPushConstants(frame.cmd, pipeline.layout(),
-                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push),
-                           &push);
-        vkCmdDispatch(frame.cmd, (extent.width + 7u) / 8u,
-                      (extent.height + 7u) / 8u, 1);
-        cmdImageBarrier(frame.cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                        VK_ACCESS_SHADER_WRITE_BIT,
-                        VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                        destination.handle(), VK_IMAGE_LAYOUT_GENERAL,
-                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, range);
-        initialized_[frame.frameIndex] = true;
-        return;
-    }
-
-    cmdImageBarrier(frame.cmd,
-                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT,
-                    VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                        VK_ACCESS_SHADER_READ_BIT,
-                    VK_ACCESS_TRANSFER_READ_BIT, source.handle(),
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, range);
-    cmdImageBarrier(frame.cmd,
-                    initialized_[frame.frameIndex]
-                        ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-                        : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT,
-                    initialized_[frame.frameIndex]
-                        ? VK_ACCESS_SHADER_READ_BIT |
-                              VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
-                        : 0u,
-                    VK_ACCESS_TRANSFER_WRITE_BIT, destination.handle(),
-                    initialized_[frame.frameIndex]
-                        ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                        : VK_IMAGE_LAYOUT_UNDEFINED,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, range);
-
-    const VkExtent2D extent = resources.extent(resources_.hdrColor);
-    VkImageCopy copy{};
-    copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    copy.extent = {extent.width, extent.height, 1};
-    vkCmdCopyImage(frame.cmd, source.handle(),
-                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                   destination.handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                   1, &copy);
-
-    cmdImageBarrier(frame.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                    VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT,
-                    source.handle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, range);
-    cmdImageBarrier(frame.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    VK_ACCESS_TRANSFER_WRITE_BIT,
-                    VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-                        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                    destination.handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, range);
-    initialized_[frame.frameIndex] = true;
 }
 
 void HdrCompositePass::createLayout() {

@@ -40,9 +40,6 @@ class DirectionalShadowPass final : public IRenderPass {
     void recordNode(RenderGraphPassContext &context,
                     uint32_t localNodeIndex,
                     const VisibilityFrame &visibility) override;
-    void execute(const RenderFrameContext &frame,
-                 const RenderResourceRegistry &resources,
-                 const VisibilityFrame &visibility) override;
 
   private:
     void drawCasters(const RenderFrameContext &frame,

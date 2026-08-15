@@ -44,9 +44,6 @@ class GtaoPass final : public IRenderPass {
                     const VisibilityFrame &visibility) override;
     void releaseViewportResources() override;
     void onViewportResize(const RenderResourceRegistry &resources) override;
-    void execute(const RenderFrameContext &frame,
-                 const RenderResourceRegistry &resources,
-                 const VisibilityFrame &visibility) override;
 
     const GtaoPassStatus &status() const { return status_; }
 
@@ -76,7 +73,6 @@ class GtaoPass final : public IRenderPass {
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> temporalSets_{};
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> horizontalSets_{};
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> verticalSets_{};
-    std::array<bool, MAX_FRAMES_IN_FLIGHT> initialized_{};
     std::array<bool, MAX_FRAMES_IN_FLIGHT> historyWritten_{};
     bool currentHistoryValid_ = false;
     uint64_t currentSettingsSignature_ = 0;
