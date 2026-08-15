@@ -1,8 +1,20 @@
 # VulkanLab
 
-VulkanLab is an experimental Vulkan renderer and scene editor for Windows. It
-is a learning and research project focused on explicit rendering architecture,
-glTF asset workflows, real-time lighting, and graphics algorithm development.
+VulkanLab is a Vulkan 1.3 real-time renderer under active development for
+Windows. It provides a scene-authoring workspace and offline asset pipeline for
+implementing, profiling, and comparing modern rendering techniques.
+
+## Status
+
+The renderer is a development project rather than a production-ready engine.
+The scene-authoring workspace exists to build repeatable renderer test scenes,
+and the AssetTool prepares renderer assets offline. Runtime Control is an
+optional local developer automation interface. VulkanLab does not currently
+aim to provide a general-purpose game editor, DCC workflow, gameplay framework,
+or stable public API.
+
+Scene formats, shader ABI, renderer architecture, and visual output may change
+between commits while the project is under active development.
 
 ## Highlights
 
@@ -17,9 +29,6 @@ glTF asset workflows, real-time lighting, and graphics algorithm development.
   and incremental GPU upload.
 - RenderDoc labels, Vulkan validation profiles, GPU pass timings, and optional
   Tracy profiling.
-
-The project is under active development. APIs, scene formats, and rendering
-results may change between commits.
 
 ## Requirements
 

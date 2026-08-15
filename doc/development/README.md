@@ -1,13 +1,15 @@
 # 开发文档工作区
 
 > Status: Current
-> Last verified: 2026-08-02
-> Verified against: Scene Authoring Stage 7 implementation
+> Last verified: 2026-08-15
+> Verified against: `e75be09`
 
 本目录只存放正在讨论或执行的开发计划。不要根据历史归档推断下一阶段目标。
 
 ## Active Plans
 
+- [渲染器收口与 Application 重构计划](renderer_consolidation_and_app_refactor_plan.md)：退役 Viking/OBJ 兼容路径，收口 RenderGraph 资源驻留和 Pass 执行，拆分 Application、Editor 与 Runtime Control，并将项目重新定位为开发中的 Vulkan 实时渲染器。
+- [渲染器收口 Stage 0 基线](renderer_consolidation_baseline.md)：固化 800x600 Runtime Control 采样、源码依赖规模、兼容迁移债务和功能保留矩阵。
 - [AO、反射与全局光照算法路线](ao_reflection_gi_plan.md)：基于 Surface Data、Hi-Z、HDR 和 temporal history，分阶段实现 SSAO、TAA、GTAO、SSR、SSGI、Reflection Probe、DDGI 与可选硬件光追路径。
 - [大型场景响应式加载路线图](async_scene_loading_plan.md)：从现有同步加载演进到后台准备、增量 GPU 上传、任务取消和压缩纹理资产管线。
 - [工程结构与构建系统重构计划](engineering_refactor_plan.md)：用 target-based CMake、build-tree Shader、ProjectContext 资源路径和 Application 职责拆分支撑后续工具开发。
