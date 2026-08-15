@@ -2,7 +2,7 @@
 
 > Status: Active
 > Last verified: 2026-08-15
-> Verified against: `474e7f2`
+> Verified against: `cb7e7b3`
 
 ## Progress
 
@@ -14,8 +14,9 @@
 | 3. Feature-Aware Resource Residency | Complete | Graph-driven residency, reduced MRT variants, adaptive occlusion and capacity-tiered punctual shadows; default 800x600 steady-state resident images are about 162.9 MiB |
 | 4. Extract SceneRuntimeCoordinator | Complete | Scene/environment load state machines, repositories, publication and serial retirement moved out of Application |
 | 5. Complete SceneWorkflowController | Complete | Catalog, artifact, validation, import and asset task state moved behind typed Workflow snapshots/actions |
-| 6. Render Settings And Feature Ownership | Next | Pending implementation |
-| 7-10 | Pending | Execute in order after each preceding stage is verified |
+| 6. Render Settings And Feature Ownership | Complete | Typed requested/active settings, centralized validation, deterministic frame feature resolution and feature-owned Shader program families |
+| 7. Extract EditorController | Next | Pending implementation |
+| 8-10 | Pending | Execute in order after each preceding stage is verified |
 
 ## Summary
 
@@ -657,6 +658,16 @@ Sheen Chair继续承担 glTF/PBR/material smoke。
 - 添加新算法不需要修改Application。
 - 所有算法仍在dev-fast和runtime构建中可用。
 - 不使用散布在Shader ABI中的算法编译宏裁剪运行时行为。
+
+### Stage 6 Completion Record
+
+- 新增 `RenderSettingsController`，统一持有 Shader variant、requested settings、capability support 和上一帧 runtime active state；UI 与 Runtime Control 通过同一 patch action 修改设置。
+- Controller 集中处理 debug view 互斥、capability fallback、有限值/枚举检查、参数范围归一化以及 CACAO 重建副作用。Runtime Control adapter 只保留 JSON 类型和名称解析，不再保存领域范围规则。
+- `Application` 构建 RenderView 时只消费 Controller 的 resolved active settings；requested settings继续用于 UI 和协议查询，因此切换不兼容 Shader 时设置不会丢失。
+- 新增纯函数 `FrameFeatureResolver`，成为 `FrameRenderFeatures` 和 requested-to-active AO/GI 状态的唯一推导入口；Application 和 Renderer 不再各自拼装 feature flags。
+- Shader Manifest program解析按 Shadow、Surface/Visibility、Screen Space、Atmosphere/GI 和 Post Process family 分组，各 family解析自己的 contract；旧的 `RendererShaderPaths` 巨型字符串集合已删除。
+- RenderGraph Pass注册按五个 feature family收口，保留原有执行顺序和显式共享资源契约。新增算法不再要求修改 Application。
+- `windows-msvc-dev-fast` 与 `windows-msvc-runtime` 均已构建并持续启动。Runtime Control验证了曝光范围归一化，以及 Bloom requested state在 PBR/Legacy切换时保持、active state按 Shader能力自动变化；按项目策略未运行测试套件，也未进行完整GPU视觉回归。
 
 ## Stage 7: Extract EditorController
 
