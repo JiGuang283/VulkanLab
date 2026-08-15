@@ -1,6 +1,7 @@
 [submodule "external/ktx"]
 	path = external/ktx
 	url = https://github.com/KhronosGroup/KTX-Software.git
+	ignore = untracked
 [submodule "external/spirv-reflect"]
 	path = external/spirv-reflect
 	url = https://github.com/KhronosGroup/SPIRV-Reflect.git

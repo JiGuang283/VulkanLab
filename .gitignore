@@ -67,6 +67,11 @@ run_*.txt
 derived_assets/
 artifacts/
 /external/tools/
+/imgui.ini
+
+# Local scene-authoring drafts are machine-specific. Promote scenes to the
+# parent directory explicitly when they become project fixtures.
+/assets/scenes/local/
 
 # ---------- Local rendering references ----------
 # The index and fetch script are versioned; downloaded third-party source,
