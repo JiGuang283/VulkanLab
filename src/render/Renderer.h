@@ -6,11 +6,12 @@
 #include "core/SwapChain.h"
 #include "render/RenderGraph.h"
 #include "render/RenderFrame.h"
+#include "render/RenderFeatureState.h"
 #include "render/FrameGpuData.h"
 #include "render/GpuPassProfiler.h"
 #include "render/RenderResourceRegistry.h"
 #include "render/RenderSettings.h"
-#include "render/RendererShaderPaths.h"
+#include "render/RendererProgramCatalog.h"
 #include "render/Atmosphere.h"
 #include "render/Visibility.h"
 #include "scene_data/SceneIds.h"
@@ -28,6 +29,7 @@ namespace vkr {
 
 class DescriptorAllocator;
 class MaterialSystem;
+class ShaderRegistry;
 struct EnvironmentGpuResources;
 class GuiSystem;
 class MainForwardPass;
@@ -170,8 +172,8 @@ class Renderer {
   public:
     Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
              DescriptorAllocator &descriptorAllocator,
-             MaterialSystem &materialSystem,
-             RendererShaderPaths shaderPaths);
+             MaterialSystem &materialSystem, const ShaderRegistry &shaderRegistry,
+             MaterialBindingMode materialBindingMode);
     ~Renderer();
 
     Renderer(const Renderer &) = delete;
@@ -224,6 +226,10 @@ class Renderer {
     const std::string &atmosphereUnsupportedReason() const;
     AtmosphereRuntimeStatus atmosphereStatus() const;
     DdgiRuntimeStatus ddgiStatus() const;
+    RenderFeatureSupport featureSupport() const;
+    RenderFeatureRuntimeState featureRuntimeState() const {
+        return featureRuntimeState_;
+    }
 
     // ---- per-frame UBO 访问器 ----
   private:
@@ -273,6 +279,11 @@ class Renderer {
     void freeLightingGeneration(
         LightingDescriptorGeneration &generation);
     void createRenderGraph();
+    void registerAtmosphereShadowFeatures();
+    void registerSurfaceVisibilityFeatures();
+    void registerIndirectLightingPreparationFeatures();
+    void registerSceneLightingFeatures();
+    void registerPostProcessFeatures();
     VkDescriptorSet globalDescriptorSet(uint32_t frameIndex) const;
 
     Device    *device_;
@@ -312,13 +323,14 @@ class Renderer {
     RenderImageHandle activeDirectionalShadowImage_{};
     RenderImageHandle activePointShadowImage_{};
     RenderImageHandle activeSpotShadowImage_{};
-    RendererShaderPaths shaderPaths_;
+    RendererProgramCatalog programs_;
     RenderGraph renderGraph_;
     std::unique_ptr<GpuPassProfiler> gpuPassProfiler_;
     MainForwardPass *mainForwardPass_ = nullptr;
     SurfacePrepass *surfacePrepass_ = nullptr;
     bool lastSurfaceDataActive_ = false;
     ScreenSpaceEffectsStatus screenSpaceStatus_{};
+    RenderFeatureRuntimeState featureRuntimeState_{};
     CacaoPass *cacaoPass_ = nullptr;
     GtaoPass *gtaoPass_ = nullptr;
     SsrPass *ssrPass_ = nullptr;

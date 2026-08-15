@@ -10,6 +10,7 @@
 #include "core/UploadContext.h"
 #include "core/VulkanCheck.h"
 #include "render/FrameGpuData.h"
+#include "render/FrameFeatureResolver.h"
 #include "render/EnvironmentGpuResources.h"
 #include "render/GuiSystem.h"
 #include "render/MaterialSystem.h"
@@ -72,12 +73,14 @@ uint32_t nextSceneLightCapacity(uint32_t required) {
 Renderer::Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
                    DescriptorAllocator &descriptorAllocator,
                    MaterialSystem &materialSystem,
-                   RendererShaderPaths shaderPaths)
+                   const ShaderRegistry &shaderRegistry,
+                   MaterialBindingMode materialBindingMode)
     : device_(&device), swapChain_(&swapChain), frameSync_(&frameSync),
       descriptorAllocator_(&descriptorAllocator),
       materialSystem_(&materialSystem),
       uniformBufferSize_(sizeof(GlobalFrameUbo)),
-      shaderPaths_(std::move(shaderPaths)) {
+      programs_(RendererProgramCatalog::resolve(shaderRegistry,
+                                                materialBindingMode)) {
     rayTracingScene_ = std::make_unique<RayTracingScene>(device);
     createUniformBuffers();
     createSceneLightBuffers();
@@ -193,87 +196,30 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     updateReflectionProbes(view, frame.frameIndex);
     collectRetiredLightingGenerations();
 
-    const ScreenSpaceEffectsSupport &screenSupport =
-        device_->screenSpaceEffectsSupport();
-    const bool ssaoDebugRequested =
-        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsaoRaw ||
-        view.settings.screenSpaceDebugView ==
-            ScreenSpaceDebugView::SsaoFiltered;
-    const bool cacaoDebugRequested =
-        view.settings.screenSpaceDebugView ==
-        ScreenSpaceDebugView::CacaoOutput;
-    const bool gtaoDebugRequested =
-        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::GtaoRaw ||
-        view.settings.screenSpaceDebugView ==
-            ScreenSpaceDebugView::GtaoTemporal ||
-        view.settings.screenSpaceDebugView ==
-            ScreenSpaceDebugView::GtaoFiltered ||
-        view.settings.screenSpaceDebugView ==
-            ScreenSpaceDebugView::GtaoRejection ||
-        view.settings.screenSpaceDebugView ==
-            ScreenSpaceDebugView::GtaoHistoryWeight;
-    const bool ssaoShadingActive =
-        screenSupport.ssaoAvailable && shaderVariant.supportsScreenSpace &&
-        view.settings.ambientOcclusionMode == AmbientOcclusionMode::Ssao;
-    const bool ssaoPassRequired = ssaoShadingActive || ssaoDebugRequested;
-    const bool cacaoReady = cacaoPass_ && cacaoPass_->status().initialized;
-    const bool cacaoShadingActive =
-        cacaoReady && shaderVariant.supportsScreenSpace &&
-        view.settings.ambientOcclusionMode == AmbientOcclusionMode::Cacao;
-    const bool cacaoPassRequired =
-        cacaoReady && (cacaoShadingActive || cacaoDebugRequested);
-    const bool gtaoShadingActive =
-        screenSupport.gtaoAvailable && shaderVariant.supportsScreenSpace &&
-        view.settings.ambientOcclusionMode == AmbientOcclusionMode::Gtao;
-    const bool gtaoPassRequired =
-        screenSupport.gtaoAvailable &&
-        (gtaoShadingActive || gtaoDebugRequested);
-    const bool taaDebugRequested =
-        isTaaDebugView(view.settings.screenSpaceDebugView);
-    const bool taaShadingActive =
-        screenSupport.taaAvailable &&
-        view.settings.temporalAntiAliasingMode ==
-            TemporalAntiAliasingMode::Taa;
-    const bool taaPassRequired =
-        screenSupport.taaAvailable &&
-        (taaShadingActive || taaDebugRequested);
-    const bool ssrDebugRequested =
-        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsrRaw ||
-        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsrTemporal ||
-        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsrFiltered ||
-        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsrConfidence ||
-        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsrRejection;
-    const bool ssrShadingActive =
-        screenSupport.ssrAvailable && shaderVariant.supportsScreenSpace &&
-        view.settings.reflectionMode == ReflectionMode::Ssr;
-    const bool ssrPassRequired = screenSupport.ssrAvailable &&
-        (ssrShadingActive || ssrDebugRequested);
-    const bool ssgiDebugRequested =
-        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsgiRaw ||
-        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsgiTemporal ||
-        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsgiFiltered ||
-        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsgiConfidence ||
-        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsgiVariance ||
-        view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SsgiRejection;
-    const bool ssgiShadingActive =
-        screenSupport.ssgiAvailable && shaderVariant.supportsScreenSpace &&
-        view.settings.ddgi.debugView == DdgiDebugView::None &&
-        (view.settings.globalIlluminationMode == GlobalIlluminationMode::Ssgi ||
-         view.settings.globalIlluminationMode ==
-             GlobalIlluminationMode::SsgiDdgi);
-    const bool ssgiPassRequired = screenSupport.ssgiAvailable &&
-        (ssgiShadingActive || ssgiDebugRequested);
-    const bool ddgiShadingActive =
-        ddgiPass_ && device_->ddgiSupport().available &&
-        shaderVariant.supportsDdgi && view.ddgi.active;
-    const bool ddgiPassRequired = ddgiShadingActive;
+    const RenderFeatureSupport support = featureSupport();
+    FrameFeatureResolveInput featureInput;
+    featureInput.settings = &view.settings;
+    featureInput.shaderVariant = &shaderVariant;
+    featureInput.support = &support;
+    featureInput.atmosphereActive =
+        view.atmosphere.active && atmosphereLutPass_;
+    featureInput.transparentVisible =
+        !visibility.cameraTransparent.empty();
+    featureInput.directionalShadowActive = view.shadow.csm.enabled;
+    featureInput.directionalShadowCascadeCount = kCsmCascadeCount;
+    featureInput.pointShadowLightCount =
+        view.shadow.punctual.activePointCount;
+    featureInput.spotShadowLightCount =
+        view.shadow.punctual.activeSpotCount;
+    featureInput.occlusionCandidates =
+        visibility.cpuStats.occlusionCandidates;
+    featureInput.ddgiSceneActive = view.ddgi.active;
+    featureInput.captureRequested = static_cast<bool>(screenshotCopy);
+    featureInput.captureSource = captureSource;
+    FrameFeatureResolution featureResolution =
+        resolveFrameFeatures(featureInput);
     const AmbientOcclusionMode activeAoMode =
-        gtaoShadingActive
-            ? AmbientOcclusionMode::Gtao
-            : (cacaoShadingActive
-                   ? AmbientOcclusionMode::Cacao
-                   : (ssaoShadingActive ? AmbientOcclusionMode::Ssao
-                                        : AmbientOcclusionMode::Off));
+        featureResolution.runtime.activeAmbientOcclusion;
     ScreenSpaceLightingUbo screenUbo{};
     const VkExtent2D screenExtent = renderResources_->viewportExtent();
     screenUbo.viewportSizeInvSize =
@@ -334,22 +280,7 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.atmosphereReady =
         atmosphereLutPass_ &&
         atmosphereLutPass_->readyFor(view.atmosphere.staticLutKey);
-    renderFrame.features.atmosphereRequired =
-        view.atmosphere.active && atmosphereLutPass_;
-    renderFrame.features.transparentRequired =
-        !visibility.cameraTransparent.empty();
-    renderFrame.features.directionalShadowRequired =
-        view.shadow.csm.enabled;
-    renderFrame.features.pointShadowRequired =
-        view.shadow.punctual.activePointCount > 0;
-    renderFrame.features.spotShadowRequired =
-        view.shadow.punctual.activeSpotCount > 0;
-    renderFrame.features.directionalShadowCascadeCount =
-        view.shadow.csm.enabled ? kCsmCascadeCount : 0;
-    renderFrame.features.pointShadowLightCount =
-        view.shadow.punctual.activePointCount;
-    renderFrame.features.spotShadowLightCount =
-        view.shadow.punctual.activeSpotCount;
+    renderFrame.features = featureResolution.features;
     const RenderImageHandle directionalShadowImage =
         renderFrame.features.directionalShadowRequired
             ? resourceHandles_.directionalShadowDepth
@@ -379,70 +310,6 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     activeDirectionalShadowImage_ = directionalShadowImage;
     activePointShadowImage_ = pointShadowImage;
     activeSpotShadowImage_ = spotShadowImage;
-    const bool occlusionWorkRequired =
-        device_->occlusionCullingSupport().available &&
-        view.settings.culling.occlusionEnabled &&
-        visibility.cpuStats.occlusionCandidates >=
-            view.settings.culling.occlusionMinCandidates;
-    const SurfaceDebugView surfaceDebug =
-        view.settings.surfaceDebugView;
-    renderFrame.features.surfaceAlbedoRequired = ssgiPassRequired;
-    renderFrame.features.surfaceMotionRequired =
-        surfaceDebug == SurfaceDebugView::Motion || gtaoPassRequired ||
-        ssrPassRequired || ssgiPassRequired || taaPassRequired;
-    renderFrame.features.surfaceNormalsRequired =
-        surfaceDebug != SurfaceDebugView::None ||
-        (screenSupport.ssaoAvailable && ssaoPassRequired) ||
-        (device_->cacaoSupport().available && cacaoPassRequired) ||
-        gtaoPassRequired || ssrPassRequired || ssgiPassRequired ||
-        taaPassRequired;
-    renderFrame.features.surfaceDataRequired =
-        device_->surfaceDataSupport().available &&
-        (renderFrame.features.transparentRequired ||
-         occlusionWorkRequired ||
-         renderFrame.features.surfaceNormalsRequired ||
-         renderFrame.features.surfaceMotionRequired ||
-         renderFrame.features.surfaceAlbedoRequired ||
-         view.settings.screenSpaceDebugView ==
-             ScreenSpaceDebugView::NearestDepth);
-    renderFrame.features.hiZRequired = occlusionWorkRequired;
-    renderFrame.features.occlusionRequired =
-        renderFrame.features.hiZRequired;
-    renderFrame.features.screenDepthPyramidRequired =
-        screenSupport.depthPyramidAvailable &&
-        (view.settings.screenSpaceDebugView ==
-             ScreenSpaceDebugView::NearestDepth ||
-         gtaoPassRequired);
-    renderFrame.features.screenDepthPyramidRequired =
-        renderFrame.features.screenDepthPyramidRequired || ssrPassRequired ||
-        ssgiPassRequired;
-    renderFrame.features.sceneColorPyramidRequired =
-        screenSupport.colorPyramidAvailable &&
-        (view.settings.screenSpaceDebugView == ScreenSpaceDebugView::SceneColor ||
-         ssrPassRequired || ssgiPassRequired);
-    renderFrame.features.ssaoRequired =
-        screenSupport.ssaoAvailable && ssaoPassRequired;
-    renderFrame.features.ssaoActive = ssaoShadingActive;
-    renderFrame.features.cacaoRequired = cacaoPassRequired;
-    renderFrame.features.cacaoActive = cacaoShadingActive;
-    renderFrame.features.gtaoRequired = gtaoPassRequired;
-    renderFrame.features.gtaoActive = gtaoShadingActive;
-    renderFrame.features.taaRequired = taaPassRequired;
-    renderFrame.features.taaActive = taaShadingActive;
-    renderFrame.features.ssrRequired = ssrPassRequired;
-    renderFrame.features.ssrActive = ssrShadingActive;
-    renderFrame.features.ssgiRequired = ssgiPassRequired;
-    renderFrame.features.ssgiActive = ssgiShadingActive;
-    renderFrame.features.lightingCompositeRequired =
-        ssrShadingActive || ssgiShadingActive;
-    renderFrame.features.ddgiRequired = ddgiPassRequired;
-    renderFrame.features.ddgiActive = ddgiShadingActive;
-    renderFrame.features.bloomRequired =
-        view.settings.bloomEnabled && shaderVariant.supportsBloom;
-    renderFrame.features.captureRequired =
-        static_cast<bool>(screenshotCopy);
-    renderFrame.features.captureSource =
-        renderFrame.features.captureRequired ? captureSource : std::nullopt;
     renderFrame.screenshotCopy = std::move(screenshotCopy);
     renderGraph_.prepareGraph(renderFrame, *renderResources_, visibility);
     const RenderResourceResidencyUpdate residencyUpdate =
@@ -466,7 +333,7 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     renderFrame.lightingDescriptorSet =
         currentLightingGeneration_->sets.at(frame.frameIndex);
     updateScreenSpaceDescriptor(frame.frameIndex, activeAoMode);
-    if (!ddgiShadingActive)
+    if (!renderFrame.features.ddgiActive)
         ddgiPass_->disableSampling(frame.frameIndex, *renderResources_);
     lastSurfaceDataActive_ = renderFrame.features.surfaceDataRequired;
 
@@ -475,13 +342,7 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     screenSpaceStatus_.requestedGiMode =
         view.settings.globalIlluminationMode;
     screenSpaceStatus_.activeGiMode =
-        ssgiShadingActive && ddgiShadingActive
-            ? GlobalIlluminationMode::SsgiDdgi
-            : ssgiShadingActive
-                  ? GlobalIlluminationMode::Ssgi
-                  : ddgiShadingActive
-                        ? GlobalIlluminationMode::Ddgi
-                        : GlobalIlluminationMode::AmbientOrIbl;
+        featureResolution.runtime.activeGlobalIllumination;
     renderFrame.visibilityDrawStream =
         occlusionCullPass_
             ? &occlusionCullPass_->drawStream(frame.frameIndex)
@@ -494,13 +355,17 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
                          gpuPassProfiler_.get());
     const bool ddgiActuallyActive = ddgiPass_ && ddgiPass_->status().active;
     screenSpaceStatus_.activeGiMode =
-        ssgiShadingActive && ddgiActuallyActive
+        renderFrame.features.ssgiActive && ddgiActuallyActive
             ? GlobalIlluminationMode::SsgiDdgi
-            : ssgiShadingActive
+            : renderFrame.features.ssgiActive
                   ? GlobalIlluminationMode::Ssgi
                   : ddgiActuallyActive
                         ? GlobalIlluminationMode::Ddgi
                         : GlobalIlluminationMode::AmbientOrIbl;
+    featureRuntimeState_ = featureResolution.runtime;
+    featureRuntimeState_.activeGlobalIllumination =
+        screenSpaceStatus_.activeGiMode;
+    featureRuntimeState_.ddgiActive = ddgiActuallyActive;
     if (taaPass_) {
         const TaaPassStatus &taa = taaPass_->status();
         screenSpaceStatus_.taaActive = taa.active;
@@ -538,6 +403,14 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
         screenSpaceStatus_.ssgiLastFrameSerial = ssgi.lastFrameSerial;
         screenSpaceStatus_.ssgiLastResetReason = ssgi.lastResetReason;
     }
+    featureRuntimeState_.activeAmbientOcclusion =
+        screenSpaceStatus_.activeMode;
+    featureRuntimeState_.surfaceDataActive = lastSurfaceDataActive_;
+    featureRuntimeState_.taaActive = screenSpaceStatus_.taaActive;
+    featureRuntimeState_.ssrActive = screenSpaceStatus_.ssrActive;
+    featureRuntimeState_.ssgiActive = screenSpaceStatus_.ssgiActive;
+    featureRuntimeState_.occlusionCullingActive =
+        occlusionCullingStatus().active;
     if (atmosphereLutPass_)
         atmosphereStatus_ = atmosphereLutPass_->status();
 }
@@ -1483,6 +1356,34 @@ DdgiRuntimeStatus Renderer::ddgiStatus() const {
     return ddgiPass_ ? ddgiPass_->status() : DdgiRuntimeStatus{};
 }
 
+RenderFeatureSupport Renderer::featureSupport() const {
+    RenderFeatureSupport result;
+    result.bloom = {bloomSupported(), bloomUnsupportedReason()};
+
+    const OcclusionCullingStatus occlusion = occlusionCullingStatus();
+    result.occlusionCulling =
+        {occlusion.supported, occlusion.unavailableReason};
+    const SurfaceDataStatus surface = surfaceDataStatus();
+    result.surfaceData = {surface.supported, surface.unavailableReason};
+
+    const ScreenSpaceEffectsStatus screen = screenSpaceEffectsStatus();
+    result.depthPyramid = {screen.depthPyramidSupported,
+                           screen.depthPyramidUnavailableReason};
+    result.colorPyramid = {screen.colorPyramidSupported,
+                           screen.colorPyramidUnavailableReason};
+    result.ssao = {screen.ssaoSupported, screen.ssaoUnavailableReason};
+    result.cacao = {screen.cacaoInitialized,
+                    screen.cacaoUnavailableReason};
+    result.gtao = {screen.gtaoSupported, screen.gtaoUnavailableReason};
+    result.taa = {screen.taaSupported, screen.taaUnavailableReason};
+    result.ssr = {screen.ssrSupported, screen.ssrUnavailableReason};
+    result.ssgi = {screen.ssgiSupported, screen.ssgiUnavailableReason};
+
+    const DdgiRuntimeStatus ddgi = ddgiStatus();
+    result.ddgi = {ddgi.supported, ddgi.unavailableReason};
+    return result;
+}
+
 SceneLightBufferStatus Renderer::sceneLightBufferStatus() const {
     SceneLightBufferStatus status{};
     status.activeLights = activeSceneLightCount_;
@@ -1680,227 +1581,6 @@ bool Renderer::reconfigureCacao(CacaoResolution resolution,
         return false;
     }
     return cacaoPass_->reconfigure(*renderResources_, resolution, error);
-}
-
-void Renderer::createRenderGraph() {
-    if (device_->atmosphereSupport().available) {
-        auto atmospherePass = std::make_unique<AtmosphereLutPass>(
-            *device_, *renderResources_, resourceHandles_,
-            *descriptorAllocator_, atmosphereDescriptorSetLayout_,
-            shaderPaths_.atmosphereTransmittanceComp,
-            shaderPaths_.atmosphereMultipleScatteringComp,
-            shaderPaths_.atmosphereSkyViewComp,
-            shaderPaths_.atmosphereAerialPerspectiveComp);
-        atmosphereLutPass_ = atmospherePass.get();
-        renderGraph_.addPass(std::move(atmospherePass));
-    }
-    renderGraph_.addPass(std::make_unique<DirectionalShadowPass>(
-        *device_, *renderResources_, resourceHandles_.directionalShadowDepth,
-        globalDescriptorSetLayout_,
-        shaderPaths_.shadowVert, shaderPaths_.shadowMaskFrag));
-    renderGraph_.addPass(std::make_unique<PointShadowPass>(
-        *device_, *renderResources_,
-        resourceHandles_.pointShadowDepthByCapacity,
-        *descriptorAllocator_,
-        shaderPaths_.shadowPunctualVert,
-        shaderPaths_.shadowPointFrag,
-        shaderPaths_.shadowPointMaskFrag));
-    renderGraph_.addPass(std::make_unique<SpotShadowPass>(
-        *device_, *renderResources_,
-        resourceHandles_.spotShadowDepthByCapacity,
-        *descriptorAllocator_,
-        shaderPaths_.shadowPunctualVert,
-        shaderPaths_.shadowSpotMaskFrag));
-
-    if (device_->surfaceDataSupport().available) {
-        auto surfacePass = std::make_unique<SurfacePrepass>(
-            *device_, *renderResources_, resourceHandles_,
-            *descriptorAllocator_, globalDescriptorSetLayout_,
-            shaderPaths_.surfacePrepassVert,
-            shaderPaths_.surfacePrepassOpaqueFrags,
-            shaderPaths_.surfacePrepassMaskFrags);
-        surfacePrepass_ = surfacePass.get();
-        renderGraph_.addPass(std::move(surfacePass));
-    }
-    if (device_->occlusionCullingSupport().available) {
-        renderGraph_.addPass(std::make_unique<HiZBuildPass>(
-            *device_, *renderResources_, resourceHandles_,
-            *descriptorAllocator_, shaderPaths_.visibilityHiZInitComp,
-            shaderPaths_.visibilityHiZReduceComp));
-        auto occlusionPass = std::make_unique<OcclusionCullPass>(
-            *device_, *renderResources_, resourceHandles_,
-            *descriptorAllocator_, shaderPaths_.visibilityOcclusionComp);
-        occlusionCullPass_ = occlusionPass.get();
-        renderGraph_.addPass(std::move(occlusionPass));
-    }
-
-    const ScreenSpaceEffectsSupport &screenSupport =
-        device_->screenSpaceEffectsSupport();
-    if (screenSupport.depthPyramidAvailable) {
-        renderGraph_.addPass(std::make_unique<ScreenSpacePyramidPass>(
-            *device_, *renderResources_,
-            ScreenSpacePyramidKind::NearestDepth,
-            resourceHandles_.surfaceDepth,
-            resourceHandles_.surfaceDepthSampler,
-            RenderImageHandle{}, RenderSamplerHandle{},
-            resourceHandles_.screenDepthPyramid,
-            resourceHandles_.screenPyramidSampler, *descriptorAllocator_,
-            shaderPaths_.screenDepthInitComp,
-            shaderPaths_.screenDepthReduceComp));
-    }
-    if (screenSupport.ssaoAvailable) {
-        renderGraph_.addPass(std::make_unique<SsaoPass>(
-            *device_, *renderResources_, resourceHandles_,
-            *descriptorAllocator_, globalDescriptorSetLayout_,
-            shaderPaths_.ssaoTraceComp, shaderPaths_.ssaoBlurComp));
-    }
-    if (screenSupport.gtaoAvailable) {
-        auto gtaoPass = std::make_unique<GtaoPass>(
-            *device_, *renderResources_, resourceHandles_,
-            *descriptorAllocator_, globalDescriptorSetLayout_,
-            shaderPaths_.gtaoTraceComp, shaderPaths_.gtaoTemporalComp,
-            shaderPaths_.ssaoBlurComp);
-        gtaoPass_ = gtaoPass.get();
-        renderGraph_.addPass(std::move(gtaoPass));
-    }
-    if (device_->cacaoSupport().available) {
-        renderGraph_.addPass(std::make_unique<CacaoNormalAdapterPass>(
-            *device_, *renderResources_, resourceHandles_,
-            *descriptorAllocator_, globalDescriptorSetLayout_,
-            shaderPaths_.cacaoNormalAdapterComp));
-        auto cacaoPass = std::make_unique<CacaoPass>(
-            *device_, *renderResources_, resourceHandles_,
-            CacaoResolution::Half);
-        cacaoPass_ = cacaoPass.get();
-        renderGraph_.addPass(std::move(cacaoPass));
-    }
-
-    auto ddgiPass = std::make_unique<DdgiPass>(
-        *device_, *renderResources_, resourceHandles_,
-        *descriptorAllocator_, globalDescriptorSetLayout_,
-        *rayTracingScene_, shaderPaths_.ddgiTraceComp,
-        shaderPaths_.ddgiUpdateComp);
-    ddgiPass_ = ddgiPass.get();
-    renderGraph_.addPass(
-        std::make_unique<RayTracingSceneBuildPass>(*rayTracingScene_));
-    renderGraph_.addPass(std::move(ddgiPass));
-
-    renderGraph_.addPass(std::make_unique<SkyBackgroundPass>(
-        *device_, *renderResources_, resourceHandles_,
-        globalDescriptorSetLayout_, lightingDescriptorSetLayout_,
-        atmosphereDescriptorSetLayout_, shaderPaths_.fullscreenVert,
-        shaderPaths_.skyboxFrag, shaderPaths_.atmosphereSkyFrag));
-
-    auto mainPass = std::make_unique<MainForwardPass>(
-        *device_, *renderResources_, resourceHandles_,
-        ForwardPhase::Opaque,
-        lightingDescriptorSetLayout_, atmosphereDescriptorSetLayout_,
-        ddgiPass_->samplingDescriptorSetLayout());
-    mainForwardPass_ = mainPass.get();
-    renderGraph_.addPass(std::move(mainPass));
-
-    if (screenSupport.colorPyramidAvailable) {
-        renderGraph_.addPass(std::make_unique<ScreenSpacePyramidPass>(
-            *device_, *renderResources_, ScreenSpacePyramidKind::SceneColor,
-            resourceHandles_.hdrColor, resourceHandles_.hdrSampler,
-            RenderImageHandle{}, RenderSamplerHandle{},
-            resourceHandles_.sceneColorPyramid,
-            resourceHandles_.screenPyramidSampler, *descriptorAllocator_,
-            shaderPaths_.screenColorInitComp,
-            shaderPaths_.screenColorReduceComp));
-    }
-
-    if (screenSupport.ssrAvailable) {
-        auto ssrPass = std::make_unique<SsrPass>(
-            *device_, *renderResources_, resourceHandles_,
-            *descriptorAllocator_, globalDescriptorSetLayout_,
-            shaderPaths_.ssrTraceComp, shaderPaths_.ssrTemporalComp,
-            shaderPaths_.ssrBlurComp);
-        ssrPass_ = ssrPass.get();
-        renderGraph_.addPass(std::move(ssrPass));
-    }
-
-    if (screenSupport.ssgiAvailable) {
-        auto ssgiPass = std::make_unique<SsgiPass>(
-            *device_, *renderResources_, resourceHandles_,
-            *descriptorAllocator_, globalDescriptorSetLayout_,
-            shaderPaths_.ssgiTraceComp, shaderPaths_.ssgiTemporalComp,
-            shaderPaths_.ssgiFilterComp);
-        ssgiPass_ = ssgiPass.get();
-        renderGraph_.addPass(std::move(ssgiPass));
-    }
-
-    RendererResourceHandles postProcessHandles = resourceHandles_;
-    renderGraph_.addPass(std::make_unique<HdrCompositePass>(
-        *device_, *renderResources_, resourceHandles_,
-        *descriptorAllocator_, shaderPaths_.reflectionCompositeComp));
-    renderGraph_.addPass(std::make_unique<MainForwardPass>(
-        *device_, *renderResources_, resourceHandles_,
-        ForwardPhase::Transparent,
-        lightingDescriptorSetLayout_, atmosphereDescriptorSetLayout_,
-        ddgiPass_->samplingDescriptorSetLayout()));
-
-    if (screenSupport.taaAvailable) {
-        auto taaPass = std::make_unique<TaaPass>(
-            *device_, *renderResources_, postProcessHandles,
-            *descriptorAllocator_, shaderPaths_.taaResolveComp);
-        taaPass_ = taaPass.get();
-        renderGraph_.addPass(std::move(taaPass));
-    }
-
-    if (device_->computeBloomSupport().available) {
-        renderGraph_.addPass(std::make_unique<BloomPass>(
-            *device_, *renderResources_, postProcessHandles,
-            *descriptorAllocator_, shaderPaths_.bloomDownsampleComp,
-            shaderPaths_.bloomUpsampleComp));
-    }
-
-    auto toneMapPass = std::make_unique<ToneMapPass>(
-        *device_, *renderResources_, postProcessHandles.hdrColor,
-        resourceHandles_.compositedHdrColor,
-        resourceHandles_.hdrSampler, resourceHandles_.bloomLevels.front(),
-        resourceHandles_.bloomSampler, resourceHandles_.viewportColor,
-        resourceHandles_.surfaceNormalRoughness,
-        resourceHandles_.surfaceMotion,
-        resourceHandles_.surfaceDataSampler,
-        resourceHandles_.screenDepthPyramid,
-        resourceHandles_.sceneColorPyramid,
-        resourceHandles_.ssaoRaw,
-        resourceHandles_.ssaoFiltered,
-        resourceHandles_.cacaoOutput,
-        resourceHandles_.gtaoRaw,
-        resourceHandles_.gtaoHistory,
-        resourceHandles_.gtaoFiltered,
-        resourceHandles_.gtaoDebug,
-        resourceHandles_.taaHistory,
-        resourceHandles_.taaDebug,
-        resourceHandles_.ssrRaw,
-        resourceHandles_.ssrHistory,
-        resourceHandles_.ssrFiltered,
-        resourceHandles_.ssrDebug,
-        resourceHandles_.ssgiRaw,
-        resourceHandles_.ssgiHistory,
-        resourceHandles_.ssgiFiltered,
-        resourceHandles_.ssgiDebug,
-        resourceHandles_.screenPyramidSampler,
-        resourceHandles_.ssaoSampler,
-        resourceHandles_.taaSampler,
-        resourceHandles_.ssrSampler,
-        resourceHandles_.ssgiSampler,
-        *descriptorAllocator_,
-        shaderPaths_.fullscreenVert, shaderPaths_.toneMapFrag);
-    toneMapPass_ = toneMapPass.get();
-    renderGraph_.addPass(std::move(toneMapPass));
-
-    auto presentPass = std::make_unique<PresentPass>(
-        *device_, *swapChain_, *renderResources_,
-        resourceHandles_.viewportColor, resourceHandles_.viewportSampler,
-        *descriptorAllocator_, shaderPaths_.fullscreenVert,
-        shaderPaths_.presentFrag);
-    presentPass_ = presentPass.get();
-    renderGraph_.addPass(std::move(presentPass));
-    renderGraph_.addPass(
-        std::make_unique<ScreenshotCopyPass>(resourceHandles_));
 }
 
 const GpuPassTimings &Renderer::gpuPassTimings() const {

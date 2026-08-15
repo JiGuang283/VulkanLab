@@ -1,4 +1,5 @@
 #include "Application.h"
+#include "RenderSettingsController.h"
 #include "SceneRuntimeCoordinator.h"
 #include "SceneWorkflowController.h"
 
@@ -49,7 +50,6 @@
 #include "render/PipelineCache.h"
 #include "render/RenderView.h"
 #include "render/Renderer.h"
-#include "render/RendererShaderPaths.h"
 #include "render/TemporalAA.h"
 #include "render/RayTracingScene.h"
 #include "render/pass/DdgiPass.h"
@@ -684,12 +684,14 @@ Application::Application(const Config &config, ProjectContext projectContext,
       sceneRegistry_(sceneWorkflow_->entries()) {
     if (config_.derivedTextureCachePath.empty())
         config_.derivedTextureCachePath = projectContext_.cacheRoot.u8string();
-    shaderRegistry_ = ShaderRegistry::load(
+    renderSettingsController_ = std::make_unique<RenderSettingsController>(
         projectContext_.resolveRuntimePath("shader/manifest.json"));
-    currentShaderVariantId_ = shaderRegistry_.defaultVariant().id;
+    const ShaderRegistry &shaderRegistry =
+        renderSettingsController_->shaderRegistry();
     VKR_LOG_INFO("ShaderRegistry", "Loaded {} programs and {} variants; default={}",
-                 shaderRegistry_.programs().size(),
-                 shaderRegistry_.variants().size(), currentShaderVariantId_);
+                 shaderRegistry.programs().size(),
+                 shaderRegistry.variants().size(),
+                 renderSettingsController_->currentShaderVariant().id);
     editorUi_ = std::make_unique<EditorUiState>();
 #if VKL_ENABLE_EDITOR_UI
     editorDockWorkspace_ = std::make_unique<EditorDockWorkspace>();
@@ -783,7 +785,7 @@ void Application::init() {
     descriptorAllocator_ = std::make_unique<DescriptorAllocator>(*device_);
     materialSystem_ = std::make_unique<MaterialSystem>(
         *device_, *descriptorAllocator_, config_.materialBindingMode,
-        shaderRegistry_.supportsBindlessMaterials());
+        renderSettingsController_->shaderRegistry().supportsBindlessMaterials());
     VKR_LOG_INFO(
         "Material",
         "Material binding: requested={} active={} textures={} materials={}{}",
@@ -799,152 +801,23 @@ void Application::init() {
             return window_->framebufferExtent();
         });
     frameSync_ = std::make_unique<FrameSync>(*device_, *swapChain_);
-    const ShaderProgram &shadowOpaque =
-        shaderRegistry_.program("shadow.opaque");
-    const ShaderProgram &shadowMask = shaderRegistry_.program("shadow.mask");
-    const ShaderProgram &shadowPointOpaque =
-        shaderRegistry_.program("shadow.point-opaque");
-    const ShaderProgram &shadowPointMask =
-        shaderRegistry_.program("shadow.point-mask");
-    const ShaderProgram &shadowSpotOpaque =
-        shaderRegistry_.program("shadow.spot-opaque");
-    const ShaderProgram &shadowSpotMask =
-        shaderRegistry_.program("shadow.spot-mask");
-    const ShaderProgram &surfacePrepassOpaque =
-        shaderRegistry_.program("surface.prepass-opaque");
-    const ShaderProgram &surfacePrepassMask =
-        shaderRegistry_.program("surface.prepass-mask");
-    const ShaderProgram &visibilityHiZInit =
-        shaderRegistry_.program("visibility.hiz-init");
-    const ShaderProgram &visibilityHiZReduce =
-        shaderRegistry_.program("visibility.hiz-reduce");
-    const ShaderProgram &visibilityOcclusion =
-        shaderRegistry_.program("visibility.occlusion-cull");
-    const ShaderProgram &screenDepthInit =
-        shaderRegistry_.program("screenspace.depth-init");
-    const ShaderProgram &screenDepthReduce =
-        shaderRegistry_.program("screenspace.depth-reduce");
-    const ShaderProgram &screenColorInit =
-        shaderRegistry_.program("screenspace.color-init");
-    const ShaderProgram &screenColorReduce =
-        shaderRegistry_.program("screenspace.color-reduce");
-    const ShaderProgram &ssaoTrace =
-        shaderRegistry_.program("screenspace.ssao-trace");
-    const ShaderProgram &ssaoBlur =
-        shaderRegistry_.program("screenspace.ssao-blur");
-    const ShaderProgram &cacaoNormalAdapter =
-        shaderRegistry_.program("screenspace.cacao-normal-adapter");
-    const ShaderProgram &gtaoTrace =
-        shaderRegistry_.program("screenspace.gtao-trace");
-    const ShaderProgram &gtaoTemporal =
-        shaderRegistry_.program("screenspace.gtao-temporal");
-    const ShaderProgram &ssrTrace =
-        shaderRegistry_.program("screenspace.ssr-trace");
-    const ShaderProgram &ssrTemporal =
-        shaderRegistry_.program("screenspace.ssr-temporal");
-    const ShaderProgram &ssrBlur =
-        shaderRegistry_.program("screenspace.ssr-blur");
-    const ShaderProgram &ssgiTrace =
-        shaderRegistry_.program("screenspace.ssgi-trace");
-    const ShaderProgram &ssgiTemporal =
-        shaderRegistry_.program("screenspace.ssgi-temporal");
-    const ShaderProgram &ssgiFilter =
-        shaderRegistry_.program("screenspace.ssgi-filter");
-    const ShaderProgram &reflectionComposite =
-        shaderRegistry_.program("screenspace.reflection-composite");
-    const ShaderProgram &taaResolve =
-        shaderRegistry_.program("postprocess.taa-resolve");
-    const ShaderProgram &toneMap =
-        shaderRegistry_.program("postprocess.tonemap");
-    const ShaderProgram &present =
-        shaderRegistry_.program("postprocess.present");
-    const ShaderProgram &bloomDownsample =
-        shaderRegistry_.program("postprocess.bloom-downsample");
-    const ShaderProgram &bloomUpsample =
-        shaderRegistry_.program("postprocess.bloom-upsample");
-    const ShaderProgram &skybox = shaderRegistry_.program("skybox");
-    const ShaderProgram &atmosphereTransmittance =
-        shaderRegistry_.program("atmosphere.transmittance");
-    const ShaderProgram &atmosphereMultipleScattering =
-        shaderRegistry_.program("atmosphere.multiple-scattering");
-    const ShaderProgram &atmosphereSkyView =
-        shaderRegistry_.program("atmosphere.sky-view");
-    const ShaderProgram &atmosphereAerialPerspective =
-        shaderRegistry_.program("atmosphere.aerial-perspective");
-    const ShaderProgram &atmosphereSky =
-        shaderRegistry_.program("atmosphere.sky");
-    const ShaderProgram &ddgiTrace =
-        shaderRegistry_.program("gi.ddgi-trace");
-    const ShaderProgram &ddgiUpdate =
-        shaderRegistry_.program("gi.ddgi-update");
-    const auto materialFragment = [this](const ShaderProgram &program)
-        -> const std::string & {
-        return program.fragmentSpvPath(materialSystem_->activeMode());
-    };
-    RendererShaderPaths shaderPaths;
-    shaderPaths.shadowVert = shadowOpaque.vertSpvPath;
-    shaderPaths.shadowMaskFrag = materialFragment(shadowMask);
-    shaderPaths.shadowPunctualVert =
-        shadowPointOpaque.vertSpvPath;
-    shaderPaths.shadowPointFrag = shadowPointOpaque.fragSpvPath;
-    shaderPaths.shadowPointMaskFrag = materialFragment(shadowPointMask);
-    if (shadowSpotOpaque.vertSpvPath !=
-        shaderPaths.shadowPunctualVert) {
-        throw std::runtime_error(
-            "point and spot shadow programs must share the punctual vertex shader");
-    }
-    shaderPaths.shadowSpotMaskFrag = materialFragment(shadowSpotMask);
-    shaderPaths.surfacePrepassVert = surfacePrepassOpaque.vertSpvPath;
-    for (uint32_t attachmentCount = 0; attachmentCount <= 3;
-         ++attachmentCount) {
-        shaderPaths.surfacePrepassOpaqueFrags[attachmentCount] =
-            surfacePrepassOpaque.fragmentSpvPath(
-                materialSystem_->activeMode(), attachmentCount);
-        shaderPaths.surfacePrepassMaskFrags[attachmentCount] =
-            surfacePrepassMask.fragmentSpvPath(
-                materialSystem_->activeMode(), attachmentCount);
-    }
-    shaderPaths.visibilityHiZInitComp = visibilityHiZInit.computeSpvPath;
-    shaderPaths.visibilityHiZReduceComp = visibilityHiZReduce.computeSpvPath;
-    shaderPaths.visibilityOcclusionComp = visibilityOcclusion.computeSpvPath;
-    shaderPaths.screenDepthInitComp = screenDepthInit.computeSpvPath;
-    shaderPaths.screenDepthReduceComp = screenDepthReduce.computeSpvPath;
-    shaderPaths.screenColorInitComp = screenColorInit.computeSpvPath;
-    shaderPaths.screenColorReduceComp = screenColorReduce.computeSpvPath;
-    shaderPaths.ssaoTraceComp = ssaoTrace.computeSpvPath;
-    shaderPaths.ssaoBlurComp = ssaoBlur.computeSpvPath;
-    shaderPaths.cacaoNormalAdapterComp = cacaoNormalAdapter.computeSpvPath;
-    shaderPaths.gtaoTraceComp = gtaoTrace.computeSpvPath;
-    shaderPaths.gtaoTemporalComp = gtaoTemporal.computeSpvPath;
-    shaderPaths.ssrTraceComp = ssrTrace.computeSpvPath;
-    shaderPaths.ssrTemporalComp = ssrTemporal.computeSpvPath;
-    shaderPaths.ssrBlurComp = ssrBlur.computeSpvPath;
-    shaderPaths.ssgiTraceComp = ssgiTrace.computeSpvPath;
-    shaderPaths.ssgiTemporalComp = ssgiTemporal.computeSpvPath;
-    shaderPaths.ssgiFilterComp = ssgiFilter.computeSpvPath;
-    shaderPaths.reflectionCompositeComp =
-        reflectionComposite.computeSpvPath;
-    shaderPaths.ddgiTraceComp = ddgiTrace.computeSpvPath;
-    shaderPaths.ddgiUpdateComp = ddgiUpdate.computeSpvPath;
-    shaderPaths.taaResolveComp = taaResolve.computeSpvPath;
-    shaderPaths.fullscreenVert = toneMap.vertSpvPath;
-    shaderPaths.toneMapFrag = toneMap.fragSpvPath;
-    shaderPaths.presentFrag = present.fragSpvPath;
-    shaderPaths.skyboxFrag = skybox.fragSpvPath;
-    shaderPaths.bloomDownsampleComp = bloomDownsample.computeSpvPath;
-    shaderPaths.bloomUpsampleComp = bloomUpsample.computeSpvPath;
-    shaderPaths.atmosphereTransmittanceComp =
-        atmosphereTransmittance.computeSpvPath;
-    shaderPaths.atmosphereMultipleScatteringComp =
-        atmosphereMultipleScattering.computeSpvPath;
-    shaderPaths.atmosphereSkyViewComp = atmosphereSkyView.computeSpvPath;
-    shaderPaths.atmosphereAerialPerspectiveComp =
-        atmosphereAerialPerspective.computeSpvPath;
-    shaderPaths.atmosphereSkyFrag = atmosphereSky.fragSpvPath;
     renderer_ = std::make_unique<Renderer>(
         *device_, *swapChain_, *frameSync_, *descriptorAllocator_,
-        *materialSystem_,
-        std::move(shaderPaths));
+        *materialSystem_, renderSettingsController_->shaderRegistry(),
+        materialSystem_->activeMode());
+    RenderSettingsCallbacks renderSettingsCallbacks;
+    renderSettingsCallbacks.reconfigureCacao = [this](CacaoResolution resolution) {
+        frameSync_->waitForAllFrames();
+        std::string error;
+        if (!renderer_->reconfigureCacao(resolution, error)) {
+            throw RenderSettingsError(
+                "cacao_reconfigure_failed",
+                error.empty() ? "Failed to reconfigure FidelityFX CACAO."
+                              : error);
+        }
+    };
+    renderSettingsController_->configure(
+        renderer_->featureSupport(), std::move(renderSettingsCallbacks));
 #if VKL_ENABLE_CAPTURE
     if (!projectContext_.cookedPackage) {
         captureService_ = std::make_unique<CaptureService>(
@@ -1037,10 +910,11 @@ void Application::init() {
                 publication.document->document.environment) {
                 const SceneEnvironmentDocument &environment =
                     *publication.document->document.environment;
-                renderSettings_.environmentIntensity =
-                    environment.intensity;
-                renderSettings_.environmentRotationRadians =
+                RenderSettingsPatch patch;
+                patch.environmentIntensity = environment.intensity;
+                patch.environmentRotationRadians =
                     environment.rotationRadians;
+                applyRenderSettings(patch);
             }
         };
     runtimeCallbacks.environmentPublished =
@@ -1263,249 +1137,28 @@ uint64_t Application::reloadCurrentEnvironment() {
 }
 
 void Application::setShaderVariant(const std::string &id) {
-    const ShaderVariant *variant = shaderRegistry_.findVariant(id);
-    if (!variant || variant->id != id)
-        throw RuntimeCommandError("invalid_shader", "Invalid shader ID.");
-    if (currentShaderVariantId_ == variant->id)
-        return;
-    currentShaderVariantId_ = variant->id;
-    VKR_LOG_INFO("Renderer", "Shader variant switched to {}",
-                 variant->displayName);
+    try {
+        const std::string previous = currentShaderVariant().id;
+        renderSettingsController_->setShaderVariant(id);
+        if (previous != id) {
+            VKR_LOG_INFO("Renderer", "Shader variant switched to {}",
+                         currentShaderVariant().displayName);
+        }
+    } catch (const RenderSettingsError &error) {
+        throw RuntimeCommandError(error.code(), error.what());
+    }
 }
 
 void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
-    if (patch.bloomEnabled && *patch.bloomEnabled && renderer_ &&
-        !renderer_->bloomSupported()) {
-        throw RuntimeCommandError(
-            "bloom_unsupported",
-            "Compute Bloom is unavailable: " +
-                renderer_->bloomUnsupportedReason());
+    try {
+        renderSettingsController_->apply(patch);
+    } catch (const RenderSettingsError &error) {
+        throw RuntimeCommandError(error.code(), error.what());
     }
-    if (patch.occlusionCullingEnabled && *patch.occlusionCullingEnabled &&
-        renderer_ && !renderer_->occlusionCullingStatus().supported) {
-        throw RuntimeCommandError(
-            "occlusion_unsupported",
-            "GPU occlusion culling is unavailable: " +
-                renderer_->occlusionCullingStatus().unavailableReason);
-    }
-    if (patch.surfaceDebugView &&
-        *patch.surfaceDebugView != SurfaceDebugView::None && renderer_ &&
-        !renderer_->surfaceDataStatus().supported) {
-        throw RuntimeCommandError(
-            "surface_data_unsupported",
-            "Surface data is unavailable: " +
-                renderer_->surfaceDataStatus().unavailableReason);
-    }
-    if (patch.ambientOcclusionMode &&
-        *patch.ambientOcclusionMode == AmbientOcclusionMode::Ssao &&
-        renderer_ && !renderer_->screenSpaceEffectsStatus().ssaoSupported) {
-        throw RuntimeCommandError(
-            "ssao_unsupported",
-            "SSAO is unavailable: " +
-                renderer_->screenSpaceEffectsStatus().ssaoUnavailableReason);
-    }
-    if (patch.ambientOcclusionMode &&
-        *patch.ambientOcclusionMode == AmbientOcclusionMode::Cacao &&
-        renderer_ && !renderer_->screenSpaceEffectsStatus().cacaoInitialized) {
-        throw RuntimeCommandError(
-            "cacao_unsupported",
-            "FidelityFX CACAO is unavailable: " +
-                renderer_->screenSpaceEffectsStatus().cacaoUnavailableReason);
-    }
-    if (patch.ambientOcclusionMode &&
-        *patch.ambientOcclusionMode == AmbientOcclusionMode::Gtao && renderer_ &&
-        !renderer_->screenSpaceEffectsStatus().gtaoSupported) {
-        throw RuntimeCommandError(
-            "gtao_unsupported",
-            "GTAO is unavailable: " +
-                renderer_->screenSpaceEffectsStatus().gtaoUnavailableReason);
-    }
-    if (patch.temporalAntiAliasingMode &&
-        *patch.temporalAntiAliasingMode == TemporalAntiAliasingMode::Taa &&
-        renderer_ && !renderer_->screenSpaceEffectsStatus().taaSupported) {
-        throw RuntimeCommandError(
-            "taa_unsupported",
-            "TAA is unavailable: " +
-                renderer_->screenSpaceEffectsStatus().taaUnavailableReason);
-    }
-    if (patch.reflectionMode &&
-        *patch.reflectionMode == ReflectionMode::Ssr && renderer_ &&
-        !renderer_->screenSpaceEffectsStatus().ssrSupported) {
-        throw RuntimeCommandError(
-            "ssr_unsupported",
-            "SSR is unavailable: " +
-                renderer_->screenSpaceEffectsStatus().ssrUnavailableReason);
-    }
-    if (patch.globalIlluminationMode &&
-        (*patch.globalIlluminationMode == GlobalIlluminationMode::Ssgi ||
-         *patch.globalIlluminationMode == GlobalIlluminationMode::SsgiDdgi) &&
-        renderer_ && !renderer_->screenSpaceEffectsStatus().ssgiSupported) {
-        throw RuntimeCommandError(
-            "ssgi_unsupported",
-            "SSGI is unavailable: " +
-                renderer_->screenSpaceEffectsStatus().ssgiUnavailableReason);
-    }
-    if (patch.globalIlluminationMode &&
-        (*patch.globalIlluminationMode == GlobalIlluminationMode::Ddgi ||
-         *patch.globalIlluminationMode == GlobalIlluminationMode::SsgiDdgi) &&
-        renderer_ && !renderer_->ddgiStatus().supported) {
-        throw RuntimeCommandError(
-            "ddgi_unsupported",
-            "DDGI is unavailable: " +
-                renderer_->ddgiStatus().unavailableReason);
-    }
-    if (patch.surfaceDebugView && patch.screenSpaceDebugView &&
-        *patch.surfaceDebugView != SurfaceDebugView::None &&
-        *patch.screenSpaceDebugView != ScreenSpaceDebugView::None) {
-        throw RuntimeCommandError(
-            "conflicting_debug_views",
-            "Surface and screen-space debug views cannot be active together.");
-    }
-    if (patch.screenSpaceDebugView && renderer_) {
-        const ScreenSpaceEffectsStatus status =
-            renderer_->screenSpaceEffectsStatus();
-        const ScreenSpaceDebugView view = *patch.screenSpaceDebugView;
-        const bool supported =
-            view == ScreenSpaceDebugView::None ||
-            (view == ScreenSpaceDebugView::NearestDepth &&
-             status.depthPyramidSupported) ||
-            (view == ScreenSpaceDebugView::SceneColor &&
-             status.colorPyramidSupported) ||
-            ((view == ScreenSpaceDebugView::SsaoRaw ||
-              view == ScreenSpaceDebugView::SsaoFiltered) &&
-              status.ssaoSupported) ||
-            (view == ScreenSpaceDebugView::CacaoOutput &&
-             status.cacaoInitialized) ||
-            ((view == ScreenSpaceDebugView::GtaoRaw ||
-              view == ScreenSpaceDebugView::GtaoTemporal ||
-              view == ScreenSpaceDebugView::GtaoFiltered ||
-              view == ScreenSpaceDebugView::GtaoRejection ||
-              view == ScreenSpaceDebugView::GtaoHistoryWeight) &&
-             status.gtaoSupported) ||
-            ((view == ScreenSpaceDebugView::TaaHistory ||
-              view == ScreenSpaceDebugView::TaaRejection ||
-              view == ScreenSpaceDebugView::TaaHistoryWeight) &&
-             status.taaSupported) ||
-            ((view == ScreenSpaceDebugView::SsrRaw ||
-              view == ScreenSpaceDebugView::SsrTemporal ||
-              view == ScreenSpaceDebugView::SsrFiltered ||
-              view == ScreenSpaceDebugView::SsrConfidence ||
-              view == ScreenSpaceDebugView::SsrRejection) &&
-             status.ssrSupported) ||
-            ((view == ScreenSpaceDebugView::SsgiRaw ||
-              view == ScreenSpaceDebugView::SsgiTemporal ||
-              view == ScreenSpaceDebugView::SsgiFiltered ||
-              view == ScreenSpaceDebugView::SsgiConfidence ||
-              view == ScreenSpaceDebugView::SsgiVariance ||
-              view == ScreenSpaceDebugView::SsgiRejection) &&
-             status.ssgiSupported);
-        if (!supported) {
-            throw RuntimeCommandError(
-                "screen_space_unsupported",
-                "The requested screen-space debug resource is unavailable.");
-        }
-    }
-    RenderSettings next = renderSettings_;
-    applyRenderSettingsPatch(next, patch);
-    if (patch.surfaceDebugView &&
-        *patch.surfaceDebugView != SurfaceDebugView::None) {
-        next.screenSpaceDebugView = ScreenSpaceDebugView::None;
-    }
-    if (patch.screenSpaceDebugView &&
-        *patch.screenSpaceDebugView != ScreenSpaceDebugView::None) {
-        next.surfaceDebugView = SurfaceDebugView::None;
-    }
-    next.shadowReceiverBias =
-        glm::clamp(next.shadowReceiverBias, 0.0f, 0.05f);
-    next.pointShadowReceiverBiasWorld =
-        glm::clamp(next.pointShadowReceiverBiasWorld, 0.0f, 1.0f);
-    next.shadowConstantBias =
-        glm::clamp(next.shadowConstantBias, 0.0f, 10.0f);
-    next.shadowSlopeBias = glm::clamp(next.shadowSlopeBias, 0.0f, 10.0f);
-    next.maxPointShadowLights =
-        std::min(next.maxPointShadowLights, kMaxPointShadowLights);
-    next.maxSpotShadowLights =
-        std::min(next.maxSpotShadowLights, kMaxSpotShadowLights);
-    next.pointShadowDistance =
-        glm::clamp(next.pointShadowDistance, kMinPunctualShadowDistance,
-                   kMaxPunctualShadowDistance);
-    next.spotShadowDistance =
-        glm::clamp(next.spotShadowDistance, kMinPunctualShadowDistance,
-                   kMaxPunctualShadowDistance);
-    next.exposureEv = glm::clamp(next.exposureEv, -10.0f, 10.0f);
-    next.bloomThreshold =
-        glm::clamp(next.bloomThreshold, 0.0f, 20.0f);
-    next.bloomSoftKnee =
-        glm::clamp(next.bloomSoftKnee, 0.0f, 1.0f);
-    next.bloomIntensity =
-        glm::clamp(next.bloomIntensity, 0.0f, 5.0f);
-    next.environmentIntensity =
-        glm::clamp(next.environmentIntensity, 0.0f, 100.0f);
-    next.environmentRotationRadians =
-        std::remainder(next.environmentRotationRadians,
-                       glm::two_pi<float>());
-    next.surfaceMotionDebugScale =
-        glm::clamp(next.surfaceMotionDebugScale, 0.1f, 1024.0f);
-    next.ssaoRadius = glm::clamp(next.ssaoRadius, 0.05f, 10.0f);
-    next.ssaoBias = glm::clamp(next.ssaoBias, 0.0f, 0.2f);
-    next.ssaoIntensity = glm::clamp(next.ssaoIntensity, 0.0f, 4.0f);
-    next.ssaoPower = glm::clamp(next.ssaoPower, 0.25f, 4.0f);
-    next.cacao.radius = glm::clamp(next.cacao.radius, 0.05f, 10.0f);
-    next.cacao.intensity = glm::clamp(next.cacao.intensity, 0.0f, 4.0f);
-    next.cacao.power = glm::clamp(next.cacao.power, 0.25f, 4.0f);
-    next.gtao.radius = glm::clamp(next.gtao.radius, 0.05f, 10.0f);
-    next.gtao.falloff = glm::clamp(next.gtao.falloff, 0.0f, 0.99f);
-    next.gtao.intensity = glm::clamp(next.gtao.intensity, 0.0f, 4.0f);
-    next.gtao.power = glm::clamp(next.gtao.power, 0.25f, 4.0f);
-    next.gtao.temporalWeight =
-        glm::clamp(next.gtao.temporalWeight, 0.0f, 0.99f);
-    next.taaHistoryWeight =
-        glm::clamp(next.taaHistoryWeight, 0.0f, 0.99f);
-    next.taaSharpness = glm::clamp(next.taaSharpness, 0.0f, 1.0f);
-    next.ssrMaxDistance =
-        glm::clamp(next.ssrMaxDistance, 0.1f, 1000.0f);
-    next.ssrThickness = glm::clamp(next.ssrThickness, 0.001f, 10.0f);
-    next.ssrMaxRoughness = glm::clamp(next.ssrMaxRoughness, 0.0f, 1.0f);
-    next.ssrIntensity = glm::clamp(next.ssrIntensity, 0.0f, 4.0f);
-    next.ssrHistoryWeight =
-        glm::clamp(next.ssrHistoryWeight, 0.0f, 0.99f);
-    next.ssgiMaxDistance =
-        glm::clamp(next.ssgiMaxDistance, 0.05f, 1000.0f);
-    next.ssgiThickness = glm::clamp(next.ssgiThickness, 0.001f, 10.0f);
-    next.ssgiIntensity = glm::clamp(next.ssgiIntensity, 0.0f, 4.0f);
-    next.ssgiRadianceClamp =
-        glm::clamp(next.ssgiRadianceClamp, 0.1f, 100.0f);
-    next.ssgiHistoryWeight =
-        glm::clamp(next.ssgiHistoryWeight, 0.0f, 0.99f);
-    next.ddgi.radianceClamp =
-        glm::clamp(next.ddgi.radianceClamp, 0.1f, 100.0f);
-    next.screenSpaceDebugMip =
-        std::min(next.screenSpaceDebugMip, 31u);
-    next.culling.shadowDistance =
-        glm::clamp(next.culling.shadowDistance,
-                   kMinDirectionalShadowDistance,
-                   kMaxDirectionalShadowDistance);
-    next.culling.maxDrawDistance =
-        glm::clamp(next.culling.maxDrawDistance, 0.1f, 1000000.0f);
-    next.culling.minProjectedSizePixels = glm::clamp(
-        next.culling.minProjectedSizePixels, 0.0f, 256.0f);
-    next.culling.occlusionMinCandidates =
-        std::min(next.culling.occlusionMinCandidates, 65536u);
-    next.culling.occlusionDepthBias =
-        glm::clamp(next.culling.occlusionDepthBias, 0.0f, 0.05f);
-    if (renderer_ && frameSync_ &&
-        next.cacao.resolution != renderSettings_.cacao.resolution &&
-        renderer_->screenSpaceEffectsStatus().cacaoInitialized) {
-        frameSync_->waitForAllFrames();
-        std::string error;
-        if (!renderer_->reconfigureCacao(next.cacao.resolution, error)) {
-            throw RuntimeCommandError(
-                "cacao_reconfigure_failed",
-                error.empty() ? "Failed to reconfigure FidelityFX CACAO."
-                              : error);
-        }
-    }
-    renderSettings_ = next;
+}
+
+const RenderSettings &Application::renderSettings() const {
+    return renderSettingsController_->settings();
 }
 
 int Application::findSceneIndexByName(const std::string &name) const {
@@ -1620,9 +1273,11 @@ void Application::updateEditorModelBindings() {
             setEnvironment(environment->id);
         }
         if (environment) {
-            renderSettings_.environmentIntensity = environment->intensity;
-            renderSettings_.environmentRotationRadians =
+            RenderSettingsPatch patch;
+            patch.environmentIntensity = environment->intensity;
+            patch.environmentRotationRadians =
                 environment->rotationRadians;
+            applyRenderSettings(patch);
         }
     } catch (const std::exception &error) {
         editorUi_->sceneError = error.what();
@@ -2520,7 +2175,7 @@ ControlJson Application::runtimeAssetCacheInfo() {
 ControlJson Application::runtimeShaderList() {
     ControlJson shaders = ControlJson::array();
     ControlJson entries = ControlJson::array();
-    for (const auto &variant : shaderRegistry_.variants()) {
+    for (const auto &variant : renderSettingsController_->shaderRegistry().variants()) {
         shaders.push_back(variant.displayName);
         entries.push_back(
             {{"id", variant.id},
@@ -2543,10 +2198,10 @@ ControlJson Application::runtimeShaderCurrent() {
 }
 
 ControlJson Application::runtimeShaderSet(const std::string &name) {
-    const ShaderVariant *variant = shaderRegistry_.findVariant(name);
+    const ShaderVariant *variant = renderSettingsController_->shaderRegistry().findVariant(name);
     if (!variant) {
         ControlJson candidates = ControlJson::array();
-        for (const auto &candidate : shaderRegistry_.variants()) {
+        for (const auto &candidate : renderSettingsController_->shaderRegistry().variants()) {
             candidates.push_back(
                 {{"id", candidate.id}, {"name", candidate.displayName}});
         }
@@ -3033,12 +2688,12 @@ ControlJson Application::runtimeRenderStatus() {
           {"uploadedTotal", lastLightStats_.totalLights},
           {"pointShadowLights", lastLightStats_.pointShadowLights},
           {"spotShadowLights", lastLightStats_.spotShadowLights},
-          {"maxPointShadowLights", renderSettings_.maxPointShadowLights},
-          {"maxSpotShadowLights", renderSettings_.maxSpotShadowLights},
-          {"pointShadowDistance", renderSettings_.pointShadowDistance},
-          {"spotShadowDistance", renderSettings_.spotShadowDistance},
+          {"maxPointShadowLights", renderSettings().maxPointShadowLights},
+          {"maxSpotShadowLights", renderSettings().maxSpotShadowLights},
+          {"pointShadowDistance", renderSettings().pointShadowDistance},
+          {"spotShadowDistance", renderSettings().spotShadowDistance},
           {"pointShadowReceiverBiasWorld",
-           renderSettings_.pointShadowReceiverBiasWorld},
+           renderSettings().pointShadowReceiverBiasWorld},
           {"shadowSystemRevision",
            lastLightStats_.shadowContentRevision},
           {"shadowTemporalReactive",
@@ -3079,7 +2734,7 @@ ControlJson Application::runtimeRenderStatus() {
            visibilityFrame_.cpuStats.spotShadowDraws},
           {"depthPrepassDraws", visibilityFrame_.cpuStats.depthPrepassDraws},
           {"occlusionMinCandidates",
-           renderSettings_.culling.occlusionMinCandidates},
+           renderSettings().culling.occlusionMinCandidates},
           {"occlusionCandidates",
            cullingStatus.latestCandidates},
           {"gpuUncullable", cullingStatus.latestUncullable},
@@ -3095,8 +2750,8 @@ ControlJson Application::runtimeRenderStatus() {
           {"active", surfaceStatus.active},
           {"unavailableReason", surfaceStatus.unavailableReason},
           {"debugView", surfaceDebugViewName(
-                            renderSettings_.surfaceDebugView)},
-          {"motionDebugScale", renderSettings_.surfaceMotionDebugScale},
+                            renderSettings().surfaceDebugView)},
+          {"motionDebugScale", renderSettings().surfaceMotionDebugScale},
           {"depthFormat", static_cast<int32_t>(surfaceStatus.depthFormat)},
           {"normalRoughnessFormat",
            static_cast<int32_t>(surfaceStatus.normalRoughnessFormat)},
@@ -3124,8 +2779,8 @@ ControlJson Application::runtimeRenderStatus() {
           {"activeGiMode", globalIlluminationModeName(
                                screenSpaceStatus.activeGiMode)},
           {"debugView", screenSpaceDebugViewName(
-                            renderSettings_.screenSpaceDebugView)},
-          {"debugMip", renderSettings_.screenSpaceDebugMip},
+                            renderSettings().screenSpaceDebugView)},
+          {"debugMip", renderSettings().screenSpaceDebugMip},
           {"depthMipLevels", screenSpaceStatus.depthMipLevels},
           {"colorMipLevels", screenSpaceStatus.colorMipLevels},
           {"depthExtent",
@@ -3281,186 +2936,185 @@ ControlJson Application::runtimeRenderStatus() {
 }
 
 ControlJson Application::runtimeRenderSettingsGet() {
-    const OcclusionCullingStatus cullingStatus =
-        renderer_->occlusionCullingStatus();
+    const RenderSettingsSnapshot snapshot =
+        renderSettingsController_->snapshot();
+    const RenderSettings &settings = snapshot.requested;
     const ScreenSpaceEffectsStatus screenSpaceStatus =
         renderer_->screenSpaceEffectsStatus();
-    return {{"shadowsEnabled", renderSettings_.shadowsEnabled},
+    return {{"shadowsEnabled", settings.shadowsEnabled},
             {"shadowMapSize", kDirectionalShadowMapSize},
-            {"shadowReceiverBias", renderSettings_.shadowReceiverBias},
+            {"shadowReceiverBias", settings.shadowReceiverBias},
             {"pointShadowReceiverBiasWorld",
-             renderSettings_.pointShadowReceiverBiasWorld},
-            {"shadowConstantBias", renderSettings_.shadowConstantBias},
-            {"shadowSlopeBias", renderSettings_.shadowSlopeBias},
+             settings.pointShadowReceiverBiasWorld},
+            {"shadowConstantBias", settings.shadowConstantBias},
+            {"shadowSlopeBias", settings.shadowSlopeBias},
             {"maxPointShadowLights",
-             renderSettings_.maxPointShadowLights},
+             settings.maxPointShadowLights},
             {"maxSpotShadowLights",
-             renderSettings_.maxSpotShadowLights},
+             settings.maxSpotShadowLights},
             {"pointShadowDistance",
-             renderSettings_.pointShadowDistance},
+             settings.pointShadowDistance},
             {"spotShadowDistance",
-             renderSettings_.spotShadowDistance},
-            {"exposureEv", renderSettings_.exposureEv},
-            {"toneMapper", toneMapperName(renderSettings_.toneMapper)},
-            {"bloomEnabled", renderSettings_.bloomEnabled},
-            {"bloomThreshold", renderSettings_.bloomThreshold},
-            {"bloomSoftKnee", renderSettings_.bloomSoftKnee},
-            {"bloomIntensity", renderSettings_.bloomIntensity},
-            {"bloomAvailable", renderer_->bloomSupported()},
-            {"bloomActive",
-             renderer_->bloomSupported() &&
-                 renderSettings_.bloomEnabled &&
-                 currentShaderVariant().supportsBloom},
+             settings.spotShadowDistance},
+            {"exposureEv", settings.exposureEv},
+            {"toneMapper", toneMapperName(settings.toneMapper)},
+            {"bloomEnabled", settings.bloomEnabled},
+            {"bloomThreshold", settings.bloomThreshold},
+            {"bloomSoftKnee", settings.bloomSoftKnee},
+            {"bloomIntensity", settings.bloomIntensity},
+            {"bloomAvailable", snapshot.support.bloom.supported},
+            {"bloomActive", snapshot.runtime.bloomActive},
             {"bloomUnavailableReason",
-             renderer_->bloomSupported()
-                 ? std::string{}
-                 : renderer_->bloomUnsupportedReason()},
-            {"iblEnabled", renderSettings_.iblEnabled},
-            {"skyboxEnabled", renderSettings_.skyboxEnabled},
+             snapshot.support.bloom.unavailableReason},
+            {"iblEnabled", settings.iblEnabled},
+            {"skyboxEnabled", settings.skyboxEnabled},
             {"environmentIntensity",
-             renderSettings_.environmentIntensity},
+             settings.environmentIntensity},
             {"environmentRotationRadians",
-             renderSettings_.environmentRotationRadians},
+             settings.environmentRotationRadians},
             {"surfaceDebugView",
-             surfaceDebugViewName(renderSettings_.surfaceDebugView)},
+             surfaceDebugViewName(settings.surfaceDebugView)},
             {"surfaceMotionDebugScale",
-             renderSettings_.surfaceMotionDebugScale},
-            {"surfaceDataAvailable",
-             renderer_->surfaceDataStatus().supported},
-            {"surfaceDataActive", renderer_->surfaceDataStatus().active},
+             settings.surfaceMotionDebugScale},
+            {"surfaceDataAvailable", snapshot.support.surfaceData.supported},
+            {"surfaceDataActive", snapshot.runtime.surfaceDataActive},
             {"surfaceDataUnavailableReason",
-             renderer_->surfaceDataStatus().unavailableReason},
+             snapshot.support.surfaceData.unavailableReason},
             {"ambientOcclusionMode",
              ambientOcclusionModeName(
-                 renderSettings_.ambientOcclusionMode)},
+                 settings.ambientOcclusionMode)},
             {"ssaoQuality",
-             ssaoQualityName(renderSettings_.ssaoQuality)},
-            {"ssaoRadius", renderSettings_.ssaoRadius},
-            {"ssaoBias", renderSettings_.ssaoBias},
-            {"ssaoIntensity", renderSettings_.ssaoIntensity},
-            {"ssaoPower", renderSettings_.ssaoPower},
-            {"ssaoAvailable", screenSpaceStatus.ssaoSupported},
+             ssaoQualityName(settings.ssaoQuality)},
+            {"ssaoRadius", settings.ssaoRadius},
+            {"ssaoBias", settings.ssaoBias},
+            {"ssaoIntensity", settings.ssaoIntensity},
+            {"ssaoPower", settings.ssaoPower},
+            {"ssaoAvailable", snapshot.support.ssao.supported},
             {"ssaoActive",
-             screenSpaceStatus.activeMode == AmbientOcclusionMode::Ssao},
-             {"ssaoUnavailableReason",
-              screenSpaceStatus.ssaoUnavailableReason},
-             {"cacaoQuality",
-              cacaoQualityName(renderSettings_.cacao.quality)},
-             {"cacaoResolution",
-              cacaoResolutionName(renderSettings_.cacao.resolution)},
-             {"cacaoRadius", renderSettings_.cacao.radius},
-             {"cacaoIntensity", renderSettings_.cacao.intensity},
-             {"cacaoPower", renderSettings_.cacao.power},
-             {"cacaoCompiled", screenSpaceStatus.cacaoCompiled},
-             {"cacaoAvailable", screenSpaceStatus.cacaoInitialized},
-             {"cacaoActive",
-              screenSpaceStatus.activeMode == AmbientOcclusionMode::Cacao},
-             {"cacaoFp32", screenSpaceStatus.cacaoFp32},
-             {"cacaoGeneration", screenSpaceStatus.cacaoGeneration},
-              {"cacaoUnavailableReason",
-               screenSpaceStatus.cacaoUnavailableReason},
-             {"gtaoQuality",
-              gtaoQualityName(renderSettings_.gtao.quality)},
-             {"gtaoRadius", renderSettings_.gtao.radius},
-             {"gtaoFalloff", renderSettings_.gtao.falloff},
-             {"gtaoIntensity", renderSettings_.gtao.intensity},
-             {"gtaoPower", renderSettings_.gtao.power},
-             {"gtaoTemporalWeight", renderSettings_.gtao.temporalWeight},
-             {"gtaoAvailable", screenSpaceStatus.gtaoSupported},
-             {"gtaoActive", screenSpaceStatus.gtaoActive},
-             {"gtaoHistoryValid", screenSpaceStatus.gtaoHistoryValid},
-             {"gtaoHistoryGeneration",
-              screenSpaceStatus.gtaoHistoryGeneration},
-             {"gtaoLastResetReason",
-              screenSpaceStatus.gtaoLastResetReason},
-             {"gtaoUnavailableReason",
-              screenSpaceStatus.gtaoUnavailableReason},
+             snapshot.runtime.activeAmbientOcclusion ==
+                 AmbientOcclusionMode::Ssao},
+            {"ssaoUnavailableReason",
+             snapshot.support.ssao.unavailableReason},
+            {"cacaoQuality", cacaoQualityName(settings.cacao.quality)},
+            {"cacaoResolution",
+             cacaoResolutionName(settings.cacao.resolution)},
+            {"cacaoRadius", settings.cacao.radius},
+            {"cacaoIntensity", settings.cacao.intensity},
+            {"cacaoPower", settings.cacao.power},
+            {"cacaoCompiled", screenSpaceStatus.cacaoCompiled},
+            {"cacaoAvailable", snapshot.support.cacao.supported},
+            {"cacaoActive",
+             snapshot.runtime.activeAmbientOcclusion ==
+                 AmbientOcclusionMode::Cacao},
+            {"cacaoFp32", screenSpaceStatus.cacaoFp32},
+            {"cacaoGeneration", screenSpaceStatus.cacaoGeneration},
+            {"cacaoUnavailableReason",
+             snapshot.support.cacao.unavailableReason},
+            {"gtaoQuality", gtaoQualityName(settings.gtao.quality)},
+            {"gtaoRadius", settings.gtao.radius},
+            {"gtaoFalloff", settings.gtao.falloff},
+            {"gtaoIntensity", settings.gtao.intensity},
+            {"gtaoPower", settings.gtao.power},
+            {"gtaoTemporalWeight", settings.gtao.temporalWeight},
+            {"gtaoAvailable", snapshot.support.gtao.supported},
+            {"gtaoActive",
+             snapshot.runtime.activeAmbientOcclusion ==
+                 AmbientOcclusionMode::Gtao},
+            {"gtaoHistoryValid", screenSpaceStatus.gtaoHistoryValid},
+            {"gtaoHistoryGeneration",
+             screenSpaceStatus.gtaoHistoryGeneration},
+            {"gtaoLastResetReason",
+             screenSpaceStatus.gtaoLastResetReason},
+            {"gtaoUnavailableReason",
+             snapshot.support.gtao.unavailableReason},
             {"temporalAntiAliasingMode",
              temporalAntiAliasingModeName(
-                 renderSettings_.temporalAntiAliasingMode)},
-            {"taaHistoryWeight", renderSettings_.taaHistoryWeight},
-            {"taaSharpness", renderSettings_.taaSharpness},
-            {"taaAvailable", screenSpaceStatus.taaSupported},
-            {"taaActive", screenSpaceStatus.taaActive},
+                 settings.temporalAntiAliasingMode)},
+            {"taaHistoryWeight", settings.taaHistoryWeight},
+            {"taaSharpness", settings.taaSharpness},
+            {"taaAvailable", snapshot.support.taa.supported},
+            {"taaActive", snapshot.runtime.taaActive},
             {"taaHistoryValid", screenSpaceStatus.taaHistoryValid},
             {"taaHistoryGeneration",
              screenSpaceStatus.taaHistoryGeneration},
             {"taaLastResetReason",
              screenSpaceStatus.taaLastResetReason},
             {"taaUnavailableReason",
-             screenSpaceStatus.taaUnavailableReason},
+             snapshot.support.taa.unavailableReason},
             {"reflectionMode",
-             reflectionModeName(renderSettings_.reflectionMode)},
-            {"ssrQuality", ssrQualityName(renderSettings_.ssrQuality)},
-            {"ssrMaxDistance", renderSettings_.ssrMaxDistance},
-            {"ssrThickness", renderSettings_.ssrThickness},
-            {"ssrMaxRoughness", renderSettings_.ssrMaxRoughness},
-            {"ssrIntensity", renderSettings_.ssrIntensity},
-            {"ssrHistoryWeight", renderSettings_.ssrHistoryWeight},
-            {"ssrAvailable", screenSpaceStatus.ssrSupported},
-            {"ssrActive", screenSpaceStatus.ssrActive},
+             reflectionModeName(settings.reflectionMode)},
+            {"ssrQuality", ssrQualityName(settings.ssrQuality)},
+            {"ssrMaxDistance", settings.ssrMaxDistance},
+            {"ssrThickness", settings.ssrThickness},
+            {"ssrMaxRoughness", settings.ssrMaxRoughness},
+            {"ssrIntensity", settings.ssrIntensity},
+            {"ssrHistoryWeight", settings.ssrHistoryWeight},
+            {"ssrAvailable", snapshot.support.ssr.supported},
+            {"ssrActive", snapshot.runtime.ssrActive},
             {"ssrHistoryValid", screenSpaceStatus.ssrHistoryValid},
             {"ssrHistoryGeneration",
              screenSpaceStatus.ssrHistoryGeneration},
             {"ssrLastResetReason",
              screenSpaceStatus.ssrLastResetReason},
             {"ssrUnavailableReason",
-             screenSpaceStatus.ssrUnavailableReason},
+             snapshot.support.ssr.unavailableReason},
             {"globalIlluminationMode",
              globalIlluminationModeName(
-                 renderSettings_.globalIlluminationMode)},
-            {"ssgiQuality", ssgiQualityName(renderSettings_.ssgiQuality)},
-            {"ssgiMaxDistance", renderSettings_.ssgiMaxDistance},
-            {"ssgiThickness", renderSettings_.ssgiThickness},
-            {"ssgiIntensity", renderSettings_.ssgiIntensity},
-            {"ssgiRadianceClamp", renderSettings_.ssgiRadianceClamp},
-            {"ssgiHistoryWeight", renderSettings_.ssgiHistoryWeight},
-            {"ssgiAvailable", screenSpaceStatus.ssgiSupported},
-            {"ssgiActive", screenSpaceStatus.ssgiActive},
+                 settings.globalIlluminationMode)},
+            {"ssgiQuality", ssgiQualityName(settings.ssgiQuality)},
+            {"ssgiMaxDistance", settings.ssgiMaxDistance},
+            {"ssgiThickness", settings.ssgiThickness},
+            {"ssgiIntensity", settings.ssgiIntensity},
+            {"ssgiRadianceClamp", settings.ssgiRadianceClamp},
+            {"ssgiHistoryWeight", settings.ssgiHistoryWeight},
+            {"ssgiAvailable", snapshot.support.ssgi.supported},
+            {"ssgiActive", snapshot.runtime.ssgiActive},
             {"ssgiHistoryValid", screenSpaceStatus.ssgiHistoryValid},
             {"ssgiHistoryGeneration",
              screenSpaceStatus.ssgiHistoryGeneration},
             {"ssgiLastResetReason",
              screenSpaceStatus.ssgiLastResetReason},
             {"ssgiUnavailableReason",
-             screenSpaceStatus.ssgiUnavailableReason},
-            {"ddgiRadianceClamp", renderSettings_.ddgi.radianceClamp},
+             snapshot.support.ssgi.unavailableReason},
+            {"ddgiRadianceClamp", settings.ddgi.radianceClamp},
             {"ddgiDebugView",
-             ddgiDebugViewName(renderSettings_.ddgi.debugView)},
-            {"ddgiSupported", renderer_->ddgiStatus().supported},
+             ddgiDebugViewName(settings.ddgi.debugView)},
+            {"ddgiSupported", snapshot.support.ddgi.supported},
             {"ddgiComponentPresent",
              renderer_->ddgiStatus().componentPresent},
-            {"ddgiActive", renderer_->ddgiStatus().active},
+            {"ddgiActive", snapshot.runtime.ddgiActive},
             {"ddgiUnavailableReason",
-             renderer_->ddgiStatus().unavailableReason},
+             snapshot.support.ddgi.unavailableReason},
             {"screenSpaceDebugView",
              screenSpaceDebugViewName(
-                 renderSettings_.screenSpaceDebugView)},
+                 settings.screenSpaceDebugView)},
             {"screenSpaceDebugMip",
-             renderSettings_.screenSpaceDebugMip},
+             settings.screenSpaceDebugMip},
             {"frustumCullingEnabled",
-             renderSettings_.culling.frustumEnabled},
+             settings.culling.frustumEnabled},
             {"shadowCullingEnabled",
-             renderSettings_.culling.shadowCullingEnabled},
-            {"shadowDistance", renderSettings_.culling.shadowDistance},
+             settings.culling.shadowCullingEnabled},
+            {"shadowDistance", settings.culling.shadowDistance},
             {"distanceCullingEnabled",
-             renderSettings_.culling.distanceEnabled},
+             settings.culling.distanceEnabled},
             {"maxDrawDistance",
-             renderSettings_.culling.maxDrawDistance},
+             settings.culling.maxDrawDistance},
             {"smallObjectCullingEnabled",
-             renderSettings_.culling.smallObjectEnabled},
+             settings.culling.smallObjectEnabled},
             {"minProjectedSizePixels",
-             renderSettings_.culling.minProjectedSizePixels},
+             settings.culling.minProjectedSizePixels},
             {"occlusionCullingEnabled",
-             renderSettings_.culling.occlusionEnabled},
+             settings.culling.occlusionEnabled},
             {"occlusionMinCandidates",
-             renderSettings_.culling.occlusionMinCandidates},
+             settings.culling.occlusionMinCandidates},
             {"occlusionDepthBias",
-             renderSettings_.culling.occlusionDepthBias},
-            {"occlusionAvailable", cullingStatus.supported},
-            {"occlusionActive", cullingStatus.active},
+             settings.culling.occlusionDepthBias},
+            {"occlusionAvailable",
+             snapshot.support.occlusionCulling.supported},
+            {"occlusionActive",
+             snapshot.runtime.occlusionCullingActive},
             {"occlusionUnavailableReason",
-             cullingStatus.unavailableReason},
+             snapshot.support.occlusionCulling.unavailableReason},
             {"toneMappingPolicy", "pbr_only"},
             {"bloomPolicy", "pbr_only"}};
 }
@@ -4017,7 +3671,7 @@ void Application::drawCapturePanel() {
 }
 
 void Application::drawRenderPanel() {
-    const auto &shaderVariants = shaderRegistry_.variants();
+    const auto &shaderVariants = renderSettingsController_->shaderRegistry().variants();
     if (!shaderVariants.empty()) {
         const ShaderVariant &currentVariant = currentShaderVariant();
         const char *current = currentVariant.displayName.c_str();
@@ -4035,7 +3689,7 @@ void Application::drawRenderPanel() {
                     if (variant.category != category)
                         continue;
                     const bool selected =
-                        variant.id == currentShaderVariantId_;
+                        variant.id == currentShaderVariant().id;
                     if (ImGui::Selectable(variant.displayName.c_str(),
                                           selected))
                         setShaderVariant(variant.id);
@@ -4061,7 +3715,7 @@ void Application::drawRenderPanel() {
                         variant.category == "debug")
                         continue;
                     const bool selected =
-                        variant.id == currentShaderVariantId_;
+                        variant.id == currentShaderVariant().id;
                     if (ImGui::Selectable(variant.displayName.c_str(),
                                           selected))
                         setShaderVariant(variant.id);
@@ -4103,7 +3757,7 @@ void Application::drawRenderPanel() {
     }
     ImGui::EndDisabled();
     ImGui::Separator();
-    float exposureEv = renderSettings_.exposureEv;
+    float exposureEv = renderSettings().exposureEv;
     if (ImGui::DragFloat("Exposure EV", &exposureEv, 0.05f, -10.0f,
                          10.0f)) {
         RenderSettingsPatch patch;
@@ -4112,7 +3766,7 @@ void Application::drawRenderPanel() {
     }
     constexpr const char *toneMapperLabels[] = {"PassThrough", "Reinhard",
                                                 "ACES"};
-    int toneMapperIndex = static_cast<int>(renderSettings_.toneMapper);
+    int toneMapperIndex = static_cast<int>(renderSettings().toneMapper);
     if (ImGui::Combo("PBR Tone Mapper", &toneMapperIndex,
                      toneMapperLabels,
                      static_cast<int>(std::size(toneMapperLabels)))) {
@@ -4124,31 +3778,35 @@ void Application::drawRenderPanel() {
 }
 
 void Application::drawPostProcessingPanel() {
-    const bool available = renderer_ && renderer_->bloomSupported();
+    const RenderSettingsSnapshot featureSnapshot =
+        renderSettingsController_->snapshot();
+    const RenderFeatureSupport &featureSupport = featureSnapshot.support;
+    const RenderFeatureRuntimeState &featureRuntime = featureSnapshot.runtime;
+    const bool available = featureSupport.bloom.supported;
     const bool compatible = currentShaderVariant().supportsBloom;
     ImGui::BeginDisabled(!available);
-    bool enabled = renderSettings_.bloomEnabled;
+    bool enabled = renderSettings().bloomEnabled;
     if (ImGui::Checkbox("Bloom", &enabled)) {
         RenderSettingsPatch patch;
         patch.bloomEnabled = enabled;
         applyRenderSettings(patch);
     }
-    ImGui::BeginDisabled(!renderSettings_.bloomEnabled);
-    float intensity = renderSettings_.bloomIntensity;
+    ImGui::BeginDisabled(!renderSettings().bloomEnabled);
+    float intensity = renderSettings().bloomIntensity;
     if (ImGui::DragFloat("Intensity", &intensity, 0.01f, 0.0f, 5.0f)) {
         RenderSettingsPatch patch;
         patch.bloomIntensity = intensity;
         applyRenderSettings(patch);
     }
     if (ImGui::TreeNodeEx("Bloom Tuning")) {
-        float threshold = renderSettings_.bloomThreshold;
+        float threshold = renderSettings().bloomThreshold;
         if (ImGui::DragFloat("Threshold", &threshold, 0.05f, 0.0f,
                              20.0f)) {
             RenderSettingsPatch patch;
             patch.bloomThreshold = threshold;
             applyRenderSettings(patch);
         }
-        float softKnee = renderSettings_.bloomSoftKnee;
+        float softKnee = renderSettings().bloomSoftKnee;
         if (ImGui::DragFloat("Soft Knee", &softKnee, 0.01f, 0.0f,
                              1.0f)) {
             RenderSettingsPatch patch;
@@ -4161,16 +3819,15 @@ void Application::drawPostProcessingPanel() {
     ImGui::EndDisabled();
     ImGui::EndDisabled();
 
-    const bool active =
-        available && renderSettings_.bloomEnabled && compatible;
+    const bool active = featureRuntime.bloomActive;
     editor::statusIndicator(
         active ? "Bloom active" : "Bloom inactive",
         active ? editor::StatusTone::Success : editor::StatusTone::Neutral);
-    if (!available && renderer_) {
+    if (!available) {
         editor::statusIndicator(
             "Bloom unavailable", editor::StatusTone::Warning,
-            renderer_->bloomUnsupportedReason().c_str());
-    } else if (renderSettings_.bloomEnabled && !compatible) {
+            featureSupport.bloom.unavailableReason.c_str());
+    } else if (renderSettings().bloomEnabled && !compatible) {
         ImGui::TextDisabled("Selected Shader does not support Bloom.");
     }
 
@@ -4178,7 +3835,7 @@ void Application::drawPostProcessingPanel() {
     const ScreenSpaceEffectsStatus screenStatus =
         renderer_->screenSpaceEffectsStatus();
     constexpr const char *aoModeLabels[] = {"Off", "SSAO", "CACAO", "GTAO"};
-    int aoMode = static_cast<int>(renderSettings_.ambientOcclusionMode);
+    int aoMode = static_cast<int>(renderSettings().ambientOcclusionMode);
     if (ImGui::BeginCombo("Mode##AmbientOcclusion", aoModeLabels[aoMode])) {
         for (int index = 0; index < static_cast<int>(std::size(aoModeLabels));
              ++index) {
@@ -4186,11 +3843,11 @@ void Application::drawPostProcessingPanel() {
             const bool supported =
                 mode == AmbientOcclusionMode::Off ||
                 (mode == AmbientOcclusionMode::Ssao &&
-                 screenStatus.ssaoSupported) ||
+                 featureSupport.ssao.supported) ||
                 (mode == AmbientOcclusionMode::Cacao &&
-                  screenStatus.cacaoInitialized) ||
-                 (mode == AmbientOcclusionMode::Gtao &&
-                  screenStatus.gtaoSupported);
+                 featureSupport.cacao.supported) ||
+                (mode == AmbientOcclusionMode::Gtao &&
+                 featureSupport.gtao.supported);
             ImGui::BeginDisabled(!supported);
             if (ImGui::Selectable(aoModeLabels[index], index == aoMode)) {
                 RenderSettingsPatch patch;
@@ -4204,44 +3861,44 @@ void Application::drawPostProcessingPanel() {
         ImGui::EndCombo();
     }
     const bool ssaoRequested =
-        renderSettings_.ambientOcclusionMode == AmbientOcclusionMode::Ssao;
+        renderSettings().ambientOcclusionMode == AmbientOcclusionMode::Ssao;
     const bool ssaoDebugRequested =
-        renderSettings_.screenSpaceDebugView ==
+        renderSettings().screenSpaceDebugView ==
             ScreenSpaceDebugView::SsaoRaw ||
-        renderSettings_.screenSpaceDebugView ==
+        renderSettings().screenSpaceDebugView ==
             ScreenSpaceDebugView::SsaoFiltered;
     ImGui::BeginDisabled(!ssaoRequested && !ssaoDebugRequested);
     constexpr const char *qualityLabels[] = {"Low (8)", "Medium (16)",
                                               "High (32)"};
-    int quality = static_cast<int>(renderSettings_.ssaoQuality);
+    int quality = static_cast<int>(renderSettings().ssaoQuality);
     if (ImGui::Combo("Quality##SSAO", &quality, qualityLabels,
                      static_cast<int>(std::size(qualityLabels)))) {
         RenderSettingsPatch patch;
         patch.ssaoQuality = static_cast<SsaoQuality>(quality);
         applyRenderSettings(patch);
     }
-    float radius = renderSettings_.ssaoRadius;
+    float radius = renderSettings().ssaoRadius;
     if (ImGui::DragFloat("Radius##SSAO", &radius, 0.01f, 0.05f, 10.0f,
                          "%.2f")) {
         RenderSettingsPatch patch;
         patch.ssaoRadius = radius;
         applyRenderSettings(patch);
     }
-    float bias = renderSettings_.ssaoBias;
+    float bias = renderSettings().ssaoBias;
     if (ImGui::DragFloat("Bias##SSAO", &bias, 0.001f, 0.0f, 0.2f,
                          "%.3f")) {
         RenderSettingsPatch patch;
         patch.ssaoBias = bias;
         applyRenderSettings(patch);
     }
-    float aoIntensity = renderSettings_.ssaoIntensity;
+    float aoIntensity = renderSettings().ssaoIntensity;
     if (ImGui::DragFloat("Intensity##SSAO", &aoIntensity, 0.02f, 0.0f,
                          4.0f, "%.2f")) {
         RenderSettingsPatch patch;
         patch.ssaoIntensity = aoIntensity;
         applyRenderSettings(patch);
     }
-    float aoPower = renderSettings_.ssaoPower;
+    float aoPower = renderSettings().ssaoPower;
     if (ImGui::DragFloat("Power##SSAO", &aoPower, 0.02f, 0.25f, 4.0f,
                          "%.2f")) {
         RenderSettingsPatch patch;
@@ -4250,28 +3907,28 @@ void Application::drawPostProcessingPanel() {
     }
     ImGui::EndDisabled();
 
-    const bool ssaoActive =
-        screenStatus.activeMode == AmbientOcclusionMode::Ssao;
+    const bool ssaoActive = featureRuntime.activeAmbientOcclusion ==
+                            AmbientOcclusionMode::Ssao;
     editor::statusIndicator(
         ssaoActive ? "SSAO active" : "SSAO inactive",
         ssaoActive ? editor::StatusTone::Success
                    : editor::StatusTone::Neutral,
-        !screenStatus.ssaoSupported
-            ? screenStatus.ssaoUnavailableReason.c_str()
+        !featureSupport.ssao.supported
+            ? featureSupport.ssao.unavailableReason.c_str()
             : (ssaoRequested && !currentShaderVariant().supportsScreenSpace
                    ? "Selected Shader does not consume screen-space AO."
                    : nullptr));
 
     const bool cacaoRequested =
-        renderSettings_.ambientOcclusionMode == AmbientOcclusionMode::Cacao;
+        renderSettings().ambientOcclusionMode == AmbientOcclusionMode::Cacao;
     const bool cacaoDebugRequested =
-        renderSettings_.screenSpaceDebugView ==
+        renderSettings().screenSpaceDebugView ==
         ScreenSpaceDebugView::CacaoOutput;
-    ImGui::BeginDisabled(!screenStatus.cacaoInitialized ||
+    ImGui::BeginDisabled(!featureSupport.cacao.supported ||
                          (!cacaoRequested && !cacaoDebugRequested));
     constexpr const char *cacaoQualityLabels[] = {
         "Lowest", "Low", "Medium", "High", "Highest"};
-    int cacaoQuality = static_cast<int>(renderSettings_.cacao.quality);
+    int cacaoQuality = static_cast<int>(renderSettings().cacao.quality);
     if (ImGui::Combo("Quality##CACAO", &cacaoQuality, cacaoQualityLabels,
                      static_cast<int>(std::size(cacaoQualityLabels)))) {
         RenderSettingsPatch patch;
@@ -4279,7 +3936,7 @@ void Application::drawPostProcessingPanel() {
         applyRenderSettings(patch);
     }
     constexpr const char *cacaoResolutionLabels[] = {"Native", "Half"};
-    int cacaoResolution = static_cast<int>(renderSettings_.cacao.resolution);
+    int cacaoResolution = static_cast<int>(renderSettings().cacao.resolution);
     if (ImGui::Combo("Resolution##CACAO", &cacaoResolution,
                      cacaoResolutionLabels,
                      static_cast<int>(std::size(cacaoResolutionLabels)))) {
@@ -4288,21 +3945,21 @@ void Application::drawPostProcessingPanel() {
             static_cast<CacaoResolution>(cacaoResolution);
         applyRenderSettings(patch);
     }
-    float cacaoRadius = renderSettings_.cacao.radius;
+    float cacaoRadius = renderSettings().cacao.radius;
     if (ImGui::DragFloat("Radius##CACAO", &cacaoRadius, 0.01f, 0.05f,
                          10.0f, "%.2f")) {
         RenderSettingsPatch patch;
         patch.cacaoRadius = cacaoRadius;
         applyRenderSettings(patch);
     }
-    float cacaoIntensity = renderSettings_.cacao.intensity;
+    float cacaoIntensity = renderSettings().cacao.intensity;
     if (ImGui::DragFloat("Intensity##CACAO", &cacaoIntensity, 0.02f, 0.0f,
                          4.0f, "%.2f")) {
         RenderSettingsPatch patch;
         patch.cacaoIntensity = cacaoIntensity;
         applyRenderSettings(patch);
     }
-    float cacaoPower = renderSettings_.cacao.power;
+    float cacaoPower = renderSettings().cacao.power;
     if (ImGui::DragFloat("Power##CACAO", &cacaoPower, 0.02f, 0.25f, 4.0f,
                          "%.2f")) {
         RenderSettingsPatch patch;
@@ -4311,14 +3968,14 @@ void Application::drawPostProcessingPanel() {
     }
     ImGui::EndDisabled();
 
-    const bool cacaoActive =
-        screenStatus.activeMode == AmbientOcclusionMode::Cacao;
+    const bool cacaoActive = featureRuntime.activeAmbientOcclusion ==
+                             AmbientOcclusionMode::Cacao;
     editor::statusIndicator(
         cacaoActive ? "CACAO active" : "CACAO inactive",
         cacaoActive ? editor::StatusTone::Success
                     : editor::StatusTone::Neutral,
-        !screenStatus.cacaoInitialized
-            ? screenStatus.cacaoUnavailableReason.c_str()
+        !featureSupport.cacao.supported
+            ? featureSupport.cacao.unavailableReason.c_str()
             : (cacaoRequested && !currentShaderVariant().supportsScreenSpace
                    ? "Selected Shader does not consume screen-space AO."
                    : nullptr));
@@ -4332,57 +3989,57 @@ void Application::drawPostProcessingPanel() {
     }
 
     const bool gtaoRequested =
-        renderSettings_.ambientOcclusionMode == AmbientOcclusionMode::Gtao;
+        renderSettings().ambientOcclusionMode == AmbientOcclusionMode::Gtao;
     const bool gtaoDebugRequested =
-        renderSettings_.screenSpaceDebugView == ScreenSpaceDebugView::GtaoRaw ||
-        renderSettings_.screenSpaceDebugView ==
+        renderSettings().screenSpaceDebugView == ScreenSpaceDebugView::GtaoRaw ||
+        renderSettings().screenSpaceDebugView ==
             ScreenSpaceDebugView::GtaoTemporal ||
-        renderSettings_.screenSpaceDebugView ==
+        renderSettings().screenSpaceDebugView ==
             ScreenSpaceDebugView::GtaoFiltered ||
-        renderSettings_.screenSpaceDebugView ==
+        renderSettings().screenSpaceDebugView ==
             ScreenSpaceDebugView::GtaoRejection ||
-        renderSettings_.screenSpaceDebugView ==
+        renderSettings().screenSpaceDebugView ==
             ScreenSpaceDebugView::GtaoHistoryWeight;
-    ImGui::BeginDisabled(!screenStatus.gtaoSupported ||
+    ImGui::BeginDisabled(!featureSupport.gtao.supported ||
                          (!gtaoRequested && !gtaoDebugRequested));
     constexpr const char *gtaoQualityLabels[] = {
         "Low (2x2)", "Medium (3x4)", "High (4x6)"};
-    int gtaoQuality = static_cast<int>(renderSettings_.gtao.quality);
+    int gtaoQuality = static_cast<int>(renderSettings().gtao.quality);
     if (ImGui::Combo("Quality##GTAO", &gtaoQuality, gtaoQualityLabels,
                      static_cast<int>(std::size(gtaoQualityLabels)))) {
         RenderSettingsPatch patch;
         patch.gtaoQuality = static_cast<GtaoQuality>(gtaoQuality);
         applyRenderSettings(patch);
     }
-    float gtaoRadius = renderSettings_.gtao.radius;
+    float gtaoRadius = renderSettings().gtao.radius;
     if (ImGui::DragFloat("Radius##GTAO", &gtaoRadius, 0.01f, 0.05f, 10.0f,
                          "%.2f")) {
         RenderSettingsPatch patch;
         patch.gtaoRadius = gtaoRadius;
         applyRenderSettings(patch);
     }
-    float gtaoFalloff = renderSettings_.gtao.falloff;
+    float gtaoFalloff = renderSettings().gtao.falloff;
     if (ImGui::SliderFloat("Falloff##GTAO", &gtaoFalloff, 0.0f, 0.99f,
                            "%.2f")) {
         RenderSettingsPatch patch;
         patch.gtaoFalloff = gtaoFalloff;
         applyRenderSettings(patch);
     }
-    float gtaoIntensity = renderSettings_.gtao.intensity;
+    float gtaoIntensity = renderSettings().gtao.intensity;
     if (ImGui::DragFloat("Intensity##GTAO", &gtaoIntensity, 0.02f, 0.0f,
                          4.0f, "%.2f")) {
         RenderSettingsPatch patch;
         patch.gtaoIntensity = gtaoIntensity;
         applyRenderSettings(patch);
     }
-    float gtaoPower = renderSettings_.gtao.power;
+    float gtaoPower = renderSettings().gtao.power;
     if (ImGui::DragFloat("Power##GTAO", &gtaoPower, 0.02f, 0.25f, 4.0f,
                          "%.2f")) {
         RenderSettingsPatch patch;
         patch.gtaoPower = gtaoPower;
         applyRenderSettings(patch);
     }
-    float gtaoTemporalWeight = renderSettings_.gtao.temporalWeight;
+    float gtaoTemporalWeight = renderSettings().gtao.temporalWeight;
     if (ImGui::SliderFloat("History Weight##GTAO", &gtaoTemporalWeight,
                            0.0f, 0.99f, "%.2f")) {
         RenderSettingsPatch patch;
@@ -4392,15 +4049,18 @@ void Application::drawPostProcessingPanel() {
     ImGui::EndDisabled();
 
     editor::statusIndicator(
-        screenStatus.gtaoActive ? "GTAO active" : "GTAO inactive",
-        screenStatus.gtaoActive ? editor::StatusTone::Success
-                                : editor::StatusTone::Neutral,
-        !screenStatus.gtaoSupported
-            ? screenStatus.gtaoUnavailableReason.c_str()
+        featureRuntime.activeAmbientOcclusion == AmbientOcclusionMode::Gtao
+            ? "GTAO active"
+            : "GTAO inactive",
+        featureRuntime.activeAmbientOcclusion == AmbientOcclusionMode::Gtao
+            ? editor::StatusTone::Success
+            : editor::StatusTone::Neutral,
+        !featureSupport.gtao.supported
+            ? featureSupport.gtao.unavailableReason.c_str()
             : (gtaoRequested && !currentShaderVariant().supportsScreenSpace
                    ? "Selected Shader does not consume screen-space AO."
                    : nullptr));
-    if (screenStatus.gtaoSupported &&
+    if (featureSupport.gtao.supported &&
         (gtaoRequested || gtaoDebugRequested)) {
         ImGui::TextDisabled("History: %s, generation %llu, %ux%u",
                             screenStatus.gtaoHistoryValid ? "valid" : "reset",
@@ -4417,8 +4077,8 @@ void Application::drawPostProcessingPanel() {
     ImGui::SeparatorText("Temporal Anti-Aliasing");
     constexpr const char *taaModeLabels[] = {"Off", "TAA"};
     int taaMode =
-        static_cast<int>(renderSettings_.temporalAntiAliasingMode);
-    ImGui::BeginDisabled(!screenStatus.taaSupported);
+        static_cast<int>(renderSettings().temporalAntiAliasingMode);
+    ImGui::BeginDisabled(!featureSupport.taa.supported);
     if (ImGui::Combo("Mode##TAA", &taaMode, taaModeLabels,
                      static_cast<int>(std::size(taaModeLabels)))) {
         RenderSettingsPatch patch;
@@ -4427,24 +4087,24 @@ void Application::drawPostProcessingPanel() {
         applyRenderSettings(patch);
     }
     const bool taaRequested =
-        renderSettings_.temporalAntiAliasingMode ==
+        renderSettings().temporalAntiAliasingMode ==
         TemporalAntiAliasingMode::Taa;
     const bool taaDebugRequested =
-        renderSettings_.screenSpaceDebugView ==
+        renderSettings().screenSpaceDebugView ==
             ScreenSpaceDebugView::TaaHistory ||
-        renderSettings_.screenSpaceDebugView ==
+        renderSettings().screenSpaceDebugView ==
             ScreenSpaceDebugView::TaaRejection ||
-        renderSettings_.screenSpaceDebugView ==
+        renderSettings().screenSpaceDebugView ==
             ScreenSpaceDebugView::TaaHistoryWeight;
     ImGui::BeginDisabled(!taaRequested && !taaDebugRequested);
-    float historyWeight = renderSettings_.taaHistoryWeight;
+    float historyWeight = renderSettings().taaHistoryWeight;
     if (ImGui::SliderFloat("History Weight##TAA", &historyWeight, 0.0f,
                            0.99f, "%.2f")) {
         RenderSettingsPatch patch;
         patch.taaHistoryWeight = historyWeight;
         applyRenderSettings(patch);
     }
-    float sharpness = renderSettings_.taaSharpness;
+    float sharpness = renderSettings().taaSharpness;
     if (ImGui::SliderFloat("Sharpness##TAA", &sharpness, 0.0f, 1.0f,
                            "%.2f")) {
         RenderSettingsPatch patch;
@@ -4454,13 +4114,13 @@ void Application::drawPostProcessingPanel() {
     ImGui::EndDisabled();
     ImGui::EndDisabled();
     editor::statusIndicator(
-        screenStatus.taaActive ? "TAA active" : "TAA inactive",
-        screenStatus.taaActive ? editor::StatusTone::Success
-                               : editor::StatusTone::Neutral,
-        !screenStatus.taaSupported
-            ? screenStatus.taaUnavailableReason.c_str()
+        featureRuntime.taaActive ? "TAA active" : "TAA inactive",
+        featureRuntime.taaActive ? editor::StatusTone::Success
+                                 : editor::StatusTone::Neutral,
+        !featureSupport.taa.supported
+            ? featureSupport.taa.unavailableReason.c_str()
             : nullptr);
-    if (screenStatus.taaSupported) {
+    if (featureSupport.taa.supported) {
         ImGui::TextDisabled(
             "History: %s, generation %llu, jitter (%.2f, %.2f)",
             screenStatus.taaHistoryValid ? "valid" : "reset",
@@ -4476,8 +4136,8 @@ void Application::drawPostProcessingPanel() {
 
     ImGui::SeparatorText("Reflections");
     constexpr const char *reflectionLabels[] = {"IBL Only", "SSR"};
-    int reflectionMode = static_cast<int>(renderSettings_.reflectionMode);
-    ImGui::BeginDisabled(!screenStatus.ssrSupported);
+    int reflectionMode = static_cast<int>(renderSettings().reflectionMode);
+    ImGui::BeginDisabled(!featureSupport.ssr.supported);
     if (ImGui::Combo("Mode##Reflections", &reflectionMode,
                      reflectionLabels,
                      static_cast<int>(std::size(reflectionLabels)))) {
@@ -4486,41 +4146,41 @@ void Application::drawPostProcessingPanel() {
         applyRenderSettings(patch);
     }
     const bool ssrRequested =
-        renderSettings_.reflectionMode == ReflectionMode::Ssr;
+        renderSettings().reflectionMode == ReflectionMode::Ssr;
     ImGui::BeginDisabled(!ssrRequested);
     constexpr const char *ssrQualityLabels[] = {"Low", "Medium", "High"};
-    int ssrQuality = static_cast<int>(renderSettings_.ssrQuality);
+    int ssrQuality = static_cast<int>(renderSettings().ssrQuality);
     if (ImGui::Combo("Quality##SSR", &ssrQuality, ssrQualityLabels,
                      static_cast<int>(std::size(ssrQualityLabels)))) {
         RenderSettingsPatch patch;
         patch.ssrQuality = static_cast<SsrQuality>(ssrQuality);
         applyRenderSettings(patch);
     }
-    float ssrDistance = renderSettings_.ssrMaxDistance;
+    float ssrDistance = renderSettings().ssrMaxDistance;
     if (ImGui::DragFloat("Max Distance##SSR", &ssrDistance, 0.25f,
                          0.1f, 1000.0f, "%.1f")) {
         RenderSettingsPatch patch; patch.ssrMaxDistance = ssrDistance;
         applyRenderSettings(patch);
     }
-    float ssrThickness = renderSettings_.ssrThickness;
+    float ssrThickness = renderSettings().ssrThickness;
     if (ImGui::DragFloat("Thickness##SSR", &ssrThickness, 0.005f,
                          0.001f, 10.0f, "%.3f")) {
         RenderSettingsPatch patch; patch.ssrThickness = ssrThickness;
         applyRenderSettings(patch);
     }
-    float ssrRoughness = renderSettings_.ssrMaxRoughness;
+    float ssrRoughness = renderSettings().ssrMaxRoughness;
     if (ImGui::SliderFloat("Max Roughness##SSR", &ssrRoughness,
                            0.0f, 1.0f, "%.2f")) {
         RenderSettingsPatch patch; patch.ssrMaxRoughness = ssrRoughness;
         applyRenderSettings(patch);
     }
-    float ssrIntensity = renderSettings_.ssrIntensity;
+    float ssrIntensity = renderSettings().ssrIntensity;
     if (ImGui::SliderFloat("Intensity##SSR", &ssrIntensity,
                            0.0f, 4.0f, "%.2f")) {
         RenderSettingsPatch patch; patch.ssrIntensity = ssrIntensity;
         applyRenderSettings(patch);
     }
-    float ssrHistory = renderSettings_.ssrHistoryWeight;
+    float ssrHistory = renderSettings().ssrHistoryWeight;
     if (ImGui::SliderFloat("History Weight##SSR", &ssrHistory,
                            0.0f, 0.99f, "%.2f")) {
         RenderSettingsPatch patch; patch.ssrHistoryWeight = ssrHistory;
@@ -4529,15 +4189,15 @@ void Application::drawPostProcessingPanel() {
     ImGui::EndDisabled();
     ImGui::EndDisabled();
     editor::statusIndicator(
-        screenStatus.ssrActive ? "SSR active" : "SSR inactive",
-        screenStatus.ssrActive ? editor::StatusTone::Success
-                               : editor::StatusTone::Neutral,
-        !screenStatus.ssrSupported
-            ? screenStatus.ssrUnavailableReason.c_str()
+        featureRuntime.ssrActive ? "SSR active" : "SSR inactive",
+        featureRuntime.ssrActive ? editor::StatusTone::Success
+                                 : editor::StatusTone::Neutral,
+        !featureSupport.ssr.supported
+            ? featureSupport.ssr.unavailableReason.c_str()
             : (ssrRequested && !currentShaderVariant().supportsScreenSpace
                    ? "Selected Shader does not consume screen-space reflections."
                    : nullptr));
-    if (screenStatus.ssrSupported && ssrRequested) {
+    if (featureSupport.ssr.supported && ssrRequested) {
         ImGui::TextDisabled("History: %s, generation %llu, %ux%u",
                             screenStatus.ssrHistoryValid ? "valid" : "reset",
                             static_cast<unsigned long long>(
@@ -4552,9 +4212,8 @@ void Application::drawPostProcessingPanel() {
     ImGui::SeparatorText("Global Illumination");
     constexpr const char *giModeLabels[] = {
         "Ambient / IBL", "SSGI", "DDGI", "SSGI + DDGI"};
-    int giMode = static_cast<int>(renderSettings_.globalIlluminationMode);
-    const DdgiRuntimeStatus ddgiStatus =
-        renderer_ ? renderer_->ddgiStatus() : DdgiRuntimeStatus{};
+    int giMode = static_cast<int>(renderSettings().globalIlluminationMode);
+    const DdgiRuntimeStatus ddgiStatus = renderer_->ddgiStatus();
     if (ImGui::BeginCombo("Mode##GI", giModeLabels[giMode])) {
         for (int index = 0;
              index < static_cast<int>(std::size(giModeLabels)); ++index) {
@@ -4564,8 +4223,8 @@ void Application::drawPostProcessingPanel() {
             const bool needsDdgi = mode == GlobalIlluminationMode::Ddgi ||
                                    mode == GlobalIlluminationMode::SsgiDdgi;
             const bool supported =
-                (!needsSsgi || screenStatus.ssgiSupported) &&
-                (!needsDdgi || ddgiStatus.supported);
+                (!needsSsgi || featureSupport.ssgi.supported) &&
+                (!needsDdgi || featureSupport.ddgi.supported);
             ImGui::BeginDisabled(!supported);
             if (ImGui::Selectable(giModeLabels[index], giMode == index)) {
                 RenderSettingsPatch patch;
@@ -4579,47 +4238,47 @@ void Application::drawPostProcessingPanel() {
         ImGui::EndCombo();
     }
     const bool ssgiRequested =
-        renderSettings_.globalIlluminationMode == GlobalIlluminationMode::Ssgi ||
-        renderSettings_.globalIlluminationMode ==
+        renderSettings().globalIlluminationMode == GlobalIlluminationMode::Ssgi ||
+        renderSettings().globalIlluminationMode ==
             GlobalIlluminationMode::SsgiDdgi;
     ImGui::BeginDisabled(!ssgiRequested);
     constexpr const char *ssgiQualityLabels[] = {"Low", "Medium", "High"};
-    int ssgiQuality = static_cast<int>(renderSettings_.ssgiQuality);
+    int ssgiQuality = static_cast<int>(renderSettings().ssgiQuality);
     if (ImGui::Combo("Quality##SSGI", &ssgiQuality, ssgiQualityLabels,
                      static_cast<int>(std::size(ssgiQualityLabels)))) {
         RenderSettingsPatch patch;
         patch.ssgiQuality = static_cast<SsgiQuality>(ssgiQuality);
         applyRenderSettings(patch);
     }
-    float ssgiDistance = renderSettings_.ssgiMaxDistance;
+    float ssgiDistance = renderSettings().ssgiMaxDistance;
     if (ImGui::DragFloat("Max Distance##SSGI", &ssgiDistance, 0.1f,
                          0.05f, 1000.0f, "%.2f")) {
         RenderSettingsPatch patch;
         patch.ssgiMaxDistance = ssgiDistance;
         applyRenderSettings(patch);
     }
-    float ssgiThickness = renderSettings_.ssgiThickness;
+    float ssgiThickness = renderSettings().ssgiThickness;
     if (ImGui::DragFloat("Thickness##SSGI", &ssgiThickness, 0.005f,
                          0.001f, 10.0f, "%.3f")) {
         RenderSettingsPatch patch;
         patch.ssgiThickness = ssgiThickness;
         applyRenderSettings(patch);
     }
-    float ssgiIntensity = renderSettings_.ssgiIntensity;
+    float ssgiIntensity = renderSettings().ssgiIntensity;
     if (ImGui::SliderFloat("Intensity##SSGI", &ssgiIntensity,
                            0.0f, 4.0f, "%.2f")) {
         RenderSettingsPatch patch;
         patch.ssgiIntensity = ssgiIntensity;
         applyRenderSettings(patch);
     }
-    float ssgiClamp = renderSettings_.ssgiRadianceClamp;
+    float ssgiClamp = renderSettings().ssgiRadianceClamp;
     if (ImGui::DragFloat("Radiance Clamp##SSGI", &ssgiClamp, 0.1f,
                          0.1f, 100.0f, "%.1f")) {
         RenderSettingsPatch patch;
         patch.ssgiRadianceClamp = ssgiClamp;
         applyRenderSettings(patch);
     }
-    float ssgiHistory = renderSettings_.ssgiHistoryWeight;
+    float ssgiHistory = renderSettings().ssgiHistoryWeight;
     if (ImGui::SliderFloat("History Weight##SSGI", &ssgiHistory,
                            0.0f, 0.99f, "%.2f")) {
         RenderSettingsPatch patch;
@@ -4628,15 +4287,15 @@ void Application::drawPostProcessingPanel() {
     }
     ImGui::EndDisabled();
     editor::statusIndicator(
-        screenStatus.ssgiActive ? "SSGI active" : "SSGI inactive",
-        screenStatus.ssgiActive ? editor::StatusTone::Success
-                                : editor::StatusTone::Neutral,
-        !screenStatus.ssgiSupported
-            ? screenStatus.ssgiUnavailableReason.c_str()
+        featureRuntime.ssgiActive ? "SSGI active" : "SSGI inactive",
+        featureRuntime.ssgiActive ? editor::StatusTone::Success
+                                  : editor::StatusTone::Neutral,
+        !featureSupport.ssgi.supported
+            ? featureSupport.ssgi.unavailableReason.c_str()
             : (ssgiRequested && !currentShaderVariant().supportsScreenSpace
                    ? "Selected Shader does not consume screen-space GI."
                    : nullptr));
-    if (screenStatus.ssgiSupported && ssgiRequested) {
+    if (featureSupport.ssgi.supported && ssgiRequested) {
         ImGui::TextDisabled("History: %s, generation %llu, %ux%u",
                             screenStatus.ssgiHistoryValid ? "valid" : "reset",
                             static_cast<unsigned long long>(
@@ -4649,11 +4308,11 @@ void Application::drawPostProcessingPanel() {
     }
 
     const bool ddgiRequested =
-        renderSettings_.globalIlluminationMode == GlobalIlluminationMode::Ddgi ||
-        renderSettings_.globalIlluminationMode ==
+        renderSettings().globalIlluminationMode == GlobalIlluminationMode::Ddgi ||
+        renderSettings().globalIlluminationMode ==
             GlobalIlluminationMode::SsgiDdgi;
-    ImGui::BeginDisabled(!ddgiRequested || !ddgiStatus.supported);
-    float ddgiClamp = renderSettings_.ddgi.radianceClamp;
+    ImGui::BeginDisabled(!ddgiRequested || !featureSupport.ddgi.supported);
+    float ddgiClamp = renderSettings().ddgi.radianceClamp;
     if (ImGui::DragFloat("Radiance Clamp##DDGI", &ddgiClamp, 0.1f,
                          0.1f, 100.0f, "%.1f")) {
         RenderSettingsPatch patch;
@@ -4662,7 +4321,7 @@ void Application::drawPostProcessingPanel() {
     }
     constexpr const char *ddgiDebugLabels[] = {
         "None", "Irradiance", "Distance", "Classification"};
-    int ddgiDebug = static_cast<int>(renderSettings_.ddgi.debugView);
+    int ddgiDebug = static_cast<int>(renderSettings().ddgi.debugView);
     if (ImGui::Combo("Debug##DDGI", &ddgiDebug, ddgiDebugLabels,
                      static_cast<int>(std::size(ddgiDebugLabels)))) {
         RenderSettingsPatch patch;
@@ -4671,11 +4330,11 @@ void Application::drawPostProcessingPanel() {
     }
     ImGui::EndDisabled();
     editor::statusIndicator(
-        ddgiStatus.active ? "DDGI active" : "DDGI inactive",
-        ddgiStatus.active ? editor::StatusTone::Success
-                          : editor::StatusTone::Neutral,
-        !ddgiStatus.supported
-            ? ddgiStatus.unavailableReason.c_str()
+        featureRuntime.ddgiActive ? "DDGI active" : "DDGI inactive",
+        featureRuntime.ddgiActive ? editor::StatusTone::Success
+                                  : editor::StatusTone::Neutral,
+        !featureSupport.ddgi.supported
+            ? featureSupport.ddgi.unavailableReason.c_str()
             : (ddgiRequested && !ddgiStatus.componentPresent
                    ? "The active native scene has no DDGI Probe Volume."
                    : (ddgiRequested &&
@@ -4705,7 +4364,7 @@ void Application::drawPostProcessingPanel() {
         "SSR Rejection", "SSGI Raw", "SSGI Temporal", "SSGI Filtered",
         "SSGI Confidence", "SSGI Variance", "SSGI Rejection"};
     int screenDebug =
-        static_cast<int>(renderSettings_.screenSpaceDebugView);
+        static_cast<int>(renderSettings().screenSpaceDebugView);
     const char *preview = screenDebugLabels[screenDebug];
     if (ImGui::BeginCombo("Debug View##ScreenSpace", preview)) {
         for (int index = 0; index < static_cast<int>(std::size(screenDebugLabels));
@@ -4714,37 +4373,37 @@ void Application::drawPostProcessingPanel() {
             const bool supported =
                 view == ScreenSpaceDebugView::None ||
                 (view == ScreenSpaceDebugView::NearestDepth &&
-                 screenStatus.depthPyramidSupported) ||
+                 featureSupport.depthPyramid.supported) ||
                 (view == ScreenSpaceDebugView::SceneColor &&
-                 screenStatus.colorPyramidSupported) ||
+                 featureSupport.colorPyramid.supported) ||
                 ((view == ScreenSpaceDebugView::SsaoRaw ||
                   view == ScreenSpaceDebugView::SsaoFiltered) &&
-                  screenStatus.ssaoSupported) ||
+                 featureSupport.ssao.supported) ||
                 (view == ScreenSpaceDebugView::CacaoOutput &&
-                  screenStatus.cacaoInitialized) ||
+                 featureSupport.cacao.supported) ||
                 ((view == ScreenSpaceDebugView::GtaoRaw ||
                   view == ScreenSpaceDebugView::GtaoTemporal ||
                   view == ScreenSpaceDebugView::GtaoFiltered ||
                   view == ScreenSpaceDebugView::GtaoRejection ||
                   view == ScreenSpaceDebugView::GtaoHistoryWeight) &&
-                 screenStatus.gtaoSupported) ||
+                 featureSupport.gtao.supported) ||
                 ((view == ScreenSpaceDebugView::TaaHistory ||
                   view == ScreenSpaceDebugView::TaaRejection ||
                   view == ScreenSpaceDebugView::TaaHistoryWeight) &&
-                 screenStatus.taaSupported) ||
+                 featureSupport.taa.supported) ||
                 ((view == ScreenSpaceDebugView::SsrRaw ||
                   view == ScreenSpaceDebugView::SsrTemporal ||
                   view == ScreenSpaceDebugView::SsrFiltered ||
                   view == ScreenSpaceDebugView::SsrConfidence ||
                   view == ScreenSpaceDebugView::SsrRejection) &&
-                 screenStatus.ssrSupported) ||
+                 featureSupport.ssr.supported) ||
                 ((view == ScreenSpaceDebugView::SsgiRaw ||
                   view == ScreenSpaceDebugView::SsgiTemporal ||
                   view == ScreenSpaceDebugView::SsgiFiltered ||
                   view == ScreenSpaceDebugView::SsgiConfidence ||
                   view == ScreenSpaceDebugView::SsgiVariance ||
                   view == ScreenSpaceDebugView::SsgiRejection) &&
-                 screenStatus.ssgiSupported);
+                 featureSupport.ssgi.supported);
             ImGui::BeginDisabled(!supported);
             const bool selected = index == screenDebug;
             if (ImGui::Selectable(screenDebugLabels[index], selected)) {
@@ -4761,19 +4420,19 @@ void Application::drawPostProcessingPanel() {
         ImGui::EndCombo();
     }
     uint32_t maximumMip = 0;
-    if (renderSettings_.screenSpaceDebugView ==
+    if (renderSettings().screenSpaceDebugView ==
         ScreenSpaceDebugView::NearestDepth) {
         maximumMip = screenStatus.depthMipLevels > 0
                          ? screenStatus.depthMipLevels - 1u
                          : 0u;
-    } else if (renderSettings_.screenSpaceDebugView ==
+    } else if (renderSettings().screenSpaceDebugView ==
                ScreenSpaceDebugView::SceneColor) {
         maximumMip = screenStatus.colorMipLevels > 0
                          ? screenStatus.colorMipLevels - 1u
                          : 0u;
     }
     int debugMip = static_cast<int>(std::min(
-        renderSettings_.screenSpaceDebugMip, maximumMip));
+        renderSettings().screenSpaceDebugMip, maximumMip));
     ImGui::BeginDisabled(maximumMip == 0);
     if (ImGui::SliderInt("Mip##ScreenSpace", &debugMip, 0,
                          static_cast<int>(maximumMip))) {
@@ -4788,11 +4447,13 @@ void Application::drawPostProcessingPanel() {
 }
 
 void Application::drawSurfaceDataPanel() {
+    const RenderSettingsSnapshot featureSnapshot =
+        renderSettingsController_->snapshot();
     const SurfaceDataStatus status = renderer_->surfaceDataStatus();
     constexpr const char *labels[] = {
         "None", "Normal", "Roughness", "Motion", "History Validity"};
-    int mode = static_cast<int>(renderSettings_.surfaceDebugView);
-    ImGui::BeginDisabled(!status.supported);
+    int mode = static_cast<int>(renderSettings().surfaceDebugView);
+    ImGui::BeginDisabled(!featureSnapshot.support.surfaceData.supported);
     if (ImGui::Combo("Debug View", &mode, labels,
                      static_cast<int>(std::size(labels)))) {
         RenderSettingsPatch patch;
@@ -4802,8 +4463,8 @@ void Application::drawSurfaceDataPanel() {
         applyRenderSettings(patch);
     }
     ImGui::BeginDisabled(
-        renderSettings_.surfaceDebugView != SurfaceDebugView::Motion);
-    float motionScale = renderSettings_.surfaceMotionDebugScale;
+        renderSettings().surfaceDebugView != SurfaceDebugView::Motion);
+    float motionScale = renderSettings().surfaceMotionDebugScale;
     if (ImGui::DragFloat("Motion Scale", &motionScale, 0.5f, 0.1f,
                          1024.0f, "%.1f")) {
         RenderSettingsPatch patch;
@@ -4813,11 +4474,14 @@ void Application::drawSurfaceDataPanel() {
     ImGui::EndDisabled();
     ImGui::EndDisabled();
 
-    if (status.supported) {
+    if (featureSnapshot.support.surfaceData.supported) {
         editor::statusIndicator(
-            status.active ? "Surface data active" : "Surface data inactive",
-            status.active ? editor::StatusTone::Success
-                          : editor::StatusTone::Neutral);
+            featureSnapshot.runtime.surfaceDataActive
+                ? "Surface data active"
+                : "Surface data inactive",
+            featureSnapshot.runtime.surfaceDataActive
+                ? editor::StatusTone::Success
+                : editor::StatusTone::Neutral);
         ImGui::Text("History: %u / %u items",
                     visibilityFrame_.history.historyValidItems,
                     static_cast<uint32_t>(visibilityFrame_.items.size()));
@@ -4841,26 +4505,29 @@ void Application::drawSurfaceDataPanel() {
     } else {
         editor::statusIndicator("Surface data unavailable",
                                 editor::StatusTone::Warning,
-                                status.unavailableReason.c_str());
+                                featureSnapshot.support.surfaceData
+                                    .unavailableReason.c_str());
     }
 }
 
 void Application::drawCullingPanel() {
-    bool frustumEnabled = renderSettings_.culling.frustumEnabled;
+    const RenderSettingsSnapshot featureSnapshot =
+        renderSettingsController_->snapshot();
+    bool frustumEnabled = renderSettings().culling.frustumEnabled;
     if (ImGui::Checkbox("Camera Frustum", &frustumEnabled)) {
         RenderSettingsPatch patch;
         patch.frustumCullingEnabled = frustumEnabled;
         applyRenderSettings(patch);
     }
 
-    bool distanceEnabled = renderSettings_.culling.distanceEnabled;
+    bool distanceEnabled = renderSettings().culling.distanceEnabled;
     if (ImGui::Checkbox("Max Draw Distance", &distanceEnabled)) {
         RenderSettingsPatch patch;
         patch.distanceCullingEnabled = distanceEnabled;
         applyRenderSettings(patch);
     }
-    ImGui::BeginDisabled(!renderSettings_.culling.distanceEnabled);
-    float maxDrawDistance = renderSettings_.culling.maxDrawDistance;
+    ImGui::BeginDisabled(!renderSettings().culling.distanceEnabled);
+    float maxDrawDistance = renderSettings().culling.maxDrawDistance;
     if (ImGui::DragFloat("Distance", &maxDrawDistance, 1.0f, 0.1f,
                          1000000.0f, "%.1f")) {
         RenderSettingsPatch patch;
@@ -4869,14 +4536,14 @@ void Application::drawCullingPanel() {
     }
     ImGui::EndDisabled();
 
-    bool smallObjectEnabled = renderSettings_.culling.smallObjectEnabled;
+    bool smallObjectEnabled = renderSettings().culling.smallObjectEnabled;
     if (ImGui::Checkbox("Small Objects", &smallObjectEnabled)) {
         RenderSettingsPatch patch;
         patch.smallObjectCullingEnabled = smallObjectEnabled;
         applyRenderSettings(patch);
     }
-    ImGui::BeginDisabled(!renderSettings_.culling.smallObjectEnabled);
-    float minimumPixels = renderSettings_.culling.minProjectedSizePixels;
+    ImGui::BeginDisabled(!renderSettings().culling.smallObjectEnabled);
+    float minimumPixels = renderSettings().culling.minProjectedSizePixels;
     if (ImGui::DragFloat("Minimum Size", &minimumPixels, 0.1f, 0.0f,
                          256.0f, "%.1f px")) {
         RenderSettingsPatch patch;
@@ -4887,14 +4554,14 @@ void Application::drawCullingPanel() {
 
     ImGui::SeparatorText("Shadow Casters");
     bool shadowCullingEnabled =
-        renderSettings_.culling.shadowCullingEnabled;
+        renderSettings().culling.shadowCullingEnabled;
     if (ImGui::Checkbox("Cull Shadow Casters", &shadowCullingEnabled)) {
         RenderSettingsPatch patch;
         patch.shadowCullingEnabled = shadowCullingEnabled;
         applyRenderSettings(patch);
     }
-    ImGui::BeginDisabled(!renderSettings_.culling.shadowCullingEnabled);
-    float shadowDistance = renderSettings_.culling.shadowDistance;
+    ImGui::BeginDisabled(!renderSettings().culling.shadowCullingEnabled);
+    float shadowDistance = renderSettings().culling.shadowDistance;
     if (ImGui::DragFloat("Shadow Distance", &shadowDistance, 1.0f,
                          kMinDirectionalShadowDistance,
                          kMaxDirectionalShadowDistance, "%.1f")) {
@@ -4907,16 +4574,17 @@ void Application::drawCullingPanel() {
     ImGui::SeparatorText("GPU Occlusion");
     const OcclusionCullingStatus status =
         renderer_->occlusionCullingStatus();
-    ImGui::BeginDisabled(!status.supported);
-    bool occlusionEnabled = renderSettings_.culling.occlusionEnabled;
+    ImGui::BeginDisabled(
+        !featureSnapshot.support.occlusionCulling.supported);
+    bool occlusionEnabled = renderSettings().culling.occlusionEnabled;
     if (ImGui::Checkbox("Hi-Z Occlusion", &occlusionEnabled)) {
         RenderSettingsPatch patch;
         patch.occlusionCullingEnabled = occlusionEnabled;
         applyRenderSettings(patch);
     }
-    ImGui::BeginDisabled(!renderSettings_.culling.occlusionEnabled);
+    ImGui::BeginDisabled(!renderSettings().culling.occlusionEnabled);
     int minimumCandidates = static_cast<int>(
-        renderSettings_.culling.occlusionMinCandidates);
+        renderSettings().culling.occlusionMinCandidates);
     if (ImGui::DragInt("Minimum Candidates", &minimumCandidates, 1.0f,
                        0, 65536)) {
         RenderSettingsPatch patch;
@@ -4924,7 +4592,7 @@ void Application::drawCullingPanel() {
             static_cast<uint32_t>(std::max(minimumCandidates, 0));
         applyRenderSettings(patch);
     }
-    float depthBias = renderSettings_.culling.occlusionDepthBias;
+    float depthBias = renderSettings().culling.occlusionDepthBias;
     if (ImGui::DragFloat("Depth Bias", &depthBias, 0.00005f, 0.0f, 0.05f,
                          "%.5f")) {
         RenderSettingsPatch patch;
@@ -4933,15 +4601,19 @@ void Application::drawCullingPanel() {
     }
     ImGui::EndDisabled();
     ImGui::EndDisabled();
-    if (status.supported) {
+    if (featureSnapshot.support.occlusionCulling.supported) {
         editor::statusIndicator(
-            status.active ? "Occlusion active" : "Occlusion inactive",
-            status.active ? editor::StatusTone::Success
-                          : editor::StatusTone::Neutral);
+            featureSnapshot.runtime.occlusionCullingActive
+                ? "Occlusion active"
+                : "Occlusion inactive",
+            featureSnapshot.runtime.occlusionCullingActive
+                ? editor::StatusTone::Success
+                : editor::StatusTone::Neutral);
     } else {
         editor::statusIndicator("Occlusion unavailable",
                                 editor::StatusTone::Warning,
-                                status.unavailableReason.c_str());
+                                featureSnapshot.support.occlusionCulling
+                                    .unavailableReason.c_str());
     }
 
     if (ImGui::TreeNodeEx("Culling Statistics",
@@ -5049,15 +4721,15 @@ void Application::drawSceneLoadingPanel() {
 }
 
 void Application::drawLightingPanel() {
-    bool shadowsEnabled = renderSettings_.shadowsEnabled;
+    bool shadowsEnabled = renderSettings().shadowsEnabled;
     if (ImGui::Checkbox("Shadows", &shadowsEnabled)) {
         RenderSettingsPatch patch;
         patch.shadowsEnabled = shadowsEnabled;
         applyRenderSettings(patch);
     }
-    ImGui::BeginDisabled(!renderSettings_.shadowsEnabled);
+    ImGui::BeginDisabled(!renderSettings().shadowsEnabled);
     if (ImGui::TreeNodeEx("Shadow Tuning")) {
-        float receiverBias = renderSettings_.shadowReceiverBias;
+        float receiverBias = renderSettings().shadowReceiverBias;
         if (ImGui::DragFloat("Receiver Bias", &receiverBias, 0.00005f,
                              0.0f, 0.05f, "%.5f")) {
             RenderSettingsPatch patch;
@@ -5065,21 +4737,21 @@ void Application::drawLightingPanel() {
             applyRenderSettings(patch);
         }
         float pointReceiverBias =
-            renderSettings_.pointShadowReceiverBiasWorld;
+            renderSettings().pointShadowReceiverBiasWorld;
         if (ImGui::DragFloat("Point Bias (World)", &pointReceiverBias,
                              0.001f, 0.0f, 1.0f, "%.3f")) {
             RenderSettingsPatch patch;
             patch.pointShadowReceiverBiasWorld = pointReceiverBias;
             applyRenderSettings(patch);
         }
-        float constantBias = renderSettings_.shadowConstantBias;
+        float constantBias = renderSettings().shadowConstantBias;
         if (ImGui::DragFloat("Constant Bias", &constantBias, 0.05f, 0.0f,
                              10.0f)) {
             RenderSettingsPatch patch;
             patch.shadowConstantBias = constantBias;
             applyRenderSettings(patch);
         }
-        float slopeBias = renderSettings_.shadowSlopeBias;
+        float slopeBias = renderSettings().shadowSlopeBias;
         if (ImGui::DragFloat("Slope Bias", &slopeBias, 0.05f, 0.0f,
                              10.0f)) {
             RenderSettingsPatch patch;
@@ -5090,7 +4762,7 @@ void Application::drawLightingPanel() {
                             kDirectionalShadowMapSize,
                             kDirectionalShadowMapSize);
         int maxPoint = static_cast<int>(
-            renderSettings_.maxPointShadowLights);
+            renderSettings().maxPointShadowLights);
         if (ImGui::SliderInt("Max Point Shadows", &maxPoint, 0,
                              static_cast<int>(kMaxPointShadowLights))) {
             RenderSettingsPatch patch;
@@ -5098,7 +4770,7 @@ void Application::drawLightingPanel() {
                 static_cast<uint32_t>(maxPoint);
             applyRenderSettings(patch);
         }
-        float pointDistance = renderSettings_.pointShadowDistance;
+        float pointDistance = renderSettings().pointShadowDistance;
         if (ImGui::DragFloat("Point Shadow Distance", &pointDistance,
                              1.0f, kMinPunctualShadowDistance,
                              kMaxPunctualShadowDistance, "%.1f")) {
@@ -5107,7 +4779,7 @@ void Application::drawLightingPanel() {
             applyRenderSettings(patch);
         }
         int maxSpot = static_cast<int>(
-            renderSettings_.maxSpotShadowLights);
+            renderSettings().maxSpotShadowLights);
         if (ImGui::SliderInt("Max Spot Shadows", &maxSpot, 0,
                              static_cast<int>(kMaxSpotShadowLights))) {
             RenderSettingsPatch patch;
@@ -5115,7 +4787,7 @@ void Application::drawLightingPanel() {
                 static_cast<uint32_t>(maxSpot);
             applyRenderSettings(patch);
         }
-        float spotDistance = renderSettings_.spotShadowDistance;
+        float spotDistance = renderSettings().spotShadowDistance;
         if (ImGui::DragFloat("Spot Shadow Distance", &spotDistance,
                              1.0f, kMinPunctualShadowDistance,
                              kMaxPunctualShadowDistance, "%.1f")) {
@@ -5232,20 +4904,20 @@ void Application::drawLightingPanel() {
         }
         ImGui::EndCombo();
     }
-    bool iblEnabled = renderSettings_.iblEnabled;
+    bool iblEnabled = renderSettings().iblEnabled;
     if (ImGui::Checkbox("Image-Based Lighting", &iblEnabled)) {
         RenderSettingsPatch patch;
         patch.iblEnabled = iblEnabled;
         applyRenderSettings(patch);
     }
-    bool skyboxEnabled = renderSettings_.skyboxEnabled;
+    bool skyboxEnabled = renderSettings().skyboxEnabled;
     if (ImGui::Checkbox("Skybox", &skyboxEnabled)) {
         RenderSettingsPatch patch;
         patch.skyboxEnabled = skyboxEnabled;
         applyRenderSettings(patch);
     }
     float environmentIntensity =
-        renderSettings_.environmentIntensity;
+        renderSettings().environmentIntensity;
     if (ImGui::DragFloat("Environment Intensity",
                          &environmentIntensity, 0.02f, 0.0f, 100.0f)) {
         RenderSettingsPatch patch;
@@ -5253,7 +4925,7 @@ void Application::drawLightingPanel() {
         applyRenderSettings(patch);
     }
     float environmentRotation =
-        renderSettings_.environmentRotationRadians;
+        renderSettings().environmentRotationRadians;
     if (ImGui::SliderAngle("Environment Rotation",
                            &environmentRotation, -180.0f, 180.0f,
                            "%.1f deg",
@@ -7585,9 +7257,7 @@ void Application::handleSwapChainRecreate() {
 }
 
 const ShaderVariant &Application::currentShaderVariant() const {
-    const ShaderVariant *variant =
-        shaderRegistry_.findVariant(currentShaderVariantId_);
-    return variant ? *variant : shaderRegistry_.defaultVariant();
+    return renderSettingsController_->currentShaderVariant();
 }
 
 void Application::mainLoop() {
@@ -7818,7 +7488,7 @@ void Application::mainLoop() {
         viewInput.ambientIntensity = ambientIntensity_;
         viewInput.defaultSun = {defaultSunDirection_, defaultSunColor_,
                                 defaultSunIntensity_};
-        viewInput.settings = renderSettings_;
+        viewInput.settings = renderSettingsController_->snapshot().active;
         viewInput.environmentReady = renderer_->environmentReady();
         viewInput.maxSpecularLod =
             renderer_->currentEnvironmentMaxSpecularLod();
@@ -8033,7 +7703,9 @@ void Application::mainLoop() {
                                              [this](VkCommandBuffer cmd) {
                                                  captureService_->recordCopy(cmd);
                                              }}
-                                       : std::function<void(VkCommandBuffer)>{});
+                                        : std::function<void(VkCommandBuffer)>{});
+            renderSettingsController_->updateRuntimeState(
+                renderer_->featureRuntimeState());
             if constexpr (build::kTracy) {
                 profilePlotNumber(
                     "Visibility/GpuOccluded",

@@ -10,7 +10,6 @@
 #include "render/Visibility.h"
 #include "render/RenderSettings.h"
 #include "render/RenderView.h"
-#include "render/ShaderRegistry.h"
 #include "render/ShaderVariant.h"
 #include "scene/Camera.h"
 #include "scene/ModelPrepareFactory.h"
@@ -58,6 +57,7 @@ struct ModelAsset;
 struct EnvironmentLoadTask;
 class SceneRuntimeCoordinator;
 class SceneWorkflowController;
+class RenderSettingsController;
 struct EditorUiState;
 
 enum class InputMode {
@@ -154,6 +154,7 @@ class Application final
         bool *coalesced = nullptr);
     uint64_t reloadCurrentEnvironment();
     void applyRenderSettings(const RenderSettingsPatch &patch);
+    const RenderSettings &renderSettings() const;
     int findSceneIndexByName(const std::string &name) const;
     const CatalogEnvironment *
     findEnvironmentByName(const std::string &name) const;
@@ -274,8 +275,7 @@ class Application final
     VisibilitySystem                    visibilitySystem_;
     VisibilityFrame                     visibilityFrame_;
     ShadowSystem                        shadowSystem_;
-    ShaderRegistry                       shaderRegistry_;
-    std::string                          currentShaderVariantId_;
+    std::unique_ptr<RenderSettingsController> renderSettingsController_;
 
     // 场景切换
     SceneLoadContext        sceneLoadContext_;
@@ -306,7 +306,6 @@ class Application final
     glm::vec3 defaultSunColor_{1.0f};
     float     defaultSunIntensity_ = 3.0f;
     RenderViewLightStats lastLightStats_{};
-    RenderSettings renderSettings_{};
 };
 
 } // namespace vkr

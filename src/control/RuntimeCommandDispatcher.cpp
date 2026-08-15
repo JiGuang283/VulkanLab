@@ -55,17 +55,10 @@ uint32_t requiredUint32(const RuntimeCommand &command, const char *name) {
 }
 
 std::optional<uint32_t> optionalUint32(const RuntimeCommand &command,
-                                       const char *name,
-                                       uint32_t maximum) {
+                                       const char *name) {
     if (!command.params.contains(name))
         return std::nullopt;
-    const uint32_t value = requiredUint32(command, name);
-    if (value > maximum) {
-        throw RuntimeCommandError(
-            "invalid_params", std::string("Parameter '") + name +
-                                  "' is outside the supported range.");
-    }
-    return value;
+    return requiredUint32(command, name);
 }
 
 uint32_t requiredWindowDimension(const RuntimeCommand &command,
@@ -116,132 +109,95 @@ std::optional<bool> optionalBoolValue(const RuntimeCommand &command,
 }
 
 std::optional<float> optionalFiniteFloat(const RuntimeCommand &command,
-                                         const char *name, float minimum,
-                                         float maximum) {
+                                         const char *name) {
     if (!command.params.contains(name))
         return std::nullopt;
-    const float value = requiredFiniteFloat(command, name);
-    if (value < minimum || value > maximum) {
-        throw RuntimeCommandError(
-            "invalid_params", std::string("Parameter '") + name +
-                                  "' is outside the supported range.");
-    }
-    return value;
+    return requiredFiniteFloat(command, name);
 }
 
 RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
     RenderSettingsPatch patch;
     patch.shadowsEnabled = optionalBoolValue(command, "shadowsEnabled");
-    patch.shadowReceiverBias = optionalFiniteFloat(
-        command, "shadowReceiverBias", 0.0f, 0.05f);
-    patch.pointShadowReceiverBiasWorld = optionalFiniteFloat(
-        command, "pointShadowReceiverBiasWorld", 0.0f, 1.0f);
-    patch.shadowConstantBias = optionalFiniteFloat(
-        command, "shadowConstantBias", 0.0f, 10.0f);
-    patch.shadowSlopeBias = optionalFiniteFloat(
-        command, "shadowSlopeBias", 0.0f, 10.0f);
+    patch.shadowReceiverBias =
+        optionalFiniteFloat(command, "shadowReceiverBias");
+    patch.pointShadowReceiverBiasWorld =
+        optionalFiniteFloat(command, "pointShadowReceiverBiasWorld");
+    patch.shadowConstantBias =
+        optionalFiniteFloat(command, "shadowConstantBias");
+    patch.shadowSlopeBias = optionalFiniteFloat(command, "shadowSlopeBias");
     patch.maxPointShadowLights =
-        optionalUint32(command, "maxPointShadowLights",
-                       kMaxPointShadowLights);
+        optionalUint32(command, "maxPointShadowLights");
     patch.maxSpotShadowLights =
-        optionalUint32(command, "maxSpotShadowLights",
-                       kMaxSpotShadowLights);
-    patch.pointShadowDistance = optionalFiniteFloat(
-        command, "pointShadowDistance", kMinPunctualShadowDistance,
-        kMaxPunctualShadowDistance);
-    patch.spotShadowDistance = optionalFiniteFloat(
-        command, "spotShadowDistance", kMinPunctualShadowDistance,
-        kMaxPunctualShadowDistance);
-    patch.exposureEv =
-        optionalFiniteFloat(command, "exposureEv", -10.0f, 10.0f);
+        optionalUint32(command, "maxSpotShadowLights");
+    patch.pointShadowDistance =
+        optionalFiniteFloat(command, "pointShadowDistance");
+    patch.spotShadowDistance =
+        optionalFiniteFloat(command, "spotShadowDistance");
+    patch.exposureEv = optionalFiniteFloat(command, "exposureEv");
     patch.iblEnabled = optionalBoolValue(command, "iblEnabled");
     patch.skyboxEnabled = optionalBoolValue(command, "skyboxEnabled");
-    patch.environmentIntensity = optionalFiniteFloat(
-        command, "environmentIntensity", 0.0f, 100.0f);
-    patch.environmentRotationRadians = optionalFiniteFloat(
-        command, "environmentRotationRadians", -1000.0f, 1000.0f);
+    patch.environmentIntensity =
+        optionalFiniteFloat(command, "environmentIntensity");
+    patch.environmentRotationRadians =
+        optionalFiniteFloat(command, "environmentRotationRadians");
     patch.bloomEnabled = optionalBoolValue(command, "bloomEnabled");
-    patch.bloomThreshold = optionalFiniteFloat(
-        command, "bloomThreshold", 0.0f, 20.0f);
-    patch.bloomSoftKnee = optionalFiniteFloat(
-        command, "bloomSoftKnee", 0.0f, 1.0f);
-    patch.bloomIntensity = optionalFiniteFloat(
-        command, "bloomIntensity", 0.0f, 5.0f);
+    patch.bloomThreshold = optionalFiniteFloat(command, "bloomThreshold");
+    patch.bloomSoftKnee = optionalFiniteFloat(command, "bloomSoftKnee");
+    patch.bloomIntensity = optionalFiniteFloat(command, "bloomIntensity");
     patch.frustumCullingEnabled =
         optionalBoolValue(command, "frustumCullingEnabled");
     patch.shadowCullingEnabled =
         optionalBoolValue(command, "shadowCullingEnabled");
-    patch.shadowDistance = optionalFiniteFloat(
-        command, "shadowDistance", kMinDirectionalShadowDistance,
-        kMaxDirectionalShadowDistance);
+    patch.shadowDistance = optionalFiniteFloat(command, "shadowDistance");
     patch.distanceCullingEnabled =
         optionalBoolValue(command, "distanceCullingEnabled");
-    patch.maxDrawDistance = optionalFiniteFloat(
-        command, "maxDrawDistance", 0.1f, 1000000.0f);
+    patch.maxDrawDistance = optionalFiniteFloat(command, "maxDrawDistance");
     patch.smallObjectCullingEnabled =
         optionalBoolValue(command, "smallObjectCullingEnabled");
-    patch.minProjectedSizePixels = optionalFiniteFloat(
-        command, "minProjectedSizePixels", 0.0f, 256.0f);
+    patch.minProjectedSizePixels =
+        optionalFiniteFloat(command, "minProjectedSizePixels");
     patch.occlusionCullingEnabled =
         optionalBoolValue(command, "occlusionCullingEnabled");
     patch.occlusionMinCandidates =
-        optionalUint32(command, "occlusionMinCandidates", 65536u);
-    patch.occlusionDepthBias = optionalFiniteFloat(
-        command, "occlusionDepthBias", 0.0f, 0.05f);
-    patch.surfaceMotionDebugScale = optionalFiniteFloat(
-        command, "surfaceMotionDebugScale", 0.1f, 1024.0f);
-    patch.ssaoRadius = optionalFiniteFloat(
-        command, "ssaoRadius", 0.05f, 10.0f);
-    patch.ssaoBias = optionalFiniteFloat(
-        command, "ssaoBias", 0.0f, 0.2f);
-    patch.ssaoIntensity = optionalFiniteFloat(
-        command, "ssaoIntensity", 0.0f, 4.0f);
-    patch.ssaoPower = optionalFiniteFloat(
-        command, "ssaoPower", 0.25f, 4.0f);
-    patch.cacaoRadius = optionalFiniteFloat(
-        command, "cacaoRadius", 0.05f, 10.0f);
-    patch.cacaoIntensity = optionalFiniteFloat(
-        command, "cacaoIntensity", 0.0f, 4.0f);
-    patch.cacaoPower = optionalFiniteFloat(
-        command, "cacaoPower", 0.25f, 4.0f);
-    patch.gtaoRadius = optionalFiniteFloat(
-        command, "gtaoRadius", 0.05f, 10.0f);
-    patch.gtaoFalloff = optionalFiniteFloat(
-        command, "gtaoFalloff", 0.0f, 0.99f);
-    patch.gtaoIntensity = optionalFiniteFloat(
-        command, "gtaoIntensity", 0.0f, 4.0f);
-    patch.gtaoPower = optionalFiniteFloat(
-        command, "gtaoPower", 0.25f, 4.0f);
-    patch.gtaoTemporalWeight = optionalFiniteFloat(
-        command, "gtaoTemporalWeight", 0.0f, 0.99f);
-    patch.taaHistoryWeight = optionalFiniteFloat(
-        command, "taaHistoryWeight", 0.0f, 0.99f);
-    patch.taaSharpness = optionalFiniteFloat(
-        command, "taaSharpness", 0.0f, 1.0f);
-    patch.ssrMaxDistance = optionalFiniteFloat(
-        command, "ssrMaxDistance", 0.1f, 1000.0f);
-    patch.ssrThickness = optionalFiniteFloat(
-        command, "ssrThickness", 0.001f, 10.0f);
-    patch.ssrMaxRoughness = optionalFiniteFloat(
-        command, "ssrMaxRoughness", 0.0f, 1.0f);
-    patch.ssrIntensity = optionalFiniteFloat(
-        command, "ssrIntensity", 0.0f, 4.0f);
-    patch.ssrHistoryWeight = optionalFiniteFloat(
-        command, "ssrHistoryWeight", 0.0f, 0.99f);
-    patch.ssgiMaxDistance = optionalFiniteFloat(
-        command, "ssgiMaxDistance", 0.05f, 1000.0f);
-    patch.ssgiThickness = optionalFiniteFloat(
-        command, "ssgiThickness", 0.001f, 10.0f);
-    patch.ssgiIntensity = optionalFiniteFloat(
-        command, "ssgiIntensity", 0.0f, 4.0f);
-    patch.ssgiRadianceClamp = optionalFiniteFloat(
-        command, "ssgiRadianceClamp", 0.1f, 100.0f);
-    patch.ssgiHistoryWeight = optionalFiniteFloat(
-        command, "ssgiHistoryWeight", 0.0f, 0.99f);
-    patch.ddgiRadianceClamp = optionalFiniteFloat(
-        command, "ddgiRadianceClamp", 0.1f, 100.0f);
+        optionalUint32(command, "occlusionMinCandidates");
+    patch.occlusionDepthBias =
+        optionalFiniteFloat(command, "occlusionDepthBias");
+    patch.surfaceMotionDebugScale =
+        optionalFiniteFloat(command, "surfaceMotionDebugScale");
+    patch.ssaoRadius = optionalFiniteFloat(command, "ssaoRadius");
+    patch.ssaoBias = optionalFiniteFloat(command, "ssaoBias");
+    patch.ssaoIntensity = optionalFiniteFloat(command, "ssaoIntensity");
+    patch.ssaoPower = optionalFiniteFloat(command, "ssaoPower");
+    patch.cacaoRadius = optionalFiniteFloat(command, "cacaoRadius");
+    patch.cacaoIntensity = optionalFiniteFloat(command, "cacaoIntensity");
+    patch.cacaoPower = optionalFiniteFloat(command, "cacaoPower");
+    patch.gtaoRadius = optionalFiniteFloat(command, "gtaoRadius");
+    patch.gtaoFalloff = optionalFiniteFloat(command, "gtaoFalloff");
+    patch.gtaoIntensity = optionalFiniteFloat(command, "gtaoIntensity");
+    patch.gtaoPower = optionalFiniteFloat(command, "gtaoPower");
+    patch.gtaoTemporalWeight =
+        optionalFiniteFloat(command, "gtaoTemporalWeight");
+    patch.taaHistoryWeight =
+        optionalFiniteFloat(command, "taaHistoryWeight");
+    patch.taaSharpness = optionalFiniteFloat(command, "taaSharpness");
+    patch.ssrMaxDistance = optionalFiniteFloat(command, "ssrMaxDistance");
+    patch.ssrThickness = optionalFiniteFloat(command, "ssrThickness");
+    patch.ssrMaxRoughness =
+        optionalFiniteFloat(command, "ssrMaxRoughness");
+    patch.ssrIntensity = optionalFiniteFloat(command, "ssrIntensity");
+    patch.ssrHistoryWeight =
+        optionalFiniteFloat(command, "ssrHistoryWeight");
+    patch.ssgiMaxDistance = optionalFiniteFloat(command, "ssgiMaxDistance");
+    patch.ssgiThickness = optionalFiniteFloat(command, "ssgiThickness");
+    patch.ssgiIntensity = optionalFiniteFloat(command, "ssgiIntensity");
+    patch.ssgiRadianceClamp =
+        optionalFiniteFloat(command, "ssgiRadianceClamp");
+    patch.ssgiHistoryWeight =
+        optionalFiniteFloat(command, "ssgiHistoryWeight");
+    patch.ddgiRadianceClamp =
+        optionalFiniteFloat(command, "ddgiRadianceClamp");
     patch.screenSpaceDebugMip =
-        optionalUint32(command, "screenSpaceDebugMip", 31u);
+        optionalUint32(command, "screenSpaceDebugMip");
     if (const auto toneMapper = optionalString(command, "toneMapper")) {
         patch.toneMapper = toneMapperFromName(*toneMapper);
         if (!patch.toneMapper) {

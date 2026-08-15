@@ -159,6 +159,7 @@ set(VKL_ENGINE_SOURCES
     diagnostics/Profiling.h
     diagnostics/TracyProfiler.h
     render/FallbackTextures.cpp
+    render/FrameFeatureResolver.cpp
     render/EnvironmentGpuBuilder.cpp
     render/DirectionalShadow.cpp
     render/PunctualShadow.cpp
@@ -170,6 +171,8 @@ set(VKL_ENGINE_SOURCES
     render/Mesh.cpp
     render/PipelineCache.cpp
     render/Renderer.cpp
+    render/RendererFeatureGraph.cpp
+    render/RendererProgramCatalog.cpp
     render/RenderGraph.cpp
     render/RenderQueue.cpp
     render/RenderResourceRegistry.cpp
@@ -314,6 +317,7 @@ endif()
 add_executable(VulkanLab
     main.cpp
     app/Application.cpp
+    app/RenderSettingsController.cpp
     app/SceneRuntimeCoordinator.cpp
     app/SceneWorkflowController.cpp
 )
