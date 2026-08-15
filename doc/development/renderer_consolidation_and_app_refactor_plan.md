@@ -2,7 +2,7 @@
 
 > Status: Active
 > Last verified: 2026-08-15
-> Verified against: `e75be09`
+> Verified against: `737a5f3`
 
 ## Progress
 
@@ -11,8 +11,9 @@
 | 0. Baseline And Scope Lock | Complete | [Stage 0 baseline](renderer_consolidation_baseline.md) |
 | 1. Retire Viking Room And Legacy OBJ | Complete | Renderer Smoke Scene replaces Viking; async ModelAsset/Native Scene loading is the only scene path |
 | 2. Remove RenderGraph Migration Debt | Complete | Graph setup/recordNode is the only pass path; legacy barriers, startup self-tests, and migration aliases removed |
-| 3. Feature-Aware Resource Residency | Next | Pending implementation |
-| 4-10 | Pending | Execute in order after each preceding stage is verified |
+| 3. Feature-Aware Resource Residency | Complete | Graph-driven residency, reduced MRT variants, adaptive occlusion and capacity-tiered punctual shadows; default 800x600 steady-state resident images are about 162.9 MiB |
+| 4. Extract SceneRuntimeCoordinator | Next | Pending implementation |
+| 5-10 | Pending | Execute in order after each preceding stage is verified |
 
 ## Summary
 
@@ -550,6 +551,18 @@ Sheen Chair继续承担 glTF/PBR/material smoke。
 - 800x600默认配置 resident image初始目标不高于约250 MiB；该值是本机工程目标，不是跨GPU硬门槛。
 - inactive功能的 dedicated resource bytes为0或仅保留明确共享fallback。
 - Feature切换和resize不调用 `vkDeviceWaitIdle()`。
+
+### Stage 3 Completion Record
+
+- `CompiledRenderGraph` now publishes active image handles and owner Passes. `RenderResourceRegistry` tracks `Unallocated / Resident / Retiring`, creates newly active images at the current frame-slot safe point, and releases inactive images after their submission serial completes.
+- Runtime and UI diagnostics report logical, active, resident and retiring image bytes. On the current machine at 800x600, the default Sheen Chair path is about `162.9 MiB` active/resident versus the previous roughly `497 MiB` baseline; the full logical declaration remains about `664.7 MiB` without becoming resident.
+- PBR Forward and SurfacePrepass compile reduced fragment-output variants. SSR-only writes the specular lighting MRT, SSGI-only writes the required lighting MRTs, and the baseline path skips both lighting MRTs and HDR composite work.
+- SurfacePrepass selects depth-only, depth plus normal, depth plus normal/motion, or full MRT output from actual frame features. Small scenes skip Surface/Hi-Z/Occlusion by the default `64` candidate threshold, with UI and Runtime Control override.
+- Point and Spot shadow images use capacity tiers. Verified examples: one Point shadow uses `24 MiB`; two Point plus two Spot shadows use `48 MiB + 8 MiB`, instead of reserving all four slots for both types.
+- Disabled Atmosphere and DDGI outputs bind persistent 1x1 fallback images; their real LUT/probe images participate in graph residency. Enabling and disabling Atmosphere returns steady-state residency to the baseline after serial retirement.
+- Descriptor refresh is frame-slot safe. Passes are prepared in two phases: topology/buffer preparation before graph compilation, then image descriptor preparation after residency synchronization. This preserves DDGI/RayTracing dynamic topology without updating descriptor sets still used by another frame.
+- Dynamic SSAO, TAA, SSR, SSGI, Bloom and Occlusion transitions were exercised through Runtime Control without validation errors. `windows-msvc-dev-fast` and `windows-msvc-runtime` both build and sustain rendering.
+- Known follow-up: the current constructor bootstrap still briefly realizes all registered images so legacy Pass constructors can create initial descriptor sets. First-frame graph synchronization removes inactive residency, so this affects startup peak rather than steady state. Fully eliminating that peak requires lazy Pass descriptor construction and can be handled independently after the Application extraction stages.
 
 ## Stage 4: Extract SceneRuntimeCoordinator
 
