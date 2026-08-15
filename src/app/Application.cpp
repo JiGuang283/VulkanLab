@@ -5,13 +5,7 @@
 
 #include <BuildFeatures.h>
 
-#include "assets/DerivedAssetPaths.h"
-#include "assets/ContentHash.h"
-#include "assets/ArtifactStatus.h"
 #include "assets/EnvironmentLoadManager.h"
-#include "assets/ModelImportService.h"
-#include "assets/SceneCatalogEditor.h"
-#include "assets/SceneCatalogStore.h"
 #if VKL_ENABLE_RUNTIME_CONTROL
 #include "control/RuntimeControlAdapter.h"
 #endif
@@ -22,64 +16,46 @@
 #include "core/Log.h"
 #include "core/SwapChain.h"
 #include "core/VulkanContext.h"
-#include "diagnostics/BuildInfo.h"
 #include "diagnostics/CaptureService.h"
 #include "diagnostics/Profiling.h"
-#include "diagnostics/SceneLoadStats.h"
 #include "diagnostics/TracyProfiler.h"
 #if VKL_ENABLE_EDITOR_UI
 #include "editor/EditorController.h"
 #endif
+#include "render/FrameGpuData.h"
 #include "render/GuiSystem.h"
-#include "render/DirectionalShadow.h"
-#include "render/PunctualShadow.h"
-#include "render/MaterialInstance.h"
 #include "render/MaterialSystem.h"
-#include "render/MaterialTextureSlot.h"
 #include "render/PipelineCache.h"
 #include "render/RenderView.h"
 #include "render/Renderer.h"
+#include "render/ShadowSystem.h"
 #include "render/TemporalAA.h"
-#include "render/RayTracingScene.h"
-#include "render/pass/DdgiPass.h"
-#include "scene/AssetRepository.h"
-#include "scene/EnvironmentAssetRepository.h"
-#include "scene/ModelAsset.h"
-#include "scene/ModelInstance.h"
-#include "scene/ModelSourceResolver.h"
+#include "render/Visibility.h"
+#include "scene/Camera.h"
+#include "scene/EnvironmentAssetHandle.h"
+#include "scene/IRenderWorld.h"
+#include "scene/ModelPrepareFactory.h"
 #include "scene/SceneEntry.h"
-#include "scene/SceneLight.h"
-#include "scene/SceneLoadManager.h"
 #include "scene/SceneLoadTask.h"
-#include "scene/SceneRegistryBuilder.h"
-#include "scene/RuntimeWorld.h"
-#include "scene_data/PrimitiveModelDefinitions.h"
+#include "scene_data/SceneIds.h"
 #include "window/InputManager.h"
 #include "window/Window.h"
 
 #include <algorithm>
-#include <array>
-#include <atomic>
 #include <cctype>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
-#include <cstdio>
-#include <cstring>
-#include <future>
-#include <fstream>
-#include <limits>
-#include <mutex>
+#include <filesystem>
+#include <functional>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
-#include <unordered_map>
-#include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include <glm/glm.hpp>
-#include <glm/gtc/constants.hpp>
-#include <glm/gtc/matrix_transform.hpp>
 
 namespace vkr {
 
@@ -112,67 +88,136 @@ bool asciiEqualsIgnoreCase(const std::string &a, const std::string &b) {
     return true;
 }
 
-const char *assetImportModeName(AssetImportMode mode) {
-    switch (mode) {
-    case AssetImportMode::OnDemand:
-        return "OnDemand";
-    case AssetImportMode::ReadOnly:
-        return "ReadOnly";
-    case AssetImportMode::CookedOnly:
-        return "CookedOnly";
-    }
-    return "Unknown";
-}
-
-std::string artifactStatusKey(const std::string &sceneId,
-                              const std::string &profileId) {
-    return sceneId + '\n' + profileId;
-}
-
-
 } // namespace
 
+enum class InputMode {
+    UI,
+    CameraDrag,
+};
+
+struct Application::PlatformServices {
+    std::unique_ptr<Window> window;
+    std::unique_ptr<InputManager> input;
+    std::unique_ptr<VulkanContext> context;
+    std::unique_ptr<Device> device;
+    std::unique_ptr<DescriptorAllocator> descriptorAllocator;
+    std::unique_ptr<MaterialSystem> materialSystem;
+    std::unique_ptr<SwapChain> swapChain;
+    std::unique_ptr<FrameSync> frameSync;
+    std::unique_ptr<Renderer> renderer;
+    std::unique_ptr<PipelineCache> pipelineCache;
+};
+
+struct Application::RuntimeServices {
+    RuntimeServices(const ProjectContext &projectContext,
+                    SceneCatalog catalogValue)
+        : sceneWorkflow(std::make_unique<SceneWorkflowController>(
+              projectContext, std::move(catalogValue))),
+          catalog(sceneWorkflow->catalog()),
+          sceneRegistry(sceneWorkflow->entries()),
+          renderSettings(std::make_unique<RenderSettingsController>(
+              projectContext.resolveRuntimePath("shader/manifest.json"))) {}
+
+    std::unique_ptr<SceneWorkflowController> sceneWorkflow;
+    const SceneCatalog &catalog;
+    const std::vector<SceneEntry> &sceneRegistry;
+    std::unique_ptr<RenderSettingsController> renderSettings;
+    SceneLoadContext sceneLoadContext;
+    std::unique_ptr<SceneRuntimeCoordinator> scene;
+};
+
+struct Application::OptionalTooling {
+    std::unique_ptr<GuiSystem> gui;
+#if VKL_ENABLE_EDITOR_UI
+    std::unique_ptr<EditorController> editor;
+#endif
+    std::unique_ptr<CaptureService> capture;
+#if VKL_ENABLE_RUNTIME_CONTROL
+    std::unique_ptr<RuntimeControlAdapter> runtimeControl;
+#endif
+};
+
+struct Application::FrameState {
+    std::vector<RenderItem> renderItems;
+    VisibilitySystem visibilitySystem;
+    VisibilityFrame visibilityFrame;
+    ShadowSystem shadowSystem;
+    uint64_t presentedFrameCount = 0;
+    InputMode inputMode = InputMode::UI;
+    glm::dvec2 savedCursor{};
+    Camera camera;
+    glm::vec3 ambientColor{1.0f};
+    float ambientIntensity = 0.08f;
+    glm::vec3 defaultSunDirection{0.3f, 0.8f, 0.5f};
+    glm::vec3 defaultSunColor{1.0f};
+    float defaultSunIntensity = 3.0f;
+    RenderViewLightStats lastLightStats{};
+};
 
 Application::Application(const Config &config, ProjectContext projectContext,
                          SceneCatalog catalog)
     : config_(config), projectContext_(std::move(projectContext)),
-      sceneWorkflow_(std::make_unique<SceneWorkflowController>(
-          projectContext_, std::move(catalog))),
-      catalog_(sceneWorkflow_->catalog()),
-      sceneRegistry_(sceneWorkflow_->entries()) {
+      platform_(std::make_unique<PlatformServices>()),
+      runtime_(std::make_unique<RuntimeServices>(projectContext_,
+                                                 std::move(catalog))),
+      tooling_(std::make_unique<OptionalTooling>()),
+      frame_(std::make_unique<FrameState>()) {
     if (config_.derivedTextureCachePath.empty())
         config_.derivedTextureCachePath = projectContext_.cacheRoot.u8string();
-    renderSettingsController_ = std::make_unique<RenderSettingsController>(
-        projectContext_.resolveRuntimePath("shader/manifest.json"));
     const ShaderRegistry &shaderRegistry =
-        renderSettingsController_->shaderRegistry();
-    VKR_LOG_INFO("ShaderRegistry", "Loaded {} programs and {} variants; default={}",
-                 shaderRegistry.programs().size(),
-                 shaderRegistry.variants().size(),
-                 renderSettingsController_->currentShaderVariant().id);
+        runtime_->renderSettings->shaderRegistry();
+    VKR_LOG_INFO(
+        "ShaderRegistry", "Loaded {} programs and {} variants; default={}",
+        shaderRegistry.programs().size(), shaderRegistry.variants().size(),
+        runtime_->renderSettings->currentShaderVariant().id);
 }
 
-Application::~Application() {
+Application::~Application() { shutdown(); }
+
+void Application::shutdown() noexcept {
+    if (shutdown_)
+        return;
+    shutdown_ = true;
+
 #if VKL_ENABLE_RUNTIME_CONTROL
-    runtimeControl_.reset();
-#endif
-#if VKL_ENABLE_EDITOR_UI
-    editorController_.reset();
-#endif
-    if (sceneWorkflow_)
-        sceneWorkflow_->shutdown();
-    if (sceneRuntime_)
-        sceneRuntime_->shutdown();
-    if (device_) {
-        vkDeviceWaitIdle(device_->logicalDevice());
-        if (frameSync_)
-            frameSync_->markAllSubmissionsCompleted();
-        if (captureService_ && frameSync_) {
-            captureService_->shutdown(
-                frameSync_->completedSubmissionSerial());
-        }
+    if (tooling_ && tooling_->runtimeControl) {
+        tooling_->runtimeControl->stop();
+        tooling_->runtimeControl.reset();
     }
-    sceneRuntime_.reset();
+#endif
+    try {
+        if (runtime_ && runtime_->sceneWorkflow)
+            runtime_->sceneWorkflow->shutdown();
+        if (runtime_ && runtime_->scene)
+            runtime_->scene->shutdown();
+
+        if (platform_ && platform_->device) {
+            vkDeviceWaitIdle(platform_->device->logicalDevice());
+            if (platform_->frameSync)
+                platform_->frameSync->markAllSubmissionsCompleted();
+            if (runtime_ && runtime_->scene)
+                runtime_->scene->collectRetired();
+            if (tooling_ && tooling_->capture && platform_->frameSync) {
+                tooling_->capture->shutdown(
+                    platform_->frameSync->completedSubmissionSerial());
+            }
+        }
+    } catch (const std::exception &error) {
+        VKR_LOG_ERROR("Application", "Shutdown failed: {}", error.what());
+    } catch (...) {
+        VKR_LOG_ERROR("Application", "Shutdown failed with an unknown error");
+    }
+
+#if VKL_ENABLE_EDITOR_UI
+    if (tooling_)
+        tooling_->editor.reset();
+#endif
+    if (runtime_)
+        runtime_->scene.reset();
+    tooling_.reset();
+    runtime_.reset();
+    frame_.reset();
+    platform_.reset();
 }
 
 void Application::run() {
@@ -182,32 +227,34 @@ void Application::run() {
         init();
     }
 #if VKL_ENABLE_RUNTIME_CONTROL
-    if (runtimeControl_) {
-        runtimeControl_->start();
-    } else {
+    if (tooling_->runtimeControl)
+        tooling_->runtimeControl->start();
+    else
         VKR_LOG_INFO(
             "Control",
             "Runtime control disabled; pass --runtime-control to enable.");
-    }
+#endif
+
     try {
         mainLoop();
     } catch (...) {
-        if (runtimeControl_)
-            runtimeControl_->stop();
+        shutdown();
         throw;
     }
-    if (runtimeControl_)
-        runtimeControl_->stop();
-#else
-    mainLoop();
-#endif
+    shutdown();
 }
 
 void Application::init() {
-    window_ = std::make_unique<Window>(
+    initPlatformAndRenderer();
+    initSceneRuntime();
+    initOptionalTooling();
+}
+
+void Application::initPlatformAndRenderer() {
+    platform_->window = std::make_unique<Window>(
         config_.windowWidth, config_.windowHeight, config_.windowTitle,
         config_.diagnostics.windowResizable());
-    input_ = std::make_unique<InputManager>(*window_);
+    platform_->input = std::make_unique<InputManager>(*platform_->window);
 
     auto extensions = Window::getRequiredVulkanExtensions();
     VulkanContextOptions contextOptions;
@@ -216,101 +263,108 @@ void Application::init() {
         build::kValidation && !projectContext_.cookedPackage;
     contextOptions.debugUtilsRequested =
         build::kGpuDebugUtils && !projectContext_.cookedPackage;
-    context_ = std::make_unique<VulkanContext>(
-        [this](VkInstance inst) { return window_->createSurface(inst); },
+    platform_->context = std::make_unique<VulkanContext>(
+        [this](VkInstance inst) {
+            return platform_->window->createSurface(inst);
+        },
         std::move(extensions), contextOptions);
-    device_ = std::make_unique<Device>(*context_,
-                                       config_.materialBindingMode);
-    descriptorAllocator_ = std::make_unique<DescriptorAllocator>(*device_);
-    materialSystem_ = std::make_unique<MaterialSystem>(
-        *device_, *descriptorAllocator_, config_.materialBindingMode,
-        renderSettingsController_->shaderRegistry().supportsBindlessMaterials());
+    platform_->device = std::make_unique<Device>(*platform_->context,
+                                                 config_.materialBindingMode);
+    platform_->descriptorAllocator =
+        std::make_unique<DescriptorAllocator>(*platform_->device);
+    platform_->materialSystem = std::make_unique<MaterialSystem>(
+        *platform_->device, *platform_->descriptorAllocator,
+        config_.materialBindingMode,
+        runtime_->renderSettings->shaderRegistry().supportsBindlessMaterials());
     VKR_LOG_INFO(
         "Material",
         "Material binding: requested={} active={} textures={} materials={}{}",
         materialBindingModeName(config_.materialBindingMode),
-        materialBindingModeName(materialSystem_->activeMode()),
-        materialSystem_->status().textureCapacity,
-        materialSystem_->status().materialCapacity,
-        materialSystem_->status().fallbackReason.empty()
+        materialBindingModeName(platform_->materialSystem->activeMode()),
+        platform_->materialSystem->status().textureCapacity,
+        platform_->materialSystem->status().materialCapacity,
+        platform_->materialSystem->status().fallbackReason.empty()
             ? std::string{}
-            : " fallback=" + materialSystem_->status().fallbackReason);
-    swapChain_ =
-        std::make_unique<SwapChain>(*device_, context_->surface(), [this]() {
-            return window_->framebufferExtent();
-        });
-    frameSync_ = std::make_unique<FrameSync>(*device_, *swapChain_);
-    renderer_ = std::make_unique<Renderer>(
-        *device_, *swapChain_, *frameSync_, *descriptorAllocator_,
-        *materialSystem_, renderSettingsController_->shaderRegistry(),
-        materialSystem_->activeMode());
+            : " fallback=" +
+                  platform_->materialSystem->status().fallbackReason);
+    platform_->swapChain = std::make_unique<SwapChain>(
+        *platform_->device, platform_->context->surface(),
+        [this]() { return platform_->window->framebufferExtent(); });
+    platform_->frameSync =
+        std::make_unique<FrameSync>(*platform_->device, *platform_->swapChain);
+    platform_->renderer = std::make_unique<Renderer>(
+        *platform_->device, *platform_->swapChain, *platform_->frameSync,
+        *platform_->descriptorAllocator, *platform_->materialSystem,
+        runtime_->renderSettings->shaderRegistry(),
+        platform_->materialSystem->activeMode());
     RenderSettingsCallbacks renderSettingsCallbacks;
-    renderSettingsCallbacks.reconfigureCacao = [this](CacaoResolution resolution) {
-        frameSync_->waitForAllFrames();
-        std::string error;
-        if (!renderer_->reconfigureCacao(resolution, error)) {
-            throw RenderSettingsError(
-                "cacao_reconfigure_failed",
-                error.empty() ? "Failed to reconfigure FidelityFX CACAO."
-                              : error);
-        }
-    };
-    renderSettingsController_->configure(
-        renderer_->featureSupport(), std::move(renderSettingsCallbacks));
-#if VKL_ENABLE_CAPTURE
-    if (!projectContext_.cookedPackage) {
-        captureService_ = std::make_unique<CaptureService>(
-            *device_, projectContext_.captureRoot);
-    }
-#endif
+    renderSettingsCallbacks.reconfigureCacao =
+        [this](CacaoResolution resolution) {
+            platform_->frameSync->waitForAllFrames();
+            std::string error;
+            if (!platform_->renderer->reconfigureCacao(resolution, error)) {
+                throw RenderSettingsError(
+                    "cacao_reconfigure_failed",
+                    error.empty() ? "Failed to reconfigure FidelityFX CACAO."
+                                  : error);
+            }
+        };
+    runtime_->renderSettings->configure(platform_->renderer->featureSupport(),
+                                        std::move(renderSettingsCallbacks));
+    platform_->window->setResizeCallback(
+        [this](int, int) { platform_->frameSync->notifyResize(); });
 
-    window_->setResizeCallback(
-        [this](int, int) { frameSync_->notifyResize(); });
+    frame_->camera.setAspect(
+        static_cast<float>(platform_->swapChain->extent().width) /
+        static_cast<float>(platform_->swapChain->extent().height));
 
-    camera_.setAspect(static_cast<float>(swapChain_->extent().width) /
-                      static_cast<float>(swapChain_->extent().height));
+    platform_->pipelineCache =
+        std::make_unique<PipelineCache>(*platform_->device);
+}
 
-    if (sceneRegistry_.empty())
+void Application::initSceneRuntime() {
+
+    if (runtime_->sceneRegistry.empty())
         throw std::runtime_error(
             "No model previews or native scenes are registered in the "
             "scene catalog.");
 
-    int start = std::clamp(config_.defaultSceneIndex, 0,
-                           static_cast<int>(sceneRegistry_.size()) - 1);
+    int start =
+        std::clamp(config_.defaultSceneIndex, 0,
+                   static_cast<int>(runtime_->sceneRegistry.size()) - 1);
     if (projectContext_.nativeScenePackage) {
         const auto found = std::find_if(
-            sceneRegistry_.begin(), sceneRegistry_.end(),
+            runtime_->sceneRegistry.begin(), runtime_->sceneRegistry.end(),
             [this](const SceneEntry &entry) {
                 return entry.isNativeScene() &&
                        entry.id == projectContext_.startupSceneId;
             });
-        if (found == sceneRegistry_.end()) {
+        if (found == runtime_->sceneRegistry.end()) {
             throw std::runtime_error(
                 "Cooked package startup scene is not registered: " +
                 projectContext_.startupSceneId);
         }
-        start = static_cast<int>(found - sceneRegistry_.begin());
+        start = static_cast<int>(found - runtime_->sceneRegistry.begin());
     }
-    pipelineCache_ = std::make_unique<PipelineCache>(*device_);
-    sceneLoadContext_.maxTextureSize = config_.gltfMaxTextureSize;
-    sceneLoadContext_.derivedTextureCachePath =
+    runtime_->sceneLoadContext.maxTextureSize = config_.gltfMaxTextureSize;
+    runtime_->sceneLoadContext.derivedTextureCachePath =
         config_.derivedTextureCachePath;
-    sceneLoadContext_.projectId = catalog_.projectId;
-    sceneLoadContext_.textureTranscodeTarget =
-        device_->textureTranscodeTarget();
+    runtime_->sceneLoadContext.projectId = runtime_->catalog.projectId;
+    runtime_->sceneLoadContext.textureTranscodeTarget =
+        platform_->device->textureTranscodeTarget();
     if (projectContext_.cookedPackage &&
         projectContext_.requiredTextureEncoder == "bc7" &&
-        sceneLoadContext_.textureTranscodeTarget !=
+        runtime_->sceneLoadContext.textureTranscodeTarget !=
             TextureTranscodeTarget::Bc7) {
         throw std::runtime_error(
             "bc7_required: this cooked package requires native BC7 texture "
             "support");
     }
-    sceneLoadContext_.requireDerivedTextures =
+    runtime_->sceneLoadContext.requireDerivedTextures =
         config_.assetImportMode == AssetImportMode::CookedOnly;
     SceneRuntimeCallbacks runtimeCallbacks;
-    runtimeCallbacks.publicationBlockReason = [this]()
-        -> std::optional<std::string> {
+    runtimeCallbacks.publicationBlockReason =
+        [this]() -> std::optional<std::string> {
         return hasUnsavedSceneChanges()
                    ? std::optional<std::string>(
                          "Scene changed while another world was loading")
@@ -318,10 +372,10 @@ void Application::init() {
     };
     runtimeCallbacks.worldPublished =
         [this](const SceneRuntimePublication &publication) {
-            shadowSystem_.reset();
+            frame_->shadowSystem.reset();
 #if VKL_ENABLE_EDITOR_UI
-            if (editorController_)
-                editorController_->onWorldPublished(publication);
+            if (tooling_->editor)
+                tooling_->editor->onWorldPublished(publication);
 #endif
             if (publication.document &&
                 publication.document->document.environment) {
@@ -329,107 +383,119 @@ void Application::init() {
                     *publication.document->document.environment;
                 RenderSettingsPatch patch;
                 patch.environmentIntensity = environment.intensity;
-                patch.environmentRotationRadians =
-                    environment.rotationRadians;
+                patch.environmentRotationRadians = environment.rotationRadians;
                 applyRenderSettings(patch);
             }
         };
     runtimeCallbacks.environmentPublished =
         [this](const EnvironmentAssetKey &key) {
-            sceneWorkflow_->recordEnvironmentUse(key.environmentId,
-                                                 key.profileId);
+            runtime_->sceneWorkflow->recordEnvironmentUse(key.environmentId,
+                                                          key.profileId);
         };
     runtimeCallbacks.loadFinalized =
-        [this](const std::shared_ptr<SceneLoadTask> &task,
-               bool success) {
-            if (!success || !task ||
-                task->sceneIndex < 0 ||
+        [this](const std::shared_ptr<SceneLoadTask> &task, bool success) {
+            if (!success || !task || task->sceneIndex < 0 ||
                 task->sceneIndex >=
-                    static_cast<int>(sceneRegistry_.size())) {
+                    static_cast<int>(runtime_->sceneRegistry.size())) {
                 return;
             }
-            const SceneEntry &entry = sceneRegistry_[task->sceneIndex];
+            const SceneEntry &entry = runtime_->sceneRegistry[task->sceneIndex];
             if (!entry.isModelPreview())
                 return;
             const std::string &profileId = task->profileId;
-            sceneWorkflow_->recordModelUse(entry.id, profileId);
+            runtime_->sceneWorkflow->recordModelUse(entry.id, profileId);
         };
-    sceneRuntime_ = std::make_unique<SceneRuntimeCoordinator>(
-        *device_, *descriptorAllocator_, *materialSystem_, *renderer_,
-        *frameSync_, camera_, projectContext_, catalog_, sceneRegistry_,
-        sceneLoadContext_, std::move(runtimeCallbacks));
+    runtime_->scene = std::make_unique<SceneRuntimeCoordinator>(
+        *platform_->device, *platform_->descriptorAllocator,
+        *platform_->materialSystem, *platform_->renderer, *platform_->frameSync,
+        frame_->camera, projectContext_, runtime_->catalog,
+        runtime_->sceneRegistry, runtime_->sceneLoadContext,
+        std::move(runtimeCallbacks));
 
     SceneWorkflowCallbacks workflowCallbacks;
-    workflowCallbacks.requestSceneLoad =
-        [this](int index, bool sourceFallback, bool reloadAsset) {
-            return requestSceneLoad(index, sourceFallback, reloadAsset);
-        };
-    workflowCallbacks.hasUnsavedChanges =
-        [this] { return hasUnsavedSceneChanges(); };
+    workflowCallbacks.requestSceneLoad = [this](int index, bool sourceFallback,
+                                                bool reloadAsset) {
+        return requestSceneLoad(index, sourceFallback, reloadAsset);
+    };
+    workflowCallbacks.hasUnsavedChanges = [this] {
+        return hasUnsavedSceneChanges();
+    };
     workflowCallbacks.invalidateModel =
         [this](const ModelAssetId &modelId,
                const std::optional<std::string> &profileId) {
-            sceneRuntime_->invalidateModel(
-                modelId, profileId ? &*profileId : nullptr);
+            runtime_->scene->invalidateModel(modelId,
+                                             profileId ? &*profileId : nullptr);
         };
     workflowCallbacks.invalidateEnvironment =
         [this](const std::string &environmentId,
                const std::optional<std::string> &profileId) {
-            sceneRuntime_->invalidateEnvironment(
+            runtime_->scene->invalidateEnvironment(
                 environmentId, profileId ? &*profileId : nullptr);
         };
-    workflowCallbacks.catalogRefreshed =
-        [this] { sceneRuntime_->remapCurrentSceneIndex(); };
+    workflowCallbacks.catalogRefreshed = [this] {
+        runtime_->scene->remapCurrentSceneIndex();
+    };
     workflowCallbacks.environmentArtifactsReady =
         [this](const std::string &environmentId) {
-            if (sceneRuntime_->selectedEnvironmentId() != environmentId)
+            if (runtime_->scene->selectedEnvironmentId() != environmentId)
                 return;
             try {
                 setEnvironment(environmentId);
-                sceneWorkflow_->clearEnvironmentUiError();
+                runtime_->sceneWorkflow->clearEnvironmentUiError();
             } catch (const std::exception &error) {
-                sceneWorkflow_->setEnvironmentUiError(error.what());
+                runtime_->sceneWorkflow->setEnvironmentUiError(error.what());
             }
         };
     workflowCallbacks.environmentWillBeRemoved =
         [this](const std::string &environmentId) {
-            if (sceneRuntime_->selectedEnvironmentId() == environmentId)
+            if (runtime_->scene->selectedEnvironmentId() == environmentId)
                 setEnvironment("None");
         };
     workflowCallbacks.textureLimitChanged = [this](uint32_t value) {
-        sceneLoadContext_.maxTextureSize = value;
+        runtime_->sceneLoadContext.maxTextureSize = value;
         config_.gltfMaxTextureSize = value;
     };
-    sceneWorkflow_->initialize(
+    runtime_->sceneWorkflow->initialize(
         SceneWorkflowConfig{
             config_.assetImportMode,
             std::filesystem::u8path(config_.derivedTextureCachePath),
             std::filesystem::u8path(config_.assetToolPath),
             std::filesystem::u8path(config_.gltfValidatorPath),
-            config_.assetImportWorkers,
-            config_.assetImportMemoryBudgetMiB,
+            config_.assetImportWorkers, config_.assetImportMemoryBudgetMiB,
             build::kAssetAuthoring},
         std::move(workflowCallbacks));
-    sceneWorkflow_->setTextureLimit(sceneLoadContext_.maxTextureSize);
-    if (catalog_.defaultEnvironment &&
-        catalog_.findEnvironment(*catalog_.defaultEnvironment)) {
+    runtime_->sceneWorkflow->setTextureLimit(
+        runtime_->sceneLoadContext.maxTextureSize);
+    if (runtime_->catalog.defaultEnvironment &&
+        runtime_->catalog.findEnvironment(
+            *runtime_->catalog.defaultEnvironment)) {
         try {
-            setEnvironment(*catalog_.defaultEnvironment);
+            setEnvironment(*runtime_->catalog.defaultEnvironment);
         } catch (const std::exception &error) {
             VKR_LOG_WARN("Environment",
                          "Could not queue default environment '{}': {}",
-                         *catalog_.defaultEnvironment, error.what());
+                         *runtime_->catalog.defaultEnvironment, error.what());
         }
     }
-    sceneWorkflow_->selectEntry(start);
+    runtime_->sceneWorkflow->selectEntry(start);
     requestSceneOperation(start);
+}
+
+void Application::initOptionalTooling() {
+#if VKL_ENABLE_CAPTURE
+    if (!projectContext_.cookedPackage) {
+        tooling_->capture = std::make_unique<CaptureService>(
+            *platform_->device, projectContext_.captureRoot);
+    }
+#endif
 
 #if VKL_ENABLE_EDITOR_UI
     if (config_.diagnostics.guiVisible) {
-        gui_ = std::make_unique<GuiSystem>(
-            context_->instance(), *device_, swapChain_->imageFormat(),
-            window_->handle(), swapChain_->imageCount(),
-            swapChain_->imageCount());
+        tooling_->gui = std::make_unique<GuiSystem>(
+            platform_->context->instance(), *platform_->device,
+            platform_->swapChain->imageFormat(), platform_->window->handle(),
+            platform_->swapChain->imageCount(),
+            platform_->swapChain->imageCount());
         EditorControllerActions editorActions;
         editorActions.requestSceneOperation =
             [this](int index, bool sourceFallback, bool loadAfter,
@@ -439,21 +505,40 @@ void Application::init() {
                                              reason, forceReimport,
                                              reloadAsset);
             };
-        editorActions.setTextureLimit =
-            [this](uint32_t limit) { return setTextureLimit(limit); };
-        editorActions.setEnvironment =
-            [this](const std::string &id) { return setEnvironment(id); };
-        editorController_ = std::make_unique<EditorController>(
-            EditorControllerServices{
-                config_, projectContext_, catalog_, sceneRegistry_,
-                sceneLoadContext_, *window_, *device_, *frameSync_,
-                *swapChain_, *renderer_, *gui_, *materialSystem_,
-                *sceneWorkflow_, *sceneRuntime_, *renderSettingsController_,
-                captureService_.get(), camera_, ambientColor_,
-                ambientIntensity_, defaultSunDirection_, defaultSunColor_,
-                defaultSunIntensity_, visibilityFrame_, shadowSystem_,
-                lastLightStats_,
-                [this]() { return mode_ == InputMode::CameraDrag; },
+        editorActions.setTextureLimit = [this](uint32_t limit) {
+            return setTextureLimit(limit);
+        };
+        editorActions.setEnvironment = [this](const std::string &id) {
+            return setEnvironment(id);
+        };
+        tooling_->editor =
+            std::make_unique<EditorController>(EditorControllerServices{
+                config_,
+                projectContext_,
+                runtime_->catalog,
+                runtime_->sceneRegistry,
+                runtime_->sceneLoadContext,
+                *platform_->window,
+                *platform_->device,
+                *platform_->frameSync,
+                *platform_->swapChain,
+                *platform_->renderer,
+                *tooling_->gui,
+                *platform_->materialSystem,
+                *runtime_->sceneWorkflow,
+                *runtime_->scene,
+                *runtime_->renderSettings,
+                tooling_->capture.get(),
+                frame_->camera,
+                frame_->ambientColor,
+                frame_->ambientIntensity,
+                frame_->defaultSunDirection,
+                frame_->defaultSunColor,
+                frame_->defaultSunIntensity,
+                frame_->visibilityFrame,
+                frame_->shadowSystem,
+                frame_->lastLightStats,
+                [this]() { return frame_->inputMode == InputMode::CameraDrag; },
                 std::move(editorActions)});
     }
 #endif
@@ -469,68 +554,75 @@ void Application::init() {
                                              reason, forceReimport,
                                              reloadAsset);
             };
-        controlActions.setTextureLimit =
-            [this](uint32_t limit) { return setTextureLimit(limit); };
-        controlActions.setEnvironment =
-            [this](const std::string &id) { return setEnvironment(id); };
-        controlActions.reloadEnvironment =
-            [this]() { return reloadCurrentEnvironment(); };
-        controlActions.cancelLoadOperation =
-            [this](uint64_t taskId) { return cancelLoadOperation(taskId); };
-        controlActions.hasUnsavedChanges =
-            [this]() { return hasUnsavedSceneChanges(); };
+        controlActions.setTextureLimit = [this](uint32_t limit) {
+            return setTextureLimit(limit);
+        };
+        controlActions.setEnvironment = [this](const std::string &id) {
+            return setEnvironment(id);
+        };
+        controlActions.reloadEnvironment = [this]() {
+            return reloadCurrentEnvironment();
+        };
+        controlActions.cancelLoadOperation = [this](uint64_t taskId) {
+            return cancelLoadOperation(taskId);
+        };
+        controlActions.hasUnsavedChanges = [this]() {
+            return hasUnsavedSceneChanges();
+        };
 
         std::function<RuntimeViewportSnapshot()> viewportSnapshot;
 #if VKL_ENABLE_EDITOR_UI
-        if (editorController_) {
+        if (tooling_->editor) {
             viewportSnapshot = [this]() {
                 const EditorViewportDiagnostics source =
-                    editorController_->viewportDiagnostics();
+                    tooling_->editor->viewportDiagnostics();
                 return RuntimeViewportSnapshot{
-                    source.displayWidth, source.displayHeight,
-                    source.visible, source.hovered,
-                    source.resizePending};
+                    source.displayWidth, source.displayHeight, source.visible,
+                    source.hovered, source.resizePending};
             };
         }
 #endif
-        runtimeControl_ = std::make_unique<RuntimeControlAdapter>(
-            RuntimeControlServices{
-                config_, projectContext_, catalog_, sceneRegistry_,
-                sceneLoadContext_, *window_, *context_, *device_,
-                *frameSync_, *swapChain_, *renderer_, *materialSystem_,
-                *sceneWorkflow_, *sceneRuntime_, *renderSettingsController_,
-                captureService_.get(), camera_, visibilityFrame_,
-                lastLightStats_, presentedFrameCount_, gui_ != nullptr,
-                std::move(viewportSnapshot), std::move(controlActions)});
+        tooling_->runtimeControl = std::make_unique<RuntimeControlAdapter>(
+            RuntimeControlServices{config_,
+                                   projectContext_,
+                                   runtime_->catalog,
+                                   runtime_->sceneRegistry,
+                                   runtime_->sceneLoadContext,
+                                   *platform_->window,
+                                   *platform_->context,
+                                   *platform_->device,
+                                   *platform_->frameSync,
+                                   *platform_->swapChain,
+                                   *platform_->renderer,
+                                   *platform_->materialSystem,
+                                   *runtime_->sceneWorkflow,
+                                   *runtime_->scene,
+                                   *runtime_->renderSettings,
+                                   tooling_->capture.get(),
+                                   frame_->camera,
+                                   frame_->visibilityFrame,
+                                   frame_->lastLightStats,
+                                   frame_->presentedFrameCount,
+                                   tooling_->gui != nullptr,
+                                   std::move(viewportSnapshot),
+                                   std::move(controlActions)});
     }
 #endif
 }
 
 uint64_t Application::reloadCurrentScene() {
-    const int index = sceneRuntime_->currentSceneIndex();
-    if (index < 0 || index >= static_cast<int>(sceneRegistry_.size()))
+    const int index = runtime_->scene->currentSceneIndex();
+    if (index < 0 || index >= static_cast<int>(runtime_->sceneRegistry.size()))
         return 0;
     const uint64_t taskId = requestSceneOperation(
         index, false, true, SceneWorkflowRequestReason::SceneLoad, false, true);
-    VKR_LOG_INFO("Scene", "Requested reload of {} with glTF texture limit {}",
-                 sceneRegistry_[index].name,
-                 sceneLoadContext_.maxTextureSize == 0
-                     ? std::string("Full")
-                     : std::to_string(sceneLoadContext_.maxTextureSize));
+    VKR_LOG_INFO(
+        "Scene", "Requested reload of {} with glTF texture limit {}",
+        runtime_->sceneRegistry[index].name,
+        runtime_->sceneLoadContext.maxTextureSize == 0
+            ? std::string("Full")
+            : std::to_string(runtime_->sceneLoadContext.maxTextureSize));
     return taskId;
-}
-
-void Application::switchScene(int index) {
-    if (index < 0 || index >= static_cast<int>(sceneRegistry_.size()))
-        return;
-    const auto &latest = sceneRuntime_->latestSceneLoadTask();
-    if (index == sceneRuntime_->currentSceneIndex() &&
-        (!latest || isTerminalSceneLoadState(latest->state.load())))
-        return;
-    const uint64_t taskId = requestSceneOperation(index);
-    VKR_LOG_INFO("Scene", "{} {}",
-                 taskId != 0 ? "Requested switch to" : "Switched to",
-                 sceneRegistry_[index].name);
 }
 
 uint64_t Application::setTextureLimit(uint32_t limit) {
@@ -538,23 +630,23 @@ uint64_t Application::setTextureLimit(uint32_t limit) {
         throw SceneWorkflowError(
             "invalid_texture_limit",
             "Texture limit must be 0, 512, 1024, or 2048.");
-    if (sceneLoadContext_.maxTextureSize == limit)
+    if (runtime_->sceneLoadContext.maxTextureSize == limit)
         return 0;
     if (config_.assetImportMode == AssetImportMode::CookedOnly) {
         throw SceneWorkflowError(
             "texture_limit_locked",
             "Texture limit is fixed by the cooked package profile.");
     }
-    sceneLoadContext_.maxTextureSize = limit;
-    sceneWorkflow_->setTextureLimit(limit);
+    runtime_->sceneLoadContext.maxTextureSize = limit;
+    runtime_->sceneWorkflow->setTextureLimit(limit);
     VKR_LOG_INFO("Renderer", "glTF texture limit set to {}",
                  textureLimitLabel(limit));
-    const int currentIndex = sceneRuntime_->currentSceneIndex();
+    const int currentIndex = runtime_->scene->currentSceneIndex();
     if (currentIndex >= 0 &&
-        currentIndex < static_cast<int>(sceneRegistry_.size()) &&
-        sceneRegistry_[currentIndex].isNativeScene())
+        currentIndex < static_cast<int>(runtime_->sceneRegistry.size()) &&
+        runtime_->sceneRegistry[currentIndex].isNativeScene())
         return 0;
-    const auto &latest = sceneRuntime_->latestSceneLoadTask();
+    const auto &latest = runtime_->scene->latestSceneLoadTask();
     return latest && !isTerminalSceneLoadState(latest->state.load())
                ? requestSceneOperation(latest->sceneIndex)
                : reloadCurrentScene();
@@ -562,24 +654,24 @@ uint64_t Application::setTextureLimit(uint32_t limit) {
 
 uint64_t Application::requestSceneLoad(int index, bool sourceFallback,
                                        bool reloadAsset) {
-    return sceneRuntime_->requestSceneLoad(index, sourceFallback,
-                                           reloadAsset);
+    return runtime_->scene->requestSceneLoad(index, sourceFallback,
+                                             reloadAsset);
 }
 
 bool Application::cancelSceneLoad(uint64_t taskId) {
-    return sceneRuntime_ && sceneRuntime_->cancelSceneLoad(taskId);
+    return runtime_->scene && runtime_->scene->cancelSceneLoad(taskId);
 }
 
 bool Application::cancelEnvironmentLoad(uint64_t taskId) {
-    return sceneRuntime_ && sceneRuntime_->cancelEnvironmentLoad(taskId);
+    return runtime_->scene && runtime_->scene->cancelEnvironmentLoad(taskId);
 }
 
 uint64_t Application::setEnvironment(const std::string &id) {
     if (asciiEqualsIgnoreCase(id, "None") || id.empty()) {
-        sceneRuntime_->clearEnvironment();
+        runtime_->scene->clearEnvironment();
         return 0;
     }
-    if (!device_->environmentIblSupported()) {
+    if (!platform_->device->environmentIblSupported()) {
         throw SceneRuntimeError(
             "environment_unsupported",
             "The selected Vulkan device does not support the required "
@@ -593,46 +685,28 @@ uint64_t Application::setEnvironment(const std::string &id) {
     return queueEnvironmentLoad(*environment);
 }
 
-uint64_t Application::queueEnvironmentLoad(
-    const CatalogEnvironment &environment, bool reload) {
-    return sceneRuntime_->queueEnvironment(environment, reload);
-}
-
-EnvironmentAssetHandle Application::requestEnvironmentAsset(
-    const CatalogEnvironment &environment, bool reload,
-    bool *repositoryHit, bool *coalesced) {
-    return sceneRuntime_->requestEnvironmentAsset(
-        environment, reload, repositoryHit, coalesced);
+uint64_t
+Application::queueEnvironmentLoad(const CatalogEnvironment &environment,
+                                  bool reload) {
+    return runtime_->scene->queueEnvironment(environment, reload);
 }
 
 uint64_t Application::reloadCurrentEnvironment() {
-    return sceneRuntime_->reloadEnvironment();
-}
-
-void Application::setShaderVariant(const std::string &id) {
-    const std::string previous = currentShaderVariant().id;
-    renderSettingsController_->setShaderVariant(id);
-    if (previous != id) {
-        VKR_LOG_INFO("Renderer", "Shader variant switched to {}",
-                     currentShaderVariant().displayName);
-    }
+    return runtime_->scene->reloadEnvironment();
 }
 
 void Application::applyRenderSettings(const RenderSettingsPatch &patch) {
-    renderSettingsController_->apply(patch);
+    runtime_->renderSettings->apply(patch);
 }
 
 const RenderSettings &Application::renderSettings() const {
-    return renderSettingsController_->settings();
-}
-
-int Application::findSceneIndexByName(const std::string &name) const {
-    return sceneWorkflow_->findEntryByName(name);
+    return runtime_->renderSettings->settings();
 }
 
 const CatalogEnvironment *
 Application::findEnvironmentByName(const std::string &name) const {
-    for (const CatalogEnvironment &environment : catalog_.environments) {
+    for (const CatalogEnvironment &environment :
+         runtime_->catalog.environments) {
         if (asciiEqualsIgnoreCase(environment.id, name) ||
             asciiEqualsIgnoreCase(environment.displayName, name)) {
             return &environment;
@@ -641,24 +715,18 @@ Application::findEnvironmentByName(const std::string &name) const {
     return nullptr;
 }
 
-std::string
-Application::profileIdForTextureLimit(const SceneEntry &entry) const {
-    return sceneWorkflow_->profileIdForEntry(entry);
-}
-
 uint64_t Application::requestSceneOperation(int index, bool sourceFallback,
                                             bool loadAfter,
                                             SceneWorkflowRequestReason reason,
                                             bool forceReimport,
                                             bool reloadAsset) {
-    return sceneWorkflow_->requestEntry(
-        index, sourceFallback, loadAfter, reason, forceReimport,
-        reloadAsset);
+    return runtime_->sceneWorkflow->requestEntry(
+        index, sourceFallback, loadAfter, reason, forceReimport, reloadAsset);
 }
 
 bool Application::hasUnsavedSceneChanges() const {
 #if VKL_ENABLE_EDITOR_UI
-    return editorController_ && editorController_->hasUnsavedChanges();
+    return tooling_->editor && tooling_->editor->hasUnsavedChanges();
 #else
     return false;
 #endif
@@ -666,121 +734,125 @@ bool Application::hasUnsavedSceneChanges() const {
 
 bool Application::cancelLoadOperation(uint64_t taskId) {
     if ((taskId & EnvironmentLoadManager::kTaskIdMask) != 0 &&
-        !sceneWorkflow_->isAssetTaskId(taskId)) {
+        !runtime_->sceneWorkflow->isAssetTaskId(taskId)) {
         return cancelEnvironmentLoad(taskId);
     }
-    if (!sceneWorkflow_->isAssetTaskId(taskId))
+    if (!runtime_->sceneWorkflow->isAssetTaskId(taskId))
         return cancelSceneLoad(taskId);
-    const uint64_t linked = sceneWorkflow_->linkedSceneLoadTask(taskId);
+    const uint64_t linked =
+        runtime_->sceneWorkflow->linkedSceneLoadTask(taskId);
     if (linked != 0)
         return cancelSceneLoad(linked);
-    return sceneWorkflow_->cancelAssetTask(taskId);
+    return runtime_->sceneWorkflow->cancelAssetTask(taskId);
 }
 
 void Application::updateInputMode() {
 #if VKL_ENABLE_EDITOR_UI
-    if (editorController_ && editorController_->activeSceneCamera()) {
-        if (mode_ == InputMode::CameraDrag) {
-            input_->setCursorCaptured(false);
-            input_->setCursorPos(savedCursor_);
-            editorController_->setCameraDragActive(false);
-            mode_ = InputMode::UI;
+    if (tooling_->editor && tooling_->editor->activeSceneCamera()) {
+        if (frame_->inputMode == InputMode::CameraDrag) {
+            platform_->input->setCursorCaptured(false);
+            platform_->input->setCursorPos(frame_->savedCursor);
+            tooling_->editor->setCameraDragActive(false);
+            frame_->inputMode = InputMode::UI;
         }
         return;
     }
 #endif
 
-    if (mode_ == InputMode::UI) {
-        const bool pressed = input_->isMousePressed(MouseButton::Right);
-        bool overUI = gui_ && gui_->wantCaptureMouse();
+    if (frame_->inputMode == InputMode::UI) {
+        const bool pressed =
+            platform_->input->isMousePressed(MouseButton::Right);
+        bool overUI = tooling_->gui && tooling_->gui->wantCaptureMouse();
 #if VKL_ENABLE_EDITOR_UI
         const bool overSceneArea =
-            !editorController_ || editorController_->viewportHovered();
+            !tooling_->editor || tooling_->editor->viewportHovered();
         if (overSceneArea)
             overUI = false;
+        overUI =
+            overUI || (tooling_->editor && tooling_->editor->anyItemActive());
         overUI = overUI ||
-                 (editorController_ && editorController_->anyItemActive());
-        overUI = overUI ||
-                 (editorController_ && editorController_->blocksViewportInput());
+                 (tooling_->editor && tooling_->editor->blocksViewportInput());
 #else
         constexpr bool overSceneArea = true;
 #endif
         if (pressed && overSceneArea && !overUI) {
-            savedCursor_ = input_->cursorPos();
-            input_->setCursorCaptured(true);
+            frame_->savedCursor = platform_->input->cursorPos();
+            platform_->input->setCursorCaptured(true);
 #if VKL_ENABLE_EDITOR_UI
-            if (editorController_)
-                editorController_->setCameraDragActive(true);
+            if (tooling_->editor)
+                tooling_->editor->setCameraDragActive(true);
 #endif
-            mode_ = InputMode::CameraDrag;
+            frame_->inputMode = InputMode::CameraDrag;
         }
     } else { // CameraDrag
-        if (input_->isMouseReleased(MouseButton::Right)) {
-            input_->setCursorCaptured(false);
-            input_->setCursorPos(savedCursor_);
+        if (platform_->input->isMouseReleased(MouseButton::Right)) {
+            platform_->input->setCursorCaptured(false);
+            platform_->input->setCursorPos(frame_->savedCursor);
 #if VKL_ENABLE_EDITOR_UI
-            if (editorController_)
-                editorController_->setCameraDragActive(false);
+            if (tooling_->editor)
+                tooling_->editor->setCameraDragActive(false);
 #endif
-            mode_ = InputMode::UI;
+            frame_->inputMode = InputMode::UI;
         }
     }
 }
 
 void Application::processCameraInput(float dt) {
     glm::vec3 move{0.0f};
-    if (input_->isKeyDown(Key::W))
+    if (platform_->input->isKeyDown(Key::W))
         move.z += config_.moveSpeed * dt;
-    if (input_->isKeyDown(Key::S))
+    if (platform_->input->isKeyDown(Key::S))
         move.z -= config_.moveSpeed * dt;
-    if (input_->isKeyDown(Key::A))
+    if (platform_->input->isKeyDown(Key::A))
         move.x -= config_.moveSpeed * dt;
-    if (input_->isKeyDown(Key::D))
+    if (platform_->input->isKeyDown(Key::D))
         move.x += config_.moveSpeed * dt;
-    if (input_->isKeyDown(Key::Q))
+    if (platform_->input->isKeyDown(Key::Q))
         move.y -= config_.moveSpeed * dt;
-    if (input_->isKeyDown(Key::E))
+    if (platform_->input->isKeyDown(Key::E))
         move.y += config_.moveSpeed * dt;
-    camera_.translate(move);
+    frame_->camera.translate(move);
 
-    const auto d = input_->mouseDelta();
-    camera_.rotate(-d.x * config_.mouseSensitivity,
-                   -d.y * config_.mouseSensitivity);
+    const auto d = platform_->input->mouseDelta();
+    frame_->camera.rotate(-d.x * config_.mouseSensitivity,
+                          -d.y * config_.mouseSensitivity);
 }
 
 void Application::handleSwapChainRecreate() {
     VKL_PROFILE_ZONE("Swapchain Recreate");
-    const VkExtent2D framebufferExtent = window_->framebufferExtent();
+    const VkExtent2D framebufferExtent = platform_->window->framebufferExtent();
     if (framebufferExtent.width == 0 || framebufferExtent.height == 0)
         return;
 
-    renderer_->recreateSwapChain();
-    frameSync_->markAllSubmissionsCompleted();
-    if (captureService_) {
-        captureService_->update(frameSync_->completedSubmissionSerial());
-        captureService_->onSwapChainRecreated(
-            frameSync_->completedSubmissionSerial());
+    platform_->renderer->recreateSwapChain();
+    platform_->frameSync->markAllSubmissionsCompleted();
+    if (tooling_->capture) {
+        tooling_->capture->update(
+            platform_->frameSync->completedSubmissionSerial());
+        tooling_->capture->onSwapChainRecreated(
+            platform_->frameSync->completedSubmissionSerial());
     }
-    pipelineCache_->clear();
-    frameSync_->onSwapChainRecreated();
-    if (gui_)
-        gui_->onSwapChainRecreated(swapChain_->imageCount());
-    if (!gui_) {
-        renderer_->resizeViewport(swapChain_->extent());
-        camera_.setAspect(static_cast<float>(swapChain_->extent().width) /
-                          static_cast<float>(swapChain_->extent().height));
+    platform_->pipelineCache->clear();
+    platform_->frameSync->onSwapChainRecreated();
+    if (tooling_->gui)
+        tooling_->gui->onSwapChainRecreated(platform_->swapChain->imageCount());
+    if (!tooling_->gui) {
+        platform_->renderer->resizeViewport(platform_->swapChain->extent());
+        frame_->camera.setAspect(
+            static_cast<float>(platform_->swapChain->extent().width) /
+            static_cast<float>(platform_->swapChain->extent().height));
     }
 }
 
 const ShaderVariant &Application::currentShaderVariant() const {
-    return renderSettingsController_->currentShaderVariant();
+    return runtime_->renderSettings->currentShaderVariant();
 }
 
 void Application::mainLoop() {
     auto startTime = std::chrono::high_resolution_clock::now();
     auto lastTime = startTime;
-    auto lastProfilerMemorySample = std::chrono::steady_clock::now() -
-                                    std::chrono::seconds(1);
+    auto lastProfilerMemorySample =
+        std::chrono::steady_clock::now() - std::chrono::seconds(1);
     AllocatorMemorySnapshot profilerMemory{};
     profileConfigureMemoryPlot("SceneLoad/StagingBytes");
     profileConfigureMemoryPlot("SceneLoad/ProcessedBytes");
@@ -790,140 +862,136 @@ void Application::mainLoop() {
 
     while (true) {
         VKL_PROFILE_ZONE("Application Frame");
-        window_->pollEvents();
-        input_->update();
+        platform_->window->pollEvents();
+        platform_->input->update();
 
 #if VKL_ENABLE_EDITOR_UI
-        if (window_->shouldClose() && editorController_ &&
-            editorController_->interceptCloseRequest()) {
-            window_->setShouldClose(false);
+        if (platform_->window->shouldClose() && tooling_->editor &&
+            tooling_->editor->interceptCloseRequest()) {
+            platform_->window->setShouldClose(false);
         }
 #endif
-        if (window_->shouldClose())
+        if (platform_->window->shouldClose())
             break;
 
-        if (captureService_) {
-            captureService_->update(
-                frameSync_->completedSubmissionSerial());
+        if (tooling_->capture) {
+            tooling_->capture->update(
+                platform_->frameSync->completedSubmissionSerial());
         }
 
-        sceneWorkflow_->pump();
+        runtime_->sceneWorkflow->pump();
 #if VKL_ENABLE_RUNTIME_CONTROL
-        if (runtimeControl_ && runtimeControl_->processOne()) {
-            window_->setShouldClose(true);
+        if (tooling_->runtimeControl &&
+            tooling_->runtimeControl->processOne()) {
+            platform_->window->setShouldClose(true);
             break;
         }
 #endif
 
         // 1. Pump scene work outside the frame command buffer.
-        sceneRuntime_->pump();
+        runtime_->scene->pump();
 #if VKL_ENABLE_EDITOR_UI
-        if (editorController_)
-            editorController_->update();
+        if (tooling_->editor)
+            tooling_->editor->update();
 #endif
 
         // 2. Advance frame time.
         const auto now = std::chrono::high_resolution_clock::now();
-        const float dt = config_.diagnostics.fixedDeltaSeconds
-                             ? *config_.diagnostics.fixedDeltaSeconds
-                             : std::chrono::duration<float>(now - lastTime)
-                                   .count();
+        const float dt =
+            config_.diagnostics.fixedDeltaSeconds
+                ? *config_.diagnostics.fixedDeltaSeconds
+                : std::chrono::duration<float>(now - lastTime).count();
         lastTime = now;
 
 #if VKL_ENABLE_EDITOR_UI
-        if (editorController_)
-            editorController_->applyPendingViewportResize();
+        if (tooling_->editor)
+            tooling_->editor->applyPendingViewportResize();
 #endif
 
         // 3. Begin the editor frame.
-        if (gui_)
-            gui_->beginFrame();
+        if (tooling_->gui)
+            tooling_->gui->beginFrame();
 #if VKL_ENABLE_EDITOR_UI
-        if (editorController_)
-            editorController_->beginFrame();
+        if (tooling_->editor)
+            tooling_->editor->beginFrame();
 #endif
 
         // 4. Update input mode and camera controls.
         if (!config_.diagnostics.automationMode) {
             updateInputMode();
-            if (mode_ == InputMode::CameraDrag)
+            if (frame_->inputMode == InputMode::CameraDrag)
                 processCameraInput(dt);
         }
-        if (input_->isKeyPressed(Key::Escape)) {
+        if (platform_->input->isKeyPressed(Key::Escape)) {
 #if VKL_ENABLE_EDITOR_UI
-            if (!editorController_ || !editorController_->handleEscape())
-                window_->setShouldClose(true);
+            if (!tooling_->editor || !tooling_->editor->handleEscape())
+                platform_->window->setShouldClose(true);
 #else
-            window_->setShouldClose(true);
+            platform_->window->setShouldClose(true);
 #endif
         }
 #if VKL_ENABLE_CAPTURE
-        if (input_->isKeyPressed(Key::F12)) {
+        if (platform_->input->isKeyPressed(Key::F12)) {
 #if VKL_ENABLE_EDITOR_UI
-            if (editorController_)
-                editorController_->requestManualCapture();
+            if (tooling_->editor)
+                tooling_->editor->requestManualCapture();
 #endif
         }
 #endif
 
         // 5. Tick the active world.
-        simulationTime = config_.diagnostics.fixedDeltaSeconds
-                             ? simulationTime + dt
-                             : std::chrono::duration<float>(now - startTime)
-                                   .count();
-        if (sceneRuntime_->currentWorld())
-            sceneRuntime_->currentWorld()->update(dt, simulationTime);
+        simulationTime =
+            config_.diagnostics.fixedDeltaSeconds
+                ? simulationTime + dt
+                : std::chrono::duration<float>(now - startTime).count();
+        if (runtime_->scene->currentWorld())
+            runtime_->scene->currentWorld()->update(dt, simulationTime);
 
         // 6. Build editor UI.
 #if VKL_ENABLE_EDITOR_UI
-        if (editorController_)
-            editorController_->draw();
+        if (tooling_->editor)
+            tooling_->editor->draw();
 #endif
 
         // 7. Render the frame.
         std::optional<FrameSync::FrameContext> ctx;
         {
             VKL_PROFILE_ZONE("Begin Render Frame");
-            ctx = frameSync_->beginFrame();
+            ctx = platform_->frameSync->beginFrame();
         }
-        sceneRuntime_->collectRetired();
+        runtime_->scene->collectRetired();
         if (!ctx) {
-            if (frameSync_->swapChainNeedsRecreation())
+            if (platform_->frameSync->swapChainNeedsRecreation())
                 handleSwapChainRecreate();
-            if (gui_)
-                gui_->discardFrame();
-            input_->endFrame();
+            if (tooling_->gui)
+                tooling_->gui->discardFrame();
+            platform_->input->endFrame();
             const VkExtent2D framebufferExtent =
-                window_->framebufferExtent();
-            if (framebufferExtent.width == 0 ||
-                framebufferExtent.height == 0) {
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(16));
+                platform_->window->framebufferExtent();
+            if (framebufferExtent.width == 0 || framebufferExtent.height == 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(16));
             }
             continue;
         }
 
         std::optional<CaptureFrameSelection> captureSelection;
-        if (captureService_) {
-            captureService_->update(
-                frameSync_->completedSubmissionSerial());
+        if (tooling_->capture) {
+            tooling_->capture->update(
+                platform_->frameSync->completedSubmissionSerial());
             const RendererViewportOutput viewportOutput =
-                renderer_->viewportOutput();
+                platform_->renderer->viewportOutput();
             CaptureImageSource viewportSource{};
             viewportSource.kind = CaptureSourceKind::Viewport;
             viewportSource.image = viewportOutput.images[ctx->frameIndex];
             viewportSource.extent = viewportOutput.extent;
             viewportSource.format = viewportOutput.format;
-            viewportSource.layout =
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            viewportSource.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             viewportSource.sourceStage =
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-            viewportSource.sourceAccess =
-                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                VK_ACCESS_SHADER_READ_BIT;
-            viewportSource.restoreStage =
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            viewportSource.sourceAccess = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                          VK_ACCESS_SHADER_READ_BIT;
+            viewportSource.restoreStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
             viewportSource.restoreAccess = VK_ACCESS_SHADER_READ_BIT;
             viewportSource.supported =
                 describeCaptureFormat(viewportSource.format).supported;
@@ -934,22 +1002,23 @@ void Application::mainLoop() {
 
             CaptureImageSource workspaceSource{};
             workspaceSource.kind = CaptureSourceKind::Workspace;
-            workspaceSource.image = swapChain_->image(ctx->imageIndex);
-            workspaceSource.extent = swapChain_->extent();
-            workspaceSource.format = swapChain_->imageFormat();
+            workspaceSource.image =
+                platform_->swapChain->image(ctx->imageIndex);
+            workspaceSource.extent = platform_->swapChain->extent();
+            workspaceSource.format = platform_->swapChain->imageFormat();
             workspaceSource.layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
             workspaceSource.sourceStage =
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-            workspaceSource.sourceAccess =
-                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-            workspaceSource.restoreStage =
-                VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+            workspaceSource.sourceAccess = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            workspaceSource.restoreStage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
             workspaceSource.restoreAccess = 0;
-            workspaceSource.supported = swapChain_->captureSupported();
+            workspaceSource.supported =
+                platform_->swapChain->captureSupported();
             workspaceSource.unsupportedReason =
-                swapChain_->captureUnsupportedReason();
+                platform_->swapChain->captureUnsupportedReason();
 
-            const RendererHdrOutput hdrOutput = renderer_->hdrOutput();
+            const RendererHdrOutput hdrOutput =
+                platform_->renderer->hdrOutput();
             CaptureImageSource hdrSource{};
             hdrSource.kind = CaptureSourceKind::Hdr;
             hdrSource.image = hdrOutput.images[ctx->frameIndex];
@@ -960,57 +1029,58 @@ void Application::mainLoop() {
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-            hdrSource.sourceAccess =
-                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
-            hdrSource.restoreStage =
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            hdrSource.sourceAccess = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                     VK_ACCESS_SHADER_WRITE_BIT |
+                                     VK_ACCESS_SHADER_READ_BIT;
+            hdrSource.restoreStage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
             hdrSource.restoreAccess = VK_ACCESS_SHADER_READ_BIT;
             const CaptureFormatDescription hdrFormat =
                 describeCaptureFormat(hdrSource.format);
-            hdrSource.supported = hdrFormat.supported &&
-                                  hdrFormat.encoding !=
-                                      CapturePixelEncoding::Unorm8;
+            hdrSource.supported =
+                hdrFormat.supported &&
+                hdrFormat.encoding != CapturePixelEncoding::Unorm8;
             if (!hdrSource.supported)
                 hdrSource.unsupportedReason =
                     "renderer HDR format is not supported for HDR capture";
-            captureSelection = captureService_->prepareFrame(
+            captureSelection = tooling_->capture->prepareFrame(
                 viewportSource, workspaceSource, hdrSource);
         }
 
         RenderWorldFrameSnapshot worldSnapshot{};
-        const bool hasWorldSnapshot = sceneRuntime_->currentWorld() != nullptr;
-        if (sceneRuntime_->currentWorld()) {
+        const bool hasWorldSnapshot =
+            runtime_->scene->currentWorld() != nullptr;
+        if (runtime_->scene->currentWorld()) {
             VKL_PROFILE_ZONE("RenderWorld Snapshot");
-            worldSnapshot = sceneRuntime_->currentWorld()->buildRenderSnapshot();
+            worldSnapshot =
+                runtime_->scene->currentWorld()->buildRenderSnapshot();
         }
 
         RenderViewInput viewInput{};
-        viewInput.view = camera_.viewMatrix();
-        viewInput.projection = camera_.projectionMatrix();
-        viewInput.cameraPosition = camera_.position();
-        viewInput.cameraNearPlane = camera_.nearPlane();
-        viewInput.cameraFarPlane = camera_.farPlane();
-        viewInput.viewportExtent = renderer_->viewportExtent();
+        viewInput.view = frame_->camera.viewMatrix();
+        viewInput.projection = frame_->camera.projectionMatrix();
+        viewInput.cameraPosition = frame_->camera.position();
+        viewInput.cameraNearPlane = frame_->camera.nearPlane();
+        viewInput.cameraFarPlane = frame_->camera.farPlane();
+        viewInput.viewportExtent = platform_->renderer->viewportExtent();
         viewInput.atmosphereSupported =
-            device_->atmosphereSupport().available;
-        viewInput.ddgiSupported = device_->ddgiSupport().available;
-        viewInput.ambientColor = ambientColor_;
-        viewInput.ambientIntensity = ambientIntensity_;
-        viewInput.defaultSun = {defaultSunDirection_, defaultSunColor_,
-                                defaultSunIntensity_};
-        viewInput.settings = renderSettingsController_->snapshot().active;
-        viewInput.environmentReady = renderer_->environmentReady();
+            platform_->device->atmosphereSupport().available;
+        viewInput.ddgiSupported = platform_->device->ddgiSupport().available;
+        viewInput.ambientColor = frame_->ambientColor;
+        viewInput.ambientIntensity = frame_->ambientIntensity;
+        viewInput.defaultSun = {frame_->defaultSunDirection,
+                                frame_->defaultSunColor,
+                                frame_->defaultSunIntensity};
+        viewInput.settings = runtime_->renderSettings->snapshot().active;
+        viewInput.environmentReady = platform_->renderer->environmentReady();
         viewInput.maxSpecularLod =
-            renderer_->currentEnvironmentMaxSpecularLod();
+            platform_->renderer->currentEnvironmentMaxSpecularLod();
         std::string cameraHistoryIdentity = "editor";
-        if (sceneRuntime_->currentWorld()) {
+        if (runtime_->scene->currentWorld()) {
             viewInput.sceneBounds = worldSnapshot.bounds;
             viewInput.sceneLights = &worldSnapshot.lights;
             viewInput.reflectionProbes = &worldSnapshot.reflectionProbes;
-            viewInput.fallbackSunEnabled =
-                worldSnapshot.fallbackSunEnabled;
+            viewInput.fallbackSunEnabled = worldSnapshot.fallbackSunEnabled;
             viewInput.atmosphere = worldSnapshot.atmosphere;
             viewInput.ddgiProbeVolume = worldSnapshot.ddgiProbeVolume;
             if (const auto &ambient = worldSnapshot.ambient) {
@@ -1023,45 +1093,43 @@ void Application::mainLoop() {
                 viewInput.settings.environmentRotationRadians =
                     environment->rotationRadians;
             }
-            bool useActiveSceneCamera = !gui_;
+            bool useActiveSceneCamera = !tooling_->gui;
 #if VKL_ENABLE_EDITOR_UI
-            useActiveSceneCamera = useActiveSceneCamera ||
-                                   (editorController_ &&
-                                    editorController_->activeSceneCamera());
+            useActiveSceneCamera =
+                useActiveSceneCamera ||
+                (tooling_->editor && tooling_->editor->activeSceneCamera());
 #endif
             if (useActiveSceneCamera) {
-                const VkExtent2D extent = renderer_->viewportExtent();
+                const VkExtent2D extent = platform_->renderer->viewportExtent();
                 const float aspect =
-                    extent.height == 0
-                        ? 1.0f
-                        : static_cast<float>(extent.width) /
-                              static_cast<float>(extent.height);
+                    extent.height == 0 ? 1.0f
+                                       : static_cast<float>(extent.width) /
+                                             static_cast<float>(extent.height);
                 if (const auto activeCamera =
-                        sceneRuntime_->currentWorld()->activeCamera(aspect)) {
+                        runtime_->scene->currentWorld()->activeCamera(aspect)) {
                     viewInput.view = activeCamera->view;
                     viewInput.projection = activeCamera->projection;
                     viewInput.cameraPosition = activeCamera->position;
                     viewInput.cameraNearPlane = activeCamera->nearPlane;
                     viewInput.cameraFarPlane = activeCamera->farPlane;
-                    cameraHistoryIdentity = activeCamera->entityId.empty()
-                                                ? "active-camera"
-                                                : "active:" +
-                                                      activeCamera->entityId
-                                                          .toString();
+                    cameraHistoryIdentity =
+                        activeCamera->entityId.empty()
+                            ? "active-camera"
+                            : "active:" + activeCamera->entityId.toString();
                 }
             }
         }
 #if VKL_ENABLE_EDITOR_UI
-        if (editorController_)
-            editorController_->applyReflectionProbeCaptureView(
+        if (tooling_->editor)
+            tooling_->editor->applyReflectionProbeCaptureView(
                 viewInput, cameraHistoryIdentity);
 #endif
         const bool taaJitterEnabled =
-            device_->screenSpaceEffectsSupport().taaAvailable &&
+            platform_->device->screenSpaceEffectsSupport().taaAvailable &&
             taaPassRequested(viewInput.settings);
-        const TemporalJitter jitter = temporalJitter(
-            presentedFrameCount_, viewInput.viewportExtent,
-            taaJitterEnabled);
+        const TemporalJitter jitter =
+            temporalJitter(frame_->presentedFrameCount,
+                           viewInput.viewportExtent, taaJitterEnabled);
         viewInput.projectionJitterNdc = jitter.ndc;
         viewInput.projectionJitterPixels = jitter.pixels;
         ShadowBuildInput shadowInput{};
@@ -1072,23 +1140,22 @@ void Application::mainLoop() {
         shadowInput.cameraPosition = viewInput.cameraPosition;
         shadowInput.cameraNearPlane = viewInput.cameraNearPlane;
         shadowInput.cameraFarPlane = viewInput.cameraFarPlane;
-        shadowInput.fallbackSunDirection = defaultSunDirection_;
-        shadowInput.fallbackSunColor = defaultSunColor_;
-        shadowInput.fallbackSunIntensity = defaultSunIntensity_;
+        shadowInput.fallbackSunDirection = frame_->defaultSunDirection;
+        shadowInput.fallbackSunColor = frame_->defaultSunColor;
+        shadowInput.fallbackSunIntensity = frame_->defaultSunIntensity;
         shadowInput.fallbackSunEnabled =
             hasWorldSnapshot && viewInput.fallbackSunEnabled;
         shadowInput.settings = viewInput.settings;
 #if VKL_ENABLE_EDITOR_UI
-        if (editorController_)
+        if (tooling_->editor)
             shadowInput.focusedLightEntity =
-                editorController_->focusedLightEntity();
+                tooling_->editor->focusedLightEntity();
 #endif
         const ShadowFramePlan shadowPlan =
-            shadowSystem_.build(shadowInput);
-        const RenderView renderView =
-            buildRenderView(viewInput, shadowPlan);
+            frame_->shadowSystem.build(shadowInput);
+        const RenderView renderView = buildRenderView(viewInput, shadowPlan);
         if (renderView.lightStats.ignoredLights !=
-            lastLightStats_.ignoredLights) {
+            frame_->lastLightStats.ignoredLights) {
             if (renderView.lightStats.ignoredLights > 0) {
                 VKR_LOG_WARN(
                     "Lighting",
@@ -1096,150 +1163,150 @@ void Application::mainLoop() {
                     renderView.lightStats.ignoredLights, kMaxSceneLights);
             }
         }
-        lastLightStats_ = renderView.lightStats;
+        frame_->lastLightStats = renderView.lightStats;
         {
             VKL_PROFILE_ZONE("RenderItem Collect");
-            renderItems_ = std::move(worldSnapshot.renderItems);
+            frame_->renderItems = std::move(worldSnapshot.renderItems);
         }
         {
             VKL_PROFILE_ZONE("Visibility Build");
             VisibilityBuildInput visibilityInput{};
-            visibilityInput.sceneGeneration = sceneRuntime_->sceneGeneration();
-            visibilityInput.cameraIdentity =
-                std::move(cameraHistoryIdentity);
-            visibilityInput.shaderIdentity =
-                currentShaderVariant().id;
+            visibilityInput.sceneGeneration =
+                runtime_->scene->sceneGeneration();
+            visibilityInput.cameraIdentity = std::move(cameraHistoryIdentity);
+            visibilityInput.shaderIdentity = currentShaderVariant().id;
             visibilityInput.sceneBounds = viewInput.sceneBounds;
-            visibilityFrame_ = visibilitySystem_.build(
-                std::move(renderItems_), renderView,
-                renderer_->viewportExtent(),
+            frame_->visibilityFrame = frame_->visibilitySystem.build(
+                std::move(frame_->renderItems), renderView,
+                platform_->renderer->viewportExtent(),
                 std::move(visibilityInput));
         }
 
         if constexpr (build::kTracy) {
-            profilePlotNumber(
-                "Frame/DrawCount",
-                static_cast<int64_t>(visibilityFrame_.cameraDrawCount()));
-            profilePlotNumber(
-                "Frame/OpaqueDrawCount",
-                static_cast<int64_t>(
-                    visibilityFrame_.cameraOpaque.size()));
+            profilePlotNumber("Frame/DrawCount",
+                              static_cast<int64_t>(
+                                  frame_->visibilityFrame.cameraDrawCount()));
+            profilePlotNumber("Frame/OpaqueDrawCount",
+                              static_cast<int64_t>(
+                                  frame_->visibilityFrame.cameraOpaque.size()));
             profilePlotNumber(
                 "Frame/TransparentDrawCount",
                 static_cast<int64_t>(
-                    visibilityFrame_.cameraTransparent.size()));
+                    frame_->visibilityFrame.cameraTransparent.size()));
             profilePlotNumber(
                 "Visibility/Source",
-                static_cast<int64_t>(visibilityFrame_.cpuStats.sourceDraws));
+                static_cast<int64_t>(
+                    frame_->visibilityFrame.cpuStats.sourceDraws));
             profilePlotNumber(
                 "Visibility/CameraVisible",
-                static_cast<int64_t>(visibilityFrame_.cpuStats.cameraVisible));
+                static_cast<int64_t>(
+                    frame_->visibilityFrame.cpuStats.cameraVisible));
             profilePlotNumber(
                 "Visibility/FrustumCulled",
-                static_cast<int64_t>(visibilityFrame_.cpuStats.frustumCulled));
+                static_cast<int64_t>(
+                    frame_->visibilityFrame.cpuStats.frustumCulled));
             profilePlotNumber(
                 "Visibility/DistanceCulled",
-                static_cast<int64_t>(visibilityFrame_.cpuStats.distanceCulled));
+                static_cast<int64_t>(
+                    frame_->visibilityFrame.cpuStats.distanceCulled));
             profilePlotNumber(
                 "Visibility/SmallObjectCulled",
                 static_cast<int64_t>(
-                    visibilityFrame_.cpuStats.smallObjectCulled));
+                    frame_->visibilityFrame.cpuStats.smallObjectCulled));
             profilePlotNumber(
                 "Visibility/ShadowVisible",
-                static_cast<int64_t>(visibilityFrame_.cpuStats.shadowVisible));
+                static_cast<int64_t>(
+                    frame_->visibilityFrame.cpuStats.shadowVisible));
             profilePlotNumber(
                 "Frame/GraphicsPipelines",
-                static_cast<int64_t>(pipelineCache_->graphicsPipelineCount()));
+                static_cast<int64_t>(
+                    platform_->pipelineCache->graphicsPipelineCount()));
             profilePlotNumber(
                 "Lighting/Active",
-                static_cast<int64_t>(lastLightStats_.effectiveLights));
+                static_cast<int64_t>(frame_->lastLightStats.effectiveLights));
             profilePlotNumber(
                 "Lighting/Uploaded",
-                static_cast<int64_t>(lastLightStats_.totalLights));
+                static_cast<int64_t>(frame_->lastLightStats.totalLights));
             profilePlotNumber(
                 "Lighting/Ignored",
-                static_cast<int64_t>(lastLightStats_.ignoredLights));
+                static_cast<int64_t>(frame_->lastLightStats.ignoredLights));
             profilePlotNumber(
                 "Frame/ComputePipelines",
-                static_cast<int64_t>(pipelineCache_->computePipelineCount()));
+                static_cast<int64_t>(
+                    platform_->pipelineCache->computePipelineCount()));
             profilePlotMemory(
                 "SceneLoad/StagingBytes",
-                static_cast<int64_t>(sceneRuntime_->stagingBytesInUse()));
-            if (sceneRuntime_->latestSceneLoadTask()) {
+                static_cast<int64_t>(runtime_->scene->stagingBytesInUse()));
+            if (runtime_->scene->latestSceneLoadTask()) {
                 profilePlotMemory(
                     "SceneLoad/ProcessedBytes",
-                    static_cast<int64_t>(
-                        sceneRuntime_->latestSceneLoadTask()->progress.processedBytes.load()));
+                    static_cast<int64_t>(runtime_->scene->latestSceneLoadTask()
+                                             ->progress.processedBytes.load()));
             }
             const auto profilerNow = std::chrono::steady_clock::now();
-            if (profileConnected() &&
-                profilerNow - lastProfilerMemorySample >=
-                    std::chrono::seconds(1)) {
-                profilerMemory = device_->allocatorMemorySnapshot();
+            if (profileConnected() && profilerNow - lastProfilerMemorySample >=
+                                          std::chrono::seconds(1)) {
+                profilerMemory = platform_->device->allocatorMemorySnapshot();
                 lastProfilerMemorySample = profilerNow;
             }
             profilePlotMemory(
                 "VMA/AllocationBytes",
                 static_cast<int64_t>(profilerMemory.allocationBytes));
-            profilePlotMemory(
-                "VMA/BlockBytes",
-                static_cast<int64_t>(profilerMemory.blockBytes));
+            profilePlotMemory("VMA/BlockBytes",
+                              static_cast<int64_t>(profilerMemory.blockBytes));
         }
 
-        GuiSystem *frameGui = gui_.get();
+        GuiSystem *frameGui = tooling_->gui.get();
         {
             ScopedGpuLabel frameLabel(
-                device_->debugUtils(), ctx->cmd,
-                "Frame " + std::to_string(presentedFrameCount_ + 1));
-            renderer_->renderFrame(*ctx, visibilityFrame_, *pipelineCache_,
-                                   frameGui, currentShaderVariant(),
-                                   renderView,
-                                   captureSelection
-                                       ? std::optional<FrameCaptureSource>{
-                                             captureSelection->source ==
-                                                     CaptureSourceKind::Workspace
-                                                 ? FrameCaptureSource::Workspace
-                                                 : captureSelection->source ==
-                                                           CaptureSourceKind::Hdr
-                                                       ? FrameCaptureSource::Hdr
-                                                       : FrameCaptureSource::Viewport}
-                                       : std::nullopt,
-                                   captureSelection
-                                       ? std::function<void(VkCommandBuffer)>{
-                                             [this](VkCommandBuffer cmd) {
-                                                 captureService_->recordCopy(cmd);
-                                             }}
-                                        : std::function<void(VkCommandBuffer)>{});
-            renderSettingsController_->updateRuntimeState(
-                renderer_->featureRuntimeState());
+                platform_->device->debugUtils(), ctx->cmd,
+                "Frame " + std::to_string(frame_->presentedFrameCount + 1));
+            platform_->renderer->renderFrame(
+                *ctx, frame_->visibilityFrame, *platform_->pipelineCache,
+                frameGui, currentShaderVariant(), renderView,
+                captureSelection
+                    ? std::optional<
+                          FrameCaptureSource>{captureSelection->source ==
+                                                      CaptureSourceKind::
+                                                          Workspace
+                                                  ? FrameCaptureSource::
+                                                        Workspace
+                                              : captureSelection->source ==
+                                                      CaptureSourceKind::Hdr
+                                                  ? FrameCaptureSource::Hdr
+                                                  : FrameCaptureSource::
+                                                        Viewport}
+                    : std::nullopt,
+                captureSelection
+                    ? std::function<void(
+                          VkCommandBuffer)>{[this](VkCommandBuffer cmd) {
+                          tooling_->capture->recordCopy(cmd);
+                      }}
+                    : std::function<void(VkCommandBuffer)>{});
+            runtime_->renderSettings->updateRuntimeState(
+                platform_->renderer->featureRuntimeState());
             if constexpr (build::kTracy) {
                 profilePlotNumber(
                     "Visibility/GpuOccluded",
-                    static_cast<int64_t>(renderer_
-                                             ->occlusionCullingStatus()
-                                             .completed.occluded));
+                    static_cast<int64_t>(
+                        platform_->renderer->occlusionCullingStatus()
+                            .completed.occluded));
             }
         }
-        device_->tracyProfiler().collect(ctx->cmd);
-        const uint64_t submissionSerial = frameSync_->endFrame(*ctx);
-        visibilitySystem_.commit(visibilityFrame_);
-        ++presentedFrameCount_;
+        platform_->device->tracyProfiler().collect(ctx->cmd);
+        const uint64_t submissionSerial = platform_->frameSync->endFrame(*ctx);
+        frame_->visibilitySystem.commit(frame_->visibilityFrame);
+        ++frame_->presentedFrameCount;
         profileFrameMark();
         if (captureSelection)
-            captureService_->frameSubmitted(submissionSerial);
+            tooling_->capture->frameSubmitted(submissionSerial);
 
-        if (frameSync_->swapChainNeedsRecreation())
+        if (platform_->frameSync->swapChainNeedsRecreation())
             handleSwapChainRecreate();
 
-        // 8. 甯ф湯锛氫涪寮冩湰甯ч紶鏍囧閲?
-        input_->endFrame();
+        // 8. Finish per-frame input state.
+        platform_->input->endFrame();
     }
-
-    vkDeviceWaitIdle(device_->logicalDevice());
-    frameSync_->markAllSubmissionsCompleted();
-    sceneRuntime_->collectRetired();
-    if (captureService_)
-        captureService_->shutdown(frameSync_->completedSubmissionSerial());
 }
 
 } // namespace vkr

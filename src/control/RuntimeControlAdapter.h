@@ -59,8 +59,8 @@ struct RuntimeControlActions {
 struct RuntimeControlServices {
     const Config &config;
     const ProjectContext &projectContext;
-    SceneCatalog &catalog;
-    std::vector<SceneEntry> &sceneRegistry;
+    const SceneCatalog &catalog;
+    const std::vector<SceneEntry> &sceneRegistry;
     const SceneLoadContext &sceneLoadContext;
     Window &window;
     VulkanContext &context;
@@ -156,8 +156,8 @@ class RuntimeControlAdapter final : public RuntimeControlHost {
 
     const Config &config_;
     const ProjectContext &projectContext_;
-    SceneCatalog &catalog_;
-    std::vector<SceneEntry> &sceneRegistry_;
+    const SceneCatalog &catalog_;
+    const std::vector<SceneEntry> &sceneRegistry_;
     const SceneLoadContext &sceneLoadContext_;
     Window *window_ = nullptr;
     VulkanContext *context_ = nullptr;

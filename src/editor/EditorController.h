@@ -63,8 +63,8 @@ struct EditorControllerActions {
 struct EditorControllerServices {
     Config &config;
     ProjectContext &projectContext;
-    SceneCatalog &catalog;
-    std::vector<SceneEntry> &sceneRegistry;
+    const SceneCatalog &catalog;
+    const std::vector<SceneEntry> &sceneRegistry;
     SceneLoadContext &sceneLoadContext;
     Window &window;
     Device &device;
@@ -210,8 +210,8 @@ class EditorController final {
 
     Config &config_;
     ProjectContext &projectContext_;
-    SceneCatalog &catalog_;
-    std::vector<SceneEntry> &sceneRegistry_;
+    const SceneCatalog &catalog_;
+    const std::vector<SceneEntry> &sceneRegistry_;
     SceneLoadContext &sceneLoadContext_;
     Window *window_ = nullptr;
     Device *device_ = nullptr;

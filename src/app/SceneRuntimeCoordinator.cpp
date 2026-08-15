@@ -138,8 +138,8 @@ SceneRuntimeCoordinator::SceneRuntimeCoordinator(
     Device &device, DescriptorAllocator &descriptorAllocator,
     MaterialSystem &materialSystem, Renderer &renderer,
     FrameSync &frameSync, Camera &camera,
-    const ProjectContext &projectContext, SceneCatalog &catalog,
-    std::vector<SceneEntry> &sceneRegistry, SceneLoadContext &loadContext,
+    const ProjectContext &projectContext, const SceneCatalog &catalog,
+    const std::vector<SceneEntry> &sceneRegistry, SceneLoadContext &loadContext,
     SceneRuntimeCallbacks callbacks)
     : device_(&device), materialSystem_(&materialSystem),
       renderer_(&renderer), frameSync_(&frameSync), camera_(&camera),

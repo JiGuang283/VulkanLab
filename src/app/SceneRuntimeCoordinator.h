@@ -63,8 +63,8 @@ class SceneRuntimeCoordinator {
         Device &device, DescriptorAllocator &descriptorAllocator,
         MaterialSystem &materialSystem, Renderer &renderer,
         FrameSync &frameSync, Camera &camera,
-        const ProjectContext &projectContext, SceneCatalog &catalog,
-        std::vector<SceneEntry> &sceneRegistry,
+        const ProjectContext &projectContext, const SceneCatalog &catalog,
+        const std::vector<SceneEntry> &sceneRegistry,
         SceneLoadContext &loadContext, SceneRuntimeCallbacks callbacks);
     ~SceneRuntimeCoordinator();
 
@@ -157,8 +157,8 @@ class SceneRuntimeCoordinator {
     FrameSync *frameSync_ = nullptr;
     Camera *camera_ = nullptr;
     const ProjectContext *projectContext_ = nullptr;
-    SceneCatalog *catalog_ = nullptr;
-    std::vector<SceneEntry> *sceneRegistry_ = nullptr;
+    const SceneCatalog *catalog_ = nullptr;
+    const std::vector<SceneEntry> *sceneRegistry_ = nullptr;
     SceneLoadContext *loadContext_ = nullptr;
     SceneRuntimeCallbacks callbacks_;
 
