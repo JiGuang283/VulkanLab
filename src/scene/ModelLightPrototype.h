@@ -1,6 +1,6 @@
 #pragma once
 
-#include "render/SceneLight.h"
+#include "render/frame/SceneLight.h"
 
 #include <glm/glm.hpp>
 

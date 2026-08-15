@@ -1,6 +1,6 @@
 #include "PrimitiveMeshGenerator.h"
 
-#include "render/TangentGenerator.h"
+#include "render/geometry/TangentGenerator.h"
 
 #include <glm/geometric.hpp>
 

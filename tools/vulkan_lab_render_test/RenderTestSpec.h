@@ -1,6 +1,6 @@
 #pragma once
 
-#include "render/RenderSettings.h"
+#include "render/frame/RenderSettings.h"
 
 #include <json.hpp>
 

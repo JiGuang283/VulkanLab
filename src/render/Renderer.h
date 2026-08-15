@@ -4,16 +4,16 @@
 #include "core/Device.h"
 #include "core/FrameSync.h"
 #include "core/SwapChain.h"
-#include "render/RenderGraph.h"
-#include "render/RenderFrame.h"
-#include "render/RenderFeatureState.h"
-#include "render/FrameGpuData.h"
-#include "render/GpuPassProfiler.h"
-#include "render/RenderResourceRegistry.h"
-#include "render/RenderSettings.h"
-#include "render/RendererProgramCatalog.h"
-#include "render/Atmosphere.h"
-#include "render/Visibility.h"
+#include "render/graph/RenderGraph.h"
+#include "render/frame/RenderFrame.h"
+#include "render/frame/RenderFeatureState.h"
+#include "render/frame/FrameGpuData.h"
+#include "render/diagnostics/GpuPassProfiler.h"
+#include "render/graph/RenderResourcePool.h"
+#include "render/frame/RenderSettings.h"
+#include "render/shader/RendererProgramCatalog.h"
+#include "render/features/atmosphere_environment/Atmosphere.h"
+#include "render/features/shadows_visibility/Visibility.h"
 #include "scene_data/SceneIds.h"
 
 #include <memory>
@@ -318,7 +318,7 @@ class Renderer {
     ReflectionProbeRuntimeStatus reflectionProbeStatus_{};
     std::unique_ptr<RayTracingScene> rayTracingScene_;
     uint64_t nextLightingDescriptorGeneration_ = 1;
-    std::unique_ptr<RenderResourceRegistry> renderResources_;
+    std::unique_ptr<RenderResourcePool> renderResources_;
     RendererResourceHandles resourceHandles_{};
     RenderImageHandle activeDirectionalShadowImage_{};
     RenderImageHandle activePointShadowImage_{};

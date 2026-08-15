@@ -7,8 +7,8 @@
 #include "core/Log.h"
 #include "render/pipeline/PipelineConfigBuilder.h"
 #include "diagnostics/Profiling.h"
-#include "render/MaterialTemplate.h"
-#include "render/MaterialSystem.h"
+#include "render/material/MaterialTemplate.h"
+#include "render/material/MaterialSystem.h"
 
 #include <algorithm>
 #include <atomic>

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "RuntimeCommand.h"
-#include "render/RenderSettings.h"
+#include "render/frame/RenderSettings.h"
 
 #include <array>
 #include <cstdint>

@@ -1,4 +1,4 @@
-#include "render/GpuPassProfiler.h"
+#include "render/diagnostics/GpuPassProfiler.h"
 
 #include <cmath>
 #include <stdexcept>

@@ -9,7 +9,7 @@
 #include "core/FrameSync.h"
 #include "core/Log.h"
 #include "diagnostics/Profiling.h"
-#include "render/MaterialSystem.h"
+#include "render/material/MaterialSystem.h"
 #include "render/Renderer.h"
 #include "scene/Camera.h"
 #include "scene/ModelSourceResolver.h"

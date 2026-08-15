@@ -23,7 +23,7 @@ add_executable(VulkanLabCpuTests
     ManagedProcessWin32Tests.cpp
     DirectionalShadowTests.cpp
     RenderViewTests.cpp
-    RenderResourceRegistryTests.cpp
+    RenderResourcePoolTests.cpp
     PipelineKeyTests.cpp
     ShaderRegistryTests.cpp
     ShaderContractTests.cpp

@@ -1,4 +1,4 @@
-#include "render/ShaderRegistry.h"
+#include "render/shader/ShaderRegistry.h"
 
 #include <array>
 #include <chrono>

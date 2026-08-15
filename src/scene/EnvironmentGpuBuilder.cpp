@@ -4,7 +4,7 @@
 #include "assets/PreparedEnvironment.h"
 #include "core/Device.h"
 #include "core/IncrementalUploadQueue.h"
-#include "render/Texture.h"
+#include "render/material/Texture.h"
 #include "diagnostics/Profiling.h"
 
 #include <algorithm>

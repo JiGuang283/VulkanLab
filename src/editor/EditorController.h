@@ -1,7 +1,7 @@
 #pragma once
 
 #include "app/Config.h"
-#include "render/RenderView.h"
+#include "render/frame/RenderView.h"
 #include "scene/EnvironmentAssetRepository.h"
 #include "scene/SceneEntry.h"
 #include "scene/ModelPrepareFactory.h"

@@ -2,7 +2,7 @@
 
 #include "render/IRenderWorld.h"
 #include "ModelInstance.h"
-#include "render/SceneLight.h"
+#include "render/frame/SceneLight.h"
 #include "scene_data/SceneTypes.h"
 
 #include <cstddef>

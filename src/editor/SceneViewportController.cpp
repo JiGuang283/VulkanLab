@@ -4,7 +4,7 @@
 #include "EditorWidgets.h"
 #include "SceneEditorSession.h"
 #include "scene/ModelAsset.h"
-#include "render/BoundsMath.h"
+#include "render/geometry/BoundsMath.h"
 #include "scene/TransformMath.h"
 
 #include <ImGuizmo.h>

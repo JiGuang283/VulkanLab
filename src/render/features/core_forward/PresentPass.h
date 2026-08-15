@@ -1,0 +1,63 @@
+#pragma once
+
+#include "render/graph/IRenderPass.h"
+#include "core/FrameSync.h"
+
+#include <array>
+#include <string>
+#include <vector>
+#include <vulkan/vulkan.h>
+
+namespace vkr {
+
+class DescriptorAllocator;
+class Device;
+class RenderQueue;
+class RenderResourcePool;
+class SwapChain;
+struct RenderFrameContext;
+
+class PresentPass final : public IRenderPass {
+  public:
+    PresentPass(Device &device, SwapChain &swapChain,
+                const RenderResourcePool &resources,
+                RenderImageHandle viewportColor,
+                RenderSamplerHandle viewportSampler,
+                DescriptorAllocator &descriptorAllocator,
+                std::string fullscreenVertPath,
+                std::string presentFragPath);
+    ~PresentPass() override;
+
+    PresentPass(const PresentPass &) = delete;
+    PresentPass &operator=(const PresentPass &) = delete;
+
+    std::string_view name() const override { return "Present + UI"; }
+    void setup(RenderGraphBuilder &builder,
+               const RenderGraphBuildContext &context) const override;
+    void releaseViewportResources() override {}
+    void onViewportResize(
+        const RenderResourcePool &resources) override;
+    void onResourceResidencyChanged(
+        const RenderResourcePool &, uint32_t,
+        const std::vector<RenderImageHandle> &) override {}
+    void releaseSwapChainResources() override {}
+    void onSwapChainResize(const SwapChain &) override {}
+    void recordNode(RenderGraphPassContext &context, uint32_t localNodeIndex,
+                    const VisibilityFrame &visibility) override;
+
+  private:
+    void createDescriptors(const RenderResourcePool &resources);
+    void updateDescriptors(const RenderResourcePool &resources);
+
+    Device *device_ = nullptr;
+    SwapChain *swapChain_ = nullptr;
+    RenderImageHandle viewportColor_{};
+    RenderSamplerHandle viewportSampler_{};
+    DescriptorAllocator *descriptorAllocator_ = nullptr;
+    std::string fullscreenVertPath_;
+    std::string presentFragPath_;
+    VkDescriptorSetLayout sourceDescriptorSetLayout_ = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> sourceDescriptorSets_{};
+};
+
+} // namespace vkr

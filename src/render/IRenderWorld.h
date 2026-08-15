@@ -1,8 +1,8 @@
 #pragma once
 
 #include "scene_data/SceneTypes.h"
-#include "render/RenderItem.h"
-#include "render/SceneLight.h"
+#include "render/geometry/RenderItem.h"
+#include "render/frame/SceneLight.h"
 #include "scene_data/SceneDocument.h"
 
 #include <cstddef>

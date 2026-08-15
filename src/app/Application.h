@@ -4,8 +4,8 @@
 
 #include "assets/ProjectContext.h"
 #include "assets/SceneCatalog.h"
-#include "render/RenderSettings.h"
-#include "render/ShaderVariant.h"
+#include "render/frame/RenderSettings.h"
+#include "render/shader/ShaderVariant.h"
 #include "workflows/SceneWorkflowTypes.h"
 
 #include <cstdint>

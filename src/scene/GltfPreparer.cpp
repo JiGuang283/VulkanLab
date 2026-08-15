@@ -1,8 +1,8 @@
 #include "GltfPreparer.h"
 
-#include "render/MaterialTextureSlot.h"
-#include "render/TangentGenerator.h"
-#include "render/TextureData.h"
+#include "render/material/MaterialTextureSlot.h"
+#include "render/geometry/TangentGenerator.h"
+#include "render/material/TextureData.h"
 #include "assets/DerivedTextureCache.h"
 #include "assets/DerivedTextureManifest.h"
 #include "core/Log.h"

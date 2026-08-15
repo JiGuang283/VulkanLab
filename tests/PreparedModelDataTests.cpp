@@ -1,5 +1,5 @@
-#include "render/TangentGenerator.h"
-#include "render/TextureData.h"
+#include "render/geometry/TangentGenerator.h"
+#include "render/material/TextureData.h"
 #include "scene/PreparedModelData.h"
 
 #include <cmath>
@@ -36,7 +36,7 @@ void runImageComparatorTests();
 void runManagedProcessWin32Tests();
 void runDirectionalShadowTests();
 void runRenderViewTests();
-void runRenderResourceRegistryTests();
+void runRenderResourcePoolTests();
 void runPipelineKeyTests();
 void runShaderRegistryTests();
 void runShaderContractTests();
@@ -197,7 +197,7 @@ int main(int argc, char **argv) {
         runManagedProcessWin32Tests();
         runDirectionalShadowTests();
         runRenderViewTests();
-        runRenderResourceRegistryTests();
+        runRenderResourcePoolTests();
         runPipelineKeyTests();
         runShaderRegistryTests();
         runShaderContractTests();

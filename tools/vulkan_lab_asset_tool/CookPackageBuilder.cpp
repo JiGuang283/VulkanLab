@@ -14,7 +14,7 @@
 #include "assets/RuntimePackage.h"
 #include "assets/SceneCatalog.h"
 #include "assets/ModelImportService.h"
-#include "render/ShaderRegistry.h"
+#include "render/shader/ShaderRegistry.h"
 
 #include <json.hpp>
 

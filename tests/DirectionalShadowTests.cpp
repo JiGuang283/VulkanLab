@@ -1,4 +1,4 @@
-#include "render/DirectionalShadow.h"
+#include "render/features/shadows_visibility/DirectionalShadow.h"
 #include "scene/SceneLight.h"
 #include "scene/SceneTypes.h"
 

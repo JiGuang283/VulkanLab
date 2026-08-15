@@ -1,7 +1,7 @@
-#include "render/FrameGpuData.h"
-#include "render/GpuMaterialData.h"
-#include "render/ShaderRegistry.h"
-#include "render/Vertex.h"
+#include "render/frame/FrameGpuData.h"
+#include "render/material/GpuMaterialData.h"
+#include "render/shader/ShaderRegistry.h"
+#include "render/geometry/Vertex.h"
 
 #include <spirv_reflect.h>
 

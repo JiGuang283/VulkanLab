@@ -1,7 +1,7 @@
 #include "RuntimeCommandDispatcher.h"
 
 #include "core/Log.h"
-#include "render/RenderSettings.h"
+#include "render/frame/RenderSettings.h"
 
 #include <cmath>
 #include <limits>

@@ -2,10 +2,10 @@
 
 #include "ModelAsset.h"
 #include "ModelLight.h"
-#include "render/MaterialInstance.h"
-#include "render/Mesh.h"
-#include "render/RenderItem.h"
-#include "render/BoundsMath.h"
+#include "render/material/MaterialInstance.h"
+#include "render/geometry/Mesh.h"
+#include "render/geometry/RenderItem.h"
+#include "render/geometry/BoundsMath.h"
 
 #include <stdexcept>
 #include <unordered_set>

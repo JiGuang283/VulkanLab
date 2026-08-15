@@ -3,9 +3,9 @@
 #include "assets/PreparedTextureData.h"
 #include "scene/ModelLightPrototype.h"
 #include "scene_data/SceneTypes.h"
-#include "render/MaterialInstance.h"
-#include "render/MaterialTextureSlot.h"
-#include "render/Vertex.h"
+#include "render/material/MaterialInstance.h"
+#include "render/material/MaterialTextureSlot.h"
+#include "render/geometry/Vertex.h"
 
 #include <array>
 #include <cstdint>

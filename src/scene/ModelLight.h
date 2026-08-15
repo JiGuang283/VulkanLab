@@ -1,7 +1,7 @@
 #pragma once
 
 #include "scene/ModelLightPrototype.h"
-#include "render/SceneLight.h"
+#include "render/frame/SceneLight.h"
 
 #include <glm/glm.hpp>
 namespace vkr {

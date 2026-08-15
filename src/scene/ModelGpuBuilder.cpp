@@ -6,13 +6,13 @@
 #include "core/Log.h"
 #include "diagnostics/Profiling.h"
 #include "diagnostics/SceneLoadStats.h"
-#include "render/MaterialInstance.h"
-#include "render/MaterialSystem.h"
-#include "render/MaterialTemplate.h"
-#include "render/Mesh.h"
-#include "render/Texture.h"
+#include "render/material/MaterialInstance.h"
+#include "render/material/MaterialSystem.h"
+#include "render/material/MaterialTemplate.h"
+#include "render/geometry/Mesh.h"
+#include "render/material/Texture.h"
 #include "SceneLoadTask.h"
-#include "render/BoundsMath.h"
+#include "render/geometry/BoundsMath.h"
 
 #include <algorithm>
 #include <array>

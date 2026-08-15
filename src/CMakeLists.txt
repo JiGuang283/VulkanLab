@@ -16,7 +16,7 @@ target_link_libraries(vkl_foundation PUBLIC
 )
 
 add_library(vkl_shader_catalog STATIC
-    render/ShaderRegistry.cpp
+    render/shader/ShaderRegistry.cpp
 )
 add_library(VulkanLab::ShaderCatalog ALIAS vkl_shader_catalog)
 target_include_directories(vkl_shader_catalog PUBLIC
@@ -169,70 +169,124 @@ target_link_libraries(vkl_capture
         vkl_image_codecs
 )
 
-set(VKL_RENDERER_SOURCES
-    render/FallbackTextures.cpp
-    render/FrameFeatureResolver.cpp
-    render/BoundsMath.cpp
-    render/DirectionalShadow.cpp
-    render/PunctualShadow.cpp
-    render/PunctualShadowSliceBuffer.cpp
-    render/MaterialInstance.cpp
-    render/MaterialSystem.cpp
-    render/MaterialTemplate.cpp
-    render/Mesh.cpp
-    render/PipelineCache.cpp
+set(VKL_RENDER_FRAME_SOURCES
+    render/frame/FrameFeatureResolver.cpp
+    render/frame/RenderSettingsController.cpp
+    render/frame/RenderView.cpp
+)
+
+set(VKL_RENDER_GRAPH_SOURCES
+    render/graph/FrameGraphExternalPasses.cpp
+    render/graph/RenderGraph.cpp
+    render/graph/RenderResourcePool.cpp
+)
+
+set(VKL_RENDER_GEOMETRY_SOURCES
+    render/geometry/BoundsMath.cpp
+    render/geometry/Mesh.cpp
+    render/geometry/RenderQueue.cpp
+    render/geometry/TangentGenerator.cpp
+)
+
+set(VKL_RENDER_MATERIAL_SOURCES
+    render/material/FallbackTextures.cpp
+    render/material/MaterialInstance.cpp
+    render/material/MaterialSystem.cpp
+    render/material/MaterialTemplate.cpp
+    render/material/Texture.cpp
+    render/material/TextureData.cpp
+)
+
+set(VKL_RENDER_PIPELINE_SOURCES
     render/pipeline/ComputePipeline.cpp
     render/pipeline/Pipeline.cpp
+    render/pipeline/PipelineCache.cpp
     render/pipeline/PipelineConfigBuilder.cpp
-    render/Renderer.cpp
-    render/RendererFeatureGraph.cpp
-    render/RendererProgramCatalog.cpp
-    render/RenderGraph.cpp
-    render/RenderQueue.cpp
-    render/RenderResourceRegistry.cpp
-    render/RenderSettingsController.cpp
-    render/RenderView.cpp
-    render/ShadowSystem.cpp
-    render/ShadowVisibilityBuilder.cpp
-    render/RayTracingScene.cpp
-    render/pass/DdgiPass.cpp
-    render/TemporalAA.cpp
-    render/Visibility.cpp
-    render/TangentGenerator.cpp
-    render/Texture.cpp
-    render/TextureData.cpp
-    render/pass/MainForwardPass.cpp
-    render/pass/HdrCompositePass.cpp
-    render/pass/AtmosphereLutPass.cpp
-    render/pass/DirectionalShadowPass.cpp
-    render/pass/FrameGraphExternalPasses.cpp
-    render/pass/PointShadowPass.cpp
-    render/pass/SpotShadowPass.cpp
-    render/pass/ShadowCasterDrawRecorder.cpp
-    render/pass/SurfacePrepass.cpp
-    render/pass/HiZBuildPass.cpp
-    render/pass/OcclusionCullPass.cpp
-    render/pass/ScreenSpacePyramidPass.cpp
-    render/pass/SsaoPass.cpp
-    render/pass/GtaoPass.cpp
-    render/pass/SsrPass.cpp
-    render/pass/SsgiPass.cpp
-    render/pass/CacaoNormalAdapterPass.cpp
-    render/pass/TaaPass.cpp
-    render/pass/BloomPass.cpp
-    render/pass/SkyBackgroundPass.cpp
-    render/pass/ToneMapPass.cpp
-    render/pass/PresentPass.cpp
+)
+
+set(VKL_RENDER_SHADER_SOURCES
+    render/shader/RendererProgramCatalog.cpp
+)
+
+set(VKL_RENDER_CORE_FORWARD_SOURCES
+    render/features/core_forward/HdrCompositePass.cpp
+    render/features/core_forward/MainForwardPass.cpp
+    render/features/core_forward/PresentPass.cpp
+    render/features/core_forward/SurfacePrepass.cpp
+    render/features/core_forward/ToneMapPass.cpp
+)
+
+set(VKL_RENDER_SHADOW_VISIBILITY_SOURCES
+    render/features/shadows_visibility/DirectionalShadow.cpp
+    render/features/shadows_visibility/DirectionalShadowPass.cpp
+    render/features/shadows_visibility/HiZBuildPass.cpp
+    render/features/shadows_visibility/OcclusionCullPass.cpp
+    render/features/shadows_visibility/PointShadowPass.cpp
+    render/features/shadows_visibility/PunctualShadow.cpp
+    render/features/shadows_visibility/PunctualShadowSliceBuffer.cpp
+    render/features/shadows_visibility/ShadowCasterDrawRecorder.cpp
+    render/features/shadows_visibility/ShadowSystem.cpp
+    render/features/shadows_visibility/ShadowVisibilityBuilder.cpp
+    render/features/shadows_visibility/SpotShadowPass.cpp
+    render/features/shadows_visibility/Visibility.cpp
+)
+
+set(VKL_RENDER_AO_SOURCES
+    render/features/ambient_occlusion/CacaoNormalAdapterPass.cpp
+    render/features/ambient_occlusion/GtaoPass.cpp
+    render/features/ambient_occlusion/SsaoPass.cpp
 )
 if(VKL_ENABLE_CACAO)
-    list(APPEND VKL_RENDERER_SOURCES render/pass/CacaoPass.cpp)
+    list(APPEND VKL_RENDER_AO_SOURCES
+        render/features/ambient_occlusion/CacaoPass.cpp)
 else()
-    list(APPEND VKL_RENDERER_SOURCES render/pass/CacaoPassDisabled.cpp)
+    list(APPEND VKL_RENDER_AO_SOURCES
+        render/features/ambient_occlusion/CacaoPassDisabled.cpp)
 endif()
+
+set(VKL_RENDER_REFLECTION_SOURCES
+    render/features/reflections/SsrPass.cpp
+)
+
+set(VKL_RENDER_GI_SOURCES
+    render/features/global_illumination/DdgiPass.cpp
+    render/features/global_illumination/RayTracingScene.cpp
+    render/features/global_illumination/SsgiPass.cpp
+)
+
+set(VKL_RENDER_ATMOSPHERE_ENVIRONMENT_SOURCES
+    render/features/atmosphere_environment/AtmosphereLutPass.cpp
+    render/features/atmosphere_environment/SkyBackgroundPass.cpp
+)
+
+set(VKL_RENDER_TEMPORAL_POSTPROCESS_SOURCES
+    render/features/temporal_post_process/BloomPass.cpp
+    render/features/temporal_post_process/ScreenSpacePyramidPass.cpp
+    render/features/temporal_post_process/TaaPass.cpp
+    render/features/temporal_post_process/TemporalAA.cpp
+)
+
+set(VKL_RENDERER_SOURCES
+    render/Renderer.cpp
+    render/RendererFeatureGraph.cpp
+    ${VKL_RENDER_FRAME_SOURCES}
+    ${VKL_RENDER_GRAPH_SOURCES}
+    ${VKL_RENDER_GEOMETRY_SOURCES}
+    ${VKL_RENDER_MATERIAL_SOURCES}
+    ${VKL_RENDER_PIPELINE_SOURCES}
+    ${VKL_RENDER_SHADER_SOURCES}
+    ${VKL_RENDER_CORE_FORWARD_SOURCES}
+    ${VKL_RENDER_SHADOW_VISIBILITY_SOURCES}
+    ${VKL_RENDER_AO_SOURCES}
+    ${VKL_RENDER_REFLECTION_SOURCES}
+    ${VKL_RENDER_GI_SOURCES}
+    ${VKL_RENDER_ATMOSPHERE_ENVIRONMENT_SOURCES}
+    ${VKL_RENDER_TEMPORAL_POSTPROCESS_SOURCES}
+)
 if(VKL_ENABLE_GPU_PROFILING)
-    list(APPEND VKL_RENDERER_SOURCES render/GpuPassProfiler.cpp)
+    list(APPEND VKL_RENDERER_SOURCES render/diagnostics/GpuPassProfiler.cpp)
 else()
-    list(APPEND VKL_RENDERER_SOURCES render/GpuPassProfilerDisabled.cpp)
+    list(APPEND VKL_RENDERER_SOURCES render/diagnostics/GpuPassProfilerDisabled.cpp)
 endif()
 
 add_library(vkl_renderer_runtime STATIC ${VKL_RENDERER_SOURCES})
