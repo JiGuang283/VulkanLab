@@ -17,6 +17,8 @@
 
 #include <glm/glm.hpp>
 
+#include <stdexcept>
+
 namespace vkr {
 
 namespace {
@@ -128,6 +130,12 @@ void HdrCompositePass::onViewportResize(
     createDescriptors(resources);
 }
 
+void HdrCompositePass::onResourceResidencyChanged(
+    const RenderResourcePool &resources, uint32_t,
+    const std::vector<RenderImageHandle> &) {
+    createDescriptors(resources);
+}
+
 void HdrCompositePass::createLayout() {
     std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
     for (uint32_t i = 0; i < 5; ++i)
@@ -148,6 +156,8 @@ void HdrCompositePass::createDescriptors(
     if (!resources_.ssrFiltered.valid() && !resources_.ssgiFiltered.valid())
         return;
     for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+        if (descriptorSets_[frame] != VK_NULL_HANDLE)
+            continue;
         descriptorSets_[frame] = descriptorAllocator_->allocate(
             descriptorLayout_,
             {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5},
@@ -160,6 +170,10 @@ void HdrCompositePass::createDescriptors(
 void HdrCompositePass::updateDescriptor(
     const RenderResourcePool &registry, uint32_t frame,
     bool ssrActive, bool ssgiActive) {
+    if (descriptorSets_[frame] == VK_NULL_HANDLE) {
+        throw std::logic_error(
+            "screen-space lighting composite descriptor set is unavailable");
+    }
     const VkSampler hdrSampler = registry.sampler(resources_.hdrSampler);
     const VkSampler ssrSampler = resources_.ssrSampler.valid()
         ? registry.sampler(resources_.ssrSampler) : hdrSampler;

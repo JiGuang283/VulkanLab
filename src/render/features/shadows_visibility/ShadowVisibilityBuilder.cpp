@@ -6,16 +6,15 @@
 #include "render/geometry/BoundsMath.h"
 
 #include <algorithm>
+#include <array>
 
 namespace vkr {
 namespace {
 
 bool intersectsClipVolume(const Bounds &worldBounds,
-                          const glm::mat4 &viewProjection) {
+                          const Frustum &frustum) {
     if (!worldBounds.valid)
         return true;
-    const Frustum frustum =
-        Frustum::fromVulkanClipMatrix(viewProjection);
     return !frustum.valid || frustum.intersects(worldBounds);
 }
 
@@ -65,6 +64,45 @@ void ShadowVisibilityBuilder::build(
     if (!hasShadowViews)
         return;
 
+    std::array<Frustum, kCsmCascadeCount> directionalFrusta{};
+    std::array<std::array<Frustum, kPointShadowFaceCount>,
+               kMaxPointShadowLights>
+        pointFrusta{};
+    std::array<Frustum, kMaxSpotShadowLights> spotFrusta{};
+    if (settings.shadowCullingEnabled) {
+        if (view.shadow.csm.enabled) {
+            for (uint32_t cascade = 0; cascade < kCsmCascadeCount;
+                 ++cascade) {
+                directionalFrusta[cascade] =
+                    Frustum::fromVulkanClipMatrix(
+                        view.shadow.csm.cascades[cascade]
+                            .lightViewProjection);
+            }
+        }
+        for (uint32_t light = 0;
+             light < view.shadow.punctual.activePointCount; ++light) {
+            const PointShadowData &point =
+                view.shadow.punctual.points[light];
+            if (!point.enabled)
+                continue;
+            for (uint32_t face = 0; face < kPointShadowFaceCount;
+                 ++face) {
+                pointFrusta[light][face] =
+                    Frustum::fromVulkanClipMatrix(
+                        point.faceViewProjections[face]);
+            }
+        }
+        for (uint32_t light = 0;
+             light < view.shadow.punctual.activeSpotCount; ++light) {
+            const SpotShadowData &spot =
+                view.shadow.punctual.spots[light];
+            if (spot.enabled) {
+                spotFrusta[light] = Frustum::fromVulkanClipMatrix(
+                    spot.viewProjection);
+            }
+        }
+    }
+
     for (uint32_t index = 0; index < items.size(); ++index) {
         const RenderItem &item = items[index];
         if (item.queue != RenderQueueType::Opaque)
@@ -77,10 +115,8 @@ void ShadowVisibilityBuilder::build(
                  ++cascade) {
                 const bool visible =
                     !settings.shadowCullingEnabled ||
-                    intersectsClipVolume(
-                        item.worldBounds,
-                        view.shadow.csm.cascades[cascade]
-                            .lightViewProjection);
+                    intersectsClipVolume(item.worldBounds,
+                                         directionalFrusta[cascade]);
                 if (!visible)
                     continue;
                 frame.directionalShadowCasters[cascade].push_back(index);
@@ -107,9 +143,8 @@ void ShadowVisibilityBuilder::build(
                  ++face) {
                 const bool visible =
                     !settings.shadowCullingEnabled ||
-                    intersectsClipVolume(
-                        item.worldBounds,
-                        point.faceViewProjections[face]);
+                    intersectsClipVolume(item.worldBounds,
+                                         pointFrusta[light][face]);
                 if (!visible)
                     continue;
                 frame.pointShadowCasters[light][face].push_back(index);
@@ -129,7 +164,7 @@ void ShadowVisibilityBuilder::build(
             const bool visible =
                 !settings.shadowCullingEnabled ||
                 intersectsClipVolume(item.worldBounds,
-                                     spot.viewProjection);
+                                     spotFrusta[light]);
             if (!visible)
                 continue;
             frame.spotShadowCasters[light].push_back(index);

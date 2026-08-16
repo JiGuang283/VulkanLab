@@ -167,6 +167,7 @@ target_link_libraries(vkl_capture
         vkl_asset_core
         vkl_foundation
         vkl_image_codecs
+        vkl_tracy
 )
 
 set(VKL_RENDER_FRAME_SOURCES
@@ -392,6 +393,7 @@ target_link_libraries(vkl_scene_workflow
         vkl_scene_runtime
     PRIVATE
         vkl_foundation
+        vkl_tracy
 )
 
 add_library(vkl_platform_runtime STATIC
@@ -446,6 +448,7 @@ if(VKL_ENABLE_EDITOR_UI)
         PRIVATE
             vkl_foundation
             vkl_image_codecs
+            vkl_tracy
             ole32
             uuid
     )
@@ -474,6 +477,7 @@ if(VKL_ENABLE_RUNTIME_CONTROL)
         PRIVATE
             vkl_foundation
             vkl_json
+            vkl_tracy
     )
 endif()
 

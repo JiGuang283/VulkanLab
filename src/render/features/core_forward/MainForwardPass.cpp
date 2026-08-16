@@ -118,21 +118,41 @@ void MainForwardPass::setup(RenderGraphBuilder &builder,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     if (phase_ == ForwardPhase::Transparent) {
+        const bool useSurfaceDepth = features.surfaceDataRequired;
         const RenderImageHandle transparentColor =
             features.lightingCompositeRequired
                 ? resourceHandles_.compositedHdrColor
-                : resourceHandles_.hdrColor;
+                : (useSurfaceDepth || !resourceHandles_.hdrMsaaColor.valid()
+                       ? resourceHandles_.hdrColor
+                       : resourceHandles_.hdrMsaaColor);
+        const RenderImageHandle transparentResolve =
+            !useSurfaceDepth && resourceHandles_.hdrMsaaColor.valid()
+                ? resourceHandles_.hdrColor
+                : RenderImageHandle{};
         builder.addColorAttachment(
             transparentColor,
             RenderImageAccess::ColorAttachmentReadWrite,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE);
+            transparentResolve.valid()
+                ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_ATTACHMENT_LOAD_OP_LOAD,
+            transparentResolve.valid() ? VK_ATTACHMENT_STORE_OP_DONT_CARE
+                                       : VK_ATTACHMENT_STORE_OP_STORE,
+            {}, {}, transparentResolve,
+            transparentResolve.valid()
+                ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                : VK_IMAGE_LAYOUT_UNDEFINED);
         builder.addDepthAttachment(
-            resourceHandles_.surfaceDepth,
+            useSurfaceDepth ? resourceHandles_.surfaceDepth
+                            : resourceHandles_.mainDepth,
             RenderImageAccess::DepthAttachmentRead,
-            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-            VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE);
+            useSurfaceDepth
+                ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            useSurfaceDepth
+                ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_DONT_CARE);
         return;
     }
 
@@ -144,8 +164,11 @@ void MainForwardPass::setup(RenderGraphBuilder &builder,
         multisampled ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
                      : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_ATTACHMENT_LOAD_OP_LOAD,
-        multisampled ? VK_ATTACHMENT_STORE_OP_DONT_CARE
-                     : VK_ATTACHMENT_STORE_OP_STORE,
+        multisampled &&
+                !(features.transparentRequired &&
+                  !features.surfaceDataRequired)
+            ? VK_ATTACHMENT_STORE_OP_DONT_CARE
+            : VK_ATTACHMENT_STORE_OP_STORE,
         VkClearColorValue{{0.0f, 0.0f, 0.0f, 1.0f}}, {},
         multisampled ? resourceHandles_.hdrColor : RenderImageHandle{},
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -184,7 +207,10 @@ void MainForwardPass::setup(RenderGraphBuilder &builder,
         resourceHandles_.mainDepth, RenderImageAccess::DepthAttachmentWrite,
         VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
         VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-        VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        VK_ATTACHMENT_LOAD_OP_CLEAR,
+        features.transparentRequired && !features.surfaceDataRequired
+            ? VK_ATTACHMENT_STORE_OP_STORE
+            : VK_ATTACHMENT_STORE_OP_DONT_CARE,
         VkClearDepthStencilValue{1.0f, 0});
 }
 
@@ -226,6 +252,14 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
     const auto drawCommands = [&]() {
         ScopedGpuLabel queueLabel(device_->debugUtils(), frame.cmd,
                                   transparent ? "Transparent" : "Opaque");
+        struct CachedPipeline {
+            const MaterialTemplate *materialTemplate = nullptr;
+            VkCullModeFlags cullMode = VK_CULL_MODE_NONE;
+            Pipeline *pipeline = nullptr;
+        };
+
+        std::vector<CachedPipeline> pipelineVariants;
+        pipelineVariants.reserve(2);
         Pipeline *boundPipeline = nullptr;
         const MaterialInstance *boundMaterial = nullptr;
 
@@ -239,85 +273,115 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
             const auto &p = command.material->params();
             const VkCullModeFlags cullMode =
                 p.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
-            auto pipelineConfig = materialTemplate.pipelineConfig();
-            const uint32_t opaqueAttachmentCount =
-                frame.features.ssgiActive
-                    ? 3u
-                    : ((frame.features.ssrActive ||
-                        frame.features.ssgiActive)
-                           ? 2u
-                           : 1u);
-            pipelineConfig.colorBlendAttachments.resize(
-                transparent ? 1u : opaqueAttachmentCount);
-            pipelineConfig.colorBlendAttachments[0].blendEnable = transparent;
-            if (!transparent) {
-                for (uint32_t attachment = 1;
-                     attachment < opaqueAttachmentCount; ++attachment) {
-                    pipelineConfig.colorBlendAttachments[attachment]
-                        .blendEnable = false;
-                }
-            }
-            pipelineConfig.depthTest = true;
-            pipelineConfig.depthWrite = !transparent;
-            pipelineConfig.cullMode = cullMode;
-            pipelineConfig.msaaSamples = transparent
-                ? VK_SAMPLE_COUNT_1_BIT
-                : resources.description(resourceHandles_.mainDepth).samples;
-            pipelineConfig.vertShaderPath =
-                frame.shaderVariant->vertSpvPath;
-            pipelineConfig.fragShaderPath =
-                frame.shaderVariant->fragmentSpvPath(
-                    frame.materialSystem->activeMode(),
+            auto cached = std::find_if(
+                pipelineVariants.begin(), pipelineVariants.end(),
+                [&](const CachedPipeline &entry) {
+                    return entry.materialTemplate == &materialTemplate &&
+                           entry.cullMode == cullMode;
+                });
+            if (cached == pipelineVariants.end()) {
+                auto pipelineConfig = materialTemplate.pipelineConfig();
+                const uint32_t opaqueAttachmentCount =
+                    frame.features.ssgiActive
+                        ? 3u
+                        : ((frame.features.ssrActive ||
+                            frame.features.ssgiActive)
+                               ? 2u
+                               : 1u);
+                pipelineConfig.colorBlendAttachments.resize(
                     transparent ? 1u : opaqueAttachmentCount);
-            pipelineConfig.debugName =
-                "Pipeline/MainForward/" + frame.shaderVariant->id + "/" +
-                (transparent ? "Transparent" : "Opaque") + "/" +
-                (cullMode == VK_CULL_MODE_NONE ? "CullNone" : "CullBack");
-            pipelineConfig.descriptorLayouts.insert(
-                pipelineConfig.descriptorLayouts.begin(),
-                frame.globalDescriptorSetLayout);
-            pipelineConfig.descriptorLayouts.push_back(
-                lightingDescriptorSetLayout_);
-            if (frame.shaderVariant->supportsAtmosphere ||
-                frame.shaderVariant->supportsScreenSpace) {
+                pipelineConfig.colorBlendAttachments[0].blendEnable =
+                    transparent;
+                if (!transparent) {
+                    for (uint32_t attachment = 1;
+                         attachment < opaqueAttachmentCount; ++attachment) {
+                        pipelineConfig.colorBlendAttachments[attachment]
+                            .blendEnable = false;
+                    }
+                }
+                pipelineConfig.depthTest = true;
+                pipelineConfig.depthWrite = !transparent;
+                pipelineConfig.cullMode = cullMode;
+                const bool transparentUsesSurfaceDepth =
+                    transparent && frame.features.surfaceDataRequired;
+                pipelineConfig.msaaSamples = transparentUsesSurfaceDepth
+                    ? VK_SAMPLE_COUNT_1_BIT
+                    : resources.description(resourceHandles_.mainDepth)
+                          .samples;
+                pipelineConfig.vertShaderPath =
+                    frame.shaderVariant->vertSpvPath;
+                pipelineConfig.fragShaderPath =
+                    frame.shaderVariant->fragmentSpvPath(
+                        frame.materialSystem->activeMode(),
+                        transparent ? 1u : opaqueAttachmentCount);
+                pipelineConfig.debugName =
+                    "Pipeline/MainForward/" + frame.shaderVariant->id +
+                    "/" + (transparent ? "Transparent" : "Opaque") +
+                    "/" +
+                    (cullMode == VK_CULL_MODE_NONE ? "CullNone"
+                                                  : "CullBack");
+                pipelineConfig.descriptorLayouts.insert(
+                    pipelineConfig.descriptorLayouts.begin(),
+                    frame.globalDescriptorSetLayout);
                 pipelineConfig.descriptorLayouts.push_back(
-                    atmosphereDescriptorSetLayout_);
-            }
-            if (frame.shaderVariant->supportsScreenSpace) {
-                pipelineConfig.descriptorLayouts.push_back(
-                    frame.screenSpaceDescriptorSetLayout);
-            }
-            if (frame.shaderVariant->supportsDdgi) {
-                pipelineConfig.descriptorLayouts.push_back(
-                    ddgiDescriptorSetLayout_);
-            }
+                    lightingDescriptorSetLayout_);
+                if (frame.shaderVariant->supportsAtmosphere ||
+                    frame.shaderVariant->supportsScreenSpace) {
+                    pipelineConfig.descriptorLayouts.push_back(
+                        atmosphereDescriptorSetLayout_);
+                }
+                if (frame.shaderVariant->supportsScreenSpace) {
+                    pipelineConfig.descriptorLayouts.push_back(
+                        frame.screenSpaceDescriptorSetLayout);
+                }
+                if (frame.shaderVariant->supportsDdgi) {
+                    pipelineConfig.descriptorLayouts.push_back(
+                        ddgiDescriptorSetLayout_);
+                }
 
-            PipelineRenderingSignature signature{};
-            signature.samples = pipelineConfig.msaaSamples;
-            if (transparent) {
-                const RenderImageHandle transparentColor =
-                    frame.features.lightingCompositeRequired
-                        ? resourceHandles_.compositedHdrColor
-                        : resourceHandles_.hdrColor;
-                signature.colorAttachmentFormats = {
-                    resources.description(transparentColor)
-                        .format};
-                signature.depthAttachmentFormat =
-                    resources.description(resourceHandles_.surfaceDepth)
-                        .format;
-            } else {
-                const VkFormat hdrFormat =
-                    resources.description(resourceHandles_.hdrColor).format;
-                signature.colorAttachmentFormats = {hdrFormat};
-                if (frame.features.ssrActive || frame.features.ssgiActive)
-                    signature.colorAttachmentFormats.push_back(hdrFormat);
-                if (frame.features.ssgiActive)
-                    signature.colorAttachmentFormats.push_back(hdrFormat);
-                signature.depthAttachmentFormat =
-                    resources.description(resourceHandles_.mainDepth).format;
+                PipelineRenderingSignature signature{};
+                signature.samples = pipelineConfig.msaaSamples;
+                if (transparent) {
+                    const bool useSurfaceDepth =
+                        frame.features.surfaceDataRequired;
+                    const RenderImageHandle transparentColor =
+                        frame.features.lightingCompositeRequired
+                            ? resourceHandles_.compositedHdrColor
+                            : (useSurfaceDepth ||
+                                       !resourceHandles_.hdrMsaaColor.valid()
+                                   ? resourceHandles_.hdrColor
+                                   : resourceHandles_.hdrMsaaColor);
+                    signature.colorAttachmentFormats = {
+                        resources.description(transparentColor).format};
+                    signature.depthAttachmentFormat =
+                        resources.description(
+                                     useSurfaceDepth
+                                         ? resourceHandles_.surfaceDepth
+                                         : resourceHandles_.mainDepth)
+                            .format;
+                } else {
+                    const VkFormat hdrFormat =
+                        resources.description(resourceHandles_.hdrColor)
+                            .format;
+                    signature.colorAttachmentFormats = {hdrFormat};
+                    if (frame.features.ssrActive ||
+                        frame.features.ssgiActive) {
+                        signature.colorAttachmentFormats.push_back(
+                            hdrFormat);
+                    }
+                    if (frame.features.ssgiActive)
+                        signature.colorAttachmentFormats.push_back(hdrFormat);
+                    signature.depthAttachmentFormat =
+                        resources.description(resourceHandles_.mainDepth)
+                            .format;
+                }
+                Pipeline &pipeline = frame.pipelineCache->getOrCreate(
+                    std::move(signature), std::move(pipelineConfig));
+                pipelineVariants.push_back(
+                    {&materialTemplate, cullMode, &pipeline});
+                cached = std::prev(pipelineVariants.end());
             }
-            Pipeline &pipeline = frame.pipelineCache->getOrCreate(
-                std::move(signature), std::move(pipelineConfig));
+            Pipeline &pipeline = *cached->pipeline;
             if (boundPipeline != &pipeline) {
                 vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                   pipeline.handle());

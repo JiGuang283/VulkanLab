@@ -415,8 +415,10 @@ void OcclusionCullPass::ensureCapacity(uint32_t frameIndex,
     std::memset(storage.counter->mappedData(), 0,
                 sizeof(GpuVisibilityCounter));
     storage.capacity = capacityValue;
-    if (resources_)
+    if (resources_ &&
+        resources_->resident(resourceHandles_.visibilityHiZ)) {
         updateDescriptor(frameIndex, *resources_);
+    }
 }
 
 } // namespace vkr

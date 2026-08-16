@@ -299,6 +299,15 @@ void SurfacePrepass::prepareFrame(uint32_t frameIndex,
 void SurfacePrepass::draw(const RenderFrameContext &frame,
                           const RenderResourcePool &resources,
                           const VisibilityFrame &visibility) {
+    struct CachedPipeline {
+        const MaterialTemplate *materialTemplate = nullptr;
+        bool alphaMasked = false;
+        VkCullModeFlags cullMode = VK_CULL_MODE_NONE;
+        Pipeline *pipeline = nullptr;
+    };
+
+    std::vector<CachedPipeline> pipelineVariants;
+    pipelineVariants.reserve(4);
     Pipeline *boundPipeline = nullptr;
     const MaterialInstance *boundMaterial = nullptr;
     for (RenderItemIndex itemIndex : visibility.cameraOpaque) {
@@ -312,55 +321,70 @@ void SurfacePrepass::draw(const RenderFrameContext &frame,
             item.material->materialTemplate();
         const VkCullModeFlags cullMode =
             params.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
-
-        const uint32_t attachmentCount =
-            surfaceAttachmentCount(frame.features);
-        PipelineConfig config =
-            PipelineConfigBuilder{}
-                .shaders(vertexShaderPath_,
-                         alphaMasked
-                             ? maskFragmentShaderPaths_[attachmentCount]
-                             : opaqueFragmentShaderPaths_[attachmentCount])
-                .defaultVertexLayout()
-                .rasterization(cullMode,
-                               materialTemplate.pipelineConfig().frontFace)
-                .depth(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
-                .blending(false)
-                .colorAttachmentCount(attachmentCount)
-                .msaa(VK_SAMPLE_COUNT_1_BIT)
-                .descriptorLayout(globalDescriptorSetLayout_)
-                .descriptorLayout(materialTemplate.descriptorSetLayout())
-                .descriptorLayout(surfaceDescriptorSetLayout_)
-                .pushConstant({VK_SHADER_STAGE_VERTEX_BIT |
-                                   VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0, sizeof(GpuPushBlock)})
-                .build();
-        config.debugName =
-            "Pipeline/SurfacePrepass/" +
-            std::string(alphaMasked ? "Mask" : "Opaque") + "/" +
-            (cullMode == VK_CULL_MODE_NONE ? "CullNone" : "CullBack") +
-            "/Mrt" + std::to_string(attachmentCount);
-        PipelineRenderingSignature signature{};
-        if (attachmentCount >= 1) {
-            signature.colorAttachmentFormats.push_back(
-                resources.description(
-                             resourceHandles_.surfaceNormalRoughness)
-                    .format);
+        auto cached = std::find_if(
+            pipelineVariants.begin(), pipelineVariants.end(),
+            [&](const CachedPipeline &entry) {
+                return entry.materialTemplate == &materialTemplate &&
+                       entry.alphaMasked == alphaMasked &&
+                       entry.cullMode == cullMode;
+            });
+        if (cached == pipelineVariants.end()) {
+            const uint32_t attachmentCount =
+                surfaceAttachmentCount(frame.features);
+            PipelineConfig config =
+                PipelineConfigBuilder{}
+                    .shaders(vertexShaderPath_,
+                             alphaMasked
+                                 ? maskFragmentShaderPaths_[attachmentCount]
+                                 : opaqueFragmentShaderPaths_[attachmentCount])
+                    .defaultVertexLayout()
+                    .rasterization(
+                        cullMode,
+                        materialTemplate.pipelineConfig().frontFace)
+                    .depth(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
+                    .blending(false)
+                    .colorAttachmentCount(attachmentCount)
+                    .msaa(VK_SAMPLE_COUNT_1_BIT)
+                    .descriptorLayout(globalDescriptorSetLayout_)
+                    .descriptorLayout(
+                        materialTemplate.descriptorSetLayout())
+                    .descriptorLayout(surfaceDescriptorSetLayout_)
+                    .pushConstant({VK_SHADER_STAGE_VERTEX_BIT |
+                                       VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0, sizeof(GpuPushBlock)})
+                    .build();
+            config.debugName =
+                "Pipeline/SurfacePrepass/" +
+                std::string(alphaMasked ? "Mask" : "Opaque") + "/" +
+                (cullMode == VK_CULL_MODE_NONE ? "CullNone" : "CullBack") +
+                "/Mrt" + std::to_string(attachmentCount);
+            PipelineRenderingSignature signature{};
+            if (attachmentCount >= 1) {
+                signature.colorAttachmentFormats.push_back(
+                    resources.description(
+                                 resourceHandles_.surfaceNormalRoughness)
+                        .format);
+            }
+            if (attachmentCount >= 2) {
+                signature.colorAttachmentFormats.push_back(
+                    resources.description(resourceHandles_.surfaceMotion)
+                        .format);
+            }
+            if (attachmentCount >= 3) {
+                signature.colorAttachmentFormats.push_back(
+                    resources.description(
+                                 resourceHandles_.surfaceAlbedoMetallic)
+                        .format);
+            }
+            signature.depthAttachmentFormat =
+                resources.description(resourceHandles_.surfaceDepth).format;
+            Pipeline &pipeline = frame.pipelineCache->getOrCreate(
+                std::move(signature), std::move(config));
+            pipelineVariants.push_back(
+                {&materialTemplate, alphaMasked, cullMode, &pipeline});
+            cached = std::prev(pipelineVariants.end());
         }
-        if (attachmentCount >= 2) {
-            signature.colorAttachmentFormats.push_back(
-                resources.description(resourceHandles_.surfaceMotion)
-                    .format);
-        }
-        if (attachmentCount >= 3) {
-            signature.colorAttachmentFormats.push_back(
-                resources.description(resourceHandles_.surfaceAlbedoMetallic)
-                    .format);
-        }
-        signature.depthAttachmentFormat =
-            resources.description(resourceHandles_.surfaceDepth).format;
-        Pipeline &pipeline = frame.pipelineCache->getOrCreate(
-            std::move(signature), std::move(config));
+        Pipeline &pipeline = *cached->pipeline;
         if (boundPipeline != &pipeline) {
             vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                               pipeline.handle());

@@ -29,8 +29,8 @@ class HdrCompositePass final : public IRenderPass {
     void releaseViewportResources() override;
     void onViewportResize(const RenderResourcePool &resources) override;
     void onResourceResidencyChanged(
-        const RenderResourcePool &, uint32_t,
-        const std::vector<RenderImageHandle> &) override {}
+        const RenderResourcePool &resources, uint32_t frameIndex,
+        const std::vector<RenderImageHandle> &createdImages) override;
 
   private:
     Device *device_ = nullptr;

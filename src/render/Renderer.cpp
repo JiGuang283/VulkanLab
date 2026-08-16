@@ -310,30 +310,38 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     activePointShadowImage_ = pointShadowImage;
     activeSpotShadowImage_ = spotShadowImage;
     renderFrame.screenshotCopy = std::move(screenshotCopy);
-    renderGraph_.prepareGraph(renderFrame, *renderResources_, visibility);
-    const RenderResourceResidencyUpdate residencyUpdate =
-        renderGraph_.prepareResources(
-        *renderResources_, renderFrame.features,
-        frame.frameIndex,
-        frameSync_->lastSubmittedSerial(),
-        frameSync_->completedSubmissionSerial());
-    if (residencyUpdate.physicalResourcesChanged ||
-        shadowBindingsChanged) {
-        createLightingGeneration(
-            currentLightingGeneration_
-                ? currentLightingGeneration_->environment
-                : fallbackEnvironment_,
-            currentLightingGeneration_
-                ? currentLightingGeneration_->reflectionProbeEnvironments
-                : std::vector<std::shared_ptr<EnvironmentGpuResources>>{});
+    {
+        VKL_PROFILE_ZONE("RenderGraph Prepare");
+        renderGraph_.prepareGraph(renderFrame, *renderResources_, visibility);
     }
-    updateAtmosphereDescriptor(frame.frameIndex,
-                               renderFrame.features.atmosphereRequired);
-    renderFrame.lightingDescriptorSet =
-        currentLightingGeneration_->sets.at(frame.frameIndex);
-    updateScreenSpaceDescriptor(frame.frameIndex, activeAoMode);
-    if (!renderFrame.features.ddgiActive)
-        ddgiPass_->disableSampling(frame.frameIndex, *renderResources_);
+    RenderResourceResidencyUpdate residencyUpdate{};
+    {
+        VKL_PROFILE_ZONE("RenderGraph Residency");
+        residencyUpdate = renderGraph_.prepareResources(
+            *renderResources_, renderFrame.features, frame.frameIndex,
+            frameSync_->lastSubmittedSerial(),
+            frameSync_->completedSubmissionSerial());
+    }
+    {
+        VKL_PROFILE_ZONE("Renderer Descriptor Updates");
+        if (residencyUpdate.physicalResourcesChanged ||
+            shadowBindingsChanged) {
+            createLightingGeneration(
+                currentLightingGeneration_
+                    ? currentLightingGeneration_->environment
+                    : fallbackEnvironment_,
+                currentLightingGeneration_
+                    ? currentLightingGeneration_->reflectionProbeEnvironments
+                    : std::vector<std::shared_ptr<EnvironmentGpuResources>>{});
+        }
+        updateAtmosphereDescriptor(frame.frameIndex,
+                                   renderFrame.features.atmosphereRequired);
+        renderFrame.lightingDescriptorSet =
+            currentLightingGeneration_->sets.at(frame.frameIndex);
+        updateScreenSpaceDescriptor(frame.frameIndex, activeAoMode);
+        if (!renderFrame.features.ddgiActive)
+            ddgiPass_->disableSampling(frame.frameIndex, *renderResources_);
+    }
     lastSurfaceDataActive_ = renderFrame.features.surfaceDataRequired;
 
     screenSpaceStatus_.requestedMode = view.settings.ambientOcclusionMode;
@@ -350,8 +358,11 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     gpuPassProfiler_->collect(frame.frameIndex);
     gpuPassProfiler_->beginFrame(frame.cmd, frame.frameIndex,
                                  frameSync_->lastSubmittedSerial() + 1);
-    renderGraph_.execute(renderFrame, *renderResources_, visibility,
-                         gpuPassProfiler_.get());
+    {
+        VKL_PROFILE_ZONE("RenderGraph Execute");
+        renderGraph_.execute(renderFrame, *renderResources_, visibility,
+                             gpuPassProfiler_.get());
+    }
     const bool ddgiActuallyActive = ddgiPass_ && ddgiPass_->status().active;
     screenSpaceStatus_.activeGiMode =
         renderFrame.features.ssgiActive && ddgiActuallyActive

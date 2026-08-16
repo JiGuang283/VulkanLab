@@ -145,9 +145,8 @@ resolveFrameFeatures(const FrameFeatureResolveInput &input) {
         taaRequired;
     features.surfaceDataRequired =
         support.surfaceData.supported &&
-        (features.transparentRequired || occlusionWorkRequired ||
-         features.surfaceNormalsRequired || features.surfaceMotionRequired ||
-         features.surfaceAlbedoRequired ||
+        (occlusionWorkRequired || features.surfaceNormalsRequired ||
+         features.surfaceMotionRequired || features.surfaceAlbedoRequired ||
          debug == ScreenSpaceDebugView::NearestDepth);
     features.hiZRequired = occlusionWorkRequired;
     features.occlusionRequired = occlusionWorkRequired;

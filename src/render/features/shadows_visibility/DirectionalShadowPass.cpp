@@ -23,8 +23,10 @@
 #include "diagnostics/TracyProfiler.h"
 
 #include <glm/glm.hpp>
+#include <algorithm>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace vkr {
 
@@ -94,6 +96,15 @@ void DirectionalShadowPass::drawCasters(
     if (!frame.pipelineCache || !frame.view)
         return;
 
+    struct CachedPipeline {
+        const MaterialTemplate *materialTemplate = nullptr;
+        bool alphaMasked = false;
+        VkCullModeFlags cullMode = VK_CULL_MODE_NONE;
+        Pipeline *pipeline = nullptr;
+    };
+
+    std::vector<CachedPipeline> pipelineVariants;
+    pipelineVariants.reserve(4);
     Pipeline *boundPipeline = nullptr;
     const MaterialInstance *boundMaterial = nullptr;
     for (RenderItemIndex itemIndex :
@@ -113,31 +124,45 @@ void DirectionalShadowPass::drawCasters(
             VK_SHADER_STAGE_VERTEX_BIT |
             (alphaMasked ? VK_SHADER_STAGE_FRAGMENT_BIT : 0);
 
-        PipelineConfigBuilder builder;
-        builder
-            .shaders(shadowVertPath_,
-                     alphaMasked ? shadowMaskFragPath_ : std::string{})
-            .defaultVertexLayout()
-            .rasterization(cullMode,
-                           materialTemplate.pipelineConfig().frontFace)
-            .depth(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
-            .depthBias(true)
-            .colorAttachmentCount(0)
-            .msaa(VK_SAMPLE_COUNT_1_BIT)
-            .descriptorLayout(globalDescriptorSetLayout_)
-            .pushConstant({pushStages, 0, sizeof(GpuPushBlock)});
-        builder.descriptorLayout(materialTemplate.descriptorSetLayout());
-        PipelineConfig config = builder.build();
-        config.debugName =
-            "Pipeline/DirectionalShadow/" +
-            std::string(alphaMasked ? "Mask" : "Opaque") + "/" +
-            (cullMode == VK_CULL_MODE_NONE ? "CullNone" : "CullBack");
+        auto cached = std::find_if(
+            pipelineVariants.begin(), pipelineVariants.end(),
+            [&](const CachedPipeline &entry) {
+                return entry.materialTemplate == &materialTemplate &&
+                       entry.alphaMasked == alphaMasked &&
+                       entry.cullMode == cullMode;
+            });
+        if (cached == pipelineVariants.end()) {
+            PipelineConfigBuilder builder;
+            builder
+                .shaders(shadowVertPath_,
+                         alphaMasked ? shadowMaskFragPath_ : std::string{})
+                .defaultVertexLayout()
+                .rasterization(
+                    cullMode,
+                    materialTemplate.pipelineConfig().frontFace)
+                .depth(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
+                .depthBias(true)
+                .colorAttachmentCount(0)
+                .msaa(VK_SAMPLE_COUNT_1_BIT)
+                .descriptorLayout(globalDescriptorSetLayout_)
+                .pushConstant({pushStages, 0, sizeof(GpuPushBlock)});
+            builder.descriptorLayout(materialTemplate.descriptorSetLayout());
+            PipelineConfig config = builder.build();
+            config.debugName =
+                "Pipeline/DirectionalShadow/" +
+                std::string(alphaMasked ? "Mask" : "Opaque") + "/" +
+                (cullMode == VK_CULL_MODE_NONE ? "CullNone" : "CullBack");
 
-        PipelineRenderingSignature rendering{};
-        rendering.depthAttachmentFormat = depthFormat_;
-        rendering.samples = VK_SAMPLE_COUNT_1_BIT;
-        Pipeline &pipeline = frame.pipelineCache->getOrCreate(
-            std::move(rendering), std::move(config));
+            PipelineRenderingSignature rendering{};
+            rendering.depthAttachmentFormat = depthFormat_;
+            rendering.samples = VK_SAMPLE_COUNT_1_BIT;
+            Pipeline &pipeline = frame.pipelineCache->getOrCreate(
+                std::move(rendering), std::move(config));
+            pipelineVariants.push_back(
+                {&materialTemplate, alphaMasked, cullMode, &pipeline});
+            cached = std::prev(pipelineVariants.end());
+        }
+        Pipeline &pipeline = *cached->pipeline;
         if (boundPipeline != &pipeline) {
             vkCmdBindPipeline(frame.cmd,
                               VK_PIPELINE_BIND_POINT_GRAPHICS,

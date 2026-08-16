@@ -12,7 +12,9 @@
 #include "render/frame/RenderView.h"
 #include "render/features/shadows_visibility/Visibility.h"
 
+#include <algorithm>
 #include <utility>
+#include <vector>
 
 namespace vkr {
 
@@ -27,6 +29,15 @@ void ShadowCasterDrawRecorder::record(
         return;
     }
 
+    struct CachedPipeline {
+        const MaterialTemplate *materialTemplate = nullptr;
+        bool alphaMasked = false;
+        VkCullModeFlags cullMode = VK_CULL_MODE_NONE;
+        Pipeline *pipeline = nullptr;
+    };
+
+    std::vector<CachedPipeline> pipelineVariants;
+    pipelineVariants.reserve(4);
     Pipeline *boundPipeline = nullptr;
     const MaterialInstance *boundMaterial = nullptr;
     for (RenderItemIndex itemIndex : casters) {
@@ -45,29 +56,44 @@ void ShadowCasterDrawRecorder::record(
             VK_SHADER_STAGE_VERTEX_BIT |
             (alphaMasked ? VK_SHADER_STAGE_FRAGMENT_BIT : 0);
 
-        PipelineConfigBuilder builder;
-        builder
-            .shaders(config.vertexShader,
-                     alphaMasked ? config.maskFragmentShader
-                                 : config.opaqueFragmentShader)
-            .defaultVertexLayout()
-            .rasterization(
-                cullMode, materialTemplate.pipelineConfig().frontFace)
-            .depth(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
-            .depthBias(config.rasterDepthBias)
-            .colorAttachmentCount(0)
-            .msaa(VK_SAMPLE_COUNT_1_BIT)
-            .descriptorLayout(config.sliceDescriptorLayout)
-            .pushConstant({pushStages, 0, sizeof(GpuPushBlock)});
-        builder.descriptorLayout(materialTemplate.descriptorSetLayout());
-        PipelineConfig pipelineConfig = builder.build();
-        pipelineConfig.debugName =
-            "Pipeline/" + config.pipelinePrefix + "/" +
-            (alphaMasked ? "Mask" : "Opaque") + "/" +
-            (cullMode == VK_CULL_MODE_NONE ? "CullNone" : "CullBack");
+        auto cached = std::find_if(
+            pipelineVariants.begin(), pipelineVariants.end(),
+            [&](const CachedPipeline &entry) {
+                return entry.materialTemplate == &materialTemplate &&
+                       entry.alphaMasked == alphaMasked &&
+                       entry.cullMode == cullMode;
+            });
+        if (cached == pipelineVariants.end()) {
+            PipelineConfigBuilder builder;
+            builder
+                .shaders(config.vertexShader,
+                         alphaMasked ? config.maskFragmentShader
+                                     : config.opaqueFragmentShader)
+                .defaultVertexLayout()
+                .rasterization(
+                    cullMode,
+                    materialTemplate.pipelineConfig().frontFace)
+                .depth(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
+                .depthBias(config.rasterDepthBias)
+                .colorAttachmentCount(0)
+                .msaa(VK_SAMPLE_COUNT_1_BIT)
+                .descriptorLayout(config.sliceDescriptorLayout)
+                .pushConstant({pushStages, 0, sizeof(GpuPushBlock)});
+            builder.descriptorLayout(
+                materialTemplate.descriptorSetLayout());
+            PipelineConfig pipelineConfig = builder.build();
+            pipelineConfig.debugName =
+                "Pipeline/" + config.pipelinePrefix + "/" +
+                (alphaMasked ? "Mask" : "Opaque") + "/" +
+                (cullMode == VK_CULL_MODE_NONE ? "CullNone" : "CullBack");
 
-        Pipeline &pipeline = frame.pipelineCache->getOrCreate(
-            config.rendering, std::move(pipelineConfig));
+            Pipeline &pipeline = frame.pipelineCache->getOrCreate(
+                config.rendering, std::move(pipelineConfig));
+            pipelineVariants.push_back(
+                {&materialTemplate, alphaMasked, cullMode, &pipeline});
+            cached = std::prev(pipelineVariants.end());
+        }
+        Pipeline &pipeline = *cached->pipeline;
         if (boundPipeline != &pipeline) {
             vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                               pipeline.handle());

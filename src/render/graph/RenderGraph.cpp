@@ -8,6 +8,7 @@
 #include "core/Image.h"
 #include "core/Log.h"
 #include "core/SwapChain.h"
+#include "diagnostics/Profiling.h"
 #include "render/graph/IRenderPass.h"
 
 #include <algorithm>
@@ -1249,6 +1250,7 @@ void RenderGraphExecutor::execute(
     for (uint32_t passIndex : compiled.executionOrder) {
         const RenderGraphPassDeclaration &declaration =
             compiled.passes.at(passIndex);
+        VKL_PROFILE_BEGIN(nodeProfile, declaration.name);
         IRenderPass &pass = *passes.at(declaration.ownerPassIndex);
         for (const RenderGraphImageUse &imageUse : declaration.images) {
             const RenderImageUsage &usage = imageUse.physical;
@@ -1482,11 +1484,14 @@ RenderResourceResidencyUpdate RenderGraph::prepareResources(
     const FrameRenderFeatures &features, uint32_t frameIndex,
     uint64_t lastSubmittedSerial, uint64_t completedSerial) {
     const uint64_t requestedKey = featureKey(passes_, resources, features);
-    if (!compiledValid_ || requestedKey != compiledFeatureKey_)
+    const bool graphRecompiled =
+        !compiledValid_ || requestedKey != compiledFeatureKey_;
+    if (graphRecompiled)
         compile(resources, features);
 
     RenderResourceResidencyUpdate update = resources.synchronizeResidency(
         compiled_.activeImages, lastSubmittedSerial, completedSerial);
+    const bool resourcesRefreshed = resourceRefreshPending_;
     if (resourceRefreshPending_) {
         for (uint32_t owner : compiled_.activeOwnerPasses) {
             try {
@@ -1532,7 +1537,10 @@ RenderResourceResidencyUpdate RenderGraph::prepareResources(
     } else if (update.physicalResourcesChanged) {
         imageStates_.clear();
     }
-    diagnostics_ = makeDiagnostics(compiled_, resources);
+    if (graphRecompiled || resourcesRefreshed || update.created > 0 ||
+        update.retired > 0 || update.destroyed > 0) {
+        diagnostics_ = makeDiagnostics(compiled_, resources);
+    }
     return update;
 }
 

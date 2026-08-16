@@ -308,7 +308,13 @@ const Image &RenderResourcePool::image(RenderImageHandle handle,
             : frameIndex;
     if (index >= images_[handle.index].size() ||
         !images_[handle.index][index]) {
-        throw std::out_of_range("render image is not realized");
+        throw std::out_of_range(
+            "render image '" + desc.name + "' (handle=" +
+            std::to_string(handle.index) + ", frame=" +
+            std::to_string(frameIndex) + ", physical=" +
+            std::to_string(index) + ", residency=" +
+            std::to_string(static_cast<uint32_t>(residency_[handle.index])) +
+            ") is not realized");
     }
     return *images_[handle.index][index];
 }
