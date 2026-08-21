@@ -704,6 +704,8 @@ PreparedModelData GltfPreparer::prepare(
             else if (tg3_str_equals_cstr(material.alpha_mode, "BLEND"))
                 params.alphaMode = AlphaMode::Blend;
             params.doubleSided = material.double_sided != 0;
+            if (findExtension(material.ext, "KHR_materials_unlit"))
+                result.shaderFamilyId = "builtin.unlit";
             if (material.normal_texture.index >= 0) {
                 params.normalScale = glm::max(
                     static_cast<float>(material.normal_texture.scale), 0.0f);

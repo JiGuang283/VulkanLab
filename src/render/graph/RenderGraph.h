@@ -203,6 +203,14 @@ struct RenderGraphBufferState {
 };
 
 struct RenderGraphDiagnostics {
+    struct Pass {
+        std::string name;
+        std::string groupName;
+        RgPassType type = RgPassType::Graphics;
+        RgQueueClass queue = RgQueueClass::Graphics;
+        bool active = false;
+    };
+
     struct Resource {
         uint32_t index = 0;
         std::string name;
@@ -237,6 +245,7 @@ struct RenderGraphDiagnostics {
     uint64_t logicalImageBytes = 0;
     uint64_t residentImageBytes = 0;
     uint64_t retiringImageBytes = 0;
+    std::vector<Pass> passes;
     std::vector<std::string> executionOrder;
     std::vector<std::string> culledNames;
     std::vector<Resource> resources;

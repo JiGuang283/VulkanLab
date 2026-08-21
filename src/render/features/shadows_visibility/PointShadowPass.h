@@ -28,8 +28,7 @@ class PointShadowPass final : public IRenderPass {
                     std::array<RenderImageHandle, 4> shadowDepthByCapacity,
                     DescriptorAllocator &descriptorAllocator,
                     std::string vertPath,
-                    std::string opaqueFragPath,
-                    std::string maskFragPath);
+                    std::string opaqueFragPath);
     ~PointShadowPass() override;
 
     PointShadowPass(const PointShadowPass &) = delete;
@@ -54,7 +53,6 @@ class PointShadowPass final : public IRenderPass {
     std::array<RenderImageHandle, 4> shadowDepthByCapacity_{};
     std::string vertPath_;
     std::string opaqueFragPath_;
-    std::string maskFragPath_;
     VkFormat depthFormat_ = VK_FORMAT_UNDEFINED;
     std::unique_ptr<PunctualShadowSliceBuffer> sliceBuffer_;
 };

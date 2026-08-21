@@ -29,7 +29,9 @@ struct VisibilityCpuStatistics {
     uint32_t shadowCandidates = 0;
     uint32_t shadowCulled = 0;
     uint32_t shadowVisible = 0;
+    std::array<uint32_t, kCsmCascadeCount> directionalShadowCandidates{};
     std::array<uint32_t, kCsmCascadeCount> directionalShadowDraws{};
+    std::array<uint32_t, kCsmCascadeCount> directionalShadowCulled{};
     std::array<uint32_t, kPointShadowLayers> pointShadowDraws{};
     std::array<uint32_t, kMaxSpotShadowLights> spotShadowDraws{};
     uint32_t depthPrepassDraws = 0;

@@ -113,12 +113,15 @@ void ShadowVisibilityBuilder::build(
         if (view.shadow.csm.enabled) {
             for (uint32_t cascade = 0; cascade < kCsmCascadeCount;
                  ++cascade) {
+                ++frame.cpuStats.directionalShadowCandidates[cascade];
                 const bool visible =
                     !settings.shadowCullingEnabled ||
                     intersectsClipVolume(item.worldBounds,
                                          directionalFrusta[cascade]);
-                if (!visible)
+                if (!visible) {
+                    ++frame.cpuStats.directionalShadowCulled[cascade];
                     continue;
+                }
                 frame.directionalShadowCasters[cascade].push_back(index);
                 ++frame.cpuStats.directionalShadowDraws[cascade];
                 visibleInAnyShadow = true;

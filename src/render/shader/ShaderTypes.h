@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include "core/MaterialBindingMode.h"
 
@@ -12,6 +13,8 @@ enum class ShaderProgramContract {
     ShadowDepth,
     PunctualShadowDepth,
     SurfacePrepass,
+    GBuffer,
+    DeferredLighting,
     Fullscreen,
     Compute,
 };
@@ -38,6 +41,7 @@ struct ShaderProgram {
     std::array<std::string, 3> bindlessReducedSurfaceFragSpvPaths;
     std::string computeSpvPath;
     bool usesSceneLights = false;
+    bool usesClusteredLighting = false;
     bool usesAtmosphere = false;
     bool usesScreenSpace = false;
     bool usesDdgi = false;
@@ -70,10 +74,56 @@ struct ShaderProgram {
     }
 };
 
-struct ShaderVariant {
+enum class MaterialShaderPass : uint32_t {
+    ForwardOpaque,
+    ForwardTransparent,
+    SurfaceOpaque,
+    SurfaceMask,
+    GBufferOpaque,
+    GBufferMask,
+    DirectionalShadowMask,
+    PointShadowMask,
+    SpotShadowMask,
+    Count,
+};
+
+struct MaterialShaderFamilyHandle {
+    static constexpr uint32_t kInvalidIndex =
+        std::numeric_limits<uint32_t>::max();
+
+    uint32_t index = kInvalidIndex;
+
+    bool valid() const { return index != kInvalidIndex; }
+    friend bool operator==(MaterialShaderFamilyHandle left,
+                           MaterialShaderFamilyHandle right) {
+        return left.index == right.index;
+    }
+    friend bool operator!=(MaterialShaderFamilyHandle left,
+                           MaterialShaderFamilyHandle right) {
+        return !(left == right);
+    }
+};
+
+struct MaterialShaderFamily {
     std::string id;
     std::string displayName;
-    std::string programId;
+    std::string category;
+    int32_t order = 0;
+    bool isDefault = false;
+    std::array<std::string,
+               static_cast<size_t>(MaterialShaderPass::Count)>
+        programIds{};
+
+    const std::string &programId(MaterialShaderPass pass) const {
+        return programIds.at(static_cast<size_t>(pass));
+    }
+};
+
+struct ViewMode {
+    std::string id;
+    std::string displayName;
+    // Empty means the active material shader family supplies the program.
+    std::string overrideProgramId;
     std::string category;
     int32_t order = 0;
     bool isDefault = false;
@@ -81,33 +131,11 @@ struct ShaderVariant {
     bool supportsAtmosphere = false;
     bool supportsScreenSpace = false;
     bool supportsDdgi = false;
+    bool supportsDeferred = false;
     ShaderToneMappingPolicy toneMapping =
         ShaderToneMappingPolicy::PassThrough;
-    std::string vertSpvPath;
-    std::string fragSpvPath;
-    std::string bindlessFragSpvPath;
-    std::string colorOnlyFragSpvPath;
-    std::string bindlessColorOnlyFragSpvPath;
-    std::string specularFragSpvPath;
-    std::string bindlessSpecularFragSpvPath;
-    bool usesLightingMrt = false;
-
-    const std::string &fragmentSpvPath(MaterialBindingMode mode,
-                                       uint32_t colorAttachmentCount = 3) const {
-        const bool bindless = mode == MaterialBindingMode::Bindless;
-        if (usesLightingMrt && colorAttachmentCount <= 1) {
-            return bindless && !bindlessColorOnlyFragSpvPath.empty()
-                       ? bindlessColorOnlyFragSpvPath
-                       : colorOnlyFragSpvPath;
-        }
-        if (usesLightingMrt && colorAttachmentCount == 2) {
-            return bindless && !bindlessSpecularFragSpvPath.empty()
-                       ? bindlessSpecularFragSpvPath
-                       : specularFragSpvPath;
-        }
-        return bindless && !bindlessFragSpvPath.empty()
-                   ? bindlessFragSpvPath
-                   : fragSpvPath;
+    bool overridesMaterialShader() const {
+        return !overrideProgramId.empty();
     }
 };
 

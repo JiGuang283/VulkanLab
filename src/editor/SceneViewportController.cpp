@@ -1,6 +1,7 @@
 #include "SceneViewportController.h"
 
 #include "EditorDragDrop.h"
+#include "EditorIcons.h"
 #include "EditorWidgets.h"
 #include "SceneEditorSession.h"
 #include "scene/ModelAsset.h"
@@ -191,26 +192,23 @@ void SceneViewportController::beginFrame() {
 }
 
 void SceneViewportController::drawToolbar() {
-    const auto button = [this](const char *label, const char *tooltip,
+    const auto button = [this](const char *id, const char *icon,
+                               const char *fallback, const char *tooltip,
                                GizmoOperation operation) {
         const bool active = operation_ == operation;
-        if (active) {
-            ImGui::PushStyleColor(
-                ImGuiCol_Button,
-                ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-        }
-        if (ImGui::Button(label, ImVec2(24.0f, 0.0f)))
+        if (editor::toggleIconButton(id, icon, fallback, tooltip, active,
+                                     ImVec2(28.0f, 0.0f)))
             operation_ = operation;
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", tooltip);
-        if (active)
-            ImGui::PopStyleColor();
         ImGui::SameLine();
     };
-    button("Q", "Select", GizmoOperation::Select);
-    button("W", "Translate", GizmoOperation::Translate);
-    button("E", "Rotate", GizmoOperation::Rotate);
-    button("R", "Scale", GizmoOperation::Scale);
+    button("Select", icons::MousePointer, "Q", "Select (Q)",
+           GizmoOperation::Select);
+    button("Translate", icons::Move, "W", "Translate (W)",
+           GizmoOperation::Translate);
+    button("Rotate", icons::Rotate, "E", "Rotate (E)",
+           GizmoOperation::Rotate);
+    button("Scale", icons::Scale, "R", "Scale (R)",
+           GizmoOperation::Scale);
 
     int space = space_ == GizmoSpace::Local ? 0 : 1;
     const char *labels[] = {"Local", "World"};
@@ -345,9 +343,16 @@ void SceneViewportController::drawOverlay(
     activeSession_ = &session;
 
     if (selected) {
-        drawSelection(*selected, world->modelAsset(selected->handle), camera,
-                      viewport);
-        drawDdgiProbeVolume(*selected, camera, viewport);
+        const bool selectedLight = selected->light.has_value();
+        if ((selected->modelInstance && actions.showBounds) ||
+            (selectedLight && actions.showLights) ||
+            (!selected->modelInstance && !selectedLight &&
+             actions.showBounds)) {
+            drawSelection(*selected, world->modelAsset(selected->handle),
+                          camera, viewport);
+        }
+        if (actions.showProbes)
+            drawDdgiProbeVolume(*selected, camera, viewport);
         const bool activeCameraSelected =
             session.cameraMode() == EditorCameraMode::ActiveScene &&
             world->activeCameraId() &&

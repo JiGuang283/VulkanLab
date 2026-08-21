@@ -37,13 +37,11 @@ PointShadowPass::PointShadowPass(Device &device,
                                      shadowDepthByCapacity,
                                  DescriptorAllocator &descriptorAllocator,
                                  std::string vertPath,
-                                 std::string opaqueFragPath,
-                                 std::string maskFragPath)
+                                 std::string opaqueFragPath)
     : device_(&device),
       shadowDepthByCapacity_(std::move(shadowDepthByCapacity)),
       vertPath_(std::move(vertPath)),
-      opaqueFragPath_(std::move(opaqueFragPath)),
-      maskFragPath_(std::move(maskFragPath)) {
+      opaqueFragPath_(std::move(opaqueFragPath)) {
     sliceBuffer_ = std::make_unique<PunctualShadowSliceBuffer>(
         device, descriptorAllocator, kPointShadowLayers,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -146,7 +144,7 @@ void PointShadowPass::recordFace(
     drawConfig.dynamicOffset = sliceBuffer_->dynamicOffset(layer);
     drawConfig.vertexShader = vertPath_;
     drawConfig.opaqueFragmentShader = opaqueFragPath_;
-    drawConfig.maskFragmentShader = maskFragPath_;
+    drawConfig.maskProgramPass = MaterialShaderPass::PointShadowMask;
     drawConfig.pipelinePrefix = "PointShadow";
     drawConfig.rasterDepthBias = false;
     ShadowCasterDrawRecorder::record(

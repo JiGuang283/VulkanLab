@@ -11,26 +11,21 @@ class ShaderRegistry;
 
 struct ShadowPrograms {
     std::string directionalVertex;
-    std::string directionalMaskFragment;
     std::string punctualVertex;
     std::string pointFragment;
-    std::string pointMaskFragment;
-    std::string spotMaskFragment;
 
-    static ShadowPrograms resolve(const ShaderRegistry &registry,
-                                  MaterialBindingMode materialMode);
+    static ShadowPrograms resolve(const ShaderRegistry &registry);
 };
 
 struct SurfaceVisibilityPrograms {
-    std::string surfaceVertex;
-    std::array<std::string, 4> surfaceOpaqueFragments;
-    std::array<std::string, 4> surfaceMaskFragments;
+    std::string depthHierarchyInitCompute;
+    std::string depthHierarchyReduceCompute;
     std::string hiZInitCompute;
     std::string hiZReduceCompute;
     std::string occlusionCompute;
 
     static SurfaceVisibilityPrograms
-    resolve(const ShaderRegistry &registry, MaterialBindingMode materialMode);
+    resolve(const ShaderRegistry &registry);
 };
 
 struct ScreenSpacePrograms {
@@ -67,6 +62,13 @@ struct AtmosphereGiPrograms {
     static AtmosphereGiPrograms resolve(const ShaderRegistry &registry);
 };
 
+struct DeferredPrograms {
+    std::string lightingCompute;
+    std::string clusterBuildCompute;
+
+    static DeferredPrograms resolve(const ShaderRegistry &registry);
+};
+
 struct PostProcessPrograms {
     std::string fullscreenVertex;
     std::string skyboxFragment;
@@ -83,6 +85,7 @@ struct RendererProgramCatalog {
     SurfaceVisibilityPrograms surfaceVisibility;
     ScreenSpacePrograms screenSpace;
     AtmosphereGiPrograms atmosphereGi;
+    DeferredPrograms deferred;
     PostProcessPrograms postProcess;
 
     static RendererProgramCatalog resolve(const ShaderRegistry &registry,

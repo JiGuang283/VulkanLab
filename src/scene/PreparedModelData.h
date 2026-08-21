@@ -30,6 +30,7 @@ struct PreparedTexture {
 
 struct PreparedMaterial {
     MaterialParams params;
+    std::string shaderFamilyId;
     std::array<int32_t, kMaterialTextureSlotCount> textureIndices{};
 
     PreparedMaterial() { textureIndices.fill(-1); }

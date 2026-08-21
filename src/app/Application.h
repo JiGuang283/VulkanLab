@@ -5,7 +5,7 @@
 #include "assets/ProjectContext.h"
 #include "assets/SceneCatalog.h"
 #include "render/frame/RenderSettings.h"
-#include "render/shader/ShaderVariant.h"
+#include "render/shader/ShaderTypes.h"
 #include "workflows/SceneWorkflowTypes.h"
 
 #include <cstdint>
@@ -38,7 +38,7 @@ class Application final {
     void updateInputMode();
     void processCameraInput(float dt);
     void handleSwapChainRecreate();
-    const ShaderVariant &currentShaderVariant() const;
+    const ViewMode &currentViewMode() const;
     bool hasUnsavedSceneChanges() const;
 
     uint64_t reloadCurrentScene();

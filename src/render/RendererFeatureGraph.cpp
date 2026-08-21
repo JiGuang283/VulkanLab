@@ -11,21 +11,29 @@
 #include "render/features/shadows_visibility/DirectionalShadowPass.h"
 #include "render/graph/FrameGraphExternalPasses.h"
 #include "render/features/ambient_occlusion/GtaoPass.h"
-#include "render/features/core_forward/HdrCompositePass.h"
-#include "render/features/shadows_visibility/HiZBuildPass.h"
-#include "render/features/core_forward/MainForwardPass.h"
+#include "render/features/post_process/HdrCompositePass.h"
+#include "render/features/deferred/DeferredLightingPass.h"
+#include "render/features/lighting/ClusteredLightCullingPass.h"
+#include "render/features/lighting/ClusteredLighting.h"
+#include "render/features/deferred/DeferredLightingResources.h"
+#include "render/features/surface/DepthHierarchyPass.h"
+#include "render/features/surface/DepthHierarchyResources.h"
+#include "render/features/surface/GBufferPass.h"
+#include "render/features/surface/GBufferResources.h"
+#include "render/features/surface/SurfaceFrameData.h"
+#include "render/features/forward/MainForwardPass.h"
 #include "render/features/shadows_visibility/OcclusionCullPass.h"
 #include "render/features/shadows_visibility/PointShadowPass.h"
-#include "render/features/core_forward/PresentPass.h"
+#include "render/features/post_process/PresentPass.h"
 #include "render/features/temporal_post_process/ScreenSpacePyramidPass.h"
 #include "render/features/atmosphere_environment/SkyBackgroundPass.h"
 #include "render/features/shadows_visibility/SpotShadowPass.h"
 #include "render/features/ambient_occlusion/SsaoPass.h"
 #include "render/features/global_illumination/SsgiPass.h"
 #include "render/features/reflections/SsrPass.h"
-#include "render/features/core_forward/SurfacePrepass.h"
+#include "render/features/surface/SurfacePrepass.h"
 #include "render/features/temporal_post_process/TaaPass.h"
-#include "render/features/core_forward/ToneMapPass.h"
+#include "render/features/post_process/ToneMapPass.h"
 
 namespace vkr {
 
@@ -46,57 +54,62 @@ void Renderer::registerAtmosphereShadowFeatures() {
     const ShadowPrograms &shadows = programs_.shadows;
     renderGraph_.addPass(std::make_unique<DirectionalShadowPass>(
         *device_, *renderResources_, resourceHandles_.directionalShadowDepth,
-        globalDescriptorSetLayout_, shadows.directionalVertex,
-        shadows.directionalMaskFragment));
+        globalDescriptorSetLayout_, shadows.directionalVertex));
     renderGraph_.addPass(std::make_unique<PointShadowPass>(
         *device_, *renderResources_,
         resourceHandles_.pointShadowDepthByCapacity, *descriptorAllocator_,
-        shadows.punctualVertex, shadows.pointFragment,
-        shadows.pointMaskFragment));
+        shadows.punctualVertex, shadows.pointFragment));
     renderGraph_.addPass(std::make_unique<SpotShadowPass>(
         *device_, *renderResources_,
         resourceHandles_.spotShadowDepthByCapacity, *descriptorAllocator_,
-        shadows.punctualVertex, shadows.spotMaskFragment));
+        shadows.punctualVertex));
 }
 
 void Renderer::registerSurfaceVisibilityFeatures() {
     const SurfaceVisibilityPrograms &programs = programs_.surfaceVisibility;
     if (device_->surfaceDataSupport().available) {
+        surfaceFrameData_ = std::make_unique<SurfaceFrameData>(
+            *device_, *descriptorAllocator_);
         auto pass = std::make_unique<SurfacePrepass>(
             *device_, *renderResources_, resourceHandles_,
-            *descriptorAllocator_, globalDescriptorSetLayout_,
-            programs.surfaceVertex, programs.surfaceOpaqueFragments,
-            programs.surfaceMaskFragments);
+            *surfaceFrameData_, globalDescriptorSetLayout_);
         surfacePrepass_ = pass.get();
         renderGraph_.addPass(std::move(pass));
     }
-    if (!device_->occlusionCullingSupport().available)
-        return;
-
-    renderGraph_.addPass(std::make_unique<HiZBuildPass>(
-        *device_, *renderResources_, resourceHandles_, *descriptorAllocator_,
-        programs.hiZInitCompute, programs.hiZReduceCompute));
-    auto occlusion = std::make_unique<OcclusionCullPass>(
-        *device_, *renderResources_, resourceHandles_, *descriptorAllocator_,
-        programs.occlusionCompute);
-    occlusionCullPass_ = occlusion.get();
-    renderGraph_.addPass(std::move(occlusion));
+    const DepthHierarchyResources hierarchy =
+        depthHierarchyResources(resourceHandles_);
+    if (device_->depthHierarchySupport().available()) {
+        const ScreenSpacePrograms &screen = programs_.screenSpace;
+        renderGraph_.addPass(std::make_unique<DepthHierarchyPass>(
+            *device_, *renderResources_, resourceHandles_.surfaceDepth,
+            resourceHandles_.surfaceDepthSampler, hierarchy,
+            *descriptorAllocator_,
+            DepthHierarchyPrograms{
+                programs.depthHierarchyInitCompute,
+                programs.depthHierarchyReduceCompute,
+                screen.depthInitCompute, screen.depthReduceCompute,
+                programs.hiZInitCompute, programs.hiZReduceCompute}));
+    }
+    if (device_->occlusionCullingSupport().available) {
+        auto occlusion = std::make_unique<OcclusionCullPass>(
+            *device_, *renderResources_, resourceHandles_,
+            *descriptorAllocator_, programs.occlusionCompute);
+        occlusionCullPass_ = occlusion.get();
+        renderGraph_.addPass(std::move(occlusion));
+    }
+    if (device_->gBufferSupport().available && surfaceFrameData_) {
+        auto gBuffer = std::make_unique<GBufferPass>(
+            *device_, gBufferResources(resourceHandles_),
+            *surfaceFrameData_);
+        gBufferPass_ = gBuffer.get();
+        renderGraph_.addPass(std::move(gBuffer));
+    }
 }
 
 void Renderer::registerIndirectLightingPreparationFeatures() {
     const ScreenSpaceEffectsSupport &support =
         device_->screenSpaceEffectsSupport();
     const ScreenSpacePrograms &screen = programs_.screenSpace;
-    if (support.depthPyramidAvailable) {
-        renderGraph_.addPass(std::make_unique<ScreenSpacePyramidPass>(
-            *device_, *renderResources_,
-            ScreenSpacePyramidKind::NearestDepth,
-            resourceHandles_.surfaceDepth,
-            resourceHandles_.surfaceDepthSampler, RenderImageHandle{},
-            RenderSamplerHandle{}, resourceHandles_.screenDepthPyramid,
-            resourceHandles_.screenPyramidSampler, *descriptorAllocator_,
-            screen.depthInitCompute, screen.depthReduceCompute));
-    }
     if (support.ssaoAvailable) {
         renderGraph_.addPass(std::make_unique<SsaoPass>(
             *device_, *renderResources_, resourceHandles_,
@@ -137,6 +150,9 @@ void Renderer::registerIndirectLightingPreparationFeatures() {
 
 void Renderer::registerSceneLightingFeatures() {
     const PostProcessPrograms &post = programs_.postProcess;
+    renderGraph_.addPass(std::make_unique<ClusteredLightCullingPass>(
+        *device_, *clusteredLighting_, globalDescriptorSetLayout_,
+        programs_.deferred.clusterBuildCompute));
     renderGraph_.addPass(std::make_unique<SkyBackgroundPass>(
         *device_, *renderResources_, resourceHandles_,
         globalDescriptorSetLayout_, lightingDescriptorSetLayout_,
@@ -147,18 +163,33 @@ void Renderer::registerSceneLightingFeatures() {
     auto forward = std::make_unique<MainForwardPass>(
         *device_, *renderResources_, resourceHandles_, ForwardPhase::Opaque,
         lightingDescriptorSetLayout_, atmosphereDescriptorSetLayout_,
-        ddgiPass_->samplingDescriptorSetLayout());
+        ddgiPass_->samplingDescriptorSetLayout(), *clusteredLighting_);
     mainForwardPass_ = forward.get();
     renderGraph_.addPass(std::move(forward));
+
+    if (device_->gBufferSupport().available &&
+        device_->computeBloomSupport().available) {
+        auto deferred = std::make_unique<DeferredLightingPass>(
+            *device_, *renderResources_, resourceHandles_,
+            *descriptorAllocator_, globalDescriptorSetLayout_,
+            lightingDescriptorSetLayout_, atmosphereDescriptorSetLayout_,
+            screenSpaceDescriptorSetLayout_,
+            ddgiPass_->samplingDescriptorSetLayout(),
+            *clusteredLighting_,
+            programs_.deferred.lightingCompute);
+        deferredLightingPass_ = deferred.get();
+        renderGraph_.addPass(std::move(deferred));
+    }
 
     const ScreenSpaceEffectsSupport &support =
         device_->screenSpaceEffectsSupport();
     const ScreenSpacePrograms &screen = programs_.screenSpace;
     if (support.colorPyramidAvailable) {
         renderGraph_.addPass(std::make_unique<ScreenSpacePyramidPass>(
-            *device_, *renderResources_, ScreenSpacePyramidKind::SceneColor,
+            *device_, *renderResources_,
             resourceHandles_.hdrColor, resourceHandles_.hdrSampler,
-            RenderImageHandle{}, RenderSamplerHandle{},
+            resourceHandles_.deferredHdrColor,
+            resourceHandles_.hdrSampler,
             resourceHandles_.sceneColorPyramid,
             resourceHandles_.screenPyramidSampler, *descriptorAllocator_,
             screen.colorInitCompute, screen.colorReduceCompute));
@@ -189,7 +220,7 @@ void Renderer::registerSceneLightingFeatures() {
         *device_, *renderResources_, resourceHandles_,
         ForwardPhase::Transparent, lightingDescriptorSetLayout_,
         atmosphereDescriptorSetLayout_,
-        ddgiPass_->samplingDescriptorSetLayout()));
+        ddgiPass_->samplingDescriptorSetLayout(), *clusteredLighting_));
 }
 
 void Renderer::registerPostProcessFeatures() {
@@ -219,7 +250,10 @@ void Renderer::registerPostProcessFeatures() {
         resourceHandles_.viewportColor,
         resourceHandles_.surfaceNormalRoughness,
         resourceHandles_.surfaceMotion, resourceHandles_.surfaceDataSampler,
-        resourceHandles_.screenDepthPyramid,
+        gBufferResources(resourceHandles_),
+        deferredLightingResources(resourceHandles_),
+        depthHierarchyResources(resourceHandles_)
+            .image(DepthHierarchySemantic::Nearest),
         resourceHandles_.sceneColorPyramid, resourceHandles_.ssaoRaw,
         resourceHandles_.ssaoFiltered, resourceHandles_.cacaoOutput,
         resourceHandles_.gtaoRaw, resourceHandles_.gtaoHistory,

@@ -3,6 +3,7 @@
 #extension GL_GOOGLE_include_directive : require
 #include "include/global_frame.glsl"
 #include "include/screen_temporal.glsl"
+#include "include/depth_hierarchy.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -99,7 +100,8 @@ bool traceRay(vec3 origin, vec3 direction, float phase,
             break;
         float footprint = max(distanceAlongRay / maxDistance * 12.0, 1.0);
         float mip = clamp(floor(log2(footprint)), 0.0, push.sampling.x);
-        float sceneDepth = textureLod(nearestDepthPyramid, uv, mip).r;
+        float sceneDepth = vklSampleNearestDepth(
+            nearestDepthPyramid, uv, mip);
         if (sceneDepth >= 1.0)
             continue;
         vec3 scenePosition = reconstructWorld(uv, sceneDepth);

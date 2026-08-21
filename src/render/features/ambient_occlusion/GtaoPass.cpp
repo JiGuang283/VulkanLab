@@ -1,4 +1,5 @@
 #include "render/features/ambient_occlusion/GtaoPass.h"
+#include "render/features/surface/DepthHierarchyResources.h"
 
 #include "render/pipeline/ComputePipeline.h"
 #include "render/pipeline/ComputePipelineConfig.h"
@@ -95,7 +96,9 @@ GtaoPass::GtaoPass(Device &device,
     if (!resourceHandles_.surfaceDepth.valid() ||
         !resourceHandles_.surfaceNormalRoughness.valid() ||
         !resourceHandles_.surfaceMotion.valid() ||
-        !resourceHandles_.screenDepthPyramid.valid() ||
+        !depthHierarchyResources(resourceHandles_)
+             .image(DepthHierarchySemantic::Nearest)
+             .valid() ||
         !resourceHandles_.gtaoRaw.valid() ||
         !resourceHandles_.gtaoHistory.valid() ||
         !resourceHandles_.gtaoTemp.valid() ||
@@ -145,7 +148,8 @@ void GtaoPass::setup(RenderGraphBuilder &builder,
                     RgQueueClass::Compute, 0);
     surfaceReads();
     builder.useImage(
-        {resourceHandles_.screenDepthPyramid,
+        {depthHierarchyResources(resourceHandles_)
+             .image(DepthHierarchySemantic::Nearest),
          RenderImageAccess::SampledRead,
          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
@@ -292,7 +296,8 @@ void GtaoPass::recordStage(const RenderFrameContext &frame,
                                      fullExtent.height);
         push.sampling = glm::vec4(
             static_cast<float>(resources.mipLevelCount(
-                resourceHandles_.screenDepthPyramid) - 1u),
+                depthHierarchyResources(resourceHandles_)
+                    .image(DepthHierarchySemantic::Nearest)) - 1u),
             static_cast<float>(frame.submissionSerial & 7u), 0.0f, 0.0f);
         ComputePipelineConfig config{};
         config.debugName = "Pipeline/ScreenSpace/GTAO/Trace";
@@ -494,10 +499,11 @@ void GtaoPass::createDescriptors(
             return set;
         };
 
+        const RenderImageHandle nearest =
+            depthHierarchyResources(resourceHandles_)
+                .image(DepthHierarchySemantic::Nearest);
         traceSets_[frame] = sampleStorageSet(
-            "Trace",
-            resources.image(resourceHandles_.screenDepthPyramid, frame)
-                .imageView(),
+            "Trace", resources.image(nearest, frame).imageView(),
             pyramidSampler, raw);
         horizontalSets_[frame] =
             sampleStorageSet("Horizontal", history, aoSampler, temp);

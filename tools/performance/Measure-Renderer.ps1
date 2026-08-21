@@ -10,7 +10,8 @@ param(
     [string]$Shader = 'PBR-lite NormalMapped',
     [ValidateSet('', 'auto', 'legacy', 'bindless')]
     [string]$MaterialBinding = '',
-    [ValidateSet('Minimal', 'Default', 'Ssao', 'Ssr', 'Ssgi')]
+    [ValidateSet('Minimal', 'Default', 'Ssao', 'Ssr', 'Ssgi', 'Taa',
+                 'Ddgi', 'SsgiDdgi')]
     [string]$Profile = 'Minimal',
     [int]$Width = 1280,
     [int]$Height = 720,
@@ -120,6 +121,15 @@ try {
             'Ssgi' {
                 $null = Invoke-Control render-settings set --gi ssgi
             }
+            'Taa' {
+                $null = Invoke-Control render-settings set --taa taa
+            }
+            'Ddgi' {
+                $null = Invoke-Control render-settings set --gi ddgi
+            }
+            'SsgiDdgi' {
+                $null = Invoke-Control render-settings set --gi ssgi-ddgi
+            }
         }
     }
 
@@ -168,6 +178,7 @@ try {
         shader = $Shader
         materialBindingRequested = if ($MaterialBinding) { $MaterialBinding } else { 'unsupported-or-default' }
         materialBindingActive = $info.diagnostics.materialBinding.active
+        renderPath = $lastStatus.renderPath
         profile = $Profile
         gui = [bool]$Gui
         extent = [ordered]@{ width = $Width; height = $Height }
@@ -180,12 +191,15 @@ try {
         renderGraph = if ($null -ne $graph) {
             [ordered]@{
                 activePasses = $graph.activePasses
+                topologyHash = $graph.topologyHash
                 dependencyEdges = $graph.dependencyEdges
                 automaticBarriers = $graph.automaticBarriers
                 layoutBarriers = $graph.layoutBarriers
                 hazardBarriers = $graph.hazardBarriers
+                executionOrder = $graph.executionOrder
             }
         } else { $null }
+        screenSpace = $lastStatus.screenSpace
         validationErrors = $info.diagnostics.validation.errorCount
     }
 

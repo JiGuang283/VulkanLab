@@ -1,5 +1,8 @@
 #include "EditorWidgets.h"
 
+#include "EditorIcons.h"
+#include "EditorTheme.h"
+
 #include <algorithm>
 #include <string>
 
@@ -112,6 +115,63 @@ bool segmentedControl(const char *id, int &selected,
     }
     ImGui::PopID();
     return changed;
+}
+
+bool iconButton(const char *id, const char *icon, const char *fallback,
+                const char *tooltip, ImVec2 size) {
+    ImGui::PushID(id);
+    const char *label = iconsAvailable() && icon ? icon : fallback;
+    const bool pressed = ImGui::Button(label, size);
+    if (tooltip && ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", tooltip);
+    ImGui::PopID();
+    return pressed;
+}
+
+bool toggleIconButton(const char *id, const char *icon,
+                      const char *fallback, const char *tooltip,
+                      bool active, ImVec2 size) {
+    if (active)
+        ImGui::PushStyleColor(ImGuiCol_Button,
+                              ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+    const bool pressed = iconButton(id, icon, fallback, tooltip, size);
+    if (active)
+        ImGui::PopStyleColor();
+    return pressed;
+}
+
+void statusChip(const char *label, StatusTone tone) {
+    const ImVec4 background = ImVec4(statusColor(tone).x,
+                                    statusColor(tone).y,
+                                    statusColor(tone).z, 0.18f);
+    ImGui::PushStyleColor(ImGuiCol_Button, background);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, background);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, background);
+    ImGui::PushStyleColor(ImGuiCol_Text, statusColor(tone));
+    ImGui::SmallButton(label);
+    ImGui::PopStyleColor(4);
+}
+
+bool sectionHeader(const char *label, bool *enabled, StatusTone tone,
+                   const char *status) {
+    if (enabled) {
+        ImGui::Checkbox((std::string("##Enable") + label).c_str(), enabled);
+        ImGui::SameLine();
+    }
+    const bool open = ImGui::CollapsingHeader(
+        label, ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap);
+    if (status) {
+        const float width = ImGui::CalcTextSize(status).x + 12.0f;
+        ImGui::SameLine(std::max(ImGui::GetCursorPosX(),
+                                 ImGui::GetWindowWidth() - width - 14.0f));
+        statusChip(status, tone);
+    }
+    return open;
+}
+
+bool resetButton(const char *id, const char *tooltip) {
+    return iconButton(id, icons::Reset, "Reset", tooltip,
+                      ImVec2(ImGui::GetFrameHeight(), 0.0f));
 }
 
 } // namespace vkr::editor

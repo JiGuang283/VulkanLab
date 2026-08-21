@@ -32,8 +32,9 @@ struct RenderSettingsSnapshot {
     RenderSettings active{};
     RenderFeatureSupport support{};
     RenderFeatureRuntimeState runtime{};
-    std::string shaderVariantId;
-    std::string shaderDisplayName;
+    RenderPathSelection renderPath{};
+    std::string viewModeId;
+    std::string viewModeDisplayName;
 };
 
 class RenderSettingsController {
@@ -41,10 +42,11 @@ class RenderSettingsController {
     explicit RenderSettingsController(const std::filesystem::path &manifestPath);
 
     const ShaderRegistry &shaderRegistry() const { return shaderRegistry_; }
-    const ShaderVariant &currentShaderVariant() const;
+    const ViewMode &currentViewMode() const;
     const RenderSettings &settings() const { return settings_; }
+    RenderPathSelection renderPathSelection() const;
 
-    void setShaderVariant(const std::string &id);
+    void setViewMode(const std::string &id);
     void apply(const RenderSettingsPatch &patch);
 
     void configure(RenderFeatureSupport support,
@@ -58,7 +60,7 @@ class RenderSettingsController {
     RenderSettings activeSettings() const;
 
     ShaderRegistry shaderRegistry_;
-    std::string currentShaderVariantId_;
+    std::string currentViewModeId_;
     RenderSettings settings_{};
     RenderFeatureSupport support_{};
     RenderFeatureRuntimeState runtime_{};

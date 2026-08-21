@@ -84,6 +84,10 @@ ShaderProgramContract parseContract(const std::string &value,
         return ShaderProgramContract::PunctualShadowDepth;
     if (value == "surface-prepass")
         return ShaderProgramContract::SurfacePrepass;
+    if (value == "gbuffer")
+        return ShaderProgramContract::GBuffer;
+    if (value == "deferred-lighting")
+        return ShaderProgramContract::DeferredLighting;
     if (value == "fullscreen")
         return ShaderProgramContract::Fullscreen;
     if (value == "compute")
@@ -138,7 +142,8 @@ void validateProgramStages(const ShaderProgram &program,
     const bool hasCompute = !program.computeSourcePath.empty();
     if (hasCompute) {
         if (hasVertex || hasFragment ||
-            program.contract != ShaderProgramContract::Compute) {
+            (program.contract != ShaderProgramContract::Compute &&
+             program.contract != ShaderProgramContract::DeferredLighting)) {
             throw fieldError(
                 field,
                 "compute programs cannot contain graphics shader stages");
@@ -150,6 +155,7 @@ void validateProgramStages(const ShaderProgram &program,
     switch (program.contract) {
     case ShaderProgramContract::MainForward:
     case ShaderProgramContract::SurfacePrepass:
+    case ShaderProgramContract::GBuffer:
     case ShaderProgramContract::Fullscreen:
         if (!hasFragment)
             throw fieldError(field,
@@ -159,6 +165,7 @@ void validateProgramStages(const ShaderProgram &program,
     case ShaderProgramContract::PunctualShadowDepth:
         break;
     case ShaderProgramContract::Compute:
+    case ShaderProgramContract::DeferredLighting:
         throw fieldError(field, "compute contract requires a compute stage");
     }
 }
@@ -174,7 +181,8 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
         Json root;
         input >> root;
         rejectUnknownFields(root, "root",
-                            {"schemaVersion", "programs", "variants"});
+                            {"schemaVersion", "programs", "variants",
+                             "materialShaderFamilies", "viewModes"});
 
         ShaderRegistry registry;
         registry.manifestPath_ =
@@ -184,7 +192,8 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
 
         const uint32_t schemaVersion =
             root.at("schemaVersion").get<uint32_t>();
-        if (schemaVersion != kSchemaVersion)
+        if (schemaVersion != kSchemaVersion &&
+            schemaVersion != kLegacySchemaVersion)
             throw fieldError("schemaVersion", "unsupported schema");
 
         const Json &programs = root.at("programs");
@@ -198,7 +207,8 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
             rejectUnknownFields(
                 item, field,
                 {"id", "contract", "vertex", "fragment", "compute",
-                 "sceneLights", "atmosphere", "screenSpace", "ddgi",
+                 "sceneLights", "clusteredLighting", "atmosphere",
+                 "screenSpace", "ddgi",
                  "materialTextures", "lightingMrt", "surfaceMrt",
                  "targetEnv"});
 
@@ -213,6 +223,8 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
             program.contract = parseContract(
                 requiredString(item, "contract", field), field + ".contract");
             program.usesSceneLights = item.value("sceneLights", false);
+            program.usesClusteredLighting =
+                item.value("clusteredLighting", false);
             program.usesAtmosphere = item.value("atmosphere", false);
             program.usesScreenSpace = item.value("screenSpace", false);
             program.usesDdgi = item.value("ddgi", false);
@@ -251,6 +263,22 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
                 throw fieldError(field + ".sceneLights",
                                  "only main-forward programs may consume "
                                  "scene lights");
+            }
+            if (program.usesClusteredLighting &&
+                program.contract != ShaderProgramContract::MainForward &&
+                program.contract !=
+                    ShaderProgramContract::DeferredLighting) {
+                throw fieldError(
+                    field + ".clusteredLighting",
+                    "only main-forward and deferred-lighting programs may "
+                    "consume clustered lighting resources");
+            }
+            if (program.contract == ShaderProgramContract::MainForward &&
+                program.usesClusteredLighting &&
+                !program.usesSceneLights) {
+                throw fieldError(field + ".clusteredLighting",
+                                 "requires sceneLights for main-forward "
+                                 "programs");
             }
             if (program.usesAtmosphere &&
                 (program.contract == ShaderProgramContract::ShadowDepth ||
@@ -338,86 +366,246 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
             registry.programs_.push_back(std::move(program));
         }
 
-        const Json &variants = root.at("variants");
-        if (!variants.is_array() || variants.empty())
-            throw fieldError("variants", "expected a non-empty array");
-        std::unordered_set<std::string> variantIds;
+        constexpr std::array<const char *,
+                             static_cast<size_t>(MaterialShaderPass::Count)>
+            familyProgramFields = {
+                "forwardOpaque", "forwardTransparent", "surfaceOpaque",
+                "surfaceMask", "gBufferOpaque", "gBufferMask",
+                "directionalShadowMask", "pointShadowMask", "spotShadowMask"};
+        constexpr std::array<ShaderProgramContract,
+                             static_cast<size_t>(MaterialShaderPass::Count)>
+            familyProgramContracts = {
+                ShaderProgramContract::MainForward,
+                ShaderProgramContract::MainForward,
+                ShaderProgramContract::SurfacePrepass,
+                ShaderProgramContract::SurfacePrepass,
+                ShaderProgramContract::GBuffer,
+                ShaderProgramContract::GBuffer,
+                ShaderProgramContract::ShadowDepth,
+                ShaderProgramContract::PunctualShadowDepth,
+                ShaderProgramContract::PunctualShadowDepth};
+
+        auto addFamily = [&](MaterialShaderFamily family,
+                             const std::string &field) {
+            if (!isStableId(family.id))
+                throw fieldError(field + ".id", "invalid stable ID");
+            const bool duplicate = std::any_of(
+                registry.materialShaders_.families_.begin(),
+                registry.materialShaders_.families_.end(),
+                [&](const MaterialShaderFamily &existing) {
+                    return existing.id == family.id;
+                });
+            if (duplicate)
+                throw fieldError(field + ".id", "duplicate family ID");
+            for (size_t pass = 0; pass < family.programIds.size(); ++pass) {
+                const std::string &programId = family.programIds[pass];
+                const auto programIt = programIndices.find(programId);
+                if (programIt == programIndices.end()) {
+                    throw fieldError(
+                        field + ".programs." + familyProgramFields[pass],
+                        "unknown program ID");
+                }
+                const ShaderProgram &program =
+                    registry.programs_[programIt->second];
+                if (program.contract != familyProgramContracts[pass]) {
+                    throw fieldError(
+                        field + ".programs." + familyProgramFields[pass],
+                        "program contract does not match material pass");
+                }
+            }
+            registry.materialShaders_.families_.push_back(std::move(family));
+        };
+
+        if (schemaVersion == kSchemaVersion) {
+            if (root.contains("variants"))
+                throw fieldError("variants", "schema v3 uses viewModes");
+            const Json &families = root.at("materialShaderFamilies");
+            if (!families.is_array() || families.empty()) {
+                throw fieldError("materialShaderFamilies",
+                                 "expected a non-empty array");
+            }
+            size_t defaultFamilyCount = 0;
+            std::string defaultFamilyId;
+            for (size_t index = 0; index < families.size(); ++index) {
+                const Json &item = families[index];
+                const std::string field =
+                    "materialShaderFamilies[" + std::to_string(index) + "]";
+                rejectUnknownFields(item, field,
+                                    {"id", "displayName", "category",
+                                     "default", "order", "programs"});
+                MaterialShaderFamily family;
+                family.id = requiredString(item, "id", field);
+                family.displayName =
+                    requiredString(item, "displayName", field);
+                family.category = requiredString(item, "category", field);
+                if (!isStableId(family.category)) {
+                    throw fieldError(field + ".category",
+                                     "invalid category ID");
+                }
+                family.isDefault = item.at("default").get<bool>();
+                family.order = item.at("order").get<int32_t>();
+                const Json &programMap = item.at("programs");
+                rejectUnknownFields(
+                    programMap, field + ".programs",
+                    {"forwardOpaque", "forwardTransparent",
+                     "surfaceOpaque", "surfaceMask",
+                     "gBufferOpaque", "gBufferMask",
+                     "directionalShadowMask", "pointShadowMask",
+                     "spotShadowMask"});
+                for (size_t pass = 0; pass < family.programIds.size(); ++pass) {
+                    family.programIds[pass] = requiredString(
+                        programMap, familyProgramFields[pass],
+                        field + ".programs");
+                }
+                if (family.isDefault) {
+                    ++defaultFamilyCount;
+                    defaultFamilyId = family.id;
+                }
+                addFamily(std::move(family), field);
+            }
+            if (defaultFamilyCount != 1) {
+                throw fieldError("materialShaderFamilies",
+                                 "expected exactly one default family");
+            }
+            const auto defaultFamilyIt = std::find_if(
+                registry.materialShaders_.families_.begin(),
+                registry.materialShaders_.families_.end(),
+                [&](const MaterialShaderFamily &family) {
+                    return family.id == defaultFamilyId;
+                });
+            registry.materialShaders_.defaultFamilyIndex_ =
+                static_cast<size_t>(defaultFamilyIt -
+                                    registry.materialShaders_.families_.begin());
+        } else {
+            MaterialShaderFamily family;
+            family.id = "builtin.default-lit";
+            family.displayName = "Default Lit";
+            family.category = "builtin";
+            family.isDefault = true;
+            family.programIds = {
+                "forward.pbr-lite-normal-mapped",
+                "forward.pbr-lite-normal-mapped",
+                "surface.prepass-opaque", "surface.prepass-mask",
+                "gbuffer.default-lit-opaque", "gbuffer.default-lit-mask",
+                "shadow.mask", "shadow.point-mask", "shadow.spot-mask"};
+            const bool hasProductionFamilyPrograms = std::all_of(
+                family.programIds.begin(), family.programIds.end(),
+                [&](const std::string &programId) {
+                    return programIndices.find(programId) !=
+                           programIndices.end();
+                });
+            if (hasProductionFamilyPrograms) {
+                addFamily(std::move(family),
+                          "schemaV2Migration.defaultFamily");
+            } else {
+                const auto fallbackProgram = std::find_if(
+                    registry.programs_.begin(), registry.programs_.end(),
+                    [](const ShaderProgram &program) {
+                        return program.contract ==
+                               ShaderProgramContract::MainForward;
+                    });
+                if (fallbackProgram == registry.programs_.end()) {
+                    throw fieldError(
+                        "schemaV2Migration.defaultFamily",
+                        "no main-forward program is available");
+                }
+                family.programIds.fill(fallbackProgram->id);
+                registry.materialShaders_.families_.push_back(std::move(family));
+            }
+            registry.materialShaders_.defaultFamilyIndex_ = 0;
+        }
+
+        const char *viewArrayName =
+            schemaVersion == kSchemaVersion ? "viewModes" : "variants";
+        const Json &views = root.at(viewArrayName);
+        if (!views.is_array() || views.empty()) {
+            throw fieldError(viewArrayName, "expected a non-empty array");
+        }
+        std::unordered_set<std::string> viewModeIds;
         std::unordered_set<std::string> displayNames;
         size_t defaultCount = 0;
         std::string defaultId;
-        for (size_t index = 0; index < variants.size(); ++index) {
-            const Json &item = variants[index];
+        for (size_t index = 0; index < views.size(); ++index) {
+            const Json &item = views[index];
             const std::string field =
-                "variants[" + std::to_string(index) + "]";
+                std::string(viewArrayName) + "[" + std::to_string(index) + "]";
             rejectUnknownFields(item, field,
                                 {"id", "displayName", "program", "category",
                                  "toneMapping", "bloom", "default", "order"});
 
-            ShaderVariant variant;
-            variant.id = requiredString(item, "id", field);
-            if (!isStableId(variant.id))
+            ViewMode viewMode;
+            viewMode.id = requiredString(item, "id", field);
+            if (!isStableId(viewMode.id))
                 throw fieldError(field + ".id", "invalid stable ID");
-            if (!variantIds.insert(variant.id).second)
-                throw fieldError(field + ".id", "duplicate variant ID");
-            variant.displayName = requiredString(item, "displayName", field);
-            if (!displayNames.insert(asciiLower(variant.displayName)).second) {
+            if (!viewModeIds.insert(viewMode.id).second)
+                throw fieldError(field + ".id", "duplicate view mode ID");
+            viewMode.displayName = requiredString(item, "displayName", field);
+            if (!displayNames.insert(asciiLower(viewMode.displayName)).second) {
                 throw fieldError(field + ".displayName",
                                  "duplicate display name");
             }
-            variant.programId = requiredString(item, "program", field);
-            const auto programIt = programIndices.find(variant.programId);
-            if (programIt == programIndices.end())
-                throw fieldError(field + ".program", "unknown program ID");
-            const ShaderProgram &program =
-                registry.programs_[programIt->second];
-            if (program.contract != ShaderProgramContract::MainForward) {
-                throw fieldError(field + ".program",
-                                 "variants require a main-forward program");
+            viewMode.overrideProgramId = optionalString(item, "program", field);
+            const ShaderProgram *program = nullptr;
+            if (!viewMode.overrideProgramId.empty()) {
+                const auto programIt =
+                    programIndices.find(viewMode.overrideProgramId);
+                if (programIt == programIndices.end())
+                    throw fieldError(field + ".program", "unknown program ID");
+                program = &registry.programs_[programIt->second];
+                if (program->contract != ShaderProgramContract::MainForward) {
+                    throw fieldError(
+                        field + ".program",
+                        "view mode overrides require a main-forward program");
+                }
+            } else {
+                const MaterialShaderFamily &defaultFamily =
+                    registry.materialShaders_.families_.at(
+                        registry.materialShaders_.defaultFamilyIndex_);
+                program = &registry.program(
+                    defaultFamily.programId(MaterialShaderPass::ForwardOpaque));
             }
-            variant.category = requiredString(item, "category", field);
-            if (!isStableId(variant.category))
+            viewMode.category = requiredString(item, "category", field);
+            if (!isStableId(viewMode.category))
                 throw fieldError(field + ".category", "invalid category ID");
-            variant.toneMapping = parseToneMapping(
+            viewMode.toneMapping = parseToneMapping(
                 requiredString(item, "toneMapping", field),
                 field + ".toneMapping");
-            variant.supportsBloom = item.value("bloom", false);
-            variant.supportsAtmosphere = program.usesAtmosphere;
-            variant.supportsScreenSpace = program.usesScreenSpace;
-            variant.supportsDdgi = program.usesDdgi;
-            variant.isDefault = item.at("default").get<bool>();
-            variant.order = item.at("order").get<int32_t>();
-            variant.vertSpvPath = program.vertSpvPath;
-            variant.fragSpvPath = program.fragSpvPath;
-            variant.bindlessFragSpvPath = program.bindlessFragSpvPath;
-            variant.colorOnlyFragSpvPath = program.colorOnlyFragSpvPath;
-            variant.bindlessColorOnlyFragSpvPath =
-                program.bindlessColorOnlyFragSpvPath;
-            variant.specularFragSpvPath = program.specularFragSpvPath;
-            variant.bindlessSpecularFragSpvPath =
-                program.bindlessSpecularFragSpvPath;
-            variant.usesLightingMrt = program.usesLightingMrt;
-            if (variant.isDefault) {
-                ++defaultCount;
-                defaultId = variant.id;
+            viewMode.supportsBloom = item.value("bloom", false);
+            viewMode.supportsAtmosphere = program->usesAtmosphere;
+            viewMode.supportsScreenSpace = program->usesScreenSpace;
+            viewMode.supportsDdgi = program->usesDdgi;
+            viewMode.supportsDeferred =
+                viewMode.overrideProgramId.empty();
+            viewMode.isDefault = item.at("default").get<bool>();
+            viewMode.order = item.at("order").get<int32_t>();
+            if (schemaVersion == kLegacySchemaVersion && viewMode.isDefault &&
+                viewMode.overrideProgramId ==
+                    "forward.pbr-lite-normal-mapped") {
+                viewMode.overrideProgramId.clear();
             }
-            registry.variants_.push_back(std::move(variant));
+            if (viewMode.isDefault) {
+                ++defaultCount;
+                defaultId = viewMode.id;
+            }
+            registry.viewModes_.push_back(std::move(viewMode));
         }
         if (defaultCount != 1)
-            throw fieldError("variants", "expected exactly one default variant");
+            throw fieldError(viewArrayName,
+                             "expected exactly one default view mode");
 
-        std::sort(registry.variants_.begin(), registry.variants_.end(),
-                  [](const ShaderVariant &left, const ShaderVariant &right) {
+        std::sort(registry.viewModes_.begin(), registry.viewModes_.end(),
+                  [](const ViewMode &left, const ViewMode &right) {
                       if (left.order != right.order)
                           return left.order < right.order;
                       return left.id < right.id;
                   });
         const auto defaultIt =
-            std::find_if(registry.variants_.begin(), registry.variants_.end(),
-                         [&defaultId](const ShaderVariant &variant) {
-                             return variant.id == defaultId;
+            std::find_if(registry.viewModes_.begin(), registry.viewModes_.end(),
+                         [&defaultId](const ViewMode &viewMode) {
+                             return viewMode.id == defaultId;
                          });
-        registry.defaultVariantIndex_ =
-            static_cast<size_t>(defaultIt - registry.variants_.begin());
+        registry.defaultViewModeIndex_ =
+            static_cast<size_t>(defaultIt - registry.viewModes_.begin());
         return registry;
     } catch (const std::exception &exception) {
         throw std::runtime_error("Could not load shader manifest '" +
@@ -426,28 +614,78 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
     }
 }
 
-const ShaderVariant &ShaderRegistry::defaultVariant() const {
-    if (variants_.empty() || defaultVariantIndex_ >= variants_.size())
-        throw std::logic_error("shader registry has no default variant");
-    return variants_[defaultVariantIndex_];
+const ViewMode &ShaderRegistry::defaultViewMode() const {
+    if (viewModes_.empty() || defaultViewModeIndex_ >= viewModes_.size())
+        throw std::logic_error("shader registry has no default view mode");
+    return viewModes_[defaultViewModeIndex_];
 }
 
-const ShaderVariant *
-ShaderRegistry::findVariant(std::string_view idOrDisplayName) const {
+const ViewMode *
+ShaderRegistry::findViewMode(std::string_view idOrDisplayName) const {
     const auto byId =
-        std::find_if(variants_.begin(), variants_.end(),
-                     [idOrDisplayName](const ShaderVariant &variant) {
-                         return variant.id == idOrDisplayName;
+        std::find_if(viewModes_.begin(), viewModes_.end(),
+                     [idOrDisplayName](const ViewMode &viewMode) {
+                         return viewMode.id == idOrDisplayName;
                      });
-    if (byId != variants_.end())
+    if (byId != viewModes_.end())
         return &*byId;
     const std::string lowered = asciiLower(std::string(idOrDisplayName));
     const auto byName =
-        std::find_if(variants_.begin(), variants_.end(),
-                     [&lowered](const ShaderVariant &variant) {
-                         return asciiLower(variant.displayName) == lowered;
+        std::find_if(viewModes_.begin(), viewModes_.end(),
+                     [&lowered](const ViewMode &viewMode) {
+                         return asciiLower(viewMode.displayName) == lowered;
                      });
-    return byName == variants_.end() ? nullptr : &*byName;
+    return byName == viewModes_.end() ? nullptr : &*byName;
+}
+
+MaterialShaderFamilyHandle
+ShaderRegistry::defaultMaterialShaderFamily() const {
+    return materialShaders_.defaultFamily();
+}
+
+MaterialShaderFamilyHandle
+ShaderRegistry::findMaterialShaderFamily(std::string_view id) const {
+    return materialShaders_.find(id);
+}
+
+const MaterialShaderFamily &ShaderRegistry::materialShaderFamily(
+    MaterialShaderFamilyHandle handle) const {
+    return materialShaders_.get(handle);
+}
+
+MaterialShaderFamilyHandle
+MaterialShaderFamilyRegistry::defaultFamily() const {
+    if (families_.empty() || defaultFamilyIndex_ >= families_.size())
+        throw std::logic_error("shader registry has no default material family");
+    return {static_cast<uint32_t>(defaultFamilyIndex_)};
+}
+
+MaterialShaderFamilyHandle
+MaterialShaderFamilyRegistry::find(std::string_view id) const {
+    const auto found = std::find_if(
+        families_.begin(), families_.end(),
+        [id](const MaterialShaderFamily &family) { return family.id == id; });
+    if (found == families_.end())
+        return {};
+    return {static_cast<uint32_t>(found - families_.begin())};
+}
+
+const MaterialShaderFamily &MaterialShaderFamilyRegistry::get(
+    MaterialShaderFamilyHandle handle) const {
+    if (!handle.valid() || handle.index >= families_.size())
+        throw std::out_of_range("invalid material shader family handle");
+    return families_[handle.index];
+}
+
+const ShaderProgram &ShaderRegistry::materialProgram(
+    MaterialShaderFamilyHandle family, MaterialShaderPass pass,
+    const ViewMode *viewMode) const {
+    if ((pass == MaterialShaderPass::ForwardOpaque ||
+         pass == MaterialShaderPass::ForwardTransparent) &&
+        viewMode && viewMode->overridesMaterialShader()) {
+        return program(viewMode->overrideProgramId);
+    }
+    return program(materialShaderFamily(family).programId(pass));
 }
 
 const ShaderProgram *ShaderRegistry::findProgram(std::string_view id) const {
@@ -509,6 +747,10 @@ const char *shaderProgramContractName(ShaderProgramContract contract) {
         return "punctual-shadow-depth";
     case ShaderProgramContract::SurfacePrepass:
         return "surface-prepass";
+    case ShaderProgramContract::GBuffer:
+        return "gbuffer";
+    case ShaderProgramContract::DeferredLighting:
+        return "deferred-lighting";
     case ShaderProgramContract::Fullscreen:
         return "fullscreen";
     case ShaderProgramContract::Compute:
@@ -524,6 +766,32 @@ shaderToneMappingPolicyName(ShaderToneMappingPolicy policy) {
         return "pass-through";
     case ShaderToneMappingPolicy::Configurable:
         return "configurable";
+    }
+    return "unknown";
+}
+
+const char *materialShaderPassName(MaterialShaderPass pass) {
+    switch (pass) {
+    case MaterialShaderPass::ForwardOpaque:
+        return "forward-opaque";
+    case MaterialShaderPass::ForwardTransparent:
+        return "forward-transparent";
+    case MaterialShaderPass::SurfaceOpaque:
+        return "surface-opaque";
+    case MaterialShaderPass::SurfaceMask:
+        return "surface-mask";
+    case MaterialShaderPass::GBufferOpaque:
+        return "gbuffer-opaque";
+    case MaterialShaderPass::GBufferMask:
+        return "gbuffer-mask";
+    case MaterialShaderPass::DirectionalShadowMask:
+        return "directional-shadow-mask";
+    case MaterialShaderPass::PointShadowMask:
+        return "point-shadow-mask";
+    case MaterialShaderPass::SpotShadowMask:
+        return "spot-shadow-mask";
+    case MaterialShaderPass::Count:
+        break;
     }
     return "unknown";
 }

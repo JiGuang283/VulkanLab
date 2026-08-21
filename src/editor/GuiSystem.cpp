@@ -22,7 +22,8 @@ static void imguiCheckVkResult(VkResult err) {
 
 GuiSystem::GuiSystem(VkInstance instance, Device &device,
                      VkFormat colorFormat, GLFWwindow *window,
-                     uint32_t minImageCount, uint32_t imageCount)
+                     uint32_t minImageCount, uint32_t imageCount,
+                     GuiSystemConfig config)
     : device_(&device) {
     // --- descriptor pool just for ImGui ---
     VkDescriptorPoolSize poolSize{};
@@ -44,8 +45,16 @@ GuiSystem::GuiSystem(VkInstance instance, Device &device,
     // --- ImGui context ---
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    editor::applyEditorTheme(window);
+    ImGuiIO &io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    if (!config.layoutPath.empty()) {
+        std::error_code error;
+        std::filesystem::create_directories(config.layoutPath.parent_path(),
+                                            error);
+        layoutPathUtf8_ = config.layoutPath.u8string();
+        io.IniFilename = layoutPathUtf8_.c_str();
+    }
+    editor::applyEditorTheme(window, config.iconFontPath);
 
     // --- GLFW backend (install_callbacks=true chains existing callbacks) ---
     ImGui_ImplGlfw_InitForVulkan(window, true);

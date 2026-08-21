@@ -41,10 +41,52 @@ struct SurfaceDataSupport {
     std::string albedoMetallicReason;
 };
 
+struct GBufferSupport {
+    bool available = false;
+    VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+    VkFormat baseColorMetallicFormat = VK_FORMAT_R8G8B8A8_UNORM;
+    VkFormat normalRoughnessOcclusionFormat =
+        VK_FORMAT_R16G16B16A16_SFLOAT;
+    VkFormat emissiveSurfaceFlagsFormat =
+        VK_FORMAT_R16G16B16A16_SFLOAT;
+    VkFormat motionFormat = VK_FORMAT_R16G16_SFLOAT;
+    uint32_t requiredColorAttachments = 4;
+    std::string reason;
+};
+
 struct OcclusionCullingSupport {
     bool available = false;
     VkFormat hiZFormat = VK_FORMAT_R32_SFLOAT;
     std::string reason;
+};
+
+enum class DepthHierarchyMode {
+    Unavailable,
+    SplitR32,
+    CombinedMinMax,
+};
+
+inline const char *depthHierarchyModeName(DepthHierarchyMode mode) {
+    switch (mode) {
+    case DepthHierarchyMode::Unavailable:
+        return "unavailable";
+    case DepthHierarchyMode::SplitR32:
+        return "split-r32";
+    case DepthHierarchyMode::CombinedMinMax:
+        return "combined-min-max";
+    }
+    return "unavailable";
+}
+
+struct DepthHierarchySupport {
+    DepthHierarchyMode mode = DepthHierarchyMode::Unavailable;
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    std::string reason;
+
+    bool available() const { return mode != DepthHierarchyMode::Unavailable; }
+    bool combined() const {
+        return mode == DepthHierarchyMode::CombinedMinMax;
+    }
 };
 
 struct ScreenSpaceEffectsSupport {
@@ -132,11 +174,15 @@ class Device {
     const SurfaceDataSupport &surfaceDataSupport() const {
         return surfaceDataSupport_;
     }
+    const GBufferSupport &gBufferSupport() const { return gBufferSupport_; }
     const OcclusionCullingSupport &occlusionCullingSupport() const {
         return occlusionCullingSupport_;
     }
     const ScreenSpaceEffectsSupport &screenSpaceEffectsSupport() const {
         return screenSpaceEffectsSupport_;
+    }
+    const DepthHierarchySupport &depthHierarchySupport() const {
+        return depthHierarchySupport_;
     }
     const CacaoSupport &cacaoSupport() const { return cacaoSupport_; }
     const RayQuerySupport &rayQuerySupport() const {
@@ -145,6 +191,9 @@ class Device {
     const DdgiSupport &ddgiSupport() const { return ddgiSupport_; }
     const MaterialBindingDeviceSupport &materialBindingSupport() const {
         return materialBindingSupport_;
+    }
+    bool graphicsQueueSupportsCompute() const {
+        return graphicsQueueSupportsCompute_;
     }
 
     VkDeviceAddress bufferDeviceAddress(VkBuffer buffer) const;
@@ -203,14 +252,17 @@ class Device {
     ComputeBloomSupport computeBloomSupport_{};
     AtmosphereSupport atmosphereSupport_{};
     SurfaceDataSupport surfaceDataSupport_{};
+    GBufferSupport gBufferSupport_{};
     OcclusionCullingSupport occlusionCullingSupport_{};
     ScreenSpaceEffectsSupport screenSpaceEffectsSupport_{};
+    DepthHierarchySupport depthHierarchySupport_{};
     CacaoSupport cacaoSupport_{};
     RayQuerySupport rayQuerySupport_{};
     DdgiSupport ddgiSupport_{};
     MaterialBindingMode requestedMaterialBindingMode_ =
         MaterialBindingMode::Auto;
     MaterialBindingDeviceSupport materialBindingSupport_{};
+    bool graphicsQueueSupportsCompute_ = false;
     std::vector<const char *> enabledDeviceExtensions_;
     PFN_vkCreateAccelerationStructureKHR createAccelerationStructure_ =
         nullptr;

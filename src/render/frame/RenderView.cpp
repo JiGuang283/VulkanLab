@@ -344,8 +344,16 @@ RenderView buildRenderView(const RenderViewInput &input,
 
     // Fill cascade view-projection matrices into UBO
     for (uint32_t c = 0; c < kCsmCascadeCount; ++c) {
-        result.globalUbo.cascadeViewProj[c] =
-            result.shadow.csm.cascades[c].lightViewProjection;
+        const CsmCascadeData &cascade = result.shadow.csm.cascades[c];
+        result.globalUbo.cascadeViewProj[c] = cascade.lightViewProjection;
+        result.lightStats.csmCascades[c] = {
+            cascade.nearDistance,
+            cascade.splitDistance,
+            cascade.blendStartDistance,
+            cascade.stableRadius,
+            cascade.worldUnitsPerTexel,
+            cascade.valid,
+        };
     }
     // Pack cascade split depths (view-space Z) into vec4
     result.globalUbo.cascadeSplits =
@@ -353,6 +361,11 @@ RenderView buildRenderView(const RenderViewInput &input,
                   result.shadow.csm.splitDepths[1],
                   result.shadow.csm.splitDepths[2],
                   result.shadow.csm.splitDepths[3]);
+    result.globalUbo.cascadeBlendStarts =
+        glm::vec4(result.shadow.csm.cascades[0].blendStartDistance,
+                  result.shadow.csm.cascades[1].blendStartDistance,
+                  result.shadow.csm.cascades[2].blendStartDistance,
+                  result.shadow.csm.cascades[3].blendStartDistance);
     result.globalUbo.shadowParams =
         glm::vec4(result.shadow.csm.enabled ? 1.0f : 0.0f,
                    result.settings.shadowReceiverBias,

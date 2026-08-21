@@ -34,33 +34,43 @@ vkr::PipelineConfig baseConfig() {
     return config;
 }
 
+vkr::PipelineRenderingSignature baseSignature() {
+    vkr::PipelineRenderingSignature signature;
+    signature.colorAttachmentFormats = {VK_FORMAT_R16G16B16A16_SFLOAT};
+    signature.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+    return signature;
+}
+
 template <typename Mutate>
 void requireMutationChangesKey(Mutate mutate, const char *message) {
-    const VkRenderPass renderPass = fakeHandle<VkRenderPass>(1);
-    const vkr::PipelineKey original{renderPass, baseConfig()};
+    const vkr::PipelineRenderingSignature signature = baseSignature();
+    const vkr::PipelineKey original{signature, baseConfig()};
     vkr::PipelineConfig changed = baseConfig();
     mutate(changed);
-    const vkr::PipelineKey mutated{renderPass, std::move(changed)};
+    const vkr::PipelineKey mutated{signature, std::move(changed)};
     requirePipelineKey(!(original == mutated), message);
 }
 
 void testEquivalentConfigsShareIdentity() {
-    const vkr::PipelineKey first{fakeHandle<VkRenderPass>(1), baseConfig()};
-    const vkr::PipelineKey second{fakeHandle<VkRenderPass>(1), baseConfig()};
+    const vkr::PipelineKey first{baseSignature(), baseConfig()};
+    const vkr::PipelineKey second{baseSignature(), baseConfig()};
     requirePipelineKey(first == second,
                        "equivalent pipeline configs have different keys");
     requirePipelineKey(vkr::PipelineKeyHash{}(first) ==
                            vkr::PipelineKeyHash{}(second),
                        "equivalent pipeline configs have different hashes");
 
-    const vkr::PipelineKey otherPass{fakeHandle<VkRenderPass>(2),
-                                     baseConfig()};
-    requirePipelineKey(!(first == otherPass),
-                       "render pass was omitted from pipeline identity");
+    vkr::PipelineRenderingSignature otherSignature = baseSignature();
+    otherSignature.colorAttachmentFormats = {VK_FORMAT_R8G8B8A8_UNORM};
+    const vkr::PipelineKey otherRendering{std::move(otherSignature),
+                                          baseConfig()};
+    requirePipelineKey(
+        !(first == otherRendering),
+        "dynamic rendering signature was omitted from pipeline identity");
 
     vkr::PipelineConfig renamedConfig = baseConfig();
     renamedConfig.debugName = "Pipeline/DiagnosticsOnly";
-    const vkr::PipelineKey renamed{fakeHandle<VkRenderPass>(1),
+    const vkr::PipelineKey renamed{baseSignature(),
                                    std::move(renamedConfig)};
     requirePipelineKey(first == renamed,
                        "diagnostic pipeline name changed cache identity");

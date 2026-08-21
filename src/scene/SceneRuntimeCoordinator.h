@@ -6,6 +6,7 @@
 #include "render/IRenderWorld.h"
 #include "scene/ModelPrepareFactory.h"
 #include "scene/SceneLoadTask.h"
+#include "render/shader/ShaderTypes.h"
 
 #include <cstdint>
 #include <deque>
@@ -25,6 +26,7 @@ class Device;
 class FrameSync;
 class MaterialSystem;
 class Renderer;
+class ShaderRegistry;
 class SceneCatalog;
 class SceneLoadManager;
 struct CatalogEnvironment;
@@ -62,6 +64,7 @@ class SceneRuntimeCoordinator {
     SceneRuntimeCoordinator(
         Device &device, DescriptorAllocator &descriptorAllocator,
         MaterialSystem &materialSystem, Renderer &renderer,
+        const ShaderRegistry &shaderRegistry,
         FrameSync &frameSync, Camera &camera,
         const ProjectContext &projectContext, const SceneCatalog &catalog,
         const std::vector<SceneEntry> &sceneRegistry,

@@ -583,13 +583,13 @@ bool RuntimeControlAdapter::hasUnsavedSceneChanges() const {
     return actions_.hasUnsavedChanges && actions_.hasUnsavedChanges();
 }
 
-void RuntimeControlAdapter::setShaderVariant(const std::string &id) {
+void RuntimeControlAdapter::setViewMode(const std::string &id) {
     try {
-        const std::string previous = currentShaderVariant().id;
-        renderSettingsController_->setShaderVariant(id);
+        const std::string previous = currentViewMode().id;
+        renderSettingsController_->setViewMode(id);
         if (previous != id) {
-            VKR_LOG_INFO("Renderer", "Shader variant switched to {}",
-                         currentShaderVariant().displayName);
+            VKR_LOG_INFO("Renderer", "View mode switched to {}",
+                         currentViewMode().displayName);
         }
     } catch (const RenderSettingsError &error) {
         throw RuntimeCommandError(error.code(), error.what());
@@ -609,9 +609,8 @@ const RenderSettings &RuntimeControlAdapter::renderSettings() const {
     return renderSettingsController_->settings();
 }
 
-const ShaderVariant &
-RuntimeControlAdapter::currentShaderVariant() const {
-    return renderSettingsController_->currentShaderVariant();
+const ViewMode &RuntimeControlAdapter::currentViewMode() const {
+    return renderSettingsController_->currentViewMode();
 }
 
 int RuntimeControlAdapter::findSceneIndexByName(
@@ -644,7 +643,8 @@ ControlJson RuntimeControlAdapter::runtimeSystemInfo() {
     ControlJson capabilities = {"async_scene_load", "load_status",
                                 "load_cancel", "asset_catalog",
                                 "camera_control", "render_status",
-                                "render_settings", "environment"};
+                                "render_settings", "render_path",
+                                "environment"};
     if (sceneWorkflow_->assetAuthoringAvailable()) {
         capabilities.push_back("asset_import");
         capabilities.push_back("asset_cancel");
@@ -653,7 +653,12 @@ ControlJson RuntimeControlAdapter::runtimeSystemInfo() {
         capabilities.push_back("capture");
     if (config_.diagnostics.automationMode)
         capabilities.push_back("window_resize");
-    const ShaderVariant *shader = &currentShaderVariant();
+    const ViewMode *viewMode = &currentViewMode();
+    const ShaderRegistry &shaderRegistry =
+        renderSettingsController_->shaderRegistry();
+    const ShaderProgram &effectiveProgram = shaderRegistry.materialProgram(
+        shaderRegistry.defaultMaterialShaderFamily(),
+        MaterialShaderPass::ForwardOpaque, viewMode);
     const MaterialBindingStatus &materialBinding = materialSystem_->status();
     const ValidationStatus validation = context_->validationStatus();
     const ControlJson validationFallback =
@@ -749,16 +754,18 @@ ControlJson RuntimeControlAdapter::runtimeSystemInfo() {
         {"cacheRoot", sceneLoadContext_.derivedTextureCachePath},
         {"captureRoot", projectContext_.captureRoot.u8string()},
         {"textureLimit", sceneLoadContext_.maxTextureSize},
-        {"shader", shader->displayName},
+        {"shader", viewMode->displayName},
         {"shaderInfo",
-         {{"id", shader->id},
-          {"name", shader->displayName},
-          {"category", shader->category},
+         {{"id", viewMode->id},
+          {"name", viewMode->displayName},
+          {"category", viewMode->category},
+          {"kind", "viewMode"},
           {"toneMapping",
-           shaderToneMappingPolicyName(shader->toneMapping)},
-          {"vertexSha256", sha256File(shader->vertSpvPath)},
+           shaderToneMappingPolicyName(viewMode->toneMapping)},
+          {"effectiveProgram", effectiveProgram.id},
+          {"vertexSha256", sha256File(effectiveProgram.vertSpvPath)},
           {"fragmentSha256",
-           sha256File(shader->fragmentSpvPath(
+           sha256File(effectiveProgram.fragmentSpvPath(
                materialSystem_->activeMode()))}}},
         {"loadTask", sceneLoadTaskToJson(sceneRuntime_->latestSceneLoadTask())}};
 }
@@ -1132,33 +1139,36 @@ ControlJson RuntimeControlAdapter::runtimeAssetCacheInfo() {
 ControlJson RuntimeControlAdapter::runtimeShaderList() {
     ControlJson shaders = ControlJson::array();
     ControlJson entries = ControlJson::array();
-    for (const auto &variant : renderSettingsController_->shaderRegistry().variants()) {
-        shaders.push_back(variant.displayName);
+    for (const auto &viewMode : renderSettingsController_->shaderRegistry().viewModes()) {
+        shaders.push_back(viewMode.displayName);
         entries.push_back(
-            {{"id", variant.id},
-             {"name", variant.displayName},
-             {"category", variant.category},
+            {{"id", viewMode.id},
+             {"name", viewMode.displayName},
+             {"category", viewMode.category},
              {"toneMapping",
-              shaderToneMappingPolicyName(variant.toneMapping)},
-             {"bloom", variant.supportsBloom},
-             {"default", variant.isDefault}});
+              shaderToneMappingPolicyName(viewMode.toneMapping)},
+             {"bloom", viewMode.supportsBloom},
+             {"default", viewMode.isDefault},
+             {"kind", "viewMode"}});
     }
     return {{"shaders", std::move(shaders)},
             {"entries", std::move(entries)}};
 }
 
 ControlJson RuntimeControlAdapter::runtimeShaderCurrent() {
-    const ShaderVariant &variant = currentShaderVariant();
-    return {{"id", variant.id},
-            {"name", variant.displayName},
-            {"bloom", variant.supportsBloom}};
+    const ViewMode &viewMode = currentViewMode();
+    return {{"id", viewMode.id},
+            {"name", viewMode.displayName},
+            {"bloom", viewMode.supportsBloom},
+            {"kind", "viewMode"}};
 }
 
 ControlJson RuntimeControlAdapter::runtimeShaderSet(const std::string &name) {
-    const ShaderVariant *variant = renderSettingsController_->shaderRegistry().findVariant(name);
-    if (!variant) {
+    const ViewMode *viewMode =
+        renderSettingsController_->shaderRegistry().findViewMode(name);
+    if (!viewMode) {
         ControlJson candidates = ControlJson::array();
-        for (const auto &candidate : renderSettingsController_->shaderRegistry().variants()) {
+        for (const auto &candidate : renderSettingsController_->shaderRegistry().viewModes()) {
             candidates.push_back(
                 {{"id", candidate.id}, {"name", candidate.displayName}});
         }
@@ -1167,8 +1177,10 @@ ControlJson RuntimeControlAdapter::runtimeShaderSet(const std::string &name) {
             "Unknown shader '" + name + "'. Available shaders: " +
                 candidates.dump());
     }
-    setShaderVariant(variant->id);
-    return {{"id", variant->id}, {"shader", variant->displayName}};
+    setViewMode(viewMode->id);
+    return {{"id", viewMode->id},
+            {"shader", viewMode->displayName},
+            {"kind", "viewMode"}};
 }
 
 ControlJson RuntimeControlAdapter::runtimeCameraGet() {
@@ -1305,6 +1317,15 @@ ControlJson RuntimeControlAdapter::runtimeRenderStatus() {
     ControlJson graphCulledPasses = ControlJson::array();
     for (const std::string &name : graph.culledNames)
         graphCulledPasses.push_back(name);
+    ControlJson graphPasses = ControlJson::array();
+    for (const auto &pass : graph.passes) {
+        graphPasses.push_back(
+            {{"name", pass.name},
+             {"group", pass.groupName},
+             {"type", std::string(rgPassTypeName(pass.type))},
+             {"queue", std::string(rgQueueClassName(pass.queue))},
+             {"active", pass.active}});
+    }
     ControlJson graphResources = ControlJson::array();
     for (const auto &resource : graph.resources) {
         graphResources.push_back(
@@ -1454,6 +1475,12 @@ ControlJson RuntimeControlAdapter::runtimeRenderStatus() {
     const OcclusionCullingStatus cullingStatus =
         renderer_->occlusionCullingStatus();
     const SurfaceDataStatus surfaceStatus = renderer_->surfaceDataStatus();
+    const GBufferRuntimeStatus gBufferStatus = renderer_->gBufferStatus();
+    const DeferredLightingRuntimeStatus deferredLightingStatus =
+        renderer_->deferredLightingStatus();
+    const ClusteredLightingStatus clusteredLightingStatus =
+        renderer_->clusteredLightingStatus();
+    const RenderPathStatus renderPathStatus = renderer_->renderPathStatus();
     const ScreenSpaceEffectsStatus screenSpaceStatus =
         renderer_->screenSpaceEffectsStatus();
     const ReflectionProbeRuntimeStatus reflectionProbeStatus =
@@ -1486,6 +1513,27 @@ ControlJson RuntimeControlAdapter::runtimeRenderStatus() {
     ControlJson indirectCapacities = ControlJson::array();
     for (const uint32_t capacity : cullingStatus.indirectCapacities)
         indirectCapacities.push_back(capacity);
+    ControlJson directionalShadowCascades = ControlJson::array();
+    for (uint32_t cascade = 0; cascade < kCsmCascadeCount; ++cascade) {
+        const CsmCascadeDiagnostics &diagnostics =
+            lastLightStats_.csmCascades[cascade];
+        directionalShadowCascades.push_back(
+            {{"index", cascade},
+             {"valid", diagnostics.valid},
+             {"nearDistance", diagnostics.nearDistance},
+             {"splitDistance", diagnostics.splitDistance},
+             {"blendStartDistance", diagnostics.blendStartDistance},
+             {"stableRadius", diagnostics.stableRadius},
+             {"worldUnitsPerTexel", diagnostics.worldUnitsPerTexel},
+             {"candidates",
+              visibilityFrame_.cpuStats
+                  .directionalShadowCandidates[cascade]},
+             {"draws",
+              visibilityFrame_.cpuStats.directionalShadowDraws[cascade]},
+             {"culled",
+              visibilityFrame_.cpuStats
+                  .directionalShadowCulled[cascade]}});
+    }
     ControlJson surfaceHistoryCapacities = ControlJson::array();
     for (const uint32_t capacity : surfaceStatus.historyCapacities)
         surfaceHistoryCapacities.push_back(capacity);
@@ -1642,6 +1690,38 @@ ControlJson RuntimeControlAdapter::runtimeRenderStatus() {
           {"uploadedSpot", lastLightStats_.spotLights},
           {"uploadedPunctual", lastLightStats_.punctualLights},
           {"uploadedTotal", lastLightStats_.totalLights},
+          {"clustered",
+           {{"supported", clusteredLightingStatus.supported},
+            {"active", clusteredLightingStatus.active},
+            {"unavailableReason",
+             clusteredLightingStatus.unavailableReason},
+            {"viewport",
+             {{"width", clusteredLightingStatus.viewport.width},
+              {"height", clusteredLightingStatus.viewport.height}}},
+            {"tileSize", clusteredLightingStatus.tileSize},
+            {"tilesX", clusteredLightingStatus.tilesX},
+            {"tilesY", clusteredLightingStatus.tilesY},
+            {"depthSlices", clusteredLightingStatus.depthSlices},
+            {"clusterCount", clusteredLightingStatus.clusterCount},
+            {"maxLightsPerCluster",
+             clusteredLightingStatus.maxLightsPerCluster},
+            {"punctualLightCount",
+             clusteredLightingStatus.punctualLightCount},
+            {"nonEmptyClusters",
+             clusteredLightingStatus.nonEmptyClusters},
+            {"totalLightReferences",
+             clusteredLightingStatus.totalLightReferences},
+            {"maxLightReferences",
+             clusteredLightingStatus.maxLightReferences},
+            {"averageLightReferences",
+             clusteredLightingStatus.averageLightReferences},
+            {"overflowClusters",
+             clusteredLightingStatus.overflowClusters},
+            {"overflowLightReferences",
+             clusteredLightingStatus.overflowLightReferences},
+            {"allocatedBytes", clusteredLightingStatus.allocatedBytes},
+            {"completedFrameSerial",
+             clusteredLightingStatus.completedFrameSerial}}},
           {"pointShadowLights", lastLightStats_.pointShadowLights},
           {"spotShadowLights", lastLightStats_.spotShadowLights},
           {"maxPointShadowLights", renderSettings().maxPointShadowLights},
@@ -1656,6 +1736,8 @@ ControlJson RuntimeControlAdapter::runtimeRenderStatus() {
            lastLightStats_.shadowTemporalReactive},
           {"shadowReactiveFramesRemaining",
            lastLightStats_.shadowReactiveFramesRemaining},
+          {"directionalShadowCascades",
+           std::move(directionalShadowCascades)},
            {"pointShadowSelections", std::move(pointShadowSelections)},
            {"spotShadowSelections", std::move(spotShadowSelections)},
            {"shadowEvictions", std::move(shadowEvictions)},
@@ -1684,6 +1766,10 @@ ControlJson RuntimeControlAdapter::runtimeRenderStatus() {
           {"shadowVisible", visibilityFrame_.cpuStats.shadowVisible},
           {"directionalShadowDraws",
            visibilityFrame_.cpuStats.directionalShadowDraws},
+          {"directionalShadowCandidates",
+           visibilityFrame_.cpuStats.directionalShadowCandidates},
+          {"directionalShadowCulled",
+           visibilityFrame_.cpuStats.directionalShadowCulled},
           {"pointShadowDraws",
            visibilityFrame_.cpuStats.pointShadowDraws},
           {"spotShadowDraws",
@@ -1701,6 +1787,86 @@ ControlJson RuntimeControlAdapter::runtimeRenderStatus() {
           {"hiZMipLevels", cullingStatus.hiZMipLevels},
           {"indirectCapacities", std::move(indirectCapacities)},
           {"allocatedBytes", cullingStatus.allocatedBytes}}},
+        {"renderPath",
+         {{"requested",
+           std::string(renderPathRequestName(renderPathStatus.requested))},
+          {"active", std::string(renderPathModeName(renderPathStatus.active))},
+          {"viewMode", renderPathStatus.viewMode},
+          {"unavailableReason", renderPathStatus.unavailableReason},
+          {"capabilities",
+           {{"forward", renderPathStatus.capabilities.forward},
+            {"deferred", renderPathStatus.capabilities.deferred},
+            {"multisampledOpaque",
+             renderPathStatus.capabilities.multisampledOpaque},
+            {"forwardTransparent",
+             renderPathStatus.capabilities.forwardTransparent},
+            {"gBuffer", renderPathStatus.capabilities.gBuffer}}},
+          {"opaqueProducts",
+           {{"hdrColor", renderPathStatus.products.hdrColor},
+            {"depth", renderPathStatus.products.depth},
+            {"sampledDepth", renderPathStatus.products.sampledDepth},
+            {"normalRoughness",
+             renderPathStatus.products.normalRoughness},
+            {"motion", renderPathStatus.products.motion},
+            {"baselineDiffuse",
+             renderPathStatus.products.baselineDiffuse},
+            {"baselineSpecular",
+             renderPathStatus.products.baselineSpecular},
+            {"multisampled", renderPathStatus.products.multisampled},
+            {"colorAttachmentCount",
+             renderPathStatus.products.colorAttachmentCount}}},
+          {"gBufferContract",
+           {{"defined", renderPathStatus.gBuffer.defined},
+            {"implemented", renderPathStatus.gBuffer.implemented},
+            {"attachmentCount",
+             renderPathStatus.gBuffer.attachmentCount},
+            {"nominalBytesPerPixel",
+             renderPathStatus.gBuffer.nominalBytesPerPixel},
+            {"baseColorMetallicFormat",
+             static_cast<int32_t>(
+                 renderPathStatus.gBuffer.baseColorMetallicFormat)},
+            {"normalRoughnessOcclusionFormat",
+             static_cast<int32_t>(renderPathStatus.gBuffer
+                                      .normalRoughnessOcclusionFormat)},
+            {"emissiveSurfaceFlagsFormat",
+             static_cast<int32_t>(renderPathStatus.gBuffer
+                                      .emissiveSurfaceFlagsFormat)},
+            {"motionFormat",
+             static_cast<int32_t>(renderPathStatus.gBuffer.motionFormat)}}},
+          {"gBuffer",
+           {{"supported", gBufferStatus.supported},
+            {"active", gBufferStatus.active},
+            {"unavailableReason", gBufferStatus.unavailableReason},
+            {"debugView",
+             gBufferDebugViewName(renderSettings().gBufferDebugView)},
+            {"width", gBufferStatus.extent.width},
+            {"height", gBufferStatus.extent.height},
+            {"depthFormat", static_cast<int32_t>(gBufferStatus.depthFormat)},
+            {"baseColorMetallicFormat",
+             static_cast<int32_t>(gBufferStatus.baseColorMetallicFormat)},
+            {"normalRoughnessOcclusionFormat",
+             static_cast<int32_t>(
+                 gBufferStatus.normalRoughnessOcclusionFormat)},
+            {"emissiveSurfaceFlagsFormat",
+             static_cast<int32_t>(
+                 gBufferStatus.emissiveSurfaceFlagsFormat)},
+            {"motionFormat",
+             static_cast<int32_t>(gBufferStatus.motionFormat)},
+            {"drawCount", gBufferStatus.drawCount},
+            {"residentBytes", gBufferStatus.residentBytes}}},
+          {"deferredLighting",
+           {{"supported", deferredLightingStatus.supported},
+            {"active", deferredLightingStatus.active},
+            {"unavailableReason",
+             deferredLightingStatus.unavailableReason},
+            {"debugView", deferredLightingDebugViewName(
+                              deferredLightingStatus.debugView)},
+            {"width", deferredLightingStatus.extent.width},
+            {"height", deferredLightingStatus.extent.height},
+            {"dispatchX", deferredLightingStatus.dispatchX},
+            {"dispatchY", deferredLightingStatus.dispatchY},
+            {"residentBytes",
+             deferredLightingStatus.residentBytes}}}}},
         {"surfaceData",
          {{"supported", surfaceStatus.supported},
           {"active", surfaceStatus.active},
@@ -1712,6 +1878,7 @@ ControlJson RuntimeControlAdapter::runtimeRenderStatus() {
           {"normalRoughnessFormat",
            static_cast<int32_t>(surfaceStatus.normalRoughnessFormat)},
           {"motionFormat", static_cast<int32_t>(surfaceStatus.motionFormat)},
+          {"surfaceFlagsAbi", surfaceStatus.surfaceFlagsAbi},
           {"historyGeneration", visibilityFrame_.history.historyGeneration},
           {"historyValidItems", visibilityFrame_.history.historyValidItems},
           {"itemCount", visibilityFrame_.items.size()},
@@ -1738,6 +1905,18 @@ ControlJson RuntimeControlAdapter::runtimeRenderStatus() {
                             renderSettings().screenSpaceDebugView)},
           {"debugMip", renderSettings().screenSpaceDebugMip},
           {"depthMipLevels", screenSpaceStatus.depthMipLevels},
+          {"depthHierarchyMode",
+           depthHierarchyModeName(screenSpaceStatus.depthHierarchyMode)},
+          {"depthHierarchyFormat",
+           static_cast<int32_t>(screenSpaceStatus.depthHierarchyFormat)},
+          {"depthHierarchyDispatches",
+           screenSpaceStatus.depthHierarchyDispatches},
+          {"depthHierarchyResidentBytes",
+           screenSpaceStatus.depthHierarchyResidentBytes},
+          {"depthHierarchySplitBaselineBytes",
+           screenSpaceStatus.depthHierarchySplitBaselineBytes},
+          {"depthHierarchySavedBytes",
+           screenSpaceStatus.depthHierarchySavedBytes},
           {"colorMipLevels", screenSpaceStatus.colorMipLevels},
           {"depthExtent",
            {{"width", screenSpaceStatus.depthExtent.width},
@@ -1841,6 +2020,7 @@ ControlJson RuntimeControlAdapter::runtimeRenderStatus() {
           {"logicalImageBytes", graph.logicalImageBytes},
           {"residentImageBytes", graph.residentImageBytes},
           {"retiringImageBytes", graph.retiringImageBytes},
+          {"passes", std::move(graphPasses)},
           {"executionOrder", std::move(graphExecutionOrder)},
           {"culled", std::move(graphCulledPasses)},
           {"resources", std::move(graphResources)},
@@ -1897,7 +2077,14 @@ ControlJson RuntimeControlAdapter::runtimeRenderSettingsGet() {
     const RenderSettings &settings = snapshot.requested;
     const ScreenSpaceEffectsStatus screenSpaceStatus =
         renderer_->screenSpaceEffectsStatus();
-    return {{"shadowsEnabled", settings.shadowsEnabled},
+    return {{"renderPath", renderPathRequestName(settings.renderPath)},
+            {"renderPathActive",
+             renderPathModeName(snapshot.renderPath.active)},
+            {"renderPathFallbackReason",
+             snapshot.renderPath.fallbackReason.empty()
+                 ? ControlJson(nullptr)
+                 : ControlJson(snapshot.renderPath.fallbackReason)},
+            {"shadowsEnabled", settings.shadowsEnabled},
             {"shadowMapSize", kDirectionalShadowMapSize},
             {"shadowReceiverBias", settings.shadowReceiverBias},
             {"pointShadowReceiverBiasWorld",
@@ -1930,6 +2117,21 @@ ControlJson RuntimeControlAdapter::runtimeRenderSettingsGet() {
              settings.environmentRotationRadians},
             {"surfaceDebugView",
              surfaceDebugViewName(settings.surfaceDebugView)},
+            {"gBufferDebugView",
+             gBufferDebugViewName(settings.gBufferDebugView)},
+            {"gBufferAvailable", snapshot.support.gBuffer.supported},
+            {"gBufferActive", snapshot.runtime.gBufferActive},
+            {"gBufferUnavailableReason",
+             snapshot.support.gBuffer.unavailableReason},
+            {"deferredLightingDebugView",
+             deferredLightingDebugViewName(
+                 settings.deferredLightingDebugView)},
+            {"deferredLightingAvailable",
+             snapshot.support.deferredLighting.supported},
+            {"deferredLightingActive",
+             snapshot.runtime.deferredLightingActive},
+            {"deferredLightingUnavailableReason",
+             snapshot.support.deferredLighting.unavailableReason},
             {"surfaceMotionDebugScale",
              settings.surfaceMotionDebugScale},
             {"surfaceDataAvailable", snapshot.support.surfaceData.supported},
@@ -2073,6 +2275,54 @@ ControlJson RuntimeControlAdapter::runtimeRenderSettingsGet() {
              snapshot.support.occlusionCulling.unavailableReason},
             {"toneMappingPolicy", "pbr_only"},
             {"bloomPolicy", "pbr_only"}};
+}
+
+ControlJson RuntimeControlAdapter::runtimeRenderPathGet() {
+    const RenderSettingsSnapshot snapshot =
+        renderSettingsController_->snapshot();
+    const RenderPathStatus status = renderer_->renderPathStatus();
+    const RenderGraphDiagnostics graph =
+        renderer_->renderGraphDiagnostics();
+    const ScreenSpaceEffectsStatus screenSpace =
+        renderer_->screenSpaceEffectsStatus();
+    return {
+        {"requested", renderPathRequestName(snapshot.requested.renderPath)},
+        {"active", renderPathModeName(snapshot.renderPath.active)},
+        {"supported",
+         {{"forward", status.capabilities.forward},
+          {"deferred", status.capabilities.deferred}}},
+        {"viewMode", snapshot.viewModeId},
+        {"viewModeCompatible", snapshot.renderPath.viewModeCompatible},
+        {"topologyHash", graph.topologyHash},
+        {"temporalHistory",
+         {{"taa",
+           {{"valid", screenSpace.taaHistoryValid},
+            {"generation", screenSpace.taaHistoryGeneration},
+            {"lastResetReason", screenSpace.taaLastResetReason}}},
+          {"gtao",
+           {{"valid", screenSpace.gtaoHistoryValid},
+            {"generation", screenSpace.gtaoHistoryGeneration},
+            {"lastResetReason", screenSpace.gtaoLastResetReason}}},
+          {"ssr",
+           {{"valid", screenSpace.ssrHistoryValid},
+            {"generation", screenSpace.ssrHistoryGeneration},
+            {"lastResetReason", screenSpace.ssrLastResetReason}}},
+          {"ssgi",
+           {{"valid", screenSpace.ssgiHistoryValid},
+            {"generation", screenSpace.ssgiHistoryGeneration},
+            {"lastResetReason", screenSpace.ssgiLastResetReason}}}}},
+        {"fallbackReason",
+         snapshot.renderPath.fallbackReason.empty()
+             ? ControlJson(nullptr)
+             : ControlJson(snapshot.renderPath.fallbackReason)}};
+}
+
+ControlJson RuntimeControlAdapter::runtimeRenderPathSet(
+    RenderPathRequest request) {
+    RenderSettingsPatch patch;
+    patch.renderPath = request;
+    applyRenderSettings(patch);
+    return runtimeRenderPathGet();
 }
 
 ControlJson RuntimeControlAdapter::runtimeRenderSettingsSet(

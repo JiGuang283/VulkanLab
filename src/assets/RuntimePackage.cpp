@@ -6,6 +6,7 @@
 #include "DerivedEnvironmentManifest.h"
 #include "DerivedTextureManifest.h"
 #include "SceneCatalog.h"
+#include "render/shader/ShaderRegistry.h"
 #include "scene_data/PrimitiveModelDefinitions.h"
 #include "scene_data/SceneDocument.h"
 
@@ -123,21 +124,64 @@ void verifyGltfBuffers(const std::filesystem::path &packageRoot,
     }
 }
 
-void verifyShaderClosure(const std::filesystem::path &packageRoot) {
+void verifyShaderClosure(const std::filesystem::path &packageRoot,
+                         const RuntimePackageManifest &package) {
     const std::filesystem::path manifestPath = requirePackageFile(
         packageRoot, "shader/manifest.json", "shader manifest");
-    std::ifstream input(manifestPath, std::ios::binary);
-    Json manifest;
-    input >> manifest;
-    for (const Json &program : manifest.at("programs")) {
-        for (const char *stage : {"vertex", "fragment", "compute"}) {
-            if (!program.contains(stage))
-                continue;
-            std::filesystem::path relative =
-                std::filesystem::path("shader") /
-                program.at(stage).get<std::string>();
-            relative += ".spv";
-            requirePackageFile(packageRoot, relative, "shader binary");
+    const ShaderRegistry registry = ShaderRegistry::load(manifestPath);
+
+    const auto requireProgram = [&registry](
+                                    std::string_view id,
+                                    ShaderProgramContract contract) {
+        const ShaderProgram *program = registry.findProgram(id);
+        if (!program || program->contract != contract) {
+            throw std::runtime_error(
+                "runtime package shader contract is missing: " +
+                std::string(id));
+        }
+    };
+    requireProgram("forward.pbr-lite-normal-mapped",
+                   ShaderProgramContract::MainForward);
+    requireProgram("deferred.lighting",
+                   ShaderProgramContract::DeferredLighting);
+    requireProgram("lighting.cluster-build",
+                   ShaderProgramContract::Compute);
+    requireProgram("postprocess.tonemap",
+                   ShaderProgramContract::Fullscreen);
+    requireProgram("postprocess.present",
+                   ShaderProgramContract::Fullscreen);
+
+    const MaterialShaderFamily &defaultFamily =
+        registry.materialShaderFamily(
+            registry.defaultMaterialShaderFamily());
+    for (MaterialShaderPass pass : {
+             MaterialShaderPass::ForwardOpaque,
+             MaterialShaderPass::ForwardTransparent,
+             MaterialShaderPass::GBufferOpaque,
+             MaterialShaderPass::GBufferMask}) {
+        if (defaultFamily.programId(pass).empty()) {
+            throw std::runtime_error(
+                "runtime package default material family is incomplete: " +
+                std::string(materialShaderPassName(pass)));
+        }
+    }
+
+    std::unordered_set<std::string> packagedFiles;
+    packagedFiles.reserve(package.files.size());
+    for (const RuntimePackageFile &file : package.files)
+        packagedFiles.insert(file.path);
+    for (const std::filesystem::path &shaderPath : registry.spirvPaths()) {
+        if (!pathIsWithin(packageRoot, shaderPath)) {
+            throw std::runtime_error(
+                "runtime package shader path escapes package root: " +
+                shaderPath.string());
+        }
+        const std::string relative =
+            shaderPath.lexically_relative(packageRoot).generic_string();
+        if (packagedFiles.count(relative) == 0) {
+            throw std::runtime_error(
+                "runtime package shader is not covered by file hashes: " +
+                relative);
         }
     }
 }
@@ -411,7 +455,7 @@ void verifyNativeSceneClosure(const std::filesystem::path &packageRoot,
             "packaged SceneDocument environment is missing");
 
     verifyArtifactIndexClosure(packageRoot, package, catalog);
-    verifyShaderClosure(packageRoot);
+    verifyShaderClosure(packageRoot, package);
 }
 
 Json toJson(const RuntimePackageManifest &manifest) {

@@ -57,8 +57,11 @@ void printUsage() {
         << "  VulkanLabCtl [--json] camera set --position X,Y,Z --yaw Y --pitch P\n"
         << "  VulkanLabCtl [--json] window resize <width> <height>\n"
         << "  VulkanLabCtl [--json] render status\n"
+        << "  VulkanLabCtl [--json] render-path get\n"
+        << "  VulkanLabCtl [--json] render-path set auto|forward|deferred\n"
         << "  VulkanLabCtl [--json] render-settings get\n"
         << "  VulkanLabCtl [--json] render-settings set "
+           "[--render-path auto|forward|deferred] "
            "[--shadows on|off] [--receiver-bias N] "
            "[--constant-bias N] [--slope-bias N] "
            "[--max-point-shadows N] [--point-shadow-distance N] "
@@ -75,6 +78,8 @@ void printUsage() {
            "[--occlusion-min-candidates N] "
            "[--occlusion-bias N] "
            "[--surface-debug none|normal|roughness|motion|history-validity] "
+           "[--gbuffer-debug none|base-color|normal|metallic|roughness|occlusion|emissive|motion|surface-flags] "
+           "[--deferred-lighting-debug none|final|diffuse|specular|difference] "
            "[--surface-motion-scale N] [--ao off|ssao|cacao|gtao] "
            "[--ssao-quality low|medium|high] [--ssao-radius N] "
            "[--ssao-bias N] [--ssao-intensity N] [--ssao-power N] "
@@ -191,6 +196,7 @@ ParsedCommand parseCommand(int argc, char **argv) {
     std::optional<std::string> pitch;
     std::optional<std::string> stableFrames;
     std::optional<std::string> timeoutMs;
+    std::optional<std::string> renderPath;
     std::optional<std::string> shadows;
     std::optional<std::string> receiverBias;
     std::optional<std::string> pointReceiverBias;
@@ -221,6 +227,8 @@ ParsedCommand parseCommand(int argc, char **argv) {
     std::optional<std::string> occlusionMinCandidates;
     std::optional<std::string> occlusionBias;
     std::optional<std::string> surfaceDebug;
+    std::optional<std::string> gBufferDebug;
+    std::optional<std::string> deferredLightingDebug;
     std::optional<std::string> surfaceMotionScale;
     std::optional<std::string> ambientOcclusion;
     std::optional<std::string> ssaoQuality;
@@ -275,6 +283,7 @@ ParsedCommand parseCommand(int argc, char **argv) {
                  argument == "--pitch" ||
                  argument == "--stable-frames" ||
                  argument == "--timeout-ms" ||
+                 argument == "--render-path" ||
                  argument == "--shadows" ||
                  argument == "--receiver-bias" ||
                  argument == "--point-receiver-bias" ||
@@ -305,6 +314,8 @@ ParsedCommand parseCommand(int argc, char **argv) {
                  argument == "--occlusion-min-candidates" ||
                  argument == "--occlusion-bias" ||
                   argument == "--surface-debug" ||
+                  argument == "--gbuffer-debug" ||
+                  argument == "--deferred-lighting-debug" ||
                   argument == "--surface-motion-scale" ||
                   argument == "--ao" ||
                   argument == "--ssao-quality" ||
@@ -356,6 +367,8 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 stableFrames = argv[i];
             else if (argument == "--timeout-ms")
                 timeoutMs = argv[i];
+            else if (argument == "--render-path")
+                renderPath = argv[i];
             else if (argument == "--shadows")
                 shadows = argv[i];
             else if (argument == "--receiver-bias")
@@ -416,6 +429,10 @@ ParsedCommand parseCommand(int argc, char **argv) {
                 occlusionBias = argv[i];
             else if (argument == "--surface-debug")
                 surfaceDebug = argv[i];
+            else if (argument == "--gbuffer-debug")
+                gBufferDebug = argv[i];
+            else if (argument == "--deferred-lighting-debug")
+                deferredLightingDebug = argv[i];
             else if (argument == "--surface-motion-scale")
                 surfaceMotionScale = argv[i];
             else if (argument == "--ao")
@@ -636,11 +653,31 @@ ParsedCommand parseCommand(int argc, char **argv) {
         parsed.method = "render.status";
         parsed.renderWait = true;
     } else if (args ==
+               std::vector<std::string>{"render-path", "get"}) {
+        parsed.method = "render_path.get";
+    } else if (args.size() == 3 && args[0] == "render-path" &&
+               args[1] == "set") {
+        if (args[2] != "auto" && args[2] != "forward" &&
+            args[2] != "deferred") {
+            throw std::invalid_argument(
+                "render path must be auto, forward, or deferred");
+        }
+        parsed.method = "render_path.set";
+        parsed.params = {{"mode", args[2]}};
+    } else if (args ==
                std::vector<std::string>{"render-settings", "get"}) {
         parsed.method = "render_settings.get";
     } else if (args ==
                std::vector<std::string>{"render-settings", "set"}) {
         parsed.method = "render_settings.set";
+        if (renderPath) {
+            if (*renderPath != "auto" && *renderPath != "forward" &&
+                *renderPath != "deferred") {
+                throw std::invalid_argument(
+                    "--render-path must be auto, forward, or deferred");
+            }
+            parsed.params["renderPath"] = *renderPath;
+        }
         if (shadows)
             parsed.params["shadowsEnabled"] =
                 parseOnOff(*shadows, "--shadows");
@@ -764,6 +801,36 @@ ParsedCommand parseCommand(int argc, char **argv) {
                     "motion, or history-validity");
             }
             parsed.params["surfaceDebugView"] = *surfaceDebug;
+        }
+        if (gBufferDebug) {
+            if (*gBufferDebug != "none" &&
+                *gBufferDebug != "base-color" &&
+                *gBufferDebug != "normal" &&
+                *gBufferDebug != "metallic" &&
+                *gBufferDebug != "roughness" &&
+                *gBufferDebug != "occlusion" &&
+                *gBufferDebug != "emissive" &&
+                *gBufferDebug != "motion" &&
+                *gBufferDebug != "surface-flags") {
+                throw std::invalid_argument(
+                    "--gbuffer-debug must be none, base-color, normal, "
+                    "metallic, roughness, occlusion, emissive, motion, or "
+                    "surface-flags");
+            }
+            parsed.params["gBufferDebugView"] = *gBufferDebug;
+        }
+        if (deferredLightingDebug) {
+            if (*deferredLightingDebug != "none" &&
+                *deferredLightingDebug != "final" &&
+                *deferredLightingDebug != "diffuse" &&
+                *deferredLightingDebug != "specular" &&
+                *deferredLightingDebug != "difference") {
+                throw std::invalid_argument(
+                    "--deferred-lighting-debug must be none, final, "
+                    "diffuse, specular, or difference");
+            }
+            parsed.params["deferredLightingDebugView"] =
+                *deferredLightingDebug;
         }
         if (surfaceMotionScale) {
             parsed.params["surfaceMotionDebugScale"] = parseFiniteFloat(
@@ -1320,8 +1387,32 @@ void printHuman(const std::string &method, const Json &result) {
                       << result.at("stableFrameTarget").get<uint32_t>()
                       << '\n';
         }
+    } else if (method == "render_path.get" ||
+               method == "render_path.set") {
+        std::cout << "render path requested/active: "
+                  << result.at("requested").get<std::string>() << "/"
+                  << result.at("active").get<std::string>()
+                  << ", view mode: "
+                  << result.at("viewMode").get<std::string>()
+                  << ", compatible: "
+                  << (result.at("viewModeCompatible").get<bool>() ? "yes"
+                                                                    : "no")
+                  << '\n';
+        if (!result.at("fallbackReason").is_null())
+            std::cout << "fallback: "
+                      << result.at("fallbackReason").get<std::string>()
+                      << '\n';
     } else if (method == "render_settings.get" ||
                method == "render_settings.set") {
+        std::cout << "render path requested/active: "
+                  << result.at("renderPath").get<std::string>() << "/"
+                  << result.at("renderPathActive").get<std::string>()
+                  << '\n';
+        if (!result.at("renderPathFallbackReason").is_null())
+            std::cout << "render path fallback: "
+                      << result.at("renderPathFallbackReason")
+                             .get<std::string>()
+                      << '\n';
         std::cout << "shadows: "
                   << (result.at("shadowsEnabled").get<bool>() ? "on" : "off")
                   << ", map: " << result.at("shadowMapSize").get<uint32_t>()
@@ -1391,6 +1482,22 @@ void printHuman(const std::string &method, const Json &result) {
                   << "/"
                   << (result.at("surfaceDataActive").get<bool>() ? "yes"
                                                                    : "no")
+                  << "\nGBuffer debug: "
+                  << result.value("gBufferDebugView", std::string{"none"})
+                  << ", available/active: "
+                  << (result.value("gBufferAvailable", false) ? "yes" : "no")
+                  << "/"
+                  << (result.value("gBufferActive", false) ? "yes" : "no")
+                  << "\nDeferred lighting debug: "
+                  << result.value("deferredLightingDebugView",
+                                  std::string{"none"})
+                  << ", available/active: "
+                  << (result.value("deferredLightingAvailable", false)
+                          ? "yes"
+                          : "no")
+                  << "/"
+                  << (result.value("deferredLightingActive", false) ? "yes"
+                                                                     : "no")
                   << "\nAO: "
                   << result.at("ambientOcclusionMode").get<std::string>()
                   << ", active/available: "

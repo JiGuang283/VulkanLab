@@ -8,27 +8,42 @@ layout(set = 2, binding = 0) uniform sampler2DArrayShadow directionalShadowMap;
 layout(set = 2, binding = 7) uniform samplerCubeArrayShadow pointShadowMap;
 layout(set = 2, binding = 8) uniform sampler2DArrayShadow spotShadowMap;
 
-float csmShadowVisibility(vec3 positionWS) {
-    if (ubo.shadowParams.x < 0.5)
-        return 1.0;
-
-    float viewZ = -(ubo.view * vec4(positionWS, 1.0)).z;
-
+uint csmCascadeIndex(float viewZ) {
     uint cascadeIndex = 0u;
     for (uint i = 0u; i < CSM_CASCADE_COUNT - 1u; ++i) {
         if (viewZ > ubo.cascadeSplits[i])
             cascadeIndex = i + 1u;
     }
+    return cascadeIndex;
+}
+
+float csmCascadeBlendFactor(uint cascadeIndex, float viewZ) {
+    if (cascadeIndex >= CSM_CASCADE_COUNT - 1u)
+        return 0.0;
+    float blendStart = ubo.cascadeBlendStarts[cascadeIndex];
+    float split = ubo.cascadeSplits[cascadeIndex];
+    if (split <= blendStart)
+        return 0.0;
+    return smoothstep(blendStart, split, viewZ);
+}
+
+bool sampleCsmCascade(uint cascadeIndex, vec3 positionWS,
+                      out float visibility) {
+    visibility = 1.0;
 
     vec4 clip = ubo.cascadeViewProj[cascadeIndex] * vec4(positionWS, 1.0);
+    if (abs(clip.w) <= 1.0e-7)
+        return false;
     vec3 coord = clip.xyz / clip.w;
     vec2 uv = coord.xy * 0.5 + 0.5;
+    float safeEdge = ubo.shadowParams.z * 1.5;
 
     if (coord.z <= 0.0 || coord.z >= 1.0 ||
-        any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
-        return 1.0;
+        any(lessThan(uv, vec2(safeEdge))) ||
+        any(greaterThan(uv, vec2(1.0 - safeEdge))))
+        return false;
 
-    float visibility = 0.0;
+    visibility = 0.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
             vec2 offset = vec2(x, y) * ubo.shadowParams.z;
@@ -39,7 +54,8 @@ float csmShadowVisibility(vec3 positionWS) {
                      coord.z - ubo.shadowParams.y));
         }
     }
-    return visibility / 9.0;
+    visibility /= 9.0;
+    return true;
 }
 
 float pointShadowVisibility(vec3 positionWS, vec3 lightPos,
@@ -76,6 +92,36 @@ float pointShadowVisibility(vec3 positionWS, vec3 lightPos,
         }
     }
     return visibility / 9.0;
+}
+
+float csmShadowVisibility(vec3 positionWS) {
+    if (ubo.shadowParams.x < 0.5)
+        return 1.0;
+
+    float viewZ = -(ubo.view * vec4(positionWS, 1.0)).z;
+    if (viewZ > ubo.cascadeSplits[CSM_CASCADE_COUNT - 1u])
+        return 1.0;
+    uint cascadeIndex = csmCascadeIndex(viewZ);
+    float currentVisibility = 1.0;
+    bool currentValid = sampleCsmCascade(
+        cascadeIndex, positionWS, currentVisibility);
+
+    if (cascadeIndex >= CSM_CASCADE_COUNT - 1u)
+        return currentValid ? currentVisibility : 1.0;
+
+    float blend = csmCascadeBlendFactor(cascadeIndex, viewZ);
+    float nextVisibility = 1.0;
+    bool nextValid = false;
+    if (!currentValid || blend > 0.0) {
+        nextValid = sampleCsmCascade(
+            cascadeIndex + 1u, positionWS, nextVisibility);
+    }
+
+    if (!currentValid)
+        return nextValid ? nextVisibility : 1.0;
+    if (!nextValid || blend <= 0.0)
+        return currentVisibility;
+    return mix(currentVisibility, nextVisibility, blend);
 }
 
 float spotShadowVisibility(vec3 positionWS, int shadowSlot) {

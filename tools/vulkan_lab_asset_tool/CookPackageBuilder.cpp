@@ -266,6 +266,33 @@ RuntimePackageBuildInfo inspectRuntimeBuild(
         build.gpuProfiling = features.at("gpuProfiling").get<bool>();
         build.tracy = features.at("tracy").get<bool>();
         build.cacao = features.value("cacao", false);
+        const Json &rendering = root.at("rendering");
+        const std::vector<std::string> renderPaths =
+            rendering.at("renderPaths").get<std::vector<std::string>>();
+        const std::vector<std::string> materialBindings =
+            rendering.at("materialBindings")
+                .get<std::vector<std::string>>();
+        const auto includes = [](const std::vector<std::string> &values,
+                                 std::string_view expected) {
+            return std::find(values.begin(), values.end(), expected) !=
+                   values.end();
+        };
+        if (!includes(renderPaths, "forward") ||
+            !includes(renderPaths, "deferred")) {
+            throw std::runtime_error(
+                "runtime build does not contain both render paths");
+        }
+        if (!includes(materialBindings, "legacy") ||
+            !includes(materialBindings, "bindless")) {
+            throw std::runtime_error(
+                "runtime build does not contain both material binding "
+                "backends");
+        }
+        if (rendering.at("shaderManifestSchema").get<uint32_t>() !=
+            ShaderRegistry::kSchemaVersion) {
+            throw std::runtime_error(
+                "runtime build shader manifest schema is incompatible");
+        }
         if (build.configuration != "Release")
             throw std::runtime_error("runtime build must be Release");
         if (build.editorUi || build.runtimeControl || build.capture ||

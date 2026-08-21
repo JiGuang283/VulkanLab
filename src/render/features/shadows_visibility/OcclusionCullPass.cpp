@@ -1,4 +1,5 @@
 #include "render/features/shadows_visibility/OcclusionCullPass.h"
+#include "render/features/surface/DepthHierarchyResources.h"
 
 #include "core/Buffer.h"
 #include "render/pipeline/ComputePipeline.h"
@@ -81,7 +82,7 @@ OcclusionCullPass::OcclusionCullPass(
     : device_(&device), resourceHandles_(resourceHandles),
       descriptorAllocator_(&descriptorAllocator),
       computeShaderPath_(std::move(computeShaderPath)), resources_(&resources) {
-    if (!resourceHandles_.visibilityHiZ.valid())
+    if (!depthHierarchyResources(resourceHandles_).available())
         throw std::invalid_argument("OcclusionCullPass requires Hi-Z image");
     createDescriptorSetLayout();
     for (auto &frame : frames_)
@@ -112,7 +113,10 @@ void OcclusionCullPass::setup(RenderGraphBuilder &builder,
 
     builder.addNode("OcclusionCull/Dispatch", RgPassType::Compute,
                     RgQueueClass::Compute, 1);
-    builder.useImage({resourceHandles_.visibilityHiZ,
+    const RenderImageHandle farthest =
+        depthHierarchyResources(resourceHandles_).image(
+            DepthHierarchySemantic::Farthest);
+    builder.useImage({farthest,
                       RenderImageAccess::SampledRead,
                       VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL});
     for (uint32_t frame = 0; frame < frames_.size(); ++frame) {
@@ -254,8 +258,11 @@ void OcclusionCullPass::recordCull(
     const VkDescriptorSet set = descriptorSets_.at(frame.frameIndex);
     vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                             pipeline.layout(), 0, 1, &set, 0, nullptr);
-    const VkExtent2D extent =
-        resources.extent(resourceHandles_.visibilityHiZ);
+    const DepthHierarchyResources hierarchy =
+        depthHierarchyResources(resourceHandles_);
+    const RenderImageHandle farthest =
+        hierarchy.image(DepthHierarchySemantic::Farthest);
+    const VkExtent2D extent = resources.extent(farthest);
     OcclusionPush push{};
     push.viewProjection = frame.view->globalUbo.proj *
                           frame.view->globalUbo.view;
@@ -265,7 +272,8 @@ void OcclusionCullPass::recordCull(
                             0.0f);
     push.counts = glm::uvec4(
         storage.activeCount,
-        resources.mipLevelCount(resourceHandles_.visibilityHiZ), 0u, 0u);
+        resources.mipLevelCount(farthest), hierarchy.combined() ? 1u : 0u,
+        0u);
     vkCmdPushConstants(frame.cmd, pipeline.layout(),
                        VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
     vkCmdDispatch(frame.cmd,
@@ -346,10 +354,15 @@ void OcclusionCullPass::updateDescriptor(
     if (!storage.items || !storage.indirect || !storage.counter)
         return;
     VkDescriptorImageInfo hiZ{};
-    hiZ.sampler = resources.sampler(resourceHandles_.visibilityHiZSampler);
-    hiZ.imageView =
-        resources.image(resourceHandles_.visibilityHiZ, frameIndex)
-            .imageView();
+    const DepthHierarchyResources hierarchy =
+        depthHierarchyResources(resourceHandles_);
+    hiZ.sampler = resources.sampler(
+        hierarchy.sampler(DepthHierarchySemantic::Farthest));
+    hiZ.imageView = resources
+                        .image(hierarchy.image(
+                                   DepthHierarchySemantic::Farthest),
+                               frameIndex)
+                        .imageView();
     hiZ.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     const VkDescriptorBufferInfo items{storage.items->handle(), 0,
                                        VK_WHOLE_SIZE};
@@ -416,7 +429,8 @@ void OcclusionCullPass::ensureCapacity(uint32_t frameIndex,
                 sizeof(GpuVisibilityCounter));
     storage.capacity = capacityValue;
     if (resources_ &&
-        resources_->resident(resourceHandles_.visibilityHiZ)) {
+        resources_->resident(depthHierarchyResources(resourceHandles_)
+                                 .image(DepthHierarchySemantic::Farthest))) {
         updateDescriptor(frameIndex, *resources_);
     }
 }

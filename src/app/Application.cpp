@@ -20,6 +20,7 @@
 #include "diagnostics/Profiling.h"
 #include "diagnostics/TracyProfiler.h"
 #if VKL_ENABLE_EDITOR_UI
+#include "editor/EditorPreferences.h"
 #include "editor/EditorController.h"
 #include "editor/GuiSystem.h"
 #endif
@@ -167,9 +168,15 @@ Application::Application(const Config &config, ProjectContext projectContext,
     const ShaderRegistry &shaderRegistry =
         runtime_->renderSettings->shaderRegistry();
     VKR_LOG_INFO(
-        "ShaderRegistry", "Loaded {} programs and {} variants; default={}",
-        shaderRegistry.programs().size(), shaderRegistry.variants().size(),
-        runtime_->renderSettings->currentShaderVariant().id);
+        "ShaderRegistry",
+        "Loaded {} programs, {} material families and {} view modes; "
+        "defaultFamily={} defaultViewMode={}",
+        shaderRegistry.programs().size(),
+        shaderRegistry.materialShaderFamilies().size(),
+        shaderRegistry.viewModes().size(),
+        shaderRegistry.materialShaderFamily(
+            shaderRegistry.defaultMaterialShaderFamily()).id,
+        runtime_->renderSettings->currentViewMode().id);
 }
 
 Application::~Application() { shutdown(); }
@@ -311,6 +318,9 @@ void Application::initPlatformAndRenderer() {
         };
     runtime_->renderSettings->configure(platform_->renderer->featureSupport(),
                                         std::move(renderSettingsCallbacks));
+    RenderSettingsPatch initialRenderSettings;
+    initialRenderSettings.renderPath = config_.renderPath;
+    runtime_->renderSettings->apply(initialRenderSettings);
     platform_->window->setResizeCallback(
         [this](int, int) { platform_->frameSync->notifyResize(); });
 
@@ -407,7 +417,9 @@ void Application::initSceneRuntime() {
         };
     runtime_->scene = std::make_unique<SceneRuntimeCoordinator>(
         *platform_->device, *platform_->descriptorAllocator,
-        *platform_->materialSystem, *platform_->renderer, *platform_->frameSync,
+        *platform_->materialSystem, *platform_->renderer,
+        runtime_->renderSettings->shaderRegistry(),
+        *platform_->frameSync,
         frame_->camera, projectContext_, runtime_->catalog,
         runtime_->sceneRegistry, runtime_->sceneLoadContext,
         std::move(runtimeCallbacks));
@@ -491,11 +503,16 @@ void Application::initOptionalTooling() {
 
 #if VKL_ENABLE_EDITOR_UI
     if (config_.diagnostics.guiVisible) {
+        const EditorStoragePaths editorStorage =
+            EditorStoragePaths::resolve(runtime_->catalog.projectId);
         tooling_->gui = std::make_unique<GuiSystem>(
             platform_->context->instance(), *platform_->device,
             platform_->swapChain->imageFormat(), platform_->window->handle(),
             platform_->swapChain->imageCount(),
-            platform_->swapChain->imageCount());
+            platform_->swapChain->imageCount(),
+            GuiSystemConfig{editorStorage.layout,
+                            projectContext_.runtimeRoot / "editor" /
+                                "lucide.ttf"});
         EditorControllerActions editorActions;
         editorActions.requestSceneOperation =
             [this](int index, bool sourceFallback, bool loadAfter,
@@ -514,6 +531,7 @@ void Application::initOptionalTooling() {
         tooling_->editor =
             std::make_unique<EditorController>(EditorControllerServices{
                 config_,
+                editorStorage,
                 projectContext_,
                 runtime_->catalog,
                 runtime_->sceneRegistry,
@@ -851,8 +869,8 @@ void Application::handleSwapChainRecreate() {
     }
 }
 
-const ShaderVariant &Application::currentShaderVariant() const {
-    return runtime_->renderSettings->currentShaderVariant();
+const ViewMode &Application::currentViewMode() const {
+    return runtime_->renderSettings->currentViewMode();
 }
 
 void Application::mainLoop() {
@@ -1065,6 +1083,8 @@ void Application::mainLoop() {
                 runtime_->scene->currentWorld()->buildRenderSnapshot();
         }
 
+        const RenderSettingsSnapshot renderSettingsSnapshot =
+            runtime_->renderSettings->snapshot();
         RenderViewInput viewInput{};
         viewInput.view = frame_->camera.viewMatrix();
         viewInput.projection = frame_->camera.projectionMatrix();
@@ -1080,7 +1100,7 @@ void Application::mainLoop() {
         viewInput.defaultSun = {frame_->defaultSunDirection,
                                 frame_->defaultSunColor,
                                 frame_->defaultSunIntensity};
-        viewInput.settings = runtime_->renderSettings->snapshot().active;
+        viewInput.settings = renderSettingsSnapshot.active;
         viewInput.environmentReady = platform_->renderer->environmentReady();
         viewInput.maxSpecularLod =
             platform_->renderer->currentEnvironmentMaxSpecularLod();
@@ -1183,7 +1203,10 @@ void Application::mainLoop() {
             visibilityInput.sceneGeneration =
                 runtime_->scene->sceneGeneration();
             visibilityInput.cameraIdentity = std::move(cameraHistoryIdentity);
-            visibilityInput.shaderIdentity = currentShaderVariant().id;
+            visibilityInput.shaderIdentity =
+                currentViewMode().id + "/" +
+                std::string(renderPathModeName(
+                    renderSettingsSnapshot.renderPath.active));
             visibilityInput.sceneBounds = viewInput.sceneBounds;
             frame_->visibilityFrame = frame_->visibilitySystem.build(
                 std::move(frame_->renderItems), renderView,
@@ -1279,7 +1302,7 @@ void Application::mainLoop() {
                 "Frame " + std::to_string(frame_->presentedFrameCount + 1));
             platform_->renderer->renderFrame(
                 *ctx, frame_->visibilityFrame, *platform_->pipelineCache,
-                std::move(drawUi), currentShaderVariant(), renderView,
+                std::move(drawUi), currentViewMode(), renderView,
                 captureSelection
                     ? std::optional<
                           FrameCaptureSource>{captureSelection->source ==

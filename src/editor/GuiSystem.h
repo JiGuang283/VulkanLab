@@ -4,6 +4,8 @@
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
+#include <string>
 #include <vulkan/vulkan.h>
 
 struct GLFWwindow;
@@ -12,13 +14,19 @@ namespace vkr {
 
 class Device;
 
+struct GuiSystemConfig {
+    std::filesystem::path layoutPath;
+    std::filesystem::path iconFontPath;
+};
+
 /// Dear ImGui integration (Vulkan + GLFW backends).
 /// Draws into the application's main render pass as the last step before
 /// endRenderPass, so no extra pass or attachment is required.
 class GuiSystem {
   public:
     GuiSystem(VkInstance instance, Device &device, VkFormat colorFormat,
-              GLFWwindow *window, uint32_t minImageCount, uint32_t imageCount);
+              GLFWwindow *window, uint32_t minImageCount, uint32_t imageCount,
+              GuiSystemConfig config = {});
     ~GuiSystem();
 
     GuiSystem(const GuiSystem &) = delete;
@@ -52,6 +60,7 @@ class GuiSystem {
     VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT>
         viewportTextureSets_{};
+    std::string layoutPathUtf8_;
 };
 
 } // namespace vkr

@@ -21,18 +21,26 @@
 #include "diagnostics/SceneLoadStats.h"
 #include "diagnostics/TracyProfiler.h"
 #include "editor/EditorDockWorkspace.h"
+#include "editor/EditorActionRegistry.h"
+#include "editor/EditorIcons.h"
+#include "editor/EditorNotificationService.h"
 #include "editor/EditorUiState.h"
 #include "editor/EditorWidgets.h"
 #include "editor/ReflectionProbeCapture.h"
 #include "editor/SceneEditorSession.h"
 #include "editor/SceneViewportController.h"
 #include "editor/panels/AssetsPanel.h"
+#include "editor/panels/ContentBrowserPanel.h"
+#include "editor/panels/DiagnosticsPanel.h"
 #include "editor/panels/InspectorPanel.h"
+#include "editor/panels/MaterialsPanel.h"
 #include "editor/panels/OutlinerPanel.h"
+#include "editor/panels/RenderSettingsPanel.h"
 #include "editor/panels/ScenesPanel.h"
 #include "render/features/shadows_visibility/DirectionalShadow.h"
 #include "editor/GuiSystem.h"
 #include "render/material/MaterialInstance.h"
+#include "render/material/MaterialTemplate.h"
 #include "render/material/MaterialSystem.h"
 #include "render/material/MaterialTextureSlot.h"
 #include "render/features/shadows_visibility/PunctualShadow.h"
@@ -81,26 +89,6 @@
 
 namespace vkr {
 namespace {
-glm::vec3 normalizedSunDirectionOrDefault(const glm::vec3 &direction) {
-    const float lengthSquared = glm::dot(direction, direction);
-    if (!std::isfinite(lengthSquared) || lengthSquared <= 1.0e-8f)
-        return glm::normalize(glm::vec3(0.3f, 0.8f, 0.5f));
-    return direction / std::sqrt(lengthSquared);
-}
-
-void sunAnglesFromDirection(const glm::vec3 &direction, float &azimuth,
-                            float &elevation) {
-    const glm::vec3 normalized = normalizedSunDirectionOrDefault(direction);
-    azimuth = std::atan2(normalized.y, normalized.x);
-    elevation = std::asin(std::clamp(normalized.z, -1.0f, 1.0f));
-}
-
-glm::vec3 sunDirectionFromAngles(float azimuth, float elevation) {
-    const float horizontalLength = std::cos(elevation);
-    return {horizontalLength * std::cos(azimuth),
-            horizontalLength * std::sin(azimuth), std::sin(elevation)};
-}
-
 glm::quat rotationLookingAlong(const glm::vec3 &forward,
                                const glm::vec3 &upHint) {
     const glm::vec3 normalizedForward = glm::normalize(forward);
@@ -113,76 +101,7 @@ glm::quat rotationLookingAlong(const glm::vec3 &forward,
         glm::quat_cast(glm::mat3(right, up, -normalizedForward)));
 }
 
-const char *alphaModeName(AlphaMode mode) {
-    switch (mode) {
-    case AlphaMode::Opaque:
-        return "Opaque";
-    case AlphaMode::Mask:
-        return "Mask";
-    case AlphaMode::Blend:
-        return "Blend";
-    }
-    return "Unknown";
-}
-
-const char *lightTypeName(LightType type) {
-    switch (type) {
-    case LightType::Directional:
-        return "Directional";
-    case LightType::Point:
-        return "Point";
-    case LightType::Spot:
-        return "Spot";
-    }
-    return "Unknown";
-}
-
-const char *lightIntensityUnit(LightType type) {
-    return type == LightType::Directional ? "lux" : "candela";
-}
-const char *slotName(MaterialTextureSlot slot) {
-    switch (slot) {
-    case MaterialTextureSlot::BaseColor:
-        return "BaseColor";
-    case MaterialTextureSlot::Normal:
-        return "Normal";
-    case MaterialTextureSlot::MetallicRoughness:
-        return "MetallicRoughness";
-    case MaterialTextureSlot::Occlusion:
-        return "Occlusion";
-    case MaterialTextureSlot::Emissive:
-        return "Emissive";
-    case MaterialTextureSlot::Count:
-        break;
-    }
-    return "Unknown";
-}
-
-bool isTransparentMaterial(const MaterialParams &params) {
-    return params.alphaMode == AlphaMode::Blend ||
-           params.transmissionFactor > 0.0f;
-}
-
-const char *textureLimitLabel(uint32_t limit) {
-    switch (limit) {
-    case 0:
-        return "Full";
-    case 512:
-        return "512";
-    case 1024:
-        return "1024";
-    case 2048:
-        return "2048";
-    default:
-        return "Custom";
-    }
-}
-
 double bytesToMiB(uint64_t bytes) {
-    return static_cast<double>(bytes) / (1024.0 * 1024.0);
-}
-
-double signedBytesToMiB(int64_t bytes) {
     return static_cast<double>(bytes) / (1024.0 * 1024.0);
 }
 
@@ -196,21 +115,6 @@ bool asciiEqualsIgnoreCase(const std::string &a, const std::string &b) {
             return false;
     }
     return true;
-}
-
-bool asciiContainsIgnoreCase(const std::string &text,
-                             const std::string &query) {
-    if (query.empty())
-        return true;
-
-    auto fold = [](unsigned char value) {
-        return static_cast<char>(std::tolower(value));
-    };
-    std::string foldedText(text.size(), '\0');
-    std::string foldedQuery(query.size(), '\0');
-    std::transform(text.begin(), text.end(), foldedText.begin(), fold);
-    std::transform(query.begin(), query.end(), foldedQuery.begin(), fold);
-    return foldedText.find(foldedQuery) != std::string::npos;
 }
 
 const char *assetImportModeName(AssetImportMode mode) {
@@ -270,18 +174,35 @@ EditorController::EditorController(EditorControllerServices services)
       lastLightStats_(services.lastLightStats),
       cameraDragging_(std::move(services.cameraDragging)),
       actions_(std::move(services.actions)),
-      editorDockWorkspace_(std::make_unique<EditorDockWorkspace>()),
+      preferences_(std::make_unique<EditorPreferencesStore>(
+          std::move(services.editorStorage))),
+      editorDockWorkspace_(
+          std::make_unique<EditorDockWorkspace>(*preferences_)),
+      actionRegistry_(std::make_unique<EditorActionRegistry>()),
+      commandPalette_(std::make_unique<EditorCommandPalette>()),
+      notifications_(std::make_unique<EditorNotificationService>()),
       assetsPanel_(std::make_unique<AssetsPanel>()),
+      contentBrowserPanel_(std::make_unique<ContentBrowserPanel>()),
+      diagnosticsPanel_(std::make_unique<DiagnosticsPanel>()),
+      materialsPanel_(std::make_unique<MaterialsPanel>()),
       scenesPanel_(std::make_unique<ScenesPanel>()),
       outlinerPanel_(std::make_unique<OutlinerPanel>()),
+      renderSettingsPanel_(std::make_unique<RenderSettingsPanel>()),
       inspectorPanel_(std::make_unique<InspectorPanel>()),
       sceneEditorSession_(std::make_unique<SceneEditorSession>()),
       sceneViewportController_(std::make_unique<SceneViewportController>()),
       editorUi_(std::make_unique<EditorUiState>()) {
+    config_.moveSpeed = preferences_->preferences().cameraMoveSpeed;
+    sceneViewportController_->setOperation(
+        preferences_->preferences().gizmoOperation);
+    sceneViewportController_->setSpace(preferences_->preferences().gizmoSpace);
+    assetWorkflowSnapshot_ = sceneWorkflow_->assetSnapshot();
     bindViewportTextures();
 }
 
 EditorController::~EditorController() {
+    if (preferences_)
+        preferences_->flush();
     if (gui_)
         gui_->clearViewportTextures();
 }
@@ -302,8 +223,8 @@ uint64_t EditorController::setEnvironment(const std::string &id) {
     return actions_.setEnvironment(id);
 }
 
-void EditorController::setShaderVariant(const std::string &id) {
-    renderSettingsController_->setShaderVariant(id);
+void EditorController::setViewMode(const std::string &id) {
+    renderSettingsController_->setViewMode(id);
 }
 
 void EditorController::applyRenderSettings(const RenderSettingsPatch &patch) {
@@ -314,8 +235,8 @@ const RenderSettings &EditorController::renderSettings() const {
     return renderSettingsController_->settings();
 }
 
-const ShaderVariant &EditorController::currentShaderVariant() const {
-    return renderSettingsController_->currentShaderVariant();
+const ViewMode &EditorController::currentViewMode() const {
+    return renderSettingsController_->currentViewMode();
 }
 
 bool EditorController::hasUnsavedChanges() const {
@@ -750,11 +671,15 @@ void EditorController::applyReflectionProbeCaptureView(
     input.settings.globalIlluminationMode =
         GlobalIlluminationMode::AmbientOrIbl;
     input.settings.surfaceDebugView = SurfaceDebugView::None;
+    input.settings.gBufferDebugView = GBufferDebugView::None;
+    input.settings.deferredLightingDebugView =
+        DeferredLightingDebugView::None;
     input.settings.screenSpaceDebugView = ScreenSpaceDebugView::None;
     cameraIdentity = "reflection-probe:" + state.entityId.toString() +
                      ":" + std::to_string(state.faceIndex);
 }
-void EditorController::drawScenePanel(bool modelsOnly) {
+void EditorController::drawScenePanel(bool modelsOnly,
+                                      ContentBrowserViewMode viewMode) {
     if (scenesPanel_) {
         SceneWorkflowSnapshot snapshot = sceneWorkflow_->snapshot(
             {sceneLoadContext_.maxTextureSize,
@@ -867,14 +792,14 @@ void EditorController::drawScenePanel(bool modelsOnly) {
         actions.dismissImport = [this] {
             sceneWorkflow_->dismissModelImport();
         };
-        scenesPanel_->draw(snapshot, actions, modelsOnly);
+        scenesPanel_->draw(snapshot, actions, modelsOnly, viewMode);
         return;
     }
 }
 
 void EditorController::drawAssetsPanel(bool environmentsOnly) {
     if (assetsPanel_) {
-        AssetWorkflowSnapshot snapshot = sceneWorkflow_->assetSnapshot();
+        const AssetWorkflowSnapshot &snapshot = assetWorkflowSnapshot_;
 
         AssetsPanelActions actions;
 #if VKL_ENABLE_ASSET_AUTHORING
@@ -1043,1000 +968,6 @@ void EditorController::drawCapturePanel() {
     }
 }
 
-void EditorController::drawRenderPanel() {
-    const auto &shaderVariants = renderSettingsController_->shaderRegistry().variants();
-    if (!shaderVariants.empty()) {
-        const ShaderVariant &currentVariant = currentShaderVariant();
-        const char *current = currentVariant.displayName.c_str();
-        if (ImGui::BeginCombo("Shader", current)) {
-            auto drawCategory = [&](const char *category,
-                                    const char *displayName) {
-                bool hasVariants = false;
-                for (const ShaderVariant &variant : shaderVariants)
-                    hasVariants |= variant.category == category;
-                if (!hasVariants)
-                    return;
-
-                ImGui::SeparatorText(displayName);
-                for (const ShaderVariant &variant : shaderVariants) {
-                    if (variant.category != category)
-                        continue;
-                    const bool selected =
-                        variant.id == currentShaderVariant().id;
-                    if (ImGui::Selectable(variant.displayName.c_str(),
-                                          selected))
-                        setShaderVariant(variant.id);
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-            };
-            drawCategory("legacy", "Legacy");
-            drawCategory("pbr", "PBR");
-            drawCategory("debug", "Debug");
-
-            bool hasOtherVariants = false;
-            for (const ShaderVariant &variant : shaderVariants) {
-                hasOtherVariants |= variant.category != "legacy" &&
-                                    variant.category != "pbr" &&
-                                    variant.category != "debug";
-            }
-            if (hasOtherVariants) {
-                ImGui::SeparatorText("Other");
-                for (const ShaderVariant &variant : shaderVariants) {
-                    if (variant.category == "legacy" ||
-                        variant.category == "pbr" ||
-                        variant.category == "debug")
-                        continue;
-                    const bool selected =
-                        variant.id == currentShaderVariant().id;
-                    if (ImGui::Selectable(variant.displayName.c_str(),
-                                          selected))
-                        setShaderVariant(variant.id);
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-            }
-            ImGui::EndCombo();
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", current);
-    }
-    constexpr uint32_t textureLimits[] = {0, 2048, 1024, 512};
-    const bool nativeSceneActive =
-        sceneRuntime_->currentSceneIndex() >= 0 &&
-        sceneRuntime_->currentSceneIndex() < static_cast<int>(sceneRegistry_.size()) &&
-        sceneRegistry_[sceneRuntime_->currentSceneIndex()].isNativeScene();
-    ImGui::BeginDisabled(config_.assetImportMode ==
-                             AssetImportMode::CookedOnly ||
-                         nativeSceneActive);
-    if (ImGui::BeginCombo("Texture Limit",
-                          textureLimitLabel(sceneLoadContext_.maxTextureSize))) {
-        for (uint32_t limit : textureLimits) {
-            const bool selected = sceneLoadContext_.maxTextureSize == limit;
-            if (ImGui::Selectable(textureLimitLabel(limit), selected)) {
-                if (!selected)
-                    setTextureLimit(limit);
-            }
-            if (selected)
-                ImGui::SetItemDefaultFocus();
-        }
-        ImGui::EndCombo();
-    }
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-        ImGui::SetTooltip(
-            nativeSceneActive
-                ? "Preview only. Native scenes use each model's Catalog profile."
-                : "Changing texture quality reloads the current model preview.");
-    }
-    ImGui::EndDisabled();
-    ImGui::Separator();
-    float exposureEv = renderSettings().exposureEv;
-    if (ImGui::DragFloat("Exposure EV", &exposureEv, 0.05f, -10.0f,
-                         10.0f)) {
-        RenderSettingsPatch patch;
-        patch.exposureEv = exposureEv;
-        applyRenderSettings(patch);
-    }
-    constexpr const char *toneMapperLabels[] = {"PassThrough", "Reinhard",
-                                                "ACES"};
-    int toneMapperIndex = static_cast<int>(renderSettings().toneMapper);
-    if (ImGui::Combo("PBR Tone Mapper", &toneMapperIndex,
-                     toneMapperLabels,
-                     static_cast<int>(std::size(toneMapperLabels)))) {
-        RenderSettingsPatch patch;
-        patch.toneMapper = static_cast<ToneMapper>(toneMapperIndex);
-        applyRenderSettings(patch);
-    }
-    ImGui::TextDisabled("Legacy/debug use PassThrough");
-}
-
-void EditorController::drawPostProcessingPanel() {
-    const RenderSettingsSnapshot featureSnapshot =
-        renderSettingsController_->snapshot();
-    const RenderFeatureSupport &featureSupport = featureSnapshot.support;
-    const RenderFeatureRuntimeState &featureRuntime = featureSnapshot.runtime;
-    const bool available = featureSupport.bloom.supported;
-    const bool compatible = currentShaderVariant().supportsBloom;
-    ImGui::BeginDisabled(!available);
-    bool enabled = renderSettings().bloomEnabled;
-    if (ImGui::Checkbox("Bloom", &enabled)) {
-        RenderSettingsPatch patch;
-        patch.bloomEnabled = enabled;
-        applyRenderSettings(patch);
-    }
-    ImGui::BeginDisabled(!renderSettings().bloomEnabled);
-    float intensity = renderSettings().bloomIntensity;
-    if (ImGui::DragFloat("Intensity", &intensity, 0.01f, 0.0f, 5.0f)) {
-        RenderSettingsPatch patch;
-        patch.bloomIntensity = intensity;
-        applyRenderSettings(patch);
-    }
-    if (ImGui::TreeNodeEx("Bloom Tuning")) {
-        float threshold = renderSettings().bloomThreshold;
-        if (ImGui::DragFloat("Threshold", &threshold, 0.05f, 0.0f,
-                             20.0f)) {
-            RenderSettingsPatch patch;
-            patch.bloomThreshold = threshold;
-            applyRenderSettings(patch);
-        }
-        float softKnee = renderSettings().bloomSoftKnee;
-        if (ImGui::DragFloat("Soft Knee", &softKnee, 0.01f, 0.0f,
-                             1.0f)) {
-            RenderSettingsPatch patch;
-            patch.bloomSoftKnee = softKnee;
-            applyRenderSettings(patch);
-        }
-        ImGui::TextDisabled("Up to 6 half-resolution levels");
-        ImGui::TreePop();
-    }
-    ImGui::EndDisabled();
-    ImGui::EndDisabled();
-
-    const bool active = featureRuntime.bloomActive;
-    editor::statusIndicator(
-        active ? "Bloom active" : "Bloom inactive",
-        active ? editor::StatusTone::Success : editor::StatusTone::Neutral);
-    if (!available) {
-        editor::statusIndicator(
-            "Bloom unavailable", editor::StatusTone::Warning,
-            featureSupport.bloom.unavailableReason.c_str());
-    } else if (renderSettings().bloomEnabled && !compatible) {
-        ImGui::TextDisabled("Selected Shader does not support Bloom.");
-    }
-
-    ImGui::SeparatorText("Ambient Occlusion");
-    const ScreenSpaceEffectsStatus screenStatus =
-        renderer_->screenSpaceEffectsStatus();
-    constexpr const char *aoModeLabels[] = {"Off", "SSAO", "CACAO", "GTAO"};
-    int aoMode = static_cast<int>(renderSettings().ambientOcclusionMode);
-    if (ImGui::BeginCombo("Mode##AmbientOcclusion", aoModeLabels[aoMode])) {
-        for (int index = 0; index < static_cast<int>(std::size(aoModeLabels));
-             ++index) {
-            const auto mode = static_cast<AmbientOcclusionMode>(index);
-            const bool supported =
-                mode == AmbientOcclusionMode::Off ||
-                (mode == AmbientOcclusionMode::Ssao &&
-                 featureSupport.ssao.supported) ||
-                (mode == AmbientOcclusionMode::Cacao &&
-                 featureSupport.cacao.supported) ||
-                (mode == AmbientOcclusionMode::Gtao &&
-                 featureSupport.gtao.supported);
-            ImGui::BeginDisabled(!supported);
-            if (ImGui::Selectable(aoModeLabels[index], index == aoMode)) {
-                RenderSettingsPatch patch;
-                patch.ambientOcclusionMode = mode;
-                applyRenderSettings(patch);
-            }
-            if (index == aoMode)
-                ImGui::SetItemDefaultFocus();
-            ImGui::EndDisabled();
-        }
-        ImGui::EndCombo();
-    }
-    const bool ssaoRequested =
-        renderSettings().ambientOcclusionMode == AmbientOcclusionMode::Ssao;
-    const bool ssaoDebugRequested =
-        renderSettings().screenSpaceDebugView ==
-            ScreenSpaceDebugView::SsaoRaw ||
-        renderSettings().screenSpaceDebugView ==
-            ScreenSpaceDebugView::SsaoFiltered;
-    ImGui::BeginDisabled(!ssaoRequested && !ssaoDebugRequested);
-    constexpr const char *qualityLabels[] = {"Low (8)", "Medium (16)",
-                                              "High (32)"};
-    int quality = static_cast<int>(renderSettings().ssaoQuality);
-    if (ImGui::Combo("Quality##SSAO", &quality, qualityLabels,
-                     static_cast<int>(std::size(qualityLabels)))) {
-        RenderSettingsPatch patch;
-        patch.ssaoQuality = static_cast<SsaoQuality>(quality);
-        applyRenderSettings(patch);
-    }
-    float radius = renderSettings().ssaoRadius;
-    if (ImGui::DragFloat("Radius##SSAO", &radius, 0.01f, 0.05f, 10.0f,
-                         "%.2f")) {
-        RenderSettingsPatch patch;
-        patch.ssaoRadius = radius;
-        applyRenderSettings(patch);
-    }
-    float bias = renderSettings().ssaoBias;
-    if (ImGui::DragFloat("Bias##SSAO", &bias, 0.001f, 0.0f, 0.2f,
-                         "%.3f")) {
-        RenderSettingsPatch patch;
-        patch.ssaoBias = bias;
-        applyRenderSettings(patch);
-    }
-    float aoIntensity = renderSettings().ssaoIntensity;
-    if (ImGui::DragFloat("Intensity##SSAO", &aoIntensity, 0.02f, 0.0f,
-                         4.0f, "%.2f")) {
-        RenderSettingsPatch patch;
-        patch.ssaoIntensity = aoIntensity;
-        applyRenderSettings(patch);
-    }
-    float aoPower = renderSettings().ssaoPower;
-    if (ImGui::DragFloat("Power##SSAO", &aoPower, 0.02f, 0.25f, 4.0f,
-                         "%.2f")) {
-        RenderSettingsPatch patch;
-        patch.ssaoPower = aoPower;
-        applyRenderSettings(patch);
-    }
-    ImGui::EndDisabled();
-
-    const bool ssaoActive = featureRuntime.activeAmbientOcclusion ==
-                            AmbientOcclusionMode::Ssao;
-    editor::statusIndicator(
-        ssaoActive ? "SSAO active" : "SSAO inactive",
-        ssaoActive ? editor::StatusTone::Success
-                   : editor::StatusTone::Neutral,
-        !featureSupport.ssao.supported
-            ? featureSupport.ssao.unavailableReason.c_str()
-            : (ssaoRequested && !currentShaderVariant().supportsScreenSpace
-                   ? "Selected Shader does not consume screen-space AO."
-                   : nullptr));
-
-    const bool cacaoRequested =
-        renderSettings().ambientOcclusionMode == AmbientOcclusionMode::Cacao;
-    const bool cacaoDebugRequested =
-        renderSettings().screenSpaceDebugView ==
-        ScreenSpaceDebugView::CacaoOutput;
-    ImGui::BeginDisabled(!featureSupport.cacao.supported ||
-                         (!cacaoRequested && !cacaoDebugRequested));
-    constexpr const char *cacaoQualityLabels[] = {
-        "Lowest", "Low", "Medium", "High", "Highest"};
-    int cacaoQuality = static_cast<int>(renderSettings().cacao.quality);
-    if (ImGui::Combo("Quality##CACAO", &cacaoQuality, cacaoQualityLabels,
-                     static_cast<int>(std::size(cacaoQualityLabels)))) {
-        RenderSettingsPatch patch;
-        patch.cacaoQuality = static_cast<CacaoQuality>(cacaoQuality);
-        applyRenderSettings(patch);
-    }
-    constexpr const char *cacaoResolutionLabels[] = {"Native", "Half"};
-    int cacaoResolution = static_cast<int>(renderSettings().cacao.resolution);
-    if (ImGui::Combo("Resolution##CACAO", &cacaoResolution,
-                     cacaoResolutionLabels,
-                     static_cast<int>(std::size(cacaoResolutionLabels)))) {
-        RenderSettingsPatch patch;
-        patch.cacaoResolution =
-            static_cast<CacaoResolution>(cacaoResolution);
-        applyRenderSettings(patch);
-    }
-    float cacaoRadius = renderSettings().cacao.radius;
-    if (ImGui::DragFloat("Radius##CACAO", &cacaoRadius, 0.01f, 0.05f,
-                         10.0f, "%.2f")) {
-        RenderSettingsPatch patch;
-        patch.cacaoRadius = cacaoRadius;
-        applyRenderSettings(patch);
-    }
-    float cacaoIntensity = renderSettings().cacao.intensity;
-    if (ImGui::DragFloat("Intensity##CACAO", &cacaoIntensity, 0.02f, 0.0f,
-                         4.0f, "%.2f")) {
-        RenderSettingsPatch patch;
-        patch.cacaoIntensity = cacaoIntensity;
-        applyRenderSettings(patch);
-    }
-    float cacaoPower = renderSettings().cacao.power;
-    if (ImGui::DragFloat("Power##CACAO", &cacaoPower, 0.02f, 0.25f, 4.0f,
-                         "%.2f")) {
-        RenderSettingsPatch patch;
-        patch.cacaoPower = cacaoPower;
-        applyRenderSettings(patch);
-    }
-    ImGui::EndDisabled();
-
-    const bool cacaoActive = featureRuntime.activeAmbientOcclusion ==
-                             AmbientOcclusionMode::Cacao;
-    editor::statusIndicator(
-        cacaoActive ? "CACAO active" : "CACAO inactive",
-        cacaoActive ? editor::StatusTone::Success
-                    : editor::StatusTone::Neutral,
-        !featureSupport.cacao.supported
-            ? featureSupport.cacao.unavailableReason.c_str()
-            : (cacaoRequested && !currentShaderVariant().supportsScreenSpace
-                   ? "Selected Shader does not consume screen-space AO."
-                   : nullptr));
-    if (screenStatus.cacaoInitialized) {
-        ImGui::TextDisabled("CACAO: %s, generation %llu, %ux%u",
-                            screenStatus.cacaoFp32 ? "FP32" : "FP16",
-                            static_cast<unsigned long long>(
-                                screenStatus.cacaoGeneration),
-                            screenStatus.cacaoOutputExtent.width,
-                            screenStatus.cacaoOutputExtent.height);
-    }
-
-    const bool gtaoRequested =
-        renderSettings().ambientOcclusionMode == AmbientOcclusionMode::Gtao;
-    const bool gtaoDebugRequested =
-        renderSettings().screenSpaceDebugView == ScreenSpaceDebugView::GtaoRaw ||
-        renderSettings().screenSpaceDebugView ==
-            ScreenSpaceDebugView::GtaoTemporal ||
-        renderSettings().screenSpaceDebugView ==
-            ScreenSpaceDebugView::GtaoFiltered ||
-        renderSettings().screenSpaceDebugView ==
-            ScreenSpaceDebugView::GtaoRejection ||
-        renderSettings().screenSpaceDebugView ==
-            ScreenSpaceDebugView::GtaoHistoryWeight;
-    ImGui::BeginDisabled(!featureSupport.gtao.supported ||
-                         (!gtaoRequested && !gtaoDebugRequested));
-    constexpr const char *gtaoQualityLabels[] = {
-        "Low (2x2)", "Medium (3x4)", "High (4x6)"};
-    int gtaoQuality = static_cast<int>(renderSettings().gtao.quality);
-    if (ImGui::Combo("Quality##GTAO", &gtaoQuality, gtaoQualityLabels,
-                     static_cast<int>(std::size(gtaoQualityLabels)))) {
-        RenderSettingsPatch patch;
-        patch.gtaoQuality = static_cast<GtaoQuality>(gtaoQuality);
-        applyRenderSettings(patch);
-    }
-    float gtaoRadius = renderSettings().gtao.radius;
-    if (ImGui::DragFloat("Radius##GTAO", &gtaoRadius, 0.01f, 0.05f, 10.0f,
-                         "%.2f")) {
-        RenderSettingsPatch patch;
-        patch.gtaoRadius = gtaoRadius;
-        applyRenderSettings(patch);
-    }
-    float gtaoFalloff = renderSettings().gtao.falloff;
-    if (ImGui::SliderFloat("Falloff##GTAO", &gtaoFalloff, 0.0f, 0.99f,
-                           "%.2f")) {
-        RenderSettingsPatch patch;
-        patch.gtaoFalloff = gtaoFalloff;
-        applyRenderSettings(patch);
-    }
-    float gtaoIntensity = renderSettings().gtao.intensity;
-    if (ImGui::DragFloat("Intensity##GTAO", &gtaoIntensity, 0.02f, 0.0f,
-                         4.0f, "%.2f")) {
-        RenderSettingsPatch patch;
-        patch.gtaoIntensity = gtaoIntensity;
-        applyRenderSettings(patch);
-    }
-    float gtaoPower = renderSettings().gtao.power;
-    if (ImGui::DragFloat("Power##GTAO", &gtaoPower, 0.02f, 0.25f, 4.0f,
-                         "%.2f")) {
-        RenderSettingsPatch patch;
-        patch.gtaoPower = gtaoPower;
-        applyRenderSettings(patch);
-    }
-    float gtaoTemporalWeight = renderSettings().gtao.temporalWeight;
-    if (ImGui::SliderFloat("History Weight##GTAO", &gtaoTemporalWeight,
-                           0.0f, 0.99f, "%.2f")) {
-        RenderSettingsPatch patch;
-        patch.gtaoTemporalWeight = gtaoTemporalWeight;
-        applyRenderSettings(patch);
-    }
-    ImGui::EndDisabled();
-
-    editor::statusIndicator(
-        featureRuntime.activeAmbientOcclusion == AmbientOcclusionMode::Gtao
-            ? "GTAO active"
-            : "GTAO inactive",
-        featureRuntime.activeAmbientOcclusion == AmbientOcclusionMode::Gtao
-            ? editor::StatusTone::Success
-            : editor::StatusTone::Neutral,
-        !featureSupport.gtao.supported
-            ? featureSupport.gtao.unavailableReason.c_str()
-            : (gtaoRequested && !currentShaderVariant().supportsScreenSpace
-                   ? "Selected Shader does not consume screen-space AO."
-                   : nullptr));
-    if (featureSupport.gtao.supported &&
-        (gtaoRequested || gtaoDebugRequested)) {
-        ImGui::TextDisabled("History: %s, generation %llu, %ux%u",
-                            screenStatus.gtaoHistoryValid ? "valid" : "reset",
-                            static_cast<unsigned long long>(
-                                screenStatus.gtaoHistoryGeneration),
-                            screenStatus.gtaoExtent.width,
-                            screenStatus.gtaoExtent.height);
-        if (!screenStatus.gtaoLastResetReason.empty()) {
-            ImGui::TextDisabled("Reset: %s",
-                                screenStatus.gtaoLastResetReason.c_str());
-        }
-    }
-
-    ImGui::SeparatorText("Temporal Anti-Aliasing");
-    constexpr const char *taaModeLabels[] = {"Off", "TAA"};
-    int taaMode =
-        static_cast<int>(renderSettings().temporalAntiAliasingMode);
-    ImGui::BeginDisabled(!featureSupport.taa.supported);
-    if (ImGui::Combo("Mode##TAA", &taaMode, taaModeLabels,
-                     static_cast<int>(std::size(taaModeLabels)))) {
-        RenderSettingsPatch patch;
-        patch.temporalAntiAliasingMode =
-            static_cast<TemporalAntiAliasingMode>(taaMode);
-        applyRenderSettings(patch);
-    }
-    const bool taaRequested =
-        renderSettings().temporalAntiAliasingMode ==
-        TemporalAntiAliasingMode::Taa;
-    const bool taaDebugRequested =
-        renderSettings().screenSpaceDebugView ==
-            ScreenSpaceDebugView::TaaHistory ||
-        renderSettings().screenSpaceDebugView ==
-            ScreenSpaceDebugView::TaaRejection ||
-        renderSettings().screenSpaceDebugView ==
-            ScreenSpaceDebugView::TaaHistoryWeight;
-    ImGui::BeginDisabled(!taaRequested && !taaDebugRequested);
-    float historyWeight = renderSettings().taaHistoryWeight;
-    if (ImGui::SliderFloat("History Weight##TAA", &historyWeight, 0.0f,
-                           0.99f, "%.2f")) {
-        RenderSettingsPatch patch;
-        patch.taaHistoryWeight = historyWeight;
-        applyRenderSettings(patch);
-    }
-    float sharpness = renderSettings().taaSharpness;
-    if (ImGui::SliderFloat("Sharpness##TAA", &sharpness, 0.0f, 1.0f,
-                           "%.2f")) {
-        RenderSettingsPatch patch;
-        patch.taaSharpness = sharpness;
-        applyRenderSettings(patch);
-    }
-    ImGui::EndDisabled();
-    ImGui::EndDisabled();
-    editor::statusIndicator(
-        featureRuntime.taaActive ? "TAA active" : "TAA inactive",
-        featureRuntime.taaActive ? editor::StatusTone::Success
-                                 : editor::StatusTone::Neutral,
-        !featureSupport.taa.supported
-            ? featureSupport.taa.unavailableReason.c_str()
-            : nullptr);
-    if (featureSupport.taa.supported) {
-        ImGui::TextDisabled(
-            "History: %s, generation %llu, jitter (%.2f, %.2f)",
-            screenStatus.taaHistoryValid ? "valid" : "reset",
-            static_cast<unsigned long long>(
-                screenStatus.taaHistoryGeneration),
-            screenStatus.taaJitterPixels.x,
-            screenStatus.taaJitterPixels.y);
-        if (!screenStatus.taaLastResetReason.empty()) {
-            ImGui::TextDisabled("Reset: %s",
-                                screenStatus.taaLastResetReason.c_str());
-        }
-    }
-
-    ImGui::SeparatorText("Reflections");
-    constexpr const char *reflectionLabels[] = {"IBL Only", "SSR"};
-    int reflectionMode = static_cast<int>(renderSettings().reflectionMode);
-    ImGui::BeginDisabled(!featureSupport.ssr.supported);
-    if (ImGui::Combo("Mode##Reflections", &reflectionMode,
-                     reflectionLabels,
-                     static_cast<int>(std::size(reflectionLabels)))) {
-        RenderSettingsPatch patch;
-        patch.reflectionMode = static_cast<ReflectionMode>(reflectionMode);
-        applyRenderSettings(patch);
-    }
-    const bool ssrRequested =
-        renderSettings().reflectionMode == ReflectionMode::Ssr;
-    ImGui::BeginDisabled(!ssrRequested);
-    constexpr const char *ssrQualityLabels[] = {"Low", "Medium", "High"};
-    int ssrQuality = static_cast<int>(renderSettings().ssrQuality);
-    if (ImGui::Combo("Quality##SSR", &ssrQuality, ssrQualityLabels,
-                     static_cast<int>(std::size(ssrQualityLabels)))) {
-        RenderSettingsPatch patch;
-        patch.ssrQuality = static_cast<SsrQuality>(ssrQuality);
-        applyRenderSettings(patch);
-    }
-    float ssrDistance = renderSettings().ssrMaxDistance;
-    if (ImGui::DragFloat("Max Distance##SSR", &ssrDistance, 0.25f,
-                         0.1f, 1000.0f, "%.1f")) {
-        RenderSettingsPatch patch; patch.ssrMaxDistance = ssrDistance;
-        applyRenderSettings(patch);
-    }
-    float ssrThickness = renderSettings().ssrThickness;
-    if (ImGui::DragFloat("Thickness##SSR", &ssrThickness, 0.005f,
-                         0.001f, 10.0f, "%.3f")) {
-        RenderSettingsPatch patch; patch.ssrThickness = ssrThickness;
-        applyRenderSettings(patch);
-    }
-    float ssrRoughness = renderSettings().ssrMaxRoughness;
-    if (ImGui::SliderFloat("Max Roughness##SSR", &ssrRoughness,
-                           0.0f, 1.0f, "%.2f")) {
-        RenderSettingsPatch patch; patch.ssrMaxRoughness = ssrRoughness;
-        applyRenderSettings(patch);
-    }
-    float ssrIntensity = renderSettings().ssrIntensity;
-    if (ImGui::SliderFloat("Intensity##SSR", &ssrIntensity,
-                           0.0f, 4.0f, "%.2f")) {
-        RenderSettingsPatch patch; patch.ssrIntensity = ssrIntensity;
-        applyRenderSettings(patch);
-    }
-    float ssrHistory = renderSettings().ssrHistoryWeight;
-    if (ImGui::SliderFloat("History Weight##SSR", &ssrHistory,
-                           0.0f, 0.99f, "%.2f")) {
-        RenderSettingsPatch patch; patch.ssrHistoryWeight = ssrHistory;
-        applyRenderSettings(patch);
-    }
-    ImGui::EndDisabled();
-    ImGui::EndDisabled();
-    editor::statusIndicator(
-        featureRuntime.ssrActive ? "SSR active" : "SSR inactive",
-        featureRuntime.ssrActive ? editor::StatusTone::Success
-                                 : editor::StatusTone::Neutral,
-        !featureSupport.ssr.supported
-            ? featureSupport.ssr.unavailableReason.c_str()
-            : (ssrRequested && !currentShaderVariant().supportsScreenSpace
-                   ? "Selected Shader does not consume screen-space reflections."
-                   : nullptr));
-    if (featureSupport.ssr.supported && ssrRequested) {
-        ImGui::TextDisabled("History: %s, generation %llu, %ux%u",
-                            screenStatus.ssrHistoryValid ? "valid" : "reset",
-                            static_cast<unsigned long long>(
-                                screenStatus.ssrHistoryGeneration),
-                            screenStatus.ssrExtent.width,
-                            screenStatus.ssrExtent.height);
-        if (!screenStatus.ssrLastResetReason.empty())
-            ImGui::TextDisabled("Reset: %s",
-                                screenStatus.ssrLastResetReason.c_str());
-    }
-
-    ImGui::SeparatorText("Global Illumination");
-    constexpr const char *giModeLabels[] = {
-        "Ambient / IBL", "SSGI", "DDGI", "SSGI + DDGI"};
-    int giMode = static_cast<int>(renderSettings().globalIlluminationMode);
-    const DdgiRuntimeStatus ddgiStatus = renderer_->ddgiStatus();
-    if (ImGui::BeginCombo("Mode##GI", giModeLabels[giMode])) {
-        for (int index = 0;
-             index < static_cast<int>(std::size(giModeLabels)); ++index) {
-            const auto mode = static_cast<GlobalIlluminationMode>(index);
-            const bool needsSsgi = mode == GlobalIlluminationMode::Ssgi ||
-                                   mode == GlobalIlluminationMode::SsgiDdgi;
-            const bool needsDdgi = mode == GlobalIlluminationMode::Ddgi ||
-                                   mode == GlobalIlluminationMode::SsgiDdgi;
-            const bool supported =
-                (!needsSsgi || featureSupport.ssgi.supported) &&
-                (!needsDdgi || featureSupport.ddgi.supported);
-            ImGui::BeginDisabled(!supported);
-            if (ImGui::Selectable(giModeLabels[index], giMode == index)) {
-                RenderSettingsPatch patch;
-                patch.globalIlluminationMode = mode;
-                applyRenderSettings(patch);
-            }
-            ImGui::EndDisabled();
-            if (giMode == index)
-                ImGui::SetItemDefaultFocus();
-        }
-        ImGui::EndCombo();
-    }
-    const bool ssgiRequested =
-        renderSettings().globalIlluminationMode == GlobalIlluminationMode::Ssgi ||
-        renderSettings().globalIlluminationMode ==
-            GlobalIlluminationMode::SsgiDdgi;
-    ImGui::BeginDisabled(!ssgiRequested);
-    constexpr const char *ssgiQualityLabels[] = {"Low", "Medium", "High"};
-    int ssgiQuality = static_cast<int>(renderSettings().ssgiQuality);
-    if (ImGui::Combo("Quality##SSGI", &ssgiQuality, ssgiQualityLabels,
-                     static_cast<int>(std::size(ssgiQualityLabels)))) {
-        RenderSettingsPatch patch;
-        patch.ssgiQuality = static_cast<SsgiQuality>(ssgiQuality);
-        applyRenderSettings(patch);
-    }
-    float ssgiDistance = renderSettings().ssgiMaxDistance;
-    if (ImGui::DragFloat("Max Distance##SSGI", &ssgiDistance, 0.1f,
-                         0.05f, 1000.0f, "%.2f")) {
-        RenderSettingsPatch patch;
-        patch.ssgiMaxDistance = ssgiDistance;
-        applyRenderSettings(patch);
-    }
-    float ssgiThickness = renderSettings().ssgiThickness;
-    if (ImGui::DragFloat("Thickness##SSGI", &ssgiThickness, 0.005f,
-                         0.001f, 10.0f, "%.3f")) {
-        RenderSettingsPatch patch;
-        patch.ssgiThickness = ssgiThickness;
-        applyRenderSettings(patch);
-    }
-    float ssgiIntensity = renderSettings().ssgiIntensity;
-    if (ImGui::SliderFloat("Intensity##SSGI", &ssgiIntensity,
-                           0.0f, 4.0f, "%.2f")) {
-        RenderSettingsPatch patch;
-        patch.ssgiIntensity = ssgiIntensity;
-        applyRenderSettings(patch);
-    }
-    float ssgiClamp = renderSettings().ssgiRadianceClamp;
-    if (ImGui::DragFloat("Radiance Clamp##SSGI", &ssgiClamp, 0.1f,
-                         0.1f, 100.0f, "%.1f")) {
-        RenderSettingsPatch patch;
-        patch.ssgiRadianceClamp = ssgiClamp;
-        applyRenderSettings(patch);
-    }
-    float ssgiHistory = renderSettings().ssgiHistoryWeight;
-    if (ImGui::SliderFloat("History Weight##SSGI", &ssgiHistory,
-                           0.0f, 0.99f, "%.2f")) {
-        RenderSettingsPatch patch;
-        patch.ssgiHistoryWeight = ssgiHistory;
-        applyRenderSettings(patch);
-    }
-    ImGui::EndDisabled();
-    editor::statusIndicator(
-        featureRuntime.ssgiActive ? "SSGI active" : "SSGI inactive",
-        featureRuntime.ssgiActive ? editor::StatusTone::Success
-                                  : editor::StatusTone::Neutral,
-        !featureSupport.ssgi.supported
-            ? featureSupport.ssgi.unavailableReason.c_str()
-            : (ssgiRequested && !currentShaderVariant().supportsScreenSpace
-                   ? "Selected Shader does not consume screen-space GI."
-                   : nullptr));
-    if (featureSupport.ssgi.supported && ssgiRequested) {
-        ImGui::TextDisabled("History: %s, generation %llu, %ux%u",
-                            screenStatus.ssgiHistoryValid ? "valid" : "reset",
-                            static_cast<unsigned long long>(
-                                screenStatus.ssgiHistoryGeneration),
-                            screenStatus.ssgiExtent.width,
-                            screenStatus.ssgiExtent.height);
-        if (!screenStatus.ssgiLastResetReason.empty())
-            ImGui::TextDisabled("Reset: %s",
-                                screenStatus.ssgiLastResetReason.c_str());
-    }
-
-    const bool ddgiRequested =
-        renderSettings().globalIlluminationMode == GlobalIlluminationMode::Ddgi ||
-        renderSettings().globalIlluminationMode ==
-            GlobalIlluminationMode::SsgiDdgi;
-    ImGui::BeginDisabled(!ddgiRequested || !featureSupport.ddgi.supported);
-    float ddgiClamp = renderSettings().ddgi.radianceClamp;
-    if (ImGui::DragFloat("Radiance Clamp##DDGI", &ddgiClamp, 0.1f,
-                         0.1f, 100.0f, "%.1f")) {
-        RenderSettingsPatch patch;
-        patch.ddgiRadianceClamp = ddgiClamp;
-        applyRenderSettings(patch);
-    }
-    constexpr const char *ddgiDebugLabels[] = {
-        "None", "Irradiance", "Distance", "Classification"};
-    int ddgiDebug = static_cast<int>(renderSettings().ddgi.debugView);
-    if (ImGui::Combo("Debug##DDGI", &ddgiDebug, ddgiDebugLabels,
-                     static_cast<int>(std::size(ddgiDebugLabels)))) {
-        RenderSettingsPatch patch;
-        patch.ddgiDebugView = static_cast<DdgiDebugView>(ddgiDebug);
-        applyRenderSettings(patch);
-    }
-    ImGui::EndDisabled();
-    editor::statusIndicator(
-        featureRuntime.ddgiActive ? "DDGI active" : "DDGI inactive",
-        featureRuntime.ddgiActive ? editor::StatusTone::Success
-                                  : editor::StatusTone::Neutral,
-        !featureSupport.ddgi.supported
-            ? featureSupport.ddgi.unavailableReason.c_str()
-            : (ddgiRequested && !ddgiStatus.componentPresent
-                   ? "The active native scene has no DDGI Probe Volume."
-                   : (ddgiRequested &&
-                              !currentShaderVariant().supportsDdgi
-                          ? "Selected Shader does not consume DDGI."
-                          : nullptr)));
-    if (ddgiStatus.componentPresent) {
-        ImGui::TextDisabled(
-            "Probes: %u, update %u x %u rays, cursor %u",
-            ddgiStatus.probeCount, ddgiStatus.probesUpdatedPerFrame,
-            ddgiStatus.raysPerProbe, ddgiStatus.updateCursor);
-        ImGui::TextDisabled(
-            "TLAS instances: %u, generation %llu, memory %.2f MiB",
-            ddgiStatus.tracedInstanceCount,
-            static_cast<unsigned long long>(ddgiStatus.generation),
-            static_cast<double>(ddgiStatus.allocatedBytes) /
-                (1024.0 * 1024.0));
-    }
-
-    ImGui::SeparatorText("Screen-Space Debug");
-    constexpr const char *screenDebugLabels[] = {
-        "None", "Nearest Depth", "Scene Color", "SSAO Raw",
-        "SSAO Filtered", "CACAO Output", "GTAO Raw", "GTAO Temporal",
-        "GTAO Filtered", "GTAO Rejection", "GTAO History Weight",
-        "TAA History", "TAA Rejection", "TAA History Weight",
-        "SSR Raw", "SSR Temporal", "SSR Filtered", "SSR Confidence",
-        "SSR Rejection", "SSGI Raw", "SSGI Temporal", "SSGI Filtered",
-        "SSGI Confidence", "SSGI Variance", "SSGI Rejection"};
-    int screenDebug =
-        static_cast<int>(renderSettings().screenSpaceDebugView);
-    const char *preview = screenDebugLabels[screenDebug];
-    if (ImGui::BeginCombo("Debug View##ScreenSpace", preview)) {
-        for (int index = 0; index < static_cast<int>(std::size(screenDebugLabels));
-             ++index) {
-            const auto view = static_cast<ScreenSpaceDebugView>(index);
-            const bool supported =
-                view == ScreenSpaceDebugView::None ||
-                (view == ScreenSpaceDebugView::NearestDepth &&
-                 featureSupport.depthPyramid.supported) ||
-                (view == ScreenSpaceDebugView::SceneColor &&
-                 featureSupport.colorPyramid.supported) ||
-                ((view == ScreenSpaceDebugView::SsaoRaw ||
-                  view == ScreenSpaceDebugView::SsaoFiltered) &&
-                 featureSupport.ssao.supported) ||
-                (view == ScreenSpaceDebugView::CacaoOutput &&
-                 featureSupport.cacao.supported) ||
-                ((view == ScreenSpaceDebugView::GtaoRaw ||
-                  view == ScreenSpaceDebugView::GtaoTemporal ||
-                  view == ScreenSpaceDebugView::GtaoFiltered ||
-                  view == ScreenSpaceDebugView::GtaoRejection ||
-                  view == ScreenSpaceDebugView::GtaoHistoryWeight) &&
-                 featureSupport.gtao.supported) ||
-                ((view == ScreenSpaceDebugView::TaaHistory ||
-                  view == ScreenSpaceDebugView::TaaRejection ||
-                  view == ScreenSpaceDebugView::TaaHistoryWeight) &&
-                 featureSupport.taa.supported) ||
-                ((view == ScreenSpaceDebugView::SsrRaw ||
-                  view == ScreenSpaceDebugView::SsrTemporal ||
-                  view == ScreenSpaceDebugView::SsrFiltered ||
-                  view == ScreenSpaceDebugView::SsrConfidence ||
-                  view == ScreenSpaceDebugView::SsrRejection) &&
-                 featureSupport.ssr.supported) ||
-                ((view == ScreenSpaceDebugView::SsgiRaw ||
-                  view == ScreenSpaceDebugView::SsgiTemporal ||
-                  view == ScreenSpaceDebugView::SsgiFiltered ||
-                  view == ScreenSpaceDebugView::SsgiConfidence ||
-                  view == ScreenSpaceDebugView::SsgiVariance ||
-                  view == ScreenSpaceDebugView::SsgiRejection) &&
-                 featureSupport.ssgi.supported);
-            ImGui::BeginDisabled(!supported);
-            const bool selected = index == screenDebug;
-            if (ImGui::Selectable(screenDebugLabels[index], selected)) {
-                RenderSettingsPatch patch;
-                patch.screenSpaceDebugView = view;
-                if (view != ScreenSpaceDebugView::None)
-                    patch.surfaceDebugView = SurfaceDebugView::None;
-                applyRenderSettings(patch);
-            }
-            if (selected)
-                ImGui::SetItemDefaultFocus();
-            ImGui::EndDisabled();
-        }
-        ImGui::EndCombo();
-    }
-    uint32_t maximumMip = 0;
-    if (renderSettings().screenSpaceDebugView ==
-        ScreenSpaceDebugView::NearestDepth) {
-        maximumMip = screenStatus.depthMipLevels > 0
-                         ? screenStatus.depthMipLevels - 1u
-                         : 0u;
-    } else if (renderSettings().screenSpaceDebugView ==
-               ScreenSpaceDebugView::SceneColor) {
-        maximumMip = screenStatus.colorMipLevels > 0
-                         ? screenStatus.colorMipLevels - 1u
-                         : 0u;
-    }
-    int debugMip = static_cast<int>(std::min(
-        renderSettings().screenSpaceDebugMip, maximumMip));
-    ImGui::BeginDisabled(maximumMip == 0);
-    if (ImGui::SliderInt("Mip##ScreenSpace", &debugMip, 0,
-                         static_cast<int>(maximumMip))) {
-        RenderSettingsPatch patch;
-        patch.screenSpaceDebugMip = static_cast<uint32_t>(debugMip);
-        applyRenderSettings(patch);
-    }
-    ImGui::EndDisabled();
-    ImGui::TextDisabled("Resources: %.2f MiB",
-                        static_cast<double>(screenStatus.estimatedMemoryBytes) /
-                            (1024.0 * 1024.0));
-}
-
-void EditorController::drawSurfaceDataPanel() {
-    const RenderSettingsSnapshot featureSnapshot =
-        renderSettingsController_->snapshot();
-    const SurfaceDataStatus status = renderer_->surfaceDataStatus();
-    constexpr const char *labels[] = {
-        "None", "Normal", "Roughness", "Motion", "History Validity"};
-    int mode = static_cast<int>(renderSettings().surfaceDebugView);
-    ImGui::BeginDisabled(!featureSnapshot.support.surfaceData.supported);
-    if (ImGui::Combo("Debug View", &mode, labels,
-                     static_cast<int>(std::size(labels)))) {
-        RenderSettingsPatch patch;
-        patch.surfaceDebugView = static_cast<SurfaceDebugView>(mode);
-        if (patch.surfaceDebugView != SurfaceDebugView::None)
-            patch.screenSpaceDebugView = ScreenSpaceDebugView::None;
-        applyRenderSettings(patch);
-    }
-    ImGui::BeginDisabled(
-        renderSettings().surfaceDebugView != SurfaceDebugView::Motion);
-    float motionScale = renderSettings().surfaceMotionDebugScale;
-    if (ImGui::DragFloat("Motion Scale", &motionScale, 0.5f, 0.1f,
-                         1024.0f, "%.1f")) {
-        RenderSettingsPatch patch;
-        patch.surfaceMotionDebugScale = motionScale;
-        applyRenderSettings(patch);
-    }
-    ImGui::EndDisabled();
-    ImGui::EndDisabled();
-
-    if (featureSnapshot.support.surfaceData.supported) {
-        editor::statusIndicator(
-            featureSnapshot.runtime.surfaceDataActive
-                ? "Surface data active"
-                : "Surface data inactive",
-            featureSnapshot.runtime.surfaceDataActive
-                ? editor::StatusTone::Success
-                : editor::StatusTone::Neutral);
-        ImGui::Text("History: %u / %u items",
-                    visibilityFrame_.history.historyValidItems,
-                    static_cast<uint32_t>(visibilityFrame_.items.size()));
-        ImGui::TextDisabled("Generation %llu",
-                            static_cast<unsigned long long>(
-                                visibilityFrame_.history.historyGeneration));
-        if (!visibilityFrame_.history.invalidationReason.empty()) {
-            ImGui::TextDisabled("Reset: %s",
-                                visibilityFrame_.history.invalidationReason
-                                    .c_str());
-        }
-        ImGui::TextDisabled("Formats: depth=%d normal=%d motion=%d",
-                            static_cast<int>(status.depthFormat),
-                            static_cast<int>(status.normalRoughnessFormat),
-                            static_cast<int>(status.motionFormat));
-        ImGui::TextDisabled("History buffers: %u / %u (%llu KiB)",
-                            status.historyCapacities[0],
-                            status.historyCapacities[1],
-                            static_cast<unsigned long long>(
-                                status.allocatedBytes / 1024u));
-    } else {
-        editor::statusIndicator("Surface data unavailable",
-                                editor::StatusTone::Warning,
-                                featureSnapshot.support.surfaceData
-                                    .unavailableReason.c_str());
-    }
-}
-
-void EditorController::drawCullingPanel() {
-    const RenderSettingsSnapshot featureSnapshot =
-        renderSettingsController_->snapshot();
-    bool frustumEnabled = renderSettings().culling.frustumEnabled;
-    if (ImGui::Checkbox("Camera Frustum", &frustumEnabled)) {
-        RenderSettingsPatch patch;
-        patch.frustumCullingEnabled = frustumEnabled;
-        applyRenderSettings(patch);
-    }
-
-    bool distanceEnabled = renderSettings().culling.distanceEnabled;
-    if (ImGui::Checkbox("Max Draw Distance", &distanceEnabled)) {
-        RenderSettingsPatch patch;
-        patch.distanceCullingEnabled = distanceEnabled;
-        applyRenderSettings(patch);
-    }
-    ImGui::BeginDisabled(!renderSettings().culling.distanceEnabled);
-    float maxDrawDistance = renderSettings().culling.maxDrawDistance;
-    if (ImGui::DragFloat("Distance", &maxDrawDistance, 1.0f, 0.1f,
-                         1000000.0f, "%.1f")) {
-        RenderSettingsPatch patch;
-        patch.maxDrawDistance = maxDrawDistance;
-        applyRenderSettings(patch);
-    }
-    ImGui::EndDisabled();
-
-    bool smallObjectEnabled = renderSettings().culling.smallObjectEnabled;
-    if (ImGui::Checkbox("Small Objects", &smallObjectEnabled)) {
-        RenderSettingsPatch patch;
-        patch.smallObjectCullingEnabled = smallObjectEnabled;
-        applyRenderSettings(patch);
-    }
-    ImGui::BeginDisabled(!renderSettings().culling.smallObjectEnabled);
-    float minimumPixels = renderSettings().culling.minProjectedSizePixels;
-    if (ImGui::DragFloat("Minimum Size", &minimumPixels, 0.1f, 0.0f,
-                         256.0f, "%.1f px")) {
-        RenderSettingsPatch patch;
-        patch.minProjectedSizePixels = minimumPixels;
-        applyRenderSettings(patch);
-    }
-    ImGui::EndDisabled();
-
-    ImGui::SeparatorText("Shadow Casters");
-    bool shadowCullingEnabled =
-        renderSettings().culling.shadowCullingEnabled;
-    if (ImGui::Checkbox("Cull Shadow Casters", &shadowCullingEnabled)) {
-        RenderSettingsPatch patch;
-        patch.shadowCullingEnabled = shadowCullingEnabled;
-        applyRenderSettings(patch);
-    }
-    ImGui::BeginDisabled(!renderSettings().culling.shadowCullingEnabled);
-    float shadowDistance = renderSettings().culling.shadowDistance;
-    if (ImGui::DragFloat("Shadow Distance", &shadowDistance, 1.0f,
-                         kMinDirectionalShadowDistance,
-                         kMaxDirectionalShadowDistance, "%.1f")) {
-        RenderSettingsPatch patch;
-        patch.shadowDistance = shadowDistance;
-        applyRenderSettings(patch);
-    }
-    ImGui::EndDisabled();
-
-    ImGui::SeparatorText("GPU Occlusion");
-    const OcclusionCullingStatus status =
-        renderer_->occlusionCullingStatus();
-    ImGui::BeginDisabled(
-        !featureSnapshot.support.occlusionCulling.supported);
-    bool occlusionEnabled = renderSettings().culling.occlusionEnabled;
-    if (ImGui::Checkbox("Hi-Z Occlusion", &occlusionEnabled)) {
-        RenderSettingsPatch patch;
-        patch.occlusionCullingEnabled = occlusionEnabled;
-        applyRenderSettings(patch);
-    }
-    ImGui::BeginDisabled(!renderSettings().culling.occlusionEnabled);
-    int minimumCandidates = static_cast<int>(
-        renderSettings().culling.occlusionMinCandidates);
-    if (ImGui::DragInt("Minimum Candidates", &minimumCandidates, 1.0f,
-                       0, 65536)) {
-        RenderSettingsPatch patch;
-        patch.occlusionMinCandidates =
-            static_cast<uint32_t>(std::max(minimumCandidates, 0));
-        applyRenderSettings(patch);
-    }
-    float depthBias = renderSettings().culling.occlusionDepthBias;
-    if (ImGui::DragFloat("Depth Bias", &depthBias, 0.00005f, 0.0f, 0.05f,
-                         "%.5f")) {
-        RenderSettingsPatch patch;
-        patch.occlusionDepthBias = depthBias;
-        applyRenderSettings(patch);
-    }
-    ImGui::EndDisabled();
-    ImGui::EndDisabled();
-    if (featureSnapshot.support.occlusionCulling.supported) {
-        editor::statusIndicator(
-            featureSnapshot.runtime.occlusionCullingActive
-                ? "Occlusion active"
-                : "Occlusion inactive",
-            featureSnapshot.runtime.occlusionCullingActive
-                ? editor::StatusTone::Success
-                : editor::StatusTone::Neutral);
-    } else {
-        editor::statusIndicator("Occlusion unavailable",
-                                editor::StatusTone::Warning,
-                                featureSnapshot.support.occlusionCulling
-                                    .unavailableReason.c_str());
-    }
-
-    if (ImGui::TreeNodeEx("Culling Statistics",
-                          ImGuiTreeNodeFlags_DefaultOpen)) {
-        const VisibilityCpuStatistics &stats = visibilityFrame_.cpuStats;
-        ImGui::Text("Source: %u  Visible: %u", stats.sourceDraws,
-                    stats.cameraVisible);
-        ImGui::Text("Camera culled: %u frustum, %u distance, %u small",
-                    stats.frustumCulled, stats.distanceCulled,
-                    stats.smallObjectCulled);
-        ImGui::Text("Camera queues: %u opaque, %u transparent",
-                    stats.cameraOpaque, stats.cameraTransparent);
-        ImGui::Text("Invalid bounds: %u", stats.invalidBounds);
-        ImGui::Text("Shadow: %u / %u visible, %u culled",
-                    stats.shadowVisible, stats.shadowCandidates,
-                    stats.shadowCulled);
-        ImGui::Text("CSM draws: %u / %u / %u / %u",
-                    stats.directionalShadowDraws[0],
-                    stats.directionalShadowDraws[1],
-                    stats.directionalShadowDraws[2],
-                    stats.directionalShadowDraws[3]);
-        uint32_t pointShadowDraws = 0;
-        for (uint32_t count : stats.pointShadowDraws)
-            pointShadowDraws += count;
-        uint32_t spotShadowDraws = 0;
-        for (uint32_t count : stats.spotShadowDraws)
-            spotShadowDraws += count;
-        ImGui::Text("Punctual shadow draws: %u point, %u spot",
-                    pointShadowDraws, spotShadowDraws);
-        ImGui::Text("Depth draws: %u", stats.depthPrepassDraws);
-        ImGui::Text("GPU occluded: %u / %u",
-                    status.completed.occluded,
-                    status.completed.candidates);
-        if (status.latestUncullable != 0)
-            ImGui::Text("GPU uncullable: %u", status.latestUncullable);
-        if (status.completed.frameSerial != 0) {
-            ImGui::TextDisabled("GPU result frame: %llu",
-                                static_cast<unsigned long long>(
-                                    status.completed.frameSerial));
-        }
-        ImGui::Text("Hi-Z mips: %u", status.hiZMipLevels);
-        ImGui::Text("Indirect capacity: %u / %u",
-                    status.indirectCapacities[0],
-                    status.indirectCapacities[1]);
-        ImGui::Text("Visibility buffers: %.2f KiB",
-                    static_cast<double>(status.allocatedBytes) / 1024.0);
-        ImGui::TreePop();
-    }
-}
-
 void EditorController::drawSceneLoadingPanel() {
     if (!sceneRuntime_->latestSceneLoadTask())
         return;
@@ -2091,1080 +1022,6 @@ void EditorController::drawSceneLoadingPanel() {
     std::lock_guard<std::mutex> lock(task->mutex);
     if (!task->error.empty())
         ImGui::TextWrapped("Error: %s", task->error.c_str());
-}
-
-void EditorController::drawLightingPanel() {
-    bool shadowsEnabled = renderSettings().shadowsEnabled;
-    if (ImGui::Checkbox("Shadows", &shadowsEnabled)) {
-        RenderSettingsPatch patch;
-        patch.shadowsEnabled = shadowsEnabled;
-        applyRenderSettings(patch);
-    }
-    ImGui::BeginDisabled(!renderSettings().shadowsEnabled);
-    if (ImGui::TreeNodeEx("Shadow Tuning")) {
-        float receiverBias = renderSettings().shadowReceiverBias;
-        if (ImGui::DragFloat("Receiver Bias", &receiverBias, 0.00005f,
-                             0.0f, 0.05f, "%.5f")) {
-            RenderSettingsPatch patch;
-            patch.shadowReceiverBias = receiverBias;
-            applyRenderSettings(patch);
-        }
-        float pointReceiverBias =
-            renderSettings().pointShadowReceiverBiasWorld;
-        if (ImGui::DragFloat("Point Bias (World)", &pointReceiverBias,
-                             0.001f, 0.0f, 1.0f, "%.3f")) {
-            RenderSettingsPatch patch;
-            patch.pointShadowReceiverBiasWorld = pointReceiverBias;
-            applyRenderSettings(patch);
-        }
-        float constantBias = renderSettings().shadowConstantBias;
-        if (ImGui::DragFloat("Constant Bias", &constantBias, 0.05f, 0.0f,
-                             10.0f)) {
-            RenderSettingsPatch patch;
-            patch.shadowConstantBias = constantBias;
-            applyRenderSettings(patch);
-        }
-        float slopeBias = renderSettings().shadowSlopeBias;
-        if (ImGui::DragFloat("Slope Bias", &slopeBias, 0.05f, 0.0f,
-                             10.0f)) {
-            RenderSettingsPatch patch;
-            patch.shadowSlopeBias = slopeBias;
-            applyRenderSettings(patch);
-        }
-        ImGui::TextDisabled("Shadow map %ux%u",
-                            kDirectionalShadowMapSize,
-                            kDirectionalShadowMapSize);
-        int maxPoint = static_cast<int>(
-            renderSettings().maxPointShadowLights);
-        if (ImGui::SliderInt("Max Point Shadows", &maxPoint, 0,
-                             static_cast<int>(kMaxPointShadowLights))) {
-            RenderSettingsPatch patch;
-            patch.maxPointShadowLights =
-                static_cast<uint32_t>(maxPoint);
-            applyRenderSettings(patch);
-        }
-        float pointDistance = renderSettings().pointShadowDistance;
-        if (ImGui::DragFloat("Point Shadow Distance", &pointDistance,
-                             1.0f, kMinPunctualShadowDistance,
-                             kMaxPunctualShadowDistance, "%.1f")) {
-            RenderSettingsPatch patch;
-            patch.pointShadowDistance = pointDistance;
-            applyRenderSettings(patch);
-        }
-        int maxSpot = static_cast<int>(
-            renderSettings().maxSpotShadowLights);
-        if (ImGui::SliderInt("Max Spot Shadows", &maxSpot, 0,
-                             static_cast<int>(kMaxSpotShadowLights))) {
-            RenderSettingsPatch patch;
-            patch.maxSpotShadowLights =
-                static_cast<uint32_t>(maxSpot);
-            applyRenderSettings(patch);
-        }
-        float spotDistance = renderSettings().spotShadowDistance;
-        if (ImGui::DragFloat("Spot Shadow Distance", &spotDistance,
-                             1.0f, kMinPunctualShadowDistance,
-                             kMaxPunctualShadowDistance, "%.1f")) {
-            RenderSettingsPatch patch;
-            patch.spotShadowDistance = spotDistance;
-            applyRenderSettings(patch);
-        }
-        ImGui::TextDisabled(
-            "Active: %u point, %u spot",
-            lastLightStats_.pointShadowLights,
-            lastLightStats_.spotShadowLights);
-        ImGui::TextDisabled(
-            "CSM casters: %u / %u / %u / %u",
-            visibilityFrame_.cpuStats.directionalShadowDraws[0],
-            visibilityFrame_.cpuStats.directionalShadowDraws[1],
-            visibilityFrame_.cpuStats.directionalShadowDraws[2],
-            visibilityFrame_.cpuStats.directionalShadowDraws[3]);
-        for (const PunctualShadowSelection &selection :
-             lastLightStats_.pointShadowSelections) {
-            uint32_t casterDraws = 0;
-            for (uint32_t face = 0; face < kPointShadowFaceCount; ++face) {
-                casterDraws += visibilityFrame_.cpuStats.pointShadowDraws[
-                    selection.slot * kPointShadowFaceCount + face];
-            }
-            const std::string &label = selection.name.empty()
-                                           ? selection.stableKey
-                                           : selection.name;
-            ImGui::BulletText(
-                "Point [%u] %s, %s, score %.2f, age %u, far %.1f, %u draws%s",
-                selection.slot, label.c_str(),
-                shadowCastingPolicyName(selection.policy), selection.score,
-                selection.age, selection.farPlane, casterDraws,
-                selection.focused ? ", selected" :
-                selection.retained ? ", retained" : "");
-        }
-        for (const PunctualShadowSelection &selection :
-             lastLightStats_.spotShadowSelections) {
-            const std::string &label = selection.name.empty()
-                                           ? selection.stableKey
-                                           : selection.name;
-            ImGui::BulletText(
-                "Spot [%u] %s, %s, score %.2f, age %u, far %.1f, %u draws%s",
-                selection.slot, label.c_str(),
-                shadowCastingPolicyName(selection.policy), selection.score,
-                selection.age, selection.farPlane,
-                visibilityFrame_.cpuStats.spotShadowDraws[selection.slot],
-                selection.focused ? ", selected" :
-                selection.retained ? ", retained" : "");
-        }
-        ImGui::TextDisabled("Shadow revision: %llu%s",
-                            static_cast<unsigned long long>(
-                                lastLightStats_.shadowContentRevision),
-                            lastLightStats_.shadowTemporalReactive
-                                ? " (TAA reactive)"
-                                : "");
-        for (const ShadowEviction &eviction :
-             lastLightStats_.shadowEvictions) {
-            ImGui::BulletText("Evicted %s: %s",
-                              eviction.stableKey.c_str(),
-                              eviction.reason.c_str());
-        }
-        constexpr uint64_t shadowTexelBytes = 4;
-        constexpr uint64_t shadowBytes =
-            shadowTexelBytes *
-            (uint64_t{kCsmCascadeCount} * kDirectionalShadowMapSize *
-                 kDirectionalShadowMapSize +
-             uint64_t{kPointShadowLayers} * kPointShadowMapSize *
-                 kPointShadowMapSize +
-             uint64_t{kMaxSpotShadowLights} * kSpotShadowMapSize *
-                 kSpotShadowMapSize);
-        ImGui::TextDisabled("Shared shadow storage: %.1f MiB",
-                            static_cast<double>(shadowBytes) /
-                                (1024.0 * 1024.0));
-        ImGui::TreePop();
-    }
-    ImGui::EndDisabled();
-    ImGui::Separator();
-
-    const CatalogEnvironment *selectedEnvironment =
-        sceneRuntime_->selectedEnvironmentId().empty()
-            ? nullptr
-            : catalog_.findEnvironment(sceneRuntime_->selectedEnvironmentId());
-    const char *environmentLabel =
-        selectedEnvironment ? selectedEnvironment->displayName.c_str()
-                            : "None";
-    ImGui::BeginDisabled(!device_->environmentIblSupported());
-    if (ImGui::BeginCombo("Environment", environmentLabel)) {
-        const bool noneSelected = selectedEnvironment == nullptr;
-        if (ImGui::Selectable("None", noneSelected)) {
-            try {
-                setEnvironment("None");
-                sceneWorkflow_->clearEnvironmentUiError();
-            } catch (const std::exception &error) {
-                sceneWorkflow_->setEnvironmentUiError(error.what());
-            }
-        }
-        if (noneSelected)
-            ImGui::SetItemDefaultFocus();
-        for (const CatalogEnvironment &environment :
-             catalog_.environments) {
-            const bool selected =
-                sceneRuntime_->selectedEnvironmentId() == environment.id;
-            if (ImGui::Selectable(environment.displayName.c_str(),
-                                  selected)) {
-                try {
-                    setEnvironment(environment.id);
-                    sceneWorkflow_->clearEnvironmentUiError();
-                } catch (const std::exception &error) {
-                    sceneWorkflow_->setEnvironmentUiError(error.what());
-                }
-            }
-            if (selected)
-                ImGui::SetItemDefaultFocus();
-        }
-        ImGui::EndCombo();
-    }
-    bool iblEnabled = renderSettings().iblEnabled;
-    if (ImGui::Checkbox("Image-Based Lighting", &iblEnabled)) {
-        RenderSettingsPatch patch;
-        patch.iblEnabled = iblEnabled;
-        applyRenderSettings(patch);
-    }
-    bool skyboxEnabled = renderSettings().skyboxEnabled;
-    if (ImGui::Checkbox("Skybox", &skyboxEnabled)) {
-        RenderSettingsPatch patch;
-        patch.skyboxEnabled = skyboxEnabled;
-        applyRenderSettings(patch);
-    }
-    float environmentIntensity =
-        renderSettings().environmentIntensity;
-    if (ImGui::DragFloat("Environment Intensity",
-                         &environmentIntensity, 0.02f, 0.0f, 100.0f)) {
-        RenderSettingsPatch patch;
-        patch.environmentIntensity = environmentIntensity;
-        applyRenderSettings(patch);
-    }
-    float environmentRotation =
-        renderSettings().environmentRotationRadians;
-    if (ImGui::SliderAngle("Environment Rotation",
-                           &environmentRotation, -180.0f, 180.0f,
-                           "%.1f deg",
-                           ImGuiSliderFlags_AlwaysClamp)) {
-        RenderSettingsPatch patch;
-        patch.environmentRotationRadians = environmentRotation;
-        applyRenderSettings(patch);
-    }
-    ImGui::EndDisabled();
-    const AtmosphereRuntimeStatus atmosphereStatus =
-        renderer_->atmosphereStatus();
-    if (ImGui::TreeNodeEx("Sky Atmosphere")) {
-        ImGui::Text("Support: %s",
-                    atmosphereStatus.supported ? "Available" : "Unavailable");
-        ImGui::Text("Component: %s",
-                    atmosphereStatus.componentPresent ? "Present" : "None");
-        ImGui::Text("Active: %s",
-                    atmosphereStatus.active ? "Yes" : "No");
-        if (atmosphereStatus.componentPresent) {
-            const std::string componentId =
-                atmosphereStatus.componentEntity.toString();
-            ImGui::TextWrapped("Component Entity: %s", componentId.c_str());
-            if (atmosphereStatus.sunEntity) {
-                const std::string sunId =
-                    atmosphereStatus.sunEntity->toString();
-                ImGui::TextWrapped("Sun Entity: %s", sunId.c_str());
-                ImGui::Text("Sun Buffer Index: %d",
-                            atmosphereStatus.sunBufferIndex);
-            } else {
-                ImGui::TextDisabled("Atmosphere Sun: None");
-            }
-            ImGui::Text("Camera Altitude: %.3f km",
-                        atmosphereStatus.cameraAltitudeKm);
-            ImGui::Text("Static LUT: %s%s",
-                        atmosphereStatus.staticLutReady ? "Ready" : "Pending",
-                        atmosphereStatus.staticLutDirty ? " (dirty)" : "");
-            ImGui::Text("LUT Generation: %llu",
-                        static_cast<unsigned long long>(
-                            atmosphereStatus.lutGeneration));
-            ImGui::Text("Last Static Update: %.3f ms",
-                        atmosphereStatus.lastUpdateMs);
-        }
-        if (!atmosphereStatus.unavailableReason.empty()) {
-            ImGui::TextWrapped("Unavailable: %s",
-                               atmosphereStatus.unavailableReason.c_str());
-        }
-        ImGui::TreePop();
-    }
-    if (!device_->environmentIblSupported()) {
-        ImGui::TextDisabled(
-            "IBL unsupported: RGBA16F cube/RG16F linear filtering required.");
-    } else if (sceneRuntime_->latestEnvironmentLoadTask() &&
-               !isTerminalEnvironmentLoadState(
-                   sceneRuntime_->latestEnvironmentLoadTask()->state.load())) {
-        ImGui::Text(
-            "Environment: %s (%u/%u)",
-            environmentLoadStateName(
-                sceneRuntime_->latestEnvironmentLoadTask()->state.load()),
-            sceneRuntime_->latestEnvironmentLoadTask()->uploadedImages.load(),
-            sceneRuntime_->latestEnvironmentLoadTask()->totalImages);
-        if (ImGui::Button("Cancel Environment Load")) {
-            sceneRuntime_->cancelEnvironmentLoad(
-                sceneRuntime_->latestEnvironmentLoadTask()->id);
-        }
-    } else {
-        ImGui::Text("Environment ready: %s",
-                    renderer_->environmentReady() ? "Yes" : "No");
-    }
-    if (!sceneWorkflow_->environmentError().empty()) {
-        ImGui::TextWrapped("Environment error: %s",
-                           sceneWorkflow_->environmentError().c_str());
-    }
-    if (ImGui::TreeNodeEx("Reflection Probes")) {
-        const ReflectionProbeRuntimeStatus probeStatus =
-            renderer_->reflectionProbeStatus();
-        const EnvironmentAssetRepositorySnapshot repository =
-            sceneRuntime_->environmentRepositorySnapshot();
-        ImGui::Text("Active: %u / %u", probeStatus.activeCount,
-                    probeStatus.limit);
-        ImGui::Text("Sources: %u", probeStatus.sourceCount);
-        ImGui::Text("Ignored: %u", probeStatus.ignoredCount);
-        ImGui::Text("Descriptor generation: %llu",
-                    static_cast<unsigned long long>(
-                        probeStatus.descriptorGeneration));
-        ImGui::Text("Probe metadata buffers: %.2f KiB",
-                    static_cast<double>(probeStatus.allocatedBytes) /
-                        1024.0);
-        ImGui::Text("Environment repository: %llu ready, %llu loading, "
-                    "%llu retiring",
-                    static_cast<unsigned long long>(repository.readyCount),
-                    static_cast<unsigned long long>(repository.loadingCount),
-                    static_cast<unsigned long long>(repository.retiringCount));
-        if (reflectionProbeCapture_)
-            ImGui::TextWrapped("Capture: %s",
-                               reflectionProbeCapture_->status.c_str());
-        if (probeStatus.ignoredCount > 0) {
-            for (const PersistentEntityId &id :
-                 probeStatus.ignoredEntityIds) {
-                ImGui::BulletText("Ignored %s", id.toString().c_str());
-            }
-        }
-        ImGui::TreePop();
-    }
-    ImGui::Separator();
-    ImGui::ColorEdit3("Ambient Color", &ambientColor_.x);
-    ImGui::DragFloat("Ambient Intensity", &ambientIntensity_, 0.01f, 0.0f,
-                     10.0f);
-    const size_t sceneLightCount = sceneRuntime_->currentWorld() ? sceneRuntime_->currentWorld()->lights().size()
-                                                 : 0;
-    const size_t effectiveSceneLightCount =
-        sceneRuntime_->currentWorld()
-            ? static_cast<size_t>(std::count_if(
-                  sceneRuntime_->currentWorld()->lights().begin(),
-                  sceneRuntime_->currentWorld()->lights().end(), isEffectiveSceneLight))
-            : 0;
-    if (ImGui::TreeNodeEx("Light Diagnostics")) {
-        const SceneLightBufferStatus bufferStatus =
-            renderer_->sceneLightBufferStatus();
-        ImGui::Text("Scene lights: %zu", sceneLightCount);
-        ImGui::Text("Active scene lights: %zu", effectiveSceneLightCount);
-        ImGui::Text("Uploaded: %u / %u", lastLightStats_.totalLights,
-                    bufferStatus.limit);
-        ImGui::Text("Directional %u  Point %u  Spot %u",
-                    lastLightStats_.directionalLights,
-                    lastLightStats_.pointLights,
-                    lastLightStats_.spotLights);
-        ImGui::Text("Frame capacity: %u / %u",
-                    bufferStatus.frameCapacities[0],
-                    bufferStatus.frameCapacities[1]);
-        ImGui::Text("Light buffers: %.2f KiB",
-                    static_cast<double>(bufferStatus.allocatedBytes) /
-                        1024.0);
-        if (lastLightStats_.ignoredLights > 0)
-            ImGui::Text("Ignored: %u", lastLightStats_.ignoredLights);
-        if (!lastLightStats_.shadowCasterKey.empty()) {
-            const std::string &casterName =
-                lastLightStats_.shadowCasterName.empty()
-                    ? lastLightStats_.shadowCasterKey
-                    : lastLightStats_.shadowCasterName;
-            ImGui::Text("Shadow caster: %s", casterName.c_str());
-            ImGui::TextDisabled("Shadow: %s",
-                                lastLightStats_.shadowCasterActive
-                                    ? "Active"
-                                    : "Eligible");
-        } else {
-            ImGui::TextDisabled("Shadow caster: None");
-        }
-        if (sceneRuntime_->currentWorld() && !sceneRuntime_->currentWorld()->lights().empty()) {
-            const auto &lights = sceneRuntime_->currentWorld()->lights();
-            for (size_t index = 0; index < lights.size(); ++index) {
-                const SceneLight &light = lights[index];
-                const std::string name =
-                    light.debugName.empty() ? "Light" : light.debugName;
-                const std::string label =
-                    std::to_string(index) + "  " + name;
-                if (!ImGui::TreeNode(label.c_str()))
-                    continue;
-                ImGui::Text("Type: %s", lightTypeName(light.type));
-                ImGui::Text("Color: %.3f %.3f %.3f", light.color.r,
-                            light.color.g, light.color.b);
-                ImGui::Text("Intensity: %.3f %s", light.intensity,
-                            lightIntensityUnit(light.type));
-                if (light.type != LightType::Directional) {
-                    ImGui::Text("Position: %.3f %.3f %.3f",
-                                light.positionWS.x, light.positionWS.y,
-                                light.positionWS.z);
-                    if (light.range > 0.0f)
-                        ImGui::Text("Range: %.3f", light.range);
-                    else
-                        ImGui::TextUnformatted("Range: Infinite");
-                }
-                if (light.type == LightType::Directional) {
-                    ImGui::Text("Surface-to-light: %.3f %.3f %.3f",
-                                light.directionWS.x, light.directionWS.y,
-                                light.directionWS.z);
-                } else if (light.type == LightType::Spot) {
-                    ImGui::Text("Emission direction: %.3f %.3f %.3f",
-                                light.directionWS.x, light.directionWS.y,
-                                light.directionWS.z);
-                    const float innerAngle = glm::degrees(std::acos(
-                        std::clamp(light.innerConeCos, -1.0f, 1.0f)));
-                    const float outerAngle = glm::degrees(std::acos(
-                        std::clamp(light.outerConeCos, -1.0f, 1.0f)));
-                    ImGui::Text("Cone: %.2f / %.2f deg", innerAngle,
-                                outerAngle);
-                }
-                ImGui::TreePop();
-            }
-        }
-        ImGui::TreePop();
-    }
-    if (sceneLightCount > 0 && effectiveSceneLightCount == 0) {
-        ImGui::TextDisabled(
-            "All scene lights are disabled; using fallback Sun.");
-    }
-    if (effectiveSceneLightCount == 0) {
-        ImGui::Separator();
-        float sunAzimuth = 0.0f;
-        float sunElevation = 0.0f;
-        sunAnglesFromDirection(defaultSunDirection_, sunAzimuth,
-                               sunElevation);
-        constexpr ImGuiSliderFlags angleFlags =
-            ImGuiSliderFlags_AlwaysClamp;
-        bool sunDirectionChanged = ImGui::SliderAngle(
-            "Sun Azimuth", &sunAzimuth, -180.0f, 180.0f, "%.1f deg",
-            angleFlags);
-        sunDirectionChanged |= ImGui::SliderAngle(
-            "Sun Elevation", &sunElevation, -89.0f, 89.0f, "%.1f deg",
-            angleFlags);
-        if (sunDirectionChanged) {
-            defaultSunDirection_ =
-                sunDirectionFromAngles(sunAzimuth, sunElevation);
-        }
-        ImGui::ColorEdit3("Sun Color", &defaultSunColor_.x);
-        ImGui::DragFloat("Sun Intensity", &defaultSunIntensity_, 0.05f, 0.0f,
-                         20.0f);
-    }
-}
-
-void EditorController::drawMaterialsPanel() {
-    EditorUiState &ui = *editorUi_;
-    const MaterialBindingStatus &bindingStatus = materialSystem_->status();
-    ImGui::TextDisabled("GPU binding: %s", materialBindingModeName(
-                                              bindingStatus.active));
-    ImGui::SameLine();
-    ImGui::TextDisabled("%u / %u materials", bindingStatus.activeMaterials,
-                        bindingStatus.materialCapacity);
-    ImGui::Separator();
-    std::vector<std::shared_ptr<MaterialInstance>> selectedMaterials;
-    const std::vector<std::shared_ptr<MaterialInstance>> *materialsView =
-        sceneRuntime_->currentWorld() ? &sceneRuntime_->currentWorld()->materials() : nullptr;
-    if (sceneEditorSession_ && sceneEditorSession_->active()) {
-        materialsView = &selectedMaterials;
-    }
-    if (sceneEditorSession_ && sceneEditorSession_->active() &&
-        sceneEditorSession_->selection()) {
-        const std::shared_ptr<RuntimeWorld> world =
-            sceneEditorSession_->world();
-        const auto asset = world->modelAsset(
-            world->find(*sceneEditorSession_->selection()));
-        if (asset) {
-            selectedMaterials = asset->materials;
-        }
-    }
-    if (ui.materialSceneGeneration != sceneRuntime_->sceneGeneration()) {
-        ui.materialSceneGeneration = sceneRuntime_->sceneGeneration();
-        ui.selectedMaterialIndex = 0;
-        if (materialsView) {
-            const auto &materials = *materialsView;
-            const auto firstValid =
-                std::find_if(materials.begin(), materials.end(),
-                             [](const auto &material) {
-                                 return static_cast<bool>(material);
-                             });
-            if (firstValid != materials.end()) {
-                ui.selectedMaterialIndex =
-                    static_cast<size_t>(firstValid - materials.begin());
-            }
-        }
-    }
-
-    if (!materialsView) {
-        editor::emptyState("No scene is loaded.");
-        return;
-    }
-
-    const auto &materials = *materialsView;
-    ImGui::InputTextWithHint("##MaterialSearch", "Search materials...",
-                             ui.materialSearch.data(),
-                             ui.materialSearch.size());
-    ImGui::SameLine();
-    ImGui::TextDisabled("%zu", materials.size());
-
-    const std::string search = ui.materialSearch.data();
-    std::vector<size_t> filteredIndices;
-    filteredIndices.reserve(materials.size());
-    for (size_t i = 0; i < materials.size(); ++i) {
-        const auto &material = materials[i];
-        const std::string name =
-            material && !material->params().debugName.empty()
-                ? material->params().debugName
-                : "<unnamed>";
-        if (asciiContainsIgnoreCase(name, search) ||
-            asciiContainsIgnoreCase(std::to_string(i), search))
-            filteredIndices.push_back(i);
-    }
-
-    const bool selectionVisible =
-        std::find(filteredIndices.begin(), filteredIndices.end(),
-                  ui.selectedMaterialIndex) != filteredIndices.end();
-    if (!selectionVisible && !filteredIndices.empty())
-        ui.selectedMaterialIndex = filteredIndices.front();
-
-    const float availableHeight = ImGui::GetContentRegionAvail().y;
-    const float listHeight =
-        std::clamp(availableHeight * 0.35f, 100.0f, 220.0f);
-    ImGui::BeginChild("MaterialList", ImVec2(0.0f, listHeight),
-                      ImGuiChildFlags_Borders);
-    if (filteredIndices.empty())
-        editor::emptyState("No matching materials.");
-    for (size_t materialIndex : filteredIndices) {
-        const auto &material = materials[materialIndex];
-        const std::string name =
-            material && !material->params().debugName.empty()
-                ? material->params().debugName
-                : "<unnamed>";
-        const std::string label =
-            std::to_string(materialIndex) + "  " + name;
-        ImGui::PushID(static_cast<int>(materialIndex));
-        if (ImGui::Selectable(label.c_str(),
-                              materialIndex == ui.selectedMaterialIndex))
-            ui.selectedMaterialIndex = materialIndex;
-        ImGui::PopID();
-    }
-    ImGui::EndChild();
-
-    if (materials.empty() ||
-        ui.selectedMaterialIndex >= materials.size()) {
-        editor::emptyState("No material selected.");
-        return;
-    }
-
-    const auto &material = materials[ui.selectedMaterialIndex];
-    if (!material) {
-        editor::emptyState("Selected material is unavailable.");
-        return;
-    }
-
-    const MaterialParams &params = material->params();
-    auto beginPropertyTable = [](const char *id) {
-        return editor::beginPropertyGrid(id, 0.46f);
-    };
-    auto beginProperty = [](const char *name) {
-        editor::propertyLabel(name);
-    };
-
-    if (ImGui::CollapsingHeader("Surface",
-                                ImGuiTreeNodeFlags_DefaultOpen) &&
-        beginPropertyTable("SurfaceProperties")) {
-        beginProperty("Name");
-        ImGui::TextWrapped("%s", params.debugName.empty()
-                                    ? "<unnamed>"
-                                    : params.debugName.c_str());
-        beginProperty("Index");
-        ImGui::Text("%zu", ui.selectedMaterialIndex);
-        beginProperty("GPU Material Index");
-        ImGui::Text("%u", material->materialIndex());
-        beginProperty("Alpha Mode");
-        ImGui::TextUnformatted(alphaModeName(params.alphaMode));
-        beginProperty("Alpha Cutoff");
-        ImGui::Text("%.3f", params.alphaCutoff);
-        beginProperty("Double Sided");
-        ImGui::TextUnformatted(params.doubleSided ? "true" : "false");
-        editor::endPropertyGrid();
-    }
-
-    if (ImGui::CollapsingHeader("PBR",
-                                ImGuiTreeNodeFlags_DefaultOpen) &&
-        beginPropertyTable("PbrProperties")) {
-        beginProperty("Base Color");
-        ImGui::Text("%.3f %.3f %.3f %.3f", params.baseColorFactor.r,
-                    params.baseColorFactor.g, params.baseColorFactor.b,
-                    params.baseColorFactor.a);
-        beginProperty("Metallic");
-        ImGui::Text("%.3f", params.metallicFactor);
-        beginProperty("Roughness");
-        ImGui::Text("%.3f", params.roughnessFactor);
-        beginProperty("Normal Scale");
-        ImGui::Text("%.3f", params.normalScale);
-        beginProperty("Occlusion Strength");
-        ImGui::Text("%.3f", params.occlusionStrength);
-        beginProperty("Occlusion UV");
-        ImGui::Text("%u", params.occlusionTexCoord);
-        beginProperty("Emissive");
-        ImGui::Text("%.3f %.3f %.3f", params.emissiveFactor.r,
-                    params.emissiveFactor.g, params.emissiveFactor.b);
-        beginProperty("Emissive Strength");
-        ImGui::Text("%.3f", params.emissiveStrength);
-        beginProperty("Transmission");
-        ImGui::Text("%.3f", params.transmissionFactor);
-        editor::endPropertyGrid();
-    }
-
-    if (ImGui::CollapsingHeader("Textures",
-                                ImGuiTreeNodeFlags_DefaultOpen) &&
-        beginPropertyTable("TextureProperties")) {
-        const auto &textures = material->textures();
-        const GpuMaterial *gpuMaterial =
-            materialSystem_->gpuMaterial(material->materialHandle());
-        const std::array<uint32_t, kMaterialTextureSlotCount> gpuSlots{
-            gpuMaterial ? gpuMaterial->textureIndices0.x : 0u,
-            gpuMaterial ? gpuMaterial->textureIndices0.y : 0u,
-            gpuMaterial ? gpuMaterial->textureIndices0.z : 0u,
-            gpuMaterial ? gpuMaterial->textureIndices0.w : 0u,
-            gpuMaterial ? gpuMaterial->textureIndices1.x : 0u};
-        for (size_t slotIndex = 0; slotIndex < kMaterialTextureSlotCount;
-             ++slotIndex) {
-            const auto slot =
-                static_cast<MaterialTextureSlot>(slotIndex);
-            beginProperty(slotName(slot));
-            if (!textures[slotIndex]) {
-                ImGui::TextUnformatted("Missing");
-            } else if (bindingStatus.active ==
-                       MaterialBindingMode::Bindless) {
-                ImGui::Text("Bound (slot %u)", gpuSlots[slotIndex]);
-            } else {
-                ImGui::Text("Bound (fixed binding %zu)", slotIndex + 1);
-            }
-        }
-        editor::endPropertyGrid();
-    }
-
-    if (ImGui::CollapsingHeader("Derived Render State",
-                                ImGuiTreeNodeFlags_DefaultOpen) &&
-        beginPropertyTable("DerivedProperties")) {
-        beginProperty("Render Queue");
-        ImGui::TextUnformatted(
-            isTransparentMaterial(params) ? "Transparent" : "Opaque");
-        beginProperty("Cull");
-        ImGui::TextUnformatted(params.doubleSided ? "None" : "Back");
-        editor::endPropertyGrid();
-    }
-}
-
-void EditorController::drawCameraPanel() {
-    const auto cameraPos = camera_.position();
-    ImGui::Text("Position: (%.2f, %.2f, %.2f)", cameraPos.x, cameraPos.y,
-                cameraPos.z);
-    constexpr ImGuiSliderFlags moveSpeedFlags =
-        ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp;
-    ImGui::SliderFloat("Move Speed", &config_.moveSpeed, 0.1f, 100.0f,
-                       "%.2f", moveSpeedFlags);
-    float nearPlane = camera_.nearPlane();
-    float farPlane = camera_.farPlane();
-    bool  clipChanged = false;
-    clipChanged |= ImGui::DragFloat("Near Plane", &nearPlane, 0.001f, 0.001f,
-                                    100.0f, "%.4f");
-    clipChanged |= ImGui::DragFloat("Far Plane", &farPlane, 0.1f, 1.0f,
-                                    100000.0f, "%.2f");
-    if (clipChanged)
-        camera_.setClipPlanes(nearPlane, farPlane);
-
-    if (sceneRuntime_->currentWorld() && sceneRuntime_->currentWorld()->bounds().valid) {
-        const Bounds &bounds = sceneRuntime_->currentWorld()->bounds();
-        ImGui::Separator();
-        ImGui::Text("Bounds Center: (%.2f, %.2f, %.2f)", bounds.center.x,
-                    bounds.center.y, bounds.center.z);
-        ImGui::Text("Bounds Radius: %.2f", bounds.radius);
-    } else {
-        ImGui::Separator();
-        ImGui::Text("Bounds: unavailable");
-    }
-}
-
-void EditorController::drawPerformancePanel() {
-    if (editor::beginPropertyGrid("PerformanceSummary", 0.36f)) {
-        editor::propertyLabel("FPS");
-        ImGui::Text("%.1f", ImGui::GetIO().Framerate);
-        editor::propertyLabel("Input Mode");
-        ImGui::TextUnformatted(cameraDragging_ && cameraDragging_()
-                                   ? "CameraDrag"
-                                   : "UI");
-        editor::propertyLabel("Objects");
-        ImGui::Text("%zu", sceneRuntime_->currentWorld() ? sceneRuntime_->currentWorld()->renderableCount()
-                                         : 0);
-        editor::propertyLabel("Tracy");
-        if (build::kTracy) {
-            const bool connected = device_->tracyProfiler().connected();
-            editor::statusIndicator(
-                connected ? "Connected" : "Waiting",
-                connected ? editor::StatusTone::Success
-                          : editor::StatusTone::Neutral,
-                device_->tracyProfiler().gpuAvailable()
-                    ? "Vulkan GPU profiling available"
-                    : "Vulkan GPU profiling unavailable");
-        } else {
-            ImGui::TextDisabled("Not compiled");
-        }
-        editor::endPropertyGrid();
-    }
-
-    const EditorUiState &ui = *editorUi_;
-    if (ui.performanceCount > 1) {
-        std::array<float, EditorUiState::kPerformanceHistorySize> fps{};
-        std::array<float, EditorUiState::kPerformanceHistorySize> gpu{};
-        const size_t start =
-            (ui.performanceCursor + EditorUiState::kPerformanceHistorySize -
-             ui.performanceCount) %
-            EditorUiState::kPerformanceHistorySize;
-        for (size_t i = 0; i < ui.performanceCount; ++i) {
-            const size_t source =
-                (start + i) % EditorUiState::kPerformanceHistorySize;
-            fps[i] = ui.fpsHistory[source];
-            gpu[i] = ui.gpuHistory[source];
-        }
-        const float maxFps = std::max(
-            60.0f, *std::max_element(fps.begin(),
-                                     fps.begin() + ui.performanceCount));
-        const float maxGpu = std::max(
-            1.0f, *std::max_element(gpu.begin(),
-                                    gpu.begin() + ui.performanceCount));
-        ImGui::PlotLines("FPS History", fps.data(),
-                         static_cast<int>(ui.performanceCount), 0, nullptr,
-                         0.0f, maxFps * 1.1f, ImVec2(0.0f, 54.0f));
-        ImGui::PlotLines("GPU ms History", gpu.data(),
-                         static_cast<int>(ui.performanceCount), 0, nullptr,
-                         0.0f, maxGpu * 1.1f, ImVec2(0.0f, 54.0f));
-    }
-
-    if (ImGui::CollapsingHeader("GPU Pass Timings",
-                                ImGuiTreeNodeFlags_DefaultOpen)) {
-        const GpuPassTimings &timings = renderer_->gpuPassTimings();
-        if (!build::kGpuProfiling) {
-            ImGui::TextUnformatted("Not compiled");
-        } else if (!timings.available) {
-            ImGui::TextUnformatted("Unavailable");
-        } else {
-            ImGui::Text("Frame Serial: %llu",
-                        static_cast<unsigned long long>(
-                            timings.frameSerial));
-            if (editor::beginPropertyGrid("GpuPassBreakdown", 0.42f)) {
-                for (const GpuPassTiming &pass : timings.passes) {
-                    editor::propertyLabel(pass.name.c_str());
-                    const float fraction =
-                        timings.totalMs > 0.0
-                            ? static_cast<float>(pass.milliseconds /
-                                                 timings.totalMs)
-                            : 0.0f;
-                    char overlay[48]{};
-                    std::snprintf(overlay, sizeof(overlay), "%.3f ms",
-                                  pass.milliseconds);
-                    ImGui::ProgressBar(std::clamp(fraction, 0.0f, 1.0f),
-                                       ImVec2(-1.0f, 0.0f), overlay);
-                }
-                editor::propertyLabel("Total");
-                ImGui::Text("%.3f ms", timings.totalMs);
-                editor::endPropertyGrid();
-            }
-        }
-    }
-
-    if (ImGui::CollapsingHeader("Render Graph",
-                                ImGuiTreeNodeFlags_DefaultOpen)) {
-        const RenderGraphDiagnostics &graph =
-            renderer_->renderGraphDiagnostics();
-        if (editor::beginPropertyGrid("RenderGraphSummary", 0.46f)) {
-            editor::propertyLabel("Topology");
-            ImGui::Text("%016llx",
-                        static_cast<unsigned long long>(graph.topologyHash));
-            editor::propertyLabel("Passes");
-            ImGui::Text("%u active / %u culled", graph.activePasses,
-                        graph.culledPasses);
-            editor::propertyLabel("Dependencies");
-            ImGui::Text("%u", graph.dependencyEdges);
-            editor::propertyLabel("Auto Barriers");
-            ImGui::Text("%u (%u layout, %u hazard)",
-                        graph.automaticBarriers, graph.layoutBarriers,
-                        graph.hazardBarriers);
-            editor::propertyLabel("Image Memory");
-            ImGui::Text("%.1f / %.1f MiB active/resident",
-                        graph.activeImageBytes / (1024.0 * 1024.0),
-                        graph.residentImageBytes / (1024.0 * 1024.0));
-            editor::propertyLabel("Declared / Retiring");
-            ImGui::Text("%.1f / %.1f MiB",
-                        graph.logicalImageBytes / (1024.0 * 1024.0),
-                        graph.retiringImageBytes / (1024.0 * 1024.0));
-            editor::endPropertyGrid();
-        }
-        if (ImGui::TreeNode("Execution Order")) {
-            for (uint32_t index = 0; index < graph.executionOrder.size();
-                 ++index) {
-                ImGui::Text("%02u  %s", index,
-                            graph.executionOrder[index].c_str());
-            }
-            ImGui::TreePop();
-        }
-        if (ImGui::TreeNode("Culled Passes")) {
-            for (const std::string &name : graph.culledNames)
-                ImGui::TextDisabled("%s", name.c_str());
-            ImGui::TreePop();
-        }
-        if (ImGui::TreeNode("Resources")) {
-            for (const auto &resource : graph.resources) {
-                ImGui::PushID(static_cast<int>(resource.index));
-                if (ImGui::TreeNode(
-                        "Resource", "%s  [%s, v%u]",
-                        resource.name.c_str(), resource.lifetime.c_str(),
-                        resource.versions)) {
-                    ImGui::Text("Memory: %.2f MiB",
-                                resource.residentBytes /
-                                    (1024.0 * 1024.0));
-                    ImGui::Text("Layout: %d -> %d",
-                                static_cast<int>(resource.initialLayout),
-                                static_cast<int>(resource.finalLayout));
-                    ImGui::TextUnformatted("Producers:");
-                    for (const std::string &producer : resource.producers)
-                        ImGui::BulletText("%s", producer.c_str());
-                    ImGui::TextUnformatted("Consumers:");
-                    for (const std::string &consumer : resource.consumers)
-                        ImGui::BulletText("%s", consumer.c_str());
-                    ImGui::TreePop();
-                }
-                ImGui::PopID();
-            }
-            ImGui::TreePop();
-        }
-        if (ImGui::TreeNode("Buffers")) {
-            for (const auto &buffer : graph.buffers) {
-                ImGui::PushID(static_cast<int>(buffer.index));
-                ImGui::PushID("RenderGraphBuffer");
-                if (ImGui::TreeNode(
-                        "Buffer", "%s  [%s, v%u]", buffer.name.c_str(),
-                        buffer.lifetime.c_str(), buffer.versions)) {
-                    if (buffer.declaredRangeBytes > 0) {
-                        ImGui::Text("Declared range: %.2f KiB",
-                                    buffer.declaredRangeBytes / 1024.0);
-                    } else {
-                        ImGui::TextDisabled("Declared range: whole buffer");
-                    }
-                    ImGui::TextUnformatted("Producers:");
-                    for (const std::string &producer : buffer.producers)
-                        ImGui::BulletText("%s", producer.c_str());
-                    ImGui::TextUnformatted("Consumers:");
-                    for (const std::string &consumer : buffer.consumers)
-                        ImGui::BulletText("%s", consumer.c_str());
-                    ImGui::TreePop();
-                }
-                ImGui::PopID();
-                ImGui::PopID();
-            }
-            ImGui::TreePop();
-        }
-        if (ImGui::Button("Export JSON")) {
-            std::filesystem::create_directories("logs");
-            std::ofstream("logs/render_graph.json", std::ios::binary)
-                << renderer_->renderGraphJson();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Export DOT")) {
-            std::filesystem::create_directories("logs");
-            std::ofstream("logs/render_graph.dot", std::ios::binary)
-                << renderer_->renderGraphDot();
-        }
-    }
-}
-
-void EditorController::drawLoadStatsPanel() {
-    if (sceneRuntime_->lastSceneLoadStats() &&
-        ImGui::CollapsingHeader("Last Scene Load",
-                                ImGuiTreeNodeFlags_DefaultOpen)) {
-        const SceneLoadStats &stats = *sceneRuntime_->lastSceneLoadStats();
-        const ResourceLoadStats &resources = stats.resources;
-        const int64_t allocationDelta =
-            memoryDelta(stats.allocatorAfter.allocationBytes,
-                        stats.allocatorBefore.allocationBytes);
-        const int64_t blockDelta =
-            memoryDelta(stats.allocatorAfter.blockBytes,
-                        stats.allocatorBefore.blockBytes);
-
-        ImGui::Text("Scene: %s", stats.sceneName.c_str());
-        ImGui::Text("Status: %s", stats.success ? "Success" : "Failed");
-        if (stats.taskId != 0) {
-            ImGui::Text("Task: %llu  Operation Generation: %llu",
-                        static_cast<unsigned long long>(stats.taskId),
-                        static_cast<unsigned long long>(stats.generation));
-            ImGui::Text("Model Generation: %llu  Repository: %s%s",
-                        static_cast<unsigned long long>(
-                            stats.modelGeneration),
-                        stats.repositoryHit ? "Ready hit" : "Build",
-                        stats.coalescedRequest ? " / Coalesced" : "");
-        }
-        ImGui::Text("Texture Limit: %s",
-                    textureLimitLabel(stats.maxTextureSize));
-        ImGui::Separator();
-        ImGui::Text("Total: %.2f ms", stats.totalMs);
-        ImGui::Text("Device Idle: %.2f ms (%llu calls)",
-                    stats.deviceIdleMs,
-                    static_cast<unsigned long long>(
-                        stats.deviceWaitIdleCalls));
-        ImGui::Text("Teardown: %.2f ms", stats.teardownMs);
-        ImGui::Text("Scene Factory: %.2f ms", stats.sceneFactoryMs);
-        ImGui::Text("glTF Parse: %.2f ms", stats.gltfParseMs);
-        ImGui::Text("Image Read: %.2f ms", stats.textureFileReadMs);
-        ImGui::Text("Image Decode: %.2f ms", stats.textureDecodeMs);
-        ImGui::Text("Texture Resize: %.2f ms", resources.textureResizeMs);
-        ImGui::Text("KTX Read: %.2f ms  Transcode: %.2f ms",
-                    resources.derivedTextureReadMs,
-                    resources.derivedTextureTranscodeMs);
-        ImGui::Text("Native BC7 Read: %.2f ms",
-                    resources.nativeTextureReadMs);
-        ImGui::Text("Texture Upload: %.2f ms", resources.textureUploadMs);
-        ImGui::Text("Material Setup: %.2f ms", stats.materialSetupMs);
-        ImGui::Text("Mesh CPU: %.2f ms", stats.meshCpuMs);
-        ImGui::Text("Mesh Upload: %.2f ms", resources.meshUploadMs);
-        ImGui::Text("Batch Submit/Wait: %.2f ms",
-                    resources.batchSubmitWaitMs);
-        ImGui::Text("Hierarchy: %.2f ms", stats.hierarchyMs);
-        ImGui::Text("Worker Queue: %.2f ms", stats.workerQueueWaitMs);
-        ImGui::Text("CPU Prepare: %.2f ms", stats.cpuPrepareMs);
-        ImGui::Text("GPU Build: %.2f ms", stats.gpuBuildMs);
-        ImGui::Text("Max Upload Pump: %.2f ms",
-                    resources.maxUploadPumpMs);
-        ImGui::Separator();
-        ImGui::Text("Textures: %llu decoded, %llu GPU, %llu resized",
-                    static_cast<unsigned long long>(
-                        resources.textureDecodeCount),
-                    static_cast<unsigned long long>(resources.gpuTextureCount),
-                    static_cast<unsigned long long>(
-                        resources.resizedTextureCount));
-        ImGui::Text("Derived cache: %llu/%llu hits, %llu miss, %llu invalid",
-                    static_cast<unsigned long long>(
-                        resources.derivedTextureHits),
-                    static_cast<unsigned long long>(
-                        resources.derivedTextureLookups),
-                    static_cast<unsigned long long>(
-                        resources.derivedTextureMisses),
-                    static_cast<unsigned long long>(
-                        resources.derivedTextureInvalid));
-        ImGui::Text("Native BC7: %llu  UASTC: %llu  Transcodes: %llu",
-                    static_cast<unsigned long long>(
-                        resources.nativeBc7CacheHits),
-                    static_cast<unsigned long long>(
-                        resources.basisUastcCacheHits),
-                    static_cast<unsigned long long>(
-                        resources.basisTranscodeCount));
-        ImGui::Text("BC7: %llu  RGBA fallback: %llu  Prebuilt mip: %llu",
-                    static_cast<unsigned long long>(resources.bc7TextureCount),
-                    static_cast<unsigned long long>(
-                        resources.rgbaTranscodeFallbackCount),
-                    static_cast<unsigned long long>(
-                        resources.prebuiltMipTextureCount));
-        ImGui::Text("Meshes: %llu  Vertices: %llu  Indices: %llu",
-                    static_cast<unsigned long long>(resources.gpuMeshCount),
-                    static_cast<unsigned long long>(resources.vertexCount),
-                    static_cast<unsigned long long>(resources.indexCount));
-        ImGui::Text("Materials: %llu  Primitives: %llu",
-                    static_cast<unsigned long long>(stats.materialCount),
-                    static_cast<unsigned long long>(stats.primitiveCount));
-        ImGui::Text(
-            "Lights: %llu instances / %llu definitions "
-            "(%llu directional, %llu point, %llu spot)",
-            static_cast<unsigned long long>(stats.lightInstanceCount),
-            static_cast<unsigned long long>(
-                stats.gltfLightDefinitionCount),
-            static_cast<unsigned long long>(
-                stats.directionalLightCount),
-            static_cast<unsigned long long>(stats.pointLightCount),
-            static_cast<unsigned long long>(stats.spotLightCount));
-        ImGui::Text("Texture bytes: encoded %.2f, decoded %.2f MiB",
-                    bytesToMiB(resources.encodedSourceBytes),
-                    bytesToMiB(resources.decodedRgbaBytes));
-        ImGui::Text("Texture upload: %.2f MiB  GPU estimate: %.2f MiB",
-                    bytesToMiB(resources.textureUploadBytes),
-                    bytesToMiB(resources.textureGpuBytesEstimated));
-        ImGui::Text("Native BC7 read: %.2f MiB",
-                    bytesToMiB(resources.nativeTextureReadBytes));
-        ImGui::Text("Mesh upload: %.2f MiB",
-                    bytesToMiB(resources.vertexUploadBytes +
-                               resources.indexUploadBytes));
-        ImGui::Text("Batch submits: %llu  Fence waits: %llu",
-                    static_cast<unsigned long long>(resources.batchSubmits),
-                    static_cast<unsigned long long>(
-                        resources.fenceWaitCalls));
-        ImGui::Text("Completed batches: %llu  Fence polls: %llu",
-                    static_cast<unsigned long long>(
-                        resources.completedBatchSubmits),
-                    static_cast<unsigned long long>(
-                        resources.fencePollCalls));
-        ImGui::Text("Peak in-flight batches: %llu",
-                    static_cast<unsigned long long>(
-                        resources.peakInFlightBatches));
-        ImGui::Text("Peak staging: %.2f MiB",
-                    bytesToMiB(resources.peakStagingBytes));
-        ImGui::Text("Prepared CPU: %.2f MiB",
-                    bytesToMiB(stats.preparedCpuBytes));
-        ImGui::Separator();
-        ImGui::Text("VMA allocations: %llu -> %llu",
-                    static_cast<unsigned long long>(
-                        stats.allocatorBefore.allocationCount),
-                    static_cast<unsigned long long>(
-                        stats.allocatorAfter.allocationCount));
-        ImGui::Text("VMA allocation bytes: %.2f -> %.2f MiB (%+.2f)",
-                    bytesToMiB(stats.allocatorBefore.allocationBytes),
-                    bytesToMiB(stats.allocatorAfter.allocationBytes),
-                    signedBytesToMiB(allocationDelta));
-        ImGui::Text("VMA block bytes: %.2f -> %.2f MiB (%+.2f)",
-                    bytesToMiB(stats.allocatorBefore.blockBytes),
-                    bytesToMiB(stats.allocatorAfter.blockBytes),
-                    signedBytesToMiB(blockDelta));
-    } else if (!sceneRuntime_->lastSceneLoadStats()) {
-        ImGui::TextDisabled("No scene load statistics are available.");
-    }
-
-    if (ImGui::CollapsingHeader("Material Resources",
-                                ImGuiTreeNodeFlags_DefaultOpen)) {
-        const MaterialBindingStatus &status = materialSystem_->status();
-        ImGui::Text("Requested %s  Active %s",
-                    materialBindingModeName(status.requested),
-                    materialBindingModeName(status.active));
-        if (!status.fallbackReason.empty())
-            ImGui::TextWrapped("Fallback: %s", status.fallbackReason.c_str());
-        ImGui::Text("Textures %u / %u  Retiring %u", status.activeTextures,
-                    status.textureCapacity, status.retiringTextures);
-        ImGui::Text("Materials %u / %u  Retiring %u", status.activeMaterials,
-                    status.materialCapacity, status.retiringMaterials);
-        ImGui::Text("High water: textures %u  materials %u",
-                    status.textureHighWaterMark,
-                    status.materialHighWaterMark);
-        ImGui::Text("Descriptor writes %llu  Slot reuse T/M %llu / %llu",
-                    static_cast<unsigned long long>(status.descriptorWrites),
-                    static_cast<unsigned long long>(status.textureSlotReuses),
-                    static_cast<unsigned long long>(status.materialSlotReuses));
-        ImGui::Text("Capacity failures T/M %llu / %llu",
-                    static_cast<unsigned long long>(
-                        status.textureCapacityFailures),
-                    static_cast<unsigned long long>(
-                        status.materialCapacityFailures));
-    }
-
-    if (ImGui::CollapsingHeader("Model Asset Repository",
-                                ImGuiTreeNodeFlags_DefaultOpen)) {
-        const AssetRepositorySnapshot snapshot =
-            sceneRuntime_->modelRepositorySnapshot();
-        ImGui::Text("Ready %llu  Loading %llu  Failed %llu  Retiring %llu",
-                    static_cast<unsigned long long>(snapshot.readyCount),
-                    static_cast<unsigned long long>(snapshot.loadingCount),
-                    static_cast<unsigned long long>(snapshot.failedCount),
-                    static_cast<unsigned long long>(snapshot.retiringCount));
-        ImGui::Text("CPU prepares %llu  GPU builds %llu",
-                    static_cast<unsigned long long>(
-                        snapshot.cpuPrepareStarts),
-                    static_cast<unsigned long long>(snapshot.gpuBuildStarts));
-        ImGui::Text("Ready hits %llu  Coalesced requests %llu",
-                    static_cast<unsigned long long>(snapshot.readyHits),
-                    static_cast<unsigned long long>(
-                        snapshot.coalescedRequests));
-        if (ImGui::BeginTable(
-                "ModelAssetRepositoryRecords", 5,
-                ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg |
-                    ImGuiTableFlags_SizingStretchProp)) {
-            ImGui::TableSetupColumn("Model");
-            ImGui::TableSetupColumn("Profile");
-            ImGui::TableSetupColumn("Gen");
-            ImGui::TableSetupColumn("State");
-            ImGui::TableSetupColumn("Users");
-            ImGui::TableHeadersRow();
-            for (const ModelAssetRecordSnapshot &record : snapshot.records) {
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TextUnformatted(record.key.modelId.value().c_str());
-                ImGui::TableSetColumnIndex(1);
-                ImGui::TextUnformatted(record.key.profileId.c_str());
-                ImGui::TableSetColumnIndex(2);
-                ImGui::Text("%llu", static_cast<unsigned long long>(
-                                        record.generation));
-                ImGui::TableSetColumnIndex(3);
-                ImGui::TextUnformatted(modelAssetStateName(record.state));
-                if (!record.error.empty() && ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s", record.error.c_str());
-                ImGui::TableSetColumnIndex(4);
-                ImGui::Text("%llu", static_cast<unsigned long long>(
-                                        record.consumerCount));
-            }
-            ImGui::EndTable();
-        }
-    }
 }
 
 void EditorController::saveEditorScene() {
@@ -3649,10 +1506,53 @@ void EditorController::duplicateSelectedEditorEntity() {
     }
 }
 
+void EditorController::frameSelectedEditorEntity() {
+    if (!sceneEditorSession_ || !sceneEditorSession_->active() ||
+        sceneEditorSession_->cameraMode() != EditorCameraMode::Editor ||
+        !sceneEditorSession_->selection()) {
+        return;
+    }
+    const std::shared_ptr<RuntimeWorld> world = sceneEditorSession_->world();
+    const auto selected = world->entity(
+        world->find(*sceneEditorSession_->selection()));
+    if (!selected)
+        return;
+
+    glm::vec3 target = glm::vec3(selected->world[3]);
+    float radius = 1.0f;
+    if (const std::shared_ptr<const ModelAsset> asset =
+            world->modelAsset(selected->handle);
+        asset && asset->localBounds.valid) {
+        glm::vec3 minimum(std::numeric_limits<float>::max());
+        glm::vec3 maximum(std::numeric_limits<float>::lowest());
+        for (int corner = 0; corner < 8; ++corner) {
+            const glm::vec3 local{
+                (corner & 1) ? asset->localBounds.max.x
+                             : asset->localBounds.min.x,
+                (corner & 2) ? asset->localBounds.max.y
+                             : asset->localBounds.min.y,
+                (corner & 4) ? asset->localBounds.max.z
+                             : asset->localBounds.min.z};
+            const glm::vec3 point = glm::vec3(
+                selected->world * glm::vec4(local, 1.0f));
+            minimum = glm::min(minimum, point);
+            maximum = glm::max(maximum, point);
+        }
+        target = (minimum + maximum) * 0.5f;
+        radius = std::max(glm::length(maximum - minimum) * 0.5f, 0.25f);
+    }
+    const glm::vec3 direction = glm::dot(camera_.front(), camera_.front()) >
+                                        1.0e-6f
+                                    ? glm::normalize(camera_.front())
+                                    : glm::vec3(0.0f, 1.0f, 0.0f);
+    camera_.setPosition(target - direction * std::max(radius * 2.5f, 1.5f));
+    camera_.lookAt(target);
+}
+
 void EditorController::drawOutlinerPanel() {
     if (!outlinerPanel_ || !sceneEditorSession_ ||
         !sceneEditorSession_->active()) {
-        ImGui::TextDisabled("Open a native scene to edit entities.");
+        ImGui::TextDisabled("Open a native scene.");
         return;
     }
     const std::shared_ptr<RuntimeWorld> world = sceneEditorSession_->world();
@@ -3679,6 +1579,10 @@ void EditorController::drawOutlinerPanel() {
              sceneEditorSession_->selection() &&
                  *sceneEditorSession_->selection() == entity.id,
              entity.modelBindingState, entity.modelInstance.has_value(),
+             entity.light.has_value(), entity.camera.has_value(),
+             world->activeCameraId() &&
+                 *world->activeCameraId() == entity.id,
+             entity.light && entity.light->atmosphereSunIndex.has_value(),
              lightLimitExceeded.count(entity.id) != 0,
              entity.atmosphere.has_value(),
              entity.reflectionProbeBindingState,
@@ -3848,7 +1752,7 @@ void EditorController::drawOutlinerPanel() {
 void EditorController::drawInspectorPanel() {
     if (!inspectorPanel_ || !sceneEditorSession_ ||
         !sceneEditorSession_->active()) {
-        ImGui::TextDisabled("Open a native scene to inspect it.");
+        ImGui::TextDisabled("Open a native scene.");
         return;
     }
     const std::shared_ptr<RuntimeWorld> world = sceneEditorSession_->world();
@@ -4187,6 +2091,10 @@ void EditorController::handleEditorShortcuts() {
         duplicateSelectedEditorEntity();
         return;
     }
+    if (!io.KeyCtrl && !io.KeyShift && !io.KeyAlt && pressed(ImGuiKey_F)) {
+        frameSelectedEditorEntity();
+        return;
+    }
     if (pressed(ImGuiKey_Delete)) {
         deleteSelectedEditorEntity();
         return;
@@ -4216,17 +2124,8 @@ void EditorController::draw() {
     const GpuPassTimings &gpuTimings = renderer_->gpuPassTimings();
     if (gpuTimings.available)
         status.gpuFrameMs = static_cast<float>(gpuTimings.totalMs);
-
-    EditorUiState &uiState = *editorUi_;
-    uiState.fpsHistory[uiState.performanceCursor] = status.fps;
-    uiState.gpuHistory[uiState.performanceCursor] =
-        std::max(status.gpuFrameMs, 0.0f);
-    uiState.performanceCursor =
-        (uiState.performanceCursor + 1) %
-        EditorUiState::kPerformanceHistorySize;
-    uiState.performanceCount = std::min(
-        uiState.performanceCount + 1,
-        EditorUiState::kPerformanceHistorySize);
+    status.errorCount = static_cast<uint32_t>(
+        notifications_ ? notifications_->errorCount() : 0u);
 
     bool hasActiveLoad = false;
     if (sceneRuntime_->latestSceneLoadTask()) {
@@ -4306,7 +2205,17 @@ void EditorController::draw() {
     if (panels.sceneSessionActive) {
         panels.viewportToolbar = [this]() {
             if (sceneViewportController_) {
+                const GizmoOperation beforeOperation =
+                    sceneViewportController_->operation();
+                const GizmoSpace beforeSpace = sceneViewportController_->space();
                 sceneViewportController_->drawToolbar();
+                if (beforeOperation != sceneViewportController_->operation() ||
+                    beforeSpace != sceneViewportController_->space()) {
+                    EditorPreferences &preferences = preferences_->edit();
+                    preferences.gizmoOperation =
+                        sceneViewportController_->operation();
+                    preferences.gizmoSpace = sceneViewportController_->space();
+                }
                 const float contentRight =
                     ImGui::GetWindowPos().x +
                     ImGui::GetWindowContentRegionMax().x;
@@ -4333,6 +2242,133 @@ void EditorController::draw() {
             }
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Viewport camera source");
+            ImGui::SameLine();
+            EditorPreferences current = preferences_->preferences();
+            bool changed = false;
+            changed |= editor::toggleIconButton(
+                "BoundsOverlay", icons::Box, "B", "Toggle bounds overlay",
+                current.showBounds, ImVec2(28.0f, 0.0f));
+            if (changed)
+                current.showBounds = !current.showBounds;
+            ImGui::SameLine();
+            if (editor::toggleIconButton(
+                    "LightsOverlay", icons::Light, "L",
+                    "Toggle light overlay", current.showLights,
+                    ImVec2(28.0f, 0.0f))) {
+                current.showLights = !current.showLights;
+                changed = true;
+            }
+            ImGui::SameLine();
+            if (editor::toggleIconButton(
+                    "ProbesOverlay", icons::Grid, "P",
+                    "Toggle probe overlay", current.showProbes,
+                    ImVec2(28.0f, 0.0f))) {
+                current.showProbes = !current.showProbes;
+                changed = true;
+            }
+            ImGui::SameLine();
+            if (editor::iconButton("ViewportShading", icons::Tune, "S",
+                                   "Viewport shading",
+                                   ImVec2(28.0f, 0.0f)))
+                ImGui::OpenPopup("ViewportShadingPopup");
+            if (ImGui::BeginPopup("ViewportShadingPopup")) {
+                ImGui::SeparatorText("Shading");
+                for (const ViewMode &viewMode :
+                     renderSettingsController_->shaderRegistry().viewModes()) {
+                    const bool selected =
+                        viewMode.id == currentViewMode().id;
+                    if (ImGui::Selectable(viewMode.displayName.c_str(),
+                                          selected))
+                        setViewMode(viewMode.id);
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndPopup();
+            }
+            ImGui::SameLine();
+            if (editor::iconButton("ViewportDebug", icons::Bug, "D",
+                                   "Viewport debug views",
+                                   ImVec2(28.0f, 0.0f)))
+                ImGui::OpenPopup("ViewportDebugPopup");
+            if (ImGui::BeginPopup("ViewportDebugPopup")) {
+                constexpr const char *surfaceLabels[] = {
+                    "None", "Normal", "Roughness", "Motion",
+                    "History Validity"};
+                int surface = static_cast<int>(
+                    renderSettings().surfaceDebugView);
+                ImGui::SetNextItemWidth(180.0f);
+                if (ImGui::Combo("Surface", &surface, surfaceLabels,
+                                 static_cast<int>(
+                                     std::size(surfaceLabels)))) {
+                    RenderSettingsPatch patch;
+                    patch.surfaceDebugView =
+                        static_cast<SurfaceDebugView>(surface);
+                    if (*patch.surfaceDebugView != SurfaceDebugView::None) {
+                        patch.gBufferDebugView = GBufferDebugView::None;
+                        patch.deferredLightingDebugView =
+                            DeferredLightingDebugView::None;
+                        patch.screenSpaceDebugView =
+                            ScreenSpaceDebugView::None;
+                    }
+                    applyRenderSettings(patch);
+                }
+                constexpr const char *screenLabels[] = {
+                    "None",          "Nearest Depth",  "Scene Color",
+                    "SSAO Raw",      "SSAO Filtered",  "CACAO Output",
+                    "GTAO Raw",      "GTAO Temporal",  "GTAO Filtered",
+                    "GTAO Rejection", "GTAO History",  "TAA History",
+                    "TAA Rejection", "TAA Weight",     "SSR Raw",
+                    "SSR Temporal",  "SSR Filtered",   "SSR Confidence",
+                    "SSR Rejection", "SSGI Raw",       "SSGI Temporal",
+                    "SSGI Filtered", "SSGI Confidence", "SSGI Variance",
+                    "SSGI Rejection"};
+                int screen = static_cast<int>(
+                    renderSettings().screenSpaceDebugView);
+                ImGui::SetNextItemWidth(180.0f);
+                if (ImGui::Combo("Screen Space", &screen, screenLabels,
+                                 static_cast<int>(
+                                     std::size(screenLabels)))) {
+                    RenderSettingsPatch patch;
+                    patch.screenSpaceDebugView =
+                        static_cast<ScreenSpaceDebugView>(screen);
+                    if (*patch.screenSpaceDebugView !=
+                        ScreenSpaceDebugView::None) {
+                        patch.surfaceDebugView = SurfaceDebugView::None;
+                        patch.gBufferDebugView = GBufferDebugView::None;
+                        patch.deferredLightingDebugView =
+                            DeferredLightingDebugView::None;
+                    }
+                    applyRenderSettings(patch);
+                }
+                constexpr const char *deferredLabels[] = {
+                    "None", "Final Color", "Baseline Diffuse",
+                    "Baseline Specular", "Forward Difference"};
+                int deferred = static_cast<int>(
+                    renderSettings().deferredLightingDebugView);
+                ImGui::SetNextItemWidth(180.0f);
+                if (ImGui::Combo("Deferred", &deferred, deferredLabels,
+                                 static_cast<int>(
+                                     std::size(deferredLabels)))) {
+                    RenderSettingsPatch patch;
+                    patch.deferredLightingDebugView =
+                        static_cast<DeferredLightingDebugView>(deferred);
+                    if (*patch.deferredLightingDebugView !=
+                        DeferredLightingDebugView::None) {
+                        patch.surfaceDebugView = SurfaceDebugView::None;
+                        patch.gBufferDebugView = GBufferDebugView::None;
+                        patch.screenSpaceDebugView =
+                            ScreenSpaceDebugView::None;
+                    }
+                    applyRenderSettings(patch);
+                }
+                ImGui::EndPopup();
+            }
+            if (changed) {
+                EditorPreferences &preferences = preferences_->edit();
+                preferences.showBounds = current.showBounds;
+                preferences.showLights = current.showLights;
+                preferences.showProbes = current.showProbes;
+            }
         };
         panels.viewportOverlay = [this](
                                      const EditorViewportState &viewport) {
@@ -4367,6 +2403,9 @@ void EditorController::draw() {
             }
 
             SceneViewportActions actions;
+            actions.showBounds = preferences_->preferences().showBounds;
+            actions.showLights = preferences_->preferences().showLights;
+            actions.showProbes = preferences_->preferences().showProbes;
             actions.modelDisplayName = [this](const std::string &modelId) {
                 const auto source = resolveModelSource(
                     catalog_, projectContext_, ModelAssetId(modelId));
@@ -4414,111 +2453,415 @@ void EditorController::draw() {
             }
         };
     }
-    panels.scenes = [this, hasActiveLoad]() {
-        drawScenePanel(false);
-        if (hasActiveLoad) {
-            ImGui::SeparatorText("Loading");
-            drawSceneLoadingPanel();
-        }
-        if (!editorUi_->sceneStatus.empty()) {
-            ImGui::Separator();
-            editor::statusIndicator(editorUi_->sceneStatus.c_str(),
-                                    editor::StatusTone::Success);
-        }
-        if (!editorUi_->sceneError.empty()) {
-            ImGui::Separator();
-            ImGui::TextColored(editor::statusColor(
-                                   editor::StatusTone::Error),
-                               "%s", editorUi_->sceneError.c_str());
-        }
-    };
-    panels.assets = [this]() {
-        if (!ImGui::BeginTabBar("AssetTabs"))
-            return;
-        if (ImGui::BeginTabItem("Models")) {
-            ImGui::PushID("Models");
-            drawScenePanel(true);
-            ImGui::PopID();
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Environments")) {
-            ImGui::PushID("Environments");
-            drawAssetsPanel(true);
-            ImGui::PopID();
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Jobs / Cache")) {
-            ImGui::PushID("JobsCache");
-            drawAssetsPanel(false);
-            ImGui::PopID();
-            ImGui::EndTabItem();
-        }
-        ImGui::EndTabBar();
+    panels.contentBrowser = [this]() {
+        const ContentBrowserViewMode mode =
+            preferences_->preferences().contentView;
+        const SceneWorkflowSnapshot overview = sceneWorkflow_->snapshot(
+            {sceneLoadContext_.maxTextureSize,
+             sceneRuntime_->currentSceneIndex(),
+             sceneEditorSession_ && sceneEditorSession_->active()});
+        ContentBrowserActions actions;
+        actions.setViewMode = [this](ContentBrowserViewMode value) {
+            preferences_->edit().contentView = value;
+        };
+        actions.drawScenes = [this, mode]() {
+            drawScenePanel(false, mode);
+        };
+        actions.drawModels = [this, mode]() {
+            drawScenePanel(true, mode);
+        };
+        actions.drawEnvironments = [this]() { drawAssetsPanel(true); };
+        actions.openScene = [this](int index) {
+            requestEditorSceneLoad(index);
+        };
+        actions.previewModel = [this](int index) {
+            requestEditorSceneLoad(index);
+        };
+        actions.assignEnvironment = [this](const std::string &id) {
+            setEnvironment(id);
+        };
+        contentBrowserPanel_->draw(
+            {mode, &overview, &assetWorkflowSnapshot_}, actions);
     };
     panels.render = [this]() {
-        ImGui::PushItemWidth(-145.0f);
-        if (ImGui::CollapsingHeader("Common",
-                                    ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::PushID("Common");
-            drawRenderPanel();
-            ImGui::PopID();
+        RenderSettingsPanelSnapshot snapshot{};
+        snapshot.advanced = preferences_->preferences().renderAdvanced;
+        snapshot.features = renderSettingsController_->snapshot();
+        snapshot.viewModes =
+            &renderSettingsController_->shaderRegistry().viewModes();
+        const ViewMode &viewMode = currentViewMode();
+        snapshot.currentViewModeId = viewMode.id;
+        snapshot.currentViewModeDisplayName = viewMode.displayName;
+        snapshot.viewModeSupportsBloom = viewMode.supportsBloom;
+        snapshot.viewModeSupportsScreenSpace = viewMode.supportsScreenSpace;
+        snapshot.viewModeSupportsDdgi = viewMode.supportsDdgi;
+        snapshot.textureLimit = sceneLoadContext_.maxTextureSize;
+        const bool nativeSceneActive =
+            sceneRuntime_->currentSceneIndex() >= 0 &&
+            sceneRuntime_->currentSceneIndex() <
+                static_cast<int>(sceneRegistry_.size()) &&
+            sceneRegistry_[sceneRuntime_->currentSceneIndex()]
+                .isNativeScene();
+        snapshot.textureLimitLocked =
+            config_.assetImportMode == AssetImportMode::CookedOnly ||
+            nativeSceneActive;
+        snapshot.textureLimitHelp =
+            nativeSceneActive
+                ? "Preview only. Native scenes use each model's Catalog profile."
+                : "Changing texture quality reloads the current model preview.";
+        snapshot.screenSpace = renderer_->screenSpaceEffectsStatus();
+        snapshot.ddgi = renderer_->ddgiStatus();
+        snapshot.surfaceData = renderer_->surfaceDataStatus();
+        snapshot.gBuffer = renderer_->gBufferStatus();
+        snapshot.deferredLighting = renderer_->deferredLightingStatus();
+        snapshot.occlusion = renderer_->occlusionCullingStatus();
+        snapshot.visibilityStats = visibilityFrame_.cpuStats;
+        snapshot.temporalHistory = visibilityFrame_.history;
+        snapshot.renderItemCount =
+            static_cast<uint32_t>(visibilityFrame_.items.size());
+        snapshot.lightStats = lastLightStats_;
+        snapshot.atmosphere = renderer_->atmosphereStatus();
+        snapshot.reflectionProbes = renderer_->reflectionProbeStatus();
+        snapshot.environmentRepository =
+            sceneRuntime_->environmentRepositorySnapshot();
+        snapshot.lightBuffer = renderer_->sceneLightBufferStatus();
+        snapshot.clusteredLighting = renderer_->clusteredLightingStatus();
+        if (sceneRuntime_->currentWorld()) {
+            snapshot.sceneLights = sceneRuntime_->currentWorld()->lights();
+            snapshot.camera.sceneBounds =
+                sceneRuntime_->currentWorld()->bounds();
         }
-        if (ImGui::CollapsingHeader("Post Processing",
-                                    ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::PushID("PostProcessing");
-            drawPostProcessingPanel();
-            ImGui::PopID();
+        snapshot.environments.reserve(catalog_.environments.size());
+        for (const CatalogEnvironment &environment : catalog_.environments) {
+            snapshot.environments.push_back(
+                {environment.id, environment.displayName});
         }
-        if (ImGui::CollapsingHeader("Surface Data")) {
-            ImGui::PushID("SurfaceData");
-            drawSurfaceDataPanel();
-            ImGui::PopID();
+        snapshot.selectedEnvironmentId =
+            sceneRuntime_->selectedEnvironmentId();
+        if (const CatalogEnvironment *environment =
+                snapshot.selectedEnvironmentId.empty()
+                    ? nullptr
+                    : catalog_.findEnvironment(
+                          snapshot.selectedEnvironmentId)) {
+            snapshot.selectedEnvironmentName = environment->displayName;
         }
-        if (ImGui::CollapsingHeader("Lighting",
-                                    ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::PushID("Lighting");
-            drawLightingPanel();
-            ImGui::PopID();
+        snapshot.environmentIblSupported =
+            device_->environmentIblSupported();
+        snapshot.environmentReady = renderer_->environmentReady();
+        snapshot.environmentError = sceneWorkflow_->environmentError();
+        snapshot.reflectionProbeCaptureStatus =
+            reflectionProbeCapture_ ? reflectionProbeCapture_->status
+                                    : std::string{};
+        if (const auto task = sceneRuntime_->latestEnvironmentLoadTask()) {
+            const EnvironmentLoadState state = task->state.load();
+            snapshot.environmentLoad = RenderEnvironmentLoadSnapshot{
+                task->id,
+                environmentLoadStateName(state),
+                task->uploadedImages.load(),
+                task->totalImages,
+                !isTerminalEnvironmentLoadState(state)};
         }
-        if (ImGui::CollapsingHeader("Culling",
-                                    ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::PushID("Culling");
-            drawCullingPanel();
-            ImGui::PopID();
+        snapshot.ambientColor = ambientColor_;
+        snapshot.ambientIntensity = ambientIntensity_;
+        snapshot.fallbackSunDirection = defaultSunDirection_;
+        snapshot.fallbackSunColor = defaultSunColor_;
+        snapshot.fallbackSunIntensity = defaultSunIntensity_;
+        snapshot.camera.position = camera_.position();
+        snapshot.camera.moveSpeed = config_.moveSpeed;
+        snapshot.camera.nearPlane = camera_.nearPlane();
+        snapshot.camera.farPlane = camera_.farPlane();
+
+        RenderSettingsPanelActions actions;
+        actions.setAdvanced = [this](bool value) {
+            preferences_->edit().renderAdvanced = value;
+        };
+        actions.setViewMode = [this](const std::string &id) {
+            setViewMode(id);
+        };
+        actions.setTextureLimit = [this](uint32_t limit) {
+            setTextureLimit(limit);
+        };
+        actions.applySettings = [this](const RenderSettingsPatch &patch) {
+            applyRenderSettings(patch);
+        };
+        actions.setEnvironment = [this](const std::string &id) {
+            try {
+                setEnvironment(id);
+                sceneWorkflow_->clearEnvironmentUiError();
+            } catch (const std::exception &error) {
+                sceneWorkflow_->setEnvironmentUiError(error.what());
+            }
+        };
+        actions.cancelEnvironmentLoad = [this](uint64_t taskId) {
+            sceneRuntime_->cancelEnvironmentLoad(taskId);
+        };
+        actions.setAmbientColor = [this](glm::vec3 value) {
+            ambientColor_ = value;
+        };
+        actions.setAmbientIntensity = [this](float value) {
+            ambientIntensity_ = value;
+        };
+        actions.setFallbackSunDirection = [this](glm::vec3 value) {
+            defaultSunDirection_ = value;
+        };
+        actions.setFallbackSunColor = [this](glm::vec3 value) {
+            defaultSunColor_ = value;
+        };
+        actions.setFallbackSunIntensity = [this](float value) {
+            defaultSunIntensity_ = value;
+        };
+        if (sceneEditorSession_ && sceneEditorSession_->active() &&
+            !snapshot.ddgi.componentPresent) {
+            actions.createDdgiProbeVolume = [this]() {
+                try {
+                    const std::shared_ptr<RuntimeWorld> world =
+                        sceneEditorSession_->world();
+                    const Bounds bounds = world->bounds();
+                    SceneEntityDocument entity;
+                    entity.id = PersistentEntityId::generate();
+                    entity.name = "DDGI Probe Volume";
+                    entity.ddgiProbeVolume =
+                        DdgiProbeVolumeComponentDocument{};
+                    if (bounds.valid) {
+                        const glm::vec3 extent = glm::max(
+                            bounds.max - bounds.min, glm::vec3(0.5f));
+                        const float longest = std::max(
+                            {extent.x, extent.y, extent.z, 0.5f});
+                        auto probeCount = [longest](float axisExtent,
+                                                   uint32_t minimum) {
+                            return glm::clamp(
+                                static_cast<uint32_t>(std::lround(
+                                    12.0f * axisExtent / longest)),
+                                minimum, 12u);
+                        };
+                        const glm::uvec3 counts{
+                            probeCount(extent.x, 2u),
+                            probeCount(extent.y, 2u),
+                            probeCount(extent.z, 3u)};
+                        const glm::vec3 spacing = glm::max(
+                            extent * 1.05f /
+                                glm::vec3(glm::max(
+                                    counts - glm::uvec3(1u),
+                                    glm::uvec3(1u))),
+                            glm::vec3(0.25f));
+                        entity.transform.translation = bounds.center;
+                        entity.ddgiProbeVolume->probeCounts = counts;
+                        entity.ddgiProbeVolume->probeSpacing = spacing;
+                        entity.ddgiProbeVolume->maxRayDistance =
+                            glm::clamp(
+                                std::max({spacing.x, spacing.y, spacing.z}) *
+                                    8.0f,
+                                4.0f, 100.0f);
+                        entity.ddgiProbeVolume->probesUpdatedPerFrame =
+                            std::min(64u,
+                                     counts.x * counts.y * counts.z);
+                    }
+                    const PersistentEntityId id = entity.id;
+                    sceneEditorSession_->execute(
+                        "Create Fitted DDGI Probe Volume",
+                        [entity = std::move(entity)](
+                            RuntimeWorld &runtimeWorld) mutable {
+                            const EntityHandle created =
+                                runtimeWorld.createEntity(std::move(entity));
+                            return static_cast<bool>(created);
+                        });
+                    sceneEditorSession_->select(id);
+                } catch (const std::exception &error) {
+                    editorUi_->sceneError = error.what();
+                }
+            };
         }
-        if (ImGui::CollapsingHeader("Camera & Clip")) {
-            ImGui::PushID("Camera");
-            drawCameraPanel();
-            ImGui::PopID();
-        }
-        ImGui::PopItemWidth();
+        actions.setCameraMoveSpeed = [this](float value) {
+            config_.moveSpeed = value;
+            preferences_->edit().cameraMoveSpeed = value;
+        };
+        actions.setCameraClipPlanes = [this](float nearPlane,
+                                              float farPlane) {
+            camera_.setClipPlanes(nearPlane, farPlane);
+        };
+        renderSettingsPanel_->draw(snapshot, actions);
     };
-    panels.materials = [this]() { drawMaterialsPanel(); };
-    panels.diagnostics = [this]() {
-        if (ImGui::BeginTabBar("DiagnosticsTabs")) {
-            if (ImGui::BeginTabItem("Performance")) {
-                ImGui::PushID("PerformanceTab");
-                drawPerformancePanel();
-                ImGui::PopID();
-                ImGui::EndTabItem();
+    panels.materials = [this]() {
+        MaterialsPanelSnapshot snapshot{};
+        snapshot.sceneGeneration = sceneRuntime_->sceneGeneration();
+        const MaterialBindingStatus &binding = materialSystem_->status();
+        snapshot.bindingMode = binding.active;
+        snapshot.activeMaterials = binding.activeMaterials;
+        snapshot.materialCapacity = binding.materialCapacity;
+
+        std::vector<std::shared_ptr<MaterialInstance>> selectedMaterials;
+        const std::vector<std::shared_ptr<MaterialInstance>> *materials =
+            sceneRuntime_->currentWorld()
+                ? &sceneRuntime_->currentWorld()->materials()
+                : nullptr;
+        snapshot.sceneLoaded = materials != nullptr;
+        if (sceneEditorSession_ && sceneEditorSession_->active()) {
+            snapshot.sceneLoaded = true;
+            materials = &selectedMaterials;
+            if (sceneEditorSession_->selection()) {
+                const std::shared_ptr<RuntimeWorld> world =
+                    sceneEditorSession_->world();
+                if (const auto asset = world->modelAsset(
+                        world->find(*sceneEditorSession_->selection())))
+                    selectedMaterials = asset->materials;
             }
-            if (ImGui::BeginTabItem("Load Stats")) {
-                ImGui::PushID("LoadStatsTab");
-                drawLoadStatsPanel();
-                ImGui::PopID();
-                ImGui::EndTabItem();
+        }
+        if (materials) {
+            snapshot.materials.reserve(materials->size());
+            for (size_t index = 0; index < materials->size(); ++index) {
+                const auto &material = (*materials)[index];
+                if (!material)
+                    continue;
+                MaterialPanelItem item{};
+                item.sourceIndex = static_cast<uint32_t>(index);
+                item.params = material->params();
+                item.gpuMaterialIndex = material->materialIndex();
+                item.shaderFamily =
+                    renderSettingsController_->shaderRegistry()
+                        .materialShaderFamily(
+                            material->materialTemplate().shaderFamily())
+                        .displayName;
+                const auto &textures = material->textures();
+                const GpuMaterial *gpuMaterial =
+                    materialSystem_->gpuMaterial(material->materialHandle());
+                item.textureSlots = {
+                    gpuMaterial ? gpuMaterial->textureIndices0.x : 0u,
+                    gpuMaterial ? gpuMaterial->textureIndices0.y : 0u,
+                    gpuMaterial ? gpuMaterial->textureIndices0.z : 0u,
+                    gpuMaterial ? gpuMaterial->textureIndices0.w : 0u,
+                    gpuMaterial ? gpuMaterial->textureIndices1.x : 0u};
+                for (size_t slot = 0; slot < kMaterialTextureSlotCount;
+                     ++slot)
+                    item.texturesBound[slot] =
+                        static_cast<bool>(textures[slot]);
+                snapshot.materials.push_back(std::move(item));
             }
+        }
+        materialsPanel_->draw(snapshot);
+    };
+    panels.bottomDrawer = [this, hasActiveLoad]() {
+        DiagnosticsPanelSnapshot snapshot{};
+        snapshot.sceneLoadActive = hasActiveLoad;
+        snapshot.captureAvailable = captureService_ != nullptr;
+        snapshot.fps = ImGui::GetIO().Framerate;
+        snapshot.gpuTimings = renderer_->gpuPassTimings();
+        snapshot.gpuFrameMs = snapshot.gpuTimings.available
+                                  ? static_cast<float>(
+                                        snapshot.gpuTimings.totalMs)
+                                  : 0.0f;
+        snapshot.cameraDragging = cameraDragging_ && cameraDragging_();
+        snapshot.renderableCount =
+            sceneRuntime_->currentWorld()
+                ? sceneRuntime_->currentWorld()->renderableCount()
+                : 0;
+        snapshot.tracyCompiled = build::kTracy;
+        snapshot.tracyConnected = device_->tracyProfiler().connected();
+        snapshot.tracyGpuAvailable =
+            device_->tracyProfiler().gpuAvailable();
+        snapshot.renderPath = renderer_->renderPathStatus();
+        snapshot.gBuffer = renderer_->gBufferStatus();
+        snapshot.deferredLighting = renderer_->deferredLightingStatus();
+        snapshot.clusteredLighting = renderer_->clusteredLightingStatus();
+        snapshot.renderGraph = renderer_->renderGraphDiagnostics();
+        const auto &lastSceneLoad = sceneRuntime_->lastSceneLoadStats();
+        snapshot.lastSceneLoad = lastSceneLoad ? &*lastSceneLoad : nullptr;
+        snapshot.materialBinding = materialSystem_->status();
+        snapshot.modelRepository = sceneRuntime_->modelRepositorySnapshot();
+
+        DiagnosticsPanelActions actions;
+        actions.drawSceneLoad = [this]() { drawSceneLoadingPanel(); };
+        actions.drawTasks = [this]() { drawAssetsPanel(false); };
 #if VKL_ENABLE_CAPTURE
-            if (ImGui::BeginTabItem("Capture")) {
-                ImGui::PushID("CaptureTab");
-                drawCapturePanel();
-                ImGui::PopID();
-                ImGui::EndTabItem();
-            }
+        actions.drawCapture = [this]() { drawCapturePanel(); };
 #endif
-            ImGui::EndTabBar();
-        }
+        actions.exportRenderGraphJson = [this]() {
+            std::filesystem::create_directories("logs");
+            std::ofstream("logs/render_graph.json", std::ios::binary)
+                << renderer_->renderGraphJson();
+        };
+        actions.exportRenderGraphDot = [this]() {
+            std::filesystem::create_directories("logs");
+            std::ofstream("logs/render_graph.dot", std::ios::binary)
+                << renderer_->renderGraphDot();
+        };
+        diagnosticsPanel_->draw(snapshot, actions);
     };
+
+    panels.openCommandPalette = [this]() {
+        if (commandPalette_)
+            commandPalette_->requestOpen();
+    };
+
+    actionRegistry_->clear();
+    const auto addAction = [this](std::string id, std::string label,
+                                  const char *icon, std::string shortcut,
+                                  std::string keywords,
+                                  std::function<void()> callback,
+                                  std::function<bool()> enabled = {}) {
+        actionRegistry_->add(EditorAction{
+            std::move(id), std::move(label), std::move(keywords),
+            std::move(shortcut), icon, std::move(enabled),
+            std::move(callback)});
+    };
+    addAction("file.new", "New Scene", icons::Plus, "Ctrl+N",
+              "file create", panels.newScene);
+    addAction("file.open", "Open Scene", icons::Folder, "Ctrl+O",
+              "file scene", panels.openScene);
+    addAction("file.save", "Save Scene", icons::Save, "Ctrl+S",
+              "file", panels.saveScene,
+              [active = panels.sceneSessionActive]() { return active; });
+    addAction("file.save_as", "Save Scene As", icons::Save,
+              "Ctrl+Shift+S", "file duplicate", panels.saveSceneAs,
+              [active = panels.sceneSessionActive]() { return active; });
+    addAction("file.close", "Close Scene", icons::Close, {}, "file",
+              panels.closeScene,
+              [active = panels.sceneSessionActive]() { return active; });
+    addAction("file.convert", "Convert Model Preview", icons::Scene, {},
+              "file scene model", panels.convertPreview,
+              [active = panels.sceneSessionActive]() { return !active; });
+    addAction("edit.undo", "Undo", icons::Undo, "Ctrl+Z", "edit",
+              panels.undo, [enabled = panels.canUndo]() { return enabled; });
+    addAction("edit.redo", "Redo", icons::Redo, "Ctrl+Y", "edit",
+              panels.redo, [enabled = panels.canRedo]() { return enabled; });
+    addAction("edit.duplicate", "Duplicate Entity", icons::Copy,
+              "Ctrl+D", "edit entity", [this]() {
+                  duplicateSelectedEditorEntity();
+              },
+              [this]() {
+                  return sceneEditorSession_ &&
+                         sceneEditorSession_->selection().has_value();
+              });
+    addAction("edit.delete", "Delete Entity", icons::Trash, "Delete",
+              "edit entity", [this]() { deleteSelectedEditorEntity(); },
+              [this]() {
+                  return sceneEditorSession_ &&
+                         sceneEditorSession_->selection().has_value();
+              });
+    addAction("view.maximize", "Maximize Viewport", icons::Maximize,
+              "Ctrl+Space", "view focus viewport", [this]() {
+                  editorDockWorkspace_->toggleViewportMaximized();
+              });
+    addAction("view.frame_selected", "Frame Selected", icons::Focus, "F",
+              "view camera entity", [this]() {
+                  frameSelectedEditorEntity();
+              },
+              [this]() {
+                  return sceneEditorSession_ &&
+                         sceneEditorSession_->selection().has_value() &&
+                         sceneEditorSession_->cameraMode() ==
+                             EditorCameraMode::Editor;
+              });
+    addAction("view.drawer", "Toggle Bottom Drawer", icons::DrawerOpen,
+              {}, "tasks diagnostics", [this]() {
+                  editorDockWorkspace_->toggleBottomDrawer();
+              });
+
+    if (ImGui::GetIO().KeyCtrl &&
+        ImGui::IsKeyPressed(ImGuiKey_P, false))
+        commandPalette_->requestOpen();
+    if (ImGui::GetIO().KeyCtrl &&
+        ImGui::IsKeyPressed(ImGuiKey_Space, false))
+        actionRegistry_->invoke("view.maximize");
 
     handleEditorShortcuts();
 
@@ -4530,6 +2873,11 @@ void EditorController::draw() {
     viewportFrame.renderHeight = renderExtent.height;
     viewportFrame.resizePending = viewportResize_.pending;
     editorDockWorkspace_->draw(status, viewportFrame, panels);
+    commandPalette_->draw(*actionRegistry_);
+    notifications_->draw(preferences_->preferences().bottomDrawerExpanded
+                             ? preferences_->preferences().bottomDrawerHeight +
+                                   12.0f
+                             : 40.0f);
     drawSceneAuthoringDialogs();
 
     const EditorViewportState &viewport =
@@ -4626,6 +2974,96 @@ void EditorController::onWorldPublished(
 
 void EditorController::update() {
     updateReflectionProbeCapture();
+    preferences_->update();
+    notifications_->update();
+
+    if (!editorUi_->sceneError.empty() &&
+        editorUi_->sceneError != lastNotifiedSceneError_) {
+        lastNotifiedSceneError_ = editorUi_->sceneError;
+        notifications_->push(editor::StatusTone::Error, "Scene operation failed",
+                             editorUi_->sceneError, "Open Tasks", [this]() {
+                                 if (!preferences_->preferences()
+                                          .bottomDrawerExpanded)
+                                     editorDockWorkspace_->toggleBottomDrawer();
+                             });
+    } else if (editorUi_->sceneError.empty()) {
+        lastNotifiedSceneError_.clear();
+    }
+    if (!captureUiError_.empty() &&
+        captureUiError_ != lastNotifiedCaptureError_) {
+        lastNotifiedCaptureError_ = captureUiError_;
+        notifications_->push(editor::StatusTone::Error, "Capture failed",
+                             captureUiError_);
+    } else if (captureUiError_.empty()) {
+        lastNotifiedCaptureError_.clear();
+    }
+
+    const auto openTasks = [this]() {
+        if (!preferences_->preferences().bottomDrawerExpanded)
+            editorDockWorkspace_->toggleBottomDrawer();
+    };
+    if (const std::shared_ptr<SceneLoadTask> task =
+            sceneRuntime_->latestSceneLoadTask();
+        task && isTerminalSceneLoadState(task->state.load()) &&
+        notifiedSceneTasks_.insert(task->id).second) {
+        const SceneLoadState state = task->state.load();
+        std::string message = task->sceneName;
+        if (state == SceneLoadState::Failed) {
+            std::scoped_lock lock(task->mutex);
+            if (!task->error.empty())
+                message = task->error;
+        }
+        notifications_->push(
+            state == SceneLoadState::Completed
+                ? editor::StatusTone::Success
+                : (state == SceneLoadState::Failed
+                       ? editor::StatusTone::Error
+                       : editor::StatusTone::Warning),
+            state == SceneLoadState::Completed
+                ? "Scene loaded"
+                : (state == SceneLoadState::Failed ? "Scene load failed"
+                                                   : "Scene load cancelled"),
+            std::move(message), "Open Tasks", openTasks);
+    }
+
+    assetWorkflowSnapshot_ = sceneWorkflow_->assetSnapshot();
+    const auto notifyAssetTask = [&](const AssetTaskSnapshot &task) {
+        if (!task.terminal || !notifiedAssetTasks_.insert(task.id).second)
+            return;
+        const bool failed = !task.error.empty() || task.failed > 0;
+        notifications_->push(
+            failed ? editor::StatusTone::Error
+                   : editor::StatusTone::Success,
+            failed ? "Asset task failed" : "Asset task completed",
+            failed ? task.error : task.kind + ": " + task.assetId,
+            "Open Tasks", openTasks);
+    };
+    if (assetWorkflowSnapshot_.activeTask)
+        notifyAssetTask(*assetWorkflowSnapshot_.activeTask);
+    for (const AssetTaskSnapshot &task : assetWorkflowSnapshot_.recentTasks)
+        notifyAssetTask(task);
+
+    if (captureService_) {
+        for (const CaptureTaskSnapshot &task : captureService_->tasks()) {
+            if (!isTerminalCaptureTaskState(task.state) ||
+                !notifiedCaptureTasks_.insert(task.request.taskId).second) {
+                continue;
+            }
+            const bool failed = task.state == CaptureTaskState::Failed;
+            const bool completed =
+                task.state == CaptureTaskState::Completed;
+            notifications_->push(
+                failed ? editor::StatusTone::Error
+                       : (completed ? editor::StatusTone::Success
+                                    : editor::StatusTone::Warning),
+                failed ? "Capture failed"
+                       : (completed ? "Capture saved"
+                                    : "Capture cancelled"),
+                failed ? task.result.error
+                       : task.result.outputPath.string(),
+                "Open Tasks", openTasks);
+        }
+    }
 }
 
 void EditorController::beginFrame() {

@@ -15,6 +15,9 @@ struct RenderFeatureSupport {
     RenderFeatureAvailability bloom;
     RenderFeatureAvailability occlusionCulling;
     RenderFeatureAvailability surfaceData;
+    RenderFeatureAvailability gBuffer;
+    RenderFeatureAvailability deferredLighting;
+    RenderFeatureAvailability clusteredLighting;
     RenderFeatureAvailability depthPyramid;
     RenderFeatureAvailability colorPyramid;
     RenderFeatureAvailability ssao;
@@ -27,12 +30,16 @@ struct RenderFeatureSupport {
 };
 
 struct RenderFeatureRuntimeState {
+    RenderPathSelection renderPath{};
     AmbientOcclusionMode activeAmbientOcclusion = AmbientOcclusionMode::Off;
     GlobalIlluminationMode activeGlobalIllumination =
         GlobalIlluminationMode::AmbientOrIbl;
     bool bloomActive = false;
     bool occlusionCullingActive = false;
     bool surfaceDataActive = false;
+    bool gBufferActive = false;
+    bool deferredLightingActive = false;
+    bool clusteredLightingActive = false;
     bool taaActive = false;
     bool ssrActive = false;
     bool ssgiActive = false;

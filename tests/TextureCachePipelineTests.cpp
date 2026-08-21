@@ -123,8 +123,11 @@ class FakeProcessRunner final : public vkr::assettool::IProcessRunner {
     run(const vkr::assettool::ProcessRequest &,
         const std::atomic_bool &cancelRequested) override {
         ++calls;
-        return {cancelRequested.load() ? 1223u : exitCode,
-                cancelRequested.load(), "fake output"};
+        vkr::assettool::ProcessResult result;
+        result.exitCode = cancelRequested.load() ? 1223u : exitCode;
+        result.cancelled = cancelRequested.load();
+        result.output = "fake output";
+        return result;
     }
     void cancelAll() noexcept override { cancelled = true; }
 

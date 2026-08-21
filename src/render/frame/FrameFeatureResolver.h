@@ -9,12 +9,13 @@
 namespace vkr {
 
 struct RenderSettings;
-struct ShaderVariant;
+struct ViewMode;
 
 struct FrameFeatureResolveInput {
     const RenderSettings *settings = nullptr;
-    const ShaderVariant *shaderVariant = nullptr;
+    const ViewMode *viewMode = nullptr;
     const RenderFeatureSupport *support = nullptr;
+    const RendererResourceHandles *resources = nullptr;
 
     bool atmosphereActive = false;
     bool transparentVisible = false;
@@ -22,6 +23,7 @@ struct FrameFeatureResolveInput {
     uint32_t directionalShadowCascadeCount = 0;
     uint32_t pointShadowLightCount = 0;
     uint32_t spotShadowLightCount = 0;
+    uint32_t punctualLightCount = 0;
     uint32_t occlusionCandidates = 0;
     bool ddgiSceneActive = false;
     bool captureRequested = false;

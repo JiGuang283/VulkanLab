@@ -1,7 +1,9 @@
 #pragma once
 
-#include <functional>
+#include "EditorPreferences.h"
+
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -15,17 +17,17 @@ struct EditorFrameStatus {
     float fps = 0.0f;
     float gpuFrameMs = -1.0f;
     float loadingProgress = 0.0f;
+    uint32_t errorCount = 0;
     bool loading = false;
 };
 
 struct EditorPanelCallbacks {
     std::function<void()> outliner;
     std::function<void()> inspector;
-    std::function<void()> scenes;
-    std::function<void()> assets;
+    std::function<void()> contentBrowser;
     std::function<void()> render;
     std::function<void()> materials;
-    std::function<void()> diagnostics;
+    std::function<void()> bottomDrawer;
     std::function<void()> viewportToolbar;
     std::function<void(const EditorViewportState &)> viewportOverlay;
 
@@ -43,6 +45,7 @@ struct EditorPanelCallbacks {
     std::function<void()> convertPreview;
     std::function<void()> undo;
     std::function<void()> redo;
+    std::function<void()> openCommandPalette;
 };
 
 struct EditorViewportFrame {
@@ -51,8 +54,6 @@ struct EditorViewportFrame {
     uint32_t renderHeight = 0;
     bool resizePending = false;
 };
-
-enum class EditorWorkspacePreset { Viewport, Debugging, Compact };
 
 struct EditorViewportState {
     float minX = 0.0f;
@@ -71,38 +72,44 @@ struct EditorViewportState {
 
 class EditorDockWorkspace {
   public:
+    explicit EditorDockWorkspace(EditorPreferencesStore &preferences);
+
     void draw(const EditorFrameStatus &status,
               const EditorViewportFrame &viewport,
               const EditorPanelCallbacks &panels);
 
-    const EditorViewportState &viewportState() const {
-        return viewportState_;
-    }
+    const EditorViewportState &viewportState() const { return viewportState_; }
+    EditorWorkspacePreset currentPreset() const { return currentPreset_; }
+    bool viewportMaximized() const { return viewportMaximized_; }
+    void toggleViewportMaximized();
+    void toggleBottomDrawer();
 
   private:
+    void applyPresetVisibility(EditorWorkspacePreset preset);
     void buildDefaultLayout(unsigned int dockspaceId, float x, float y,
                             float width, float height,
                             EditorWorkspacePreset preset);
-    void drawMenuBar(const EditorFrameStatus &status,
-                     const EditorPanelCallbacks &panels);
+    void requestPreset(EditorWorkspacePreset preset);
+    void drawMenuBar(const EditorPanelCallbacks &panels);
+    void drawBottomDrawer(const EditorFrameStatus &status,
+                          const EditorPanelCallbacks &panels);
     void drawViewport(const EditorViewportFrame &viewport,
                       const EditorPanelCallbacks &panels);
     void drawPanel(const char *name, bool &visible,
                    const std::function<void()> &callback);
 
+    EditorPreferencesStore *preferences_ = nullptr;
     EditorViewportState viewportState_{};
     bool viewportVisible_ = true;
     bool outlinerVisible_ = true;
     bool inspectorVisible_ = true;
-    bool scenesVisible_ = true;
-    bool assetsVisible_ = true;
-    bool renderVisible_ = true;
-    bool materialsVisible_ = true;
-    bool diagnosticsVisible_ = false;
+    bool contentBrowserVisible_ = true;
+    bool renderVisible_ = false;
+    bool materialsVisible_ = false;
     bool resetLayoutRequested_ = false;
+    bool viewportMaximized_ = false;
     uint8_t activateDefaultTabsFrames_ = 0;
-    EditorWorkspacePreset currentPreset_ =
-        EditorWorkspacePreset::Viewport;
+    EditorWorkspacePreset currentPreset_ = EditorWorkspacePreset::Scene;
     std::optional<EditorWorkspacePreset> requestedPreset_;
 };
 

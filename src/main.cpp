@@ -5,6 +5,7 @@
 #include "control/RuntimeControlProtocol.h"
 #include "diagnostics/BuildInfo.h"
 #include "core/Log.h"
+#include "render/shader/ShaderRegistry.h"
 
 #include <BuildFeatures.h>
 #include <json.hpp>
@@ -49,6 +50,7 @@ void printUsage(std::ostream &out) {
            "[--runtime-control-pipe <suffix>] [--validation <profile>] "
            "[--asset-mode <mode>] [--cache-root <path>] [diagnostics] "
            "[--material-binding <mode>] "
+           "[--render-path <mode>] "
            "[--help]\n"
         << "\n"
         << "Options:\n"
@@ -68,6 +70,8 @@ void printUsage(std::ostream &out) {
            "validation (default: core).\n"
         << "  --material-binding <mode>  Use auto, legacy, or bindless "
            "material resources (default: auto).\n"
+        << "  --render-path <mode>  Use auto, forward, or deferred "
+           "opaque rendering (default: auto).\n"
         << "  --automation      Enable deterministic automation behavior.\n"
         << "  --window-size <WxH>  Use a fixed, non-resizable window size.\n"
         << "  --fixed-delta <seconds>  Advance scene simulation by a fixed "
@@ -115,7 +119,11 @@ void printBuildInfoJson(std::ostream &out) {
           {"cacao", features.cacao},
           {"assetTool", features.assetTool},
           {"controlTool", features.controlTool},
-          {"renderTest", features.renderTest}}}};
+          {"renderTest", features.renderTest}}},
+        {"rendering",
+         {{"renderPaths", {"forward", "deferred"}},
+          {"materialBindings", {"legacy", "bindless"}},
+          {"shaderManifestSchema", vkr::ShaderRegistry::kSchemaVersion}}}};
     out << root.dump() << '\n';
 }
 
@@ -251,6 +259,17 @@ bool parseArguments(int argc, wchar_t **argv, vkr::Config &config) {
             } catch (const char *message) {
                 throw std::invalid_argument(message);
             }
+        } else if (argument == L"--render-path") {
+            if (++i >= argc)
+                throw std::invalid_argument(
+                    "--render-path requires a mode");
+            const auto request = vkr::renderPathRequestFromName(
+                utf8Argument(argv[i]));
+            if (!request) {
+                throw std::invalid_argument(
+                    "--render-path must be auto, forward, or deferred");
+            }
+            config.renderPath = *request;
         } else if (argument == L"--help") {
             return false;
         } else {

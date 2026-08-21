@@ -11,8 +11,10 @@
 #include "render/diagnostics/GpuPassProfiler.h"
 #include "render/graph/RenderResourcePool.h"
 #include "render/frame/RenderSettings.h"
+#include "render/path/RenderPath.h"
 #include "render/shader/RendererProgramCatalog.h"
 #include "render/features/atmosphere_environment/Atmosphere.h"
+#include "render/features/lighting/ClusteredLighting.h"
 #include "render/features/shadows_visibility/Visibility.h"
 #include "scene_data/SceneIds.h"
 
@@ -33,6 +35,9 @@ class ShaderRegistry;
 struct EnvironmentGpuResources;
 class MainForwardPass;
 class SurfacePrepass;
+class SurfaceFrameData;
+class GBufferPass;
+class DeferredLightingPass;
 class AtmosphereLutPass;
 class ToneMapPass;
 class CacaoPass;
@@ -47,7 +52,7 @@ class PresentPass;
 class PipelineCache;
 class RayTracingScene;
 struct RayTracingSceneStatus;
-struct ShaderVariant;
+struct ViewMode;
 struct RenderView;
 
 struct RendererViewportOutput {
@@ -100,8 +105,35 @@ struct SurfaceDataStatus {
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
     VkFormat normalRoughnessFormat = VK_FORMAT_UNDEFINED;
     VkFormat motionFormat = VK_FORMAT_UNDEFINED;
+    bool surfaceFlagsAbi = true;
     std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> historyCapacities{};
     uint64_t allocatedBytes = 0;
+};
+
+struct GBufferRuntimeStatus {
+    bool supported = false;
+    bool active = false;
+    std::string unavailableReason;
+    VkExtent2D extent{};
+    VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+    VkFormat baseColorMetallicFormat = VK_FORMAT_UNDEFINED;
+    VkFormat normalRoughnessOcclusionFormat = VK_FORMAT_UNDEFINED;
+    VkFormat emissiveSurfaceFlagsFormat = VK_FORMAT_UNDEFINED;
+    VkFormat motionFormat = VK_FORMAT_UNDEFINED;
+    uint32_t drawCount = 0;
+    uint64_t residentBytes = 0;
+};
+
+struct DeferredLightingRuntimeStatus {
+    bool supported = false;
+    bool active = false;
+    std::string unavailableReason;
+    VkExtent2D extent{};
+    uint32_t dispatchX = 0;
+    uint32_t dispatchY = 0;
+    uint64_t residentBytes = 0;
+    DeferredLightingDebugView debugView =
+        DeferredLightingDebugView::None;
 };
 
 struct ScreenSpaceEffectsStatus {
@@ -132,6 +164,13 @@ struct ScreenSpaceEffectsStatus {
     GlobalIlluminationMode activeGiMode =
         GlobalIlluminationMode::AmbientOrIbl;
     uint32_t depthMipLevels = 0;
+    DepthHierarchyMode depthHierarchyMode =
+        DepthHierarchyMode::Unavailable;
+    VkFormat depthHierarchyFormat = VK_FORMAT_UNDEFINED;
+    uint32_t depthHierarchyDispatches = 0;
+    uint64_t depthHierarchyResidentBytes = 0;
+    uint64_t depthHierarchySplitBaselineBytes = 0;
+    uint64_t depthHierarchySavedBytes = 0;
     uint32_t colorMipLevels = 0;
     VkExtent2D depthExtent{};
     VkExtent2D colorExtent{};
@@ -182,7 +221,7 @@ class Renderer {
                      const VisibilityFrame &visibility,
                      PipelineCache &pipelineCache,
                      std::function<void(VkCommandBuffer)> drawUi,
-                     const ShaderVariant &shaderVariant,
+                     const ViewMode &viewMode,
                      const RenderView &view,
                      std::optional<FrameCaptureSource> captureSource = {},
                      std::function<void(VkCommandBuffer)> screenshotCopy = {});
@@ -220,6 +259,11 @@ class Renderer {
     const RayTracingSceneStatus &rayTracingSceneStatus() const;
     OcclusionCullingStatus occlusionCullingStatus() const;
     SurfaceDataStatus surfaceDataStatus() const;
+    GBufferRuntimeStatus gBufferStatus() const;
+    DeferredLightingRuntimeStatus deferredLightingStatus() const;
+    ClusteredLightingStatus clusteredLightingStatus() const;
+    OpaqueRenderProducts opaqueRenderProducts() const;
+    RenderPathStatus renderPathStatus() const;
     ScreenSpaceEffectsStatus screenSpaceEffectsStatus() const;
     bool reconfigureCacao(CacaoResolution resolution, std::string &error);
     bool atmosphereSupported() const;
@@ -291,6 +335,7 @@ class Renderer {
     FrameSync *frameSync_;
     DescriptorAllocator *descriptorAllocator_;
     MaterialSystem *materialSystem_;
+    const ShaderRegistry *shaderRegistry_ = nullptr;
 
     std::vector<std::unique_ptr<Buffer>> uniformBuffers_;
     std::array<FrameSceneLightStorage, MAX_FRAMES_IN_FLIGHT>
@@ -324,11 +369,19 @@ class Renderer {
     RenderImageHandle activePointShadowImage_{};
     RenderImageHandle activeSpotShadowImage_{};
     RendererProgramCatalog programs_;
+    std::unique_ptr<SurfaceFrameData> surfaceFrameData_;
+    std::unique_ptr<ClusteredLightingResources> clusteredLighting_;
     RenderGraph renderGraph_;
     std::unique_ptr<GpuPassProfiler> gpuPassProfiler_;
     MainForwardPass *mainForwardPass_ = nullptr;
     SurfacePrepass *surfacePrepass_ = nullptr;
+    GBufferPass *gBufferPass_ = nullptr;
+    DeferredLightingPass *deferredLightingPass_ = nullptr;
     bool lastSurfaceDataActive_ = false;
+    FrameRenderFeatures lastFrameFeatures_{};
+    DeferredLightingDebugView lastDeferredLightingDebugView_ =
+        DeferredLightingDebugView::None;
+    std::string activeViewModeId_;
     ScreenSpaceEffectsStatus screenSpaceStatus_{};
     RenderFeatureRuntimeState featureRuntimeState_{};
     CacaoPass *cacaoPass_ = nullptr;

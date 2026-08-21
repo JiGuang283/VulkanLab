@@ -13,7 +13,7 @@
 #include "render/graph/RenderGraph.h"
 #include "render/graph/RenderResourcePool.h"
 #include "render/frame/RenderView.h"
-#include "render/shader/ShaderVariant.h"
+#include "render/shader/ShaderTypes.h"
 #include "diagnostics/Profiling.h"
 #include "diagnostics/TracyProfiler.h"
 
@@ -79,9 +79,7 @@ void BloomPass::setup(
                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
             } else {
                 builder.useImage(
-                    {context.features.lightingCompositeRequired
-                         ? resourceHandles_.compositedHdrColor
-                         : resourceHandles_.hdrColor,
+                    {context.features.postLightingHdr(resourceHandles_),
                      RenderImageAccess::SampledRead,
                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
@@ -153,7 +151,7 @@ void BloomPass::onResourceResidencyChanged(
 void BloomPass::recordDownsample(
     const RenderFrameContext &frame,
     const RenderResourcePool &resources, uint32_t level) {
-    if (!frame.pipelineCache || !frame.view || !frame.shaderVariant ||
+    if (!frame.pipelineCache || !frame.view || !frame.viewMode ||
         level >= activeLevelCount(resources))
         return;
     const bool useTaa = frame.features.taaActive &&
@@ -162,9 +160,7 @@ void BloomPass::recordDownsample(
         updatePrimarySource(
             resources, frame.frameIndex,
             useTaa ? resourceHandles_.taaHistory
-                   : (frame.features.lightingCompositeRequired
-                          ? resourceHandles_.compositedHdrColor
-                          : resourceHandles_.hdrColor),
+                   : frame.features.postLightingHdr(resourceHandles_),
             useTaa ? resourceHandles_.taaSampler
                    : resourceHandles_.hdrSampler);
     }

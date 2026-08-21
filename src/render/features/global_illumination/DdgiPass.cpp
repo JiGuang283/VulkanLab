@@ -13,6 +13,7 @@
 #include "diagnostics/Profiling.h"
 #include "diagnostics/TracyProfiler.h"
 #include "render/pipeline/PipelineCache.h"
+#include "render/shader/ShaderTypes.h"
 #include "render/features/global_illumination/RayTracingScene.h"
 #include "render/frame/RenderFrame.h"
 #include "render/graph/RenderGraph.h"
@@ -112,6 +113,28 @@ void DdgiPass::prepareGraph(const RenderFrameContext &frame,
     status_.raysPerProbe = status_.componentPresent
                                ? frame.view->ddgi.parameters.raysPerProbe
                                : 0u;
+    const bool requested =
+        frame.view &&
+        (frame.view->settings.globalIlluminationMode ==
+             GlobalIlluminationMode::Ddgi ||
+         frame.view->settings.globalIlluminationMode ==
+             GlobalIlluminationMode::SsgiDdgi);
+    if (!status_.supported) {
+        status_.unavailableReason = device_->ddgiSupport().reason;
+    } else if (requested && !status_.componentPresent) {
+        status_.unavailableReason =
+            "active scene has no DDGI Probe Volume";
+    } else if (requested && frame.viewMode &&
+               !frame.viewMode->supportsDdgi) {
+        status_.unavailableReason = "selected shader does not consume DDGI";
+    } else if (requested &&
+               rayTracingScene_->preparedInstanceCount(frame.frameIndex) ==
+                   0u) {
+        status_.unavailableReason =
+            "scene has no opaque ray-traceable geometry";
+    } else {
+        status_.unavailableReason.clear();
+    }
     preparedActive_ = status_.supported && frame.features.ddgiRequired &&
                       frame.view && frame.pipelineCache &&
                       rayTracingScene_->preparedInstanceCount(
@@ -120,6 +143,7 @@ void DdgiPass::prepareGraph(const RenderFrameContext &frame,
     if (!preparedActive_) {
         disableSampling(frame.frameIndex, resources);
         status_.tracedInstanceCount = 0;
+        status_.probesUpdatedPerFrame = 0;
         preparedUpdateCount_ = 0;
         preparedRayCount_ = 0;
         return;
@@ -279,14 +303,16 @@ void DdgiPass::createDescriptorLayouts() {
     VkDescriptorSetLayoutCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     std::array<VkDescriptorSetLayoutBinding, 4> sampling{};
+    const VkShaderStageFlags samplingStages =
+        VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
     sampling[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
-                   VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+                   samplingStages, nullptr};
     sampling[1] = {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                   VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+                   samplingStages, nullptr};
     sampling[2] = {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                   VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+                   samplingStages, nullptr};
     sampling[3] = {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-                   VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+                   samplingStages, nullptr};
     info.bindingCount = static_cast<uint32_t>(sampling.size());
     info.pBindings = sampling.data();
     VK_CHECK(vkCreateDescriptorSetLayout(device_->logicalDevice(), &info,

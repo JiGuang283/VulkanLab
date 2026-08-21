@@ -1,4 +1,5 @@
 #include "render/features/global_illumination/SsgiPass.h"
+#include "render/features/surface/DepthHierarchyResources.h"
 
 #include "render/pipeline/ComputePipeline.h"
 #include "render/pipeline/ComputePipelineConfig.h"
@@ -123,7 +124,8 @@ void SsgiPass::setup(RenderGraphBuilder &builder,
                       RenderImageAccess::SampledRead,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-    builder.useImage({resources_.screenDepthPyramid,
+    builder.useImage({depthHierarchyResources(resources_)
+                          .image(DepthHierarchySemantic::Nearest),
                       RenderImageAccess::SampledRead,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
@@ -280,7 +282,9 @@ void SsgiPass::recordStage(const RenderFrameContext &frame,
                            frame.view->settings.ssgiRadianceClamp};
         push.dimensions = {budget.x, budget.y, full.width, full.height};
         push.sampling = {
-            float(resources.mipLevelCount(resources_.screenDepthPyramid) - 1u),
+            float(resources.mipLevelCount(
+                      depthHierarchyResources(resources_)
+                          .image(DepthHierarchySemantic::Nearest)) - 1u),
             float(resources.mipLevelCount(resources_.sceneColorPyramid) - 1u),
             float(frame.submissionSerial & 7u), 0.0f};
         ComputePipelineConfig config{};
@@ -449,7 +453,9 @@ void SsgiPass::createDescriptors(const RenderResourcePool &registry) {
              VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
             {surfaceSampler, normal, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
             {surfaceSampler, albedo, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-            {pyramidSampler, view(resources_.screenDepthPyramid),
+            {pyramidSampler,
+             view(depthHierarchyResources(resources_)
+                      .image(DepthHierarchySemantic::Nearest)),
              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
             {pyramidSampler, view(resources_.sceneColorPyramid),
              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},

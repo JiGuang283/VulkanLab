@@ -1,5 +1,8 @@
 #version 450
 
+#extension GL_GOOGLE_include_directive : require
+#include "include/depth_hierarchy.glsl"
+
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 struct CullItem {
@@ -74,11 +77,20 @@ void main()
                       float(push.counts.y - 1u));
     vec2 minimumUv = minimumPixel / viewportSize;
     vec2 maximumUv = maximumPixel / viewportSize;
+    bool combinedMinMax = push.counts.z != 0u;
     float maximumDepth = max(
-        max(textureLod(hiZTexture, vec2(minimumUv.x, minimumUv.y), mip).r,
-            textureLod(hiZTexture, vec2(maximumUv.x, minimumUv.y), mip).r),
-        max(textureLod(hiZTexture, vec2(minimumUv.x, maximumUv.y), mip).r,
-            textureLod(hiZTexture, vec2(maximumUv.x, maximumUv.y), mip).r));
+        max(vklSampleFarthestDepth(
+                hiZTexture, vec2(minimumUv.x, minimumUv.y), mip,
+                combinedMinMax),
+            vklSampleFarthestDepth(
+                hiZTexture, vec2(maximumUv.x, minimumUv.y), mip,
+                combinedMinMax)),
+        max(vklSampleFarthestDepth(
+                hiZTexture, vec2(minimumUv.x, maximumUv.y), mip,
+                combinedMinMax),
+            vklSampleFarthestDepth(
+                hiZTexture, vec2(maximumUv.x, maximumUv.y), mip,
+                combinedMinMax)));
     bool visible = conservativeVisible ||
                    nearestDepth <= maximumDepth + push.params.z;
 

@@ -9,6 +9,7 @@
 namespace vkr {
 
 class Device;
+class ClusteredLightingResources;
 class RenderResourcePool;
 class SwapChain;
 struct RenderFrameContext;
@@ -27,7 +28,8 @@ class MainForwardPass final : public IRenderPass {
                      ForwardPhase phase,
                      VkDescriptorSetLayout lightingDescriptorSetLayout,
                      VkDescriptorSetLayout atmosphereDescriptorSetLayout,
-                     VkDescriptorSetLayout ddgiDescriptorSetLayout);
+                     VkDescriptorSetLayout ddgiDescriptorSetLayout,
+                     ClusteredLightingResources &clusteredLighting);
     ~MainForwardPass() override;
 
     MainForwardPass(const MainForwardPass &) = delete;
@@ -53,6 +55,7 @@ class MainForwardPass final : public IRenderPass {
     VkDescriptorSetLayout lightingDescriptorSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout atmosphereDescriptorSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout ddgiDescriptorSetLayout_ = VK_NULL_HANDLE;
+    ClusteredLightingResources *clusteredLighting_ = nullptr;
 };
 
 } // namespace vkr

@@ -58,10 +58,10 @@ vkr::SceneCatalog makeCatalog() {
         "desktop_512",
         vkr::ImportProfile{"desktop_512", 512, "uastc", "development"});
     catalog.models.push_back(
-        {"scene-a", "Scene A", "gltf", {}, "models/a.gltf",
+        {"scene-a", "Scene A", "gltf", "models/a.gltf",
          "desktop_512"});
     catalog.models.push_back(
-        {"scene-b", "Scene B", "gltf", {}, "models/b.gltf",
+        {"scene-b", "Scene B", "gltf", "models/b.gltf",
          "desktop_512"});
     return catalog;
 }

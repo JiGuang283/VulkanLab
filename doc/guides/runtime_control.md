@@ -1,8 +1,8 @@
 # Runtime Control 开发自动化接口
 
 > Status: Current
-> Last verified: 2026-08-15
-> Verified against: `62f6cc4`
+> Last verified: 2026-08-21
+> Verified against: Forward / Deferred Stage 7 working tree
 
 Runtime Control 是面向本机开发、诊断和自动化的可选接口，不是普通用户运行时功能。它通过 Windows Named Pipe 控制已经运行的 VulkanLab，可以查询状态、加载模型预览或 Native Scene、设置环境、相机、Shader 与渲染参数、等待渲染稳定、异步截图并安全退出程序。`scene.list.entries[]` 同时返回 `kind: "modelPreview"` 和 `kind: "nativeScene"`；Native Scene 条目使用稳定 SceneDocument ID，模型预览继续返回兼容 `sceneId`、`modelId`、Catalog profile ID 和纹理限制。
 
@@ -126,6 +126,8 @@ cd build\windows-msvc-debug\Debug
 - `atmosphere` 的设备 support、active 状态、component/Sun Entity、Sun buffer index、相机高度、静态 LUT ready/dirty、generation、更新时间和不可用原因；
 - capture queue 计数，以及 Workspace/Viewport 各自的 capture capability；
 - `viewport` 的模式、可见/hover 状态、display extent、render extent 和 resize pending；
+- `renderPath` 的 requested/active、View Mode、capability、fallback reason、标准 opaque products、
+  GBuffer/Deferred Lighting状态，以及 Cluster grid、reference、overflow和显存；
 - GUI 可见性、窗口最小化、swapchain recreate 和 rendering 状态。
 
 `render.wait` 不是服务端阻塞命令。控制工具反复请求 `render.status` 和必要的 `load.status`，要求同一 generation 已完成加载、pending upload 为 0、窗口可渲染，并观察指定数量的新 presented frames。默认等待 8 帧、超时 30 秒；超时返回 `render_wait_timeout`，持续最小化时返回 `window_not_rendering`。
@@ -161,7 +163,22 @@ Viewport Color 截取纯场景，输出尺寸是实际 Viewport render extent。
 
 常见截图错误码还有 `capture_queue_full`、`capture_not_found`、`capture_not_cancellable` 和 `capture_failed`。截图路径不会调用 `vkQueueWaitIdle()` 或 `vkDeviceWaitIdle()`；完成状态由正常 frame fence 的 submission serial 推进。
 
-### Shader 与纹理限制
+### Render Path、View Mode 与纹理限制
+
+```powershell
+.\VulkanLabCtl.exe render-path get
+.\VulkanLabCtl.exe render-path set auto
+.\VulkanLabCtl.exe render-path set forward
+.\VulkanLabCtl.exe render-path set deferred
+```
+
+`Auto` 在 Deferred capability可用且当前 View Mode兼容时选择 Deferred，否则回退 Forward并
+返回 `fallbackReason`。显式 Forward始终使用 Forward；显式 Deferred不满足设备或 View Mode
+契约时返回 `render_path_unsupported`，不会静默改变请求。
+
+切换路径只更新 RenderGraph topology并使相关 temporal history失效，不重建 Device、Swapchain、
+MaterialSystem或 PipelineCache。`render-path get` 返回 requested/active、Forward/Deferred支持、
+View Mode兼容性、topology hash和 TAA/GTAO/SSR/SSGI history摘要。
 
 ```powershell
 .\VulkanLabCtl.exe shader list
@@ -173,7 +190,11 @@ Viewport Color 截取纯场景，输出尺寸是实际 Viewport render extent。
 .\VulkanLabCtl.exe texture-limit set full
 ```
 
-Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模式修改纹理限制只影响 Model Preview，并触发当前预览的新加载任务；Native Scene 始终使用各 Catalog Model 的 import profile。允许值为 `full`、`512`、`1024` 和 `2048`。CookedOnly profile 固定，修改返回 `texture_limit_locked`。
+`shader.*` 是兼容保留的命令名，实际操作全局 View Mode，不会替换每个材质的 Shader Family。
+名称使用完整 display name，不区分 ASCII大小写；响应以 `viewMode` 返回当前模式。开发模式修改
+纹理限制只影响 Model Preview，并触发当前预览的新
+加载任务；Native Scene始终使用各 Catalog Model的 import profile。允许值为 `full`、`512`、
+`1024` 和 `2048`。CookedOnly profile固定，修改返回 `texture_limit_locked`。
 
 ### Environment
 
@@ -297,19 +318,19 @@ Shader 名称使用完整 display name，不区分 ASCII 大小写。开发模�
 
 `--ao` 接受 `off/ssao/cacao/gtao`。SSAO quality 接受 `low/medium/high`，分别对应 8、16 和 32 个样本；radius、bias、intensity 和 power 的范围分别为 `[0.05,10]`、`[0,0.2]`、`[0,4]` 和 `[0.25,4]`。CACAO 只在 `windows-msvc-ao-compare` 中可用，quality 接受 `lowest/low/medium/high/highest`，resolution 接受 `native/half`，radius、intensity 和 power 分别使用 `[0.05,10]`、`[0,4]` 和 `[0.25,4]`。切换 resolution 会等待现有 frame fences 后事务重建 CACAO contexts，不调用 device idle。GTAO quality 接受 `low/medium/high`，radius、falloff、intensity、power 和 temporal weight 范围分别为 `[0.05,10]`、`[0,0.99]`、`[0,4]`、`[0.25,4]` 和 `[0,0.99]`。
 
-只有两个 PBR variant 会把当前 active AO 乘入间接光；Legacy、Debug、透明与 transmission 材质保持原行为。`--taa` 接受 `off/taa`，history weight 与 sharpness 范围分别为 `[0,0.99]` 和 `[0,1]`。TAA 默认关闭，发生 camera cut、resize、scene/shader/camera mode 切换或执行序列不连续时自动重置 history。
+只有支持 Screen-Space 的 Default Lit材质路径会把当前 active AO乘入间接光；Legacy、Debug、透明与 transmission材质保持原行为。`--taa` 接受 `off/taa`，history weight 与 sharpness范围分别为 `[0,0.99]` 和 `[0,1]`。TAA默认关闭，发生 camera cut、resize、scene/View Mode/Render Path/camera mode切换或执行序列不连续时自动重置 history。
 
-`--reflection` 接受 `ibl-only/ssr`，`--ssr-quality` 接受 `low/medium/high`；max distance、thickness、max roughness、intensity 和 history weight 的范围分别为 `[0.1,1000]`、`[0.001,5]`、`[0,1]`、`[0,4]` 和 `[0,0.99]`。SSR 默认关闭，只对两个 PBR variant 生效；miss 和低 confidence 区域回退当前 IBL/constant ambient baseline。SSR history 与 TAA/GTAO 独立，并响应相同的 camera cut、resize、scene/shader/camera mode 失效事件。
+`--reflection` 接受 `ibl-only/ssr`，`--ssr-quality` 接受 `low/medium/high`；max distance、thickness、max roughness、intensity 和 history weight 的范围分别为 `[0.1,1000]`、`[0.001,5]`、`[0,1]`、`[0,4]` 和 `[0,0.99]`。SSR 默认关闭，只对支持 Screen-Space 的 Lit材质路径生效；miss 和低 confidence 区域回退当前 IBL/constant ambient baseline。SSR history 与 TAA/GTAO 独立，并响应相同的 camera cut、resize、scene/View Mode/Render Path/camera mode 失效事件。
 
-`--gi` 接受 `ambient-or-ibl/ssgi/ddgi/ssgi-ddgi`，`--ssgi-quality` 接受 `low/medium/high`；max distance、thickness、intensity、radiance clamp 和 history weight 的范围分别为 `[0.05,1000]`、`[0.001,10]`、`[0,4]`、`[0.1,100]` 和 `[0,0.99]`。SSGI 默认关闭，只对两个 PBR variant 生效；miss 与低 confidence 区域回退 DDGI 或当前 ambient/IBL baseline。SSGI history 与 TAA、GTAO、SSR 分离，并响应相同的 camera cut、resize、scene/shader/camera mode 失效事件。
+`--gi` 接受 `ambient-or-ibl/ssgi/ddgi/ssgi-ddgi`，`--ssgi-quality` 接受 `low/medium/high`；max distance、thickness、intensity、radiance clamp 和 history weight 的范围分别为 `[0.05,1000]`、`[0.001,10]`、`[0,4]`、`[0.1,100]` 和 `[0,0.99]`。SSGI 默认关闭，只对支持 Screen-Space 的 Lit材质路径生效；miss 与低 confidence 区域回退 DDGI 或当前 ambient/IBL baseline。SSGI history 与 TAA、GTAO、SSR 分离，并响应相同的 camera cut、resize、scene/View Mode/Render Path/camera mode 失效事件。
 
-`ddgi` 和 `ssgi-ddgi` 还要求当前 Native Scene 存在一个有效的 DDGI Probe Volume、当前设备支持 Vulkan Ray Query/Acceleration Structure 与所需 storage image format，并使用支持 DDGI 的 PBR variant。`--ddgi-radiance-clamp` 范围为 `[0.1,100]`；`--ddgi-debug` 接受 `none/irradiance/distance/classification`。组合模式把 DDGI 作为屏幕外低频 diffuse baseline，并用 SSGI confidence 覆盖近场屏幕空间结果。`render-settings get` 与 `render.status.ddgi` 会报告实际 active 状态、不可用原因、TLAS instance 和 probe update 进度。
+`ddgi` 和 `ssgi-ddgi` 还要求当前 Native Scene 存在一个有效的 DDGI Probe Volume、当前设备支持 Vulkan Ray Query/Acceleration Structure 与所需 storage image format，并使用支持 DDGI 的 Lit材质路径。`--ddgi-radiance-clamp` 范围为 `[0.1,100]`；`--ddgi-debug` 接受 `none/irradiance/distance/classification`。组合模式把 DDGI 作为屏幕外低频 diffuse baseline，并用 SSGI confidence 覆盖近场屏幕空间结果。`render-settings get` 与 `render.status.ddgi` 会报告实际 active 状态、不可用原因、TLAS instance 和 probe update 进度。
 
 `--screen-space-debug` 接受 `none`、`nearest-depth`、`scene-color`、`ssao-raw`、`ssao-filtered`、`cacao-output`、`gtao-raw`、`gtao-temporal`、`gtao-filtered`、`gtao-rejection`、`gtao-history-weight`、`taa-history`、`taa-rejection`、`taa-history-weight`、`ssr-raw`、`ssr-temporal`、`ssr-filtered`、`ssr-confidence`、`ssr-rejection`、`ssgi-raw`、`ssgi-temporal`、`ssgi-filtered`、`ssgi-confidence`、`ssgi-variance` 和 `ssgi-rejection`，mip 范围为 `[0,31]` 并在 shader 中限制到实际 mip。Surface 与 Screen-Space Debug 互斥；同一 patch 同时请求两个非 `none` 模式时返回 `conflicting_debug_views`，分开切换时新模式会关闭旧模式。
 
 `render.status.screenSpace` 返回 depth/color pyramid、SSAO、CACAO、GTAO、TAA、SSR 与 SSGI 的支持状态、AO/GI requested/active 状态、Debug View、资源 extent、mip 数、各 temporal effect 的 history generation/validity、最近 reset 原因、CACAO generation/precision 和估算显存。SSAO/CACAO/GTAO/TAA/SSR/SSGI 不支持时尝试启用分别返回 `ssao_unsupported`、`cacao_unsupported`、`gtao_unsupported`、`taa_unsupported`、`ssr_unsupported` 或 `ssgi_unsupported`；请求不可用的调试资源时返回 `screen_space_unsupported`。
 
-Tone Mapping policy 由 Shader Manifest 决定：两个 PBR-lite 和 `Debug IBL Diffuse/Specular` 可配置，Legacy 与其他 Debug variant 强制 PassThrough。Bloom compatibility 也由 Manifest 决定，目前只有两个 PBR-lite variant 支持；设置会保留，但其他 variant 下 `bloomActive=false`。`render-settings get` 返回 `bloomAvailable`、`bloomActive`、`bloomUnavailableReason` 和四个 Bloom 设置。设备不满足 compute/`RGBA16F` storage image 要求时，尝试开启会返回 `bloom_unsupported`。
+Tone Mapping policy 由 Shader Manifest 的 View Mode决定：Lit和 `Debug IBL Diffuse/Specular` 可配置，Legacy与其他 Debug View Mode强制 PassThrough。Bloom compatibility也由 View Mode决定；设置会保留，但不兼容模式下 `bloomActive=false`。`render-settings get` 返回 `bloomAvailable`、`bloomActive`、`bloomUnavailableReason` 和四个 Bloom设置。设备不满足 compute/`RGBA16F` storage image要求时，尝试开启会返回 `bloom_unsupported`。
 
 阴影会影响被选择的 Directional CSM caster，以及最多四盏 Point 和四盏 Spot。`render.status.lighting` 返回 ShadowSystem revision/reactive 状态，以及每盏 punctual shadow light 的 policy、稳定 key、Entity、slot、score、slot age、retained/selected、实际 far plane、caster draw 数和 Point 六个 face 分项；`render.status.culling` 返回四个 cascade、24 个 point face 和四个 spot slot 的 draw 统计。IBL 只在环境已发布且开关开启时替代 PBR 的 constant ambient；Skybox 开关独立。Native Scene 的 Atmosphere 与 Atmosphere Sun 来自只读 SceneDocument/RuntimeWorld，Runtime Control v3 只报告状态，不提供大气参数 mutation。UI 的 `Render -> Common/Post Processing/Lighting/Culling` 与 Runtime Control 修改同一个 `RenderSettings` 对象。
 

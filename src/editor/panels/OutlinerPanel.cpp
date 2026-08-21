@@ -1,6 +1,9 @@
 #include "OutlinerPanel.h"
 
 #include "editor/EditorDragDrop.h"
+#include "editor/EditorIcons.h"
+#include "editor/EditorTheme.h"
+#include "editor/EditorWidgets.h"
 
 #include <imgui.h>
 
@@ -26,12 +29,20 @@ bool containsIgnoreCase(const std::string &value, const std::string &query) {
     return valueLower.find(queryLower) != std::string::npos;
 }
 
-const OutlinerEntitySnapshot *findEntity(
-    const OutlinerPanelSnapshot &snapshot, const PersistentEntityId &id) {
-    const auto found = std::find_if(
-        snapshot.entities.begin(), snapshot.entities.end(),
-        [&](const OutlinerEntitySnapshot &entity) { return entity.id == id; });
-    return found == snapshot.entities.end() ? nullptr : &*found;
+const char *entityIcon(const OutlinerEntitySnapshot &entity) {
+    if (entity.hasAtmosphere)
+        return icons::Environment;
+    if (entity.hasCamera)
+        return icons::Camera;
+    if (entity.hasLight)
+        return entity.atmosphereSun ? icons::Sun : icons::Light;
+    if (entity.hasReflectionProbe)
+        return icons::Image;
+    if (entity.hasDdgiProbeVolume)
+        return icons::Grid;
+    if (entity.hasModel)
+        return icons::Model;
+    return icons::Box;
 }
 
 std::optional<PersistentEntityId>
@@ -62,10 +73,8 @@ void OutlinerPanel::draw(const OutlinerPanelSnapshot &snapshot,
                              search_.data(), search_.size());
     ImGui::SameLine();
     ImGui::BeginDisabled(!snapshot.editable);
-    if (ImGui::Button("+"))
+    if (editor::iconButton("Create", icons::Plus, "+", "Create entity"))
         ImGui::OpenPopup("CreateEntity");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Create entity");
     if (ImGui::BeginPopup("CreateEntity")) {
         drawCreateMenu(actions, std::nullopt,
                        snapshot.canCreateAtmosphere,
@@ -93,16 +102,38 @@ void OutlinerPanel::draw(const OutlinerPanelSnapshot &snapshot,
     }
     ImGui::Separator();
     const std::string query = search_.data();
+    EntityChildren children;
+    children.reserve(snapshot.entities.size());
+    std::unordered_map<PersistentEntityId,
+                       const OutlinerEntitySnapshot *>
+        byId;
+    byId.reserve(snapshot.entities.size());
+    for (const OutlinerEntitySnapshot &entity : snapshot.entities) {
+        byId.emplace(entity.id, &entity);
+        if (entity.parent)
+            children[*entity.parent].push_back(&entity);
+    }
+
+    std::unordered_set<PersistentEntityId> visible;
     if (!query.empty()) {
+        visible.reserve(snapshot.entities.size());
         for (const OutlinerEntitySnapshot &entity : snapshot.entities) {
-            if (containsIgnoreCase(entity.name, query))
-                drawEntity(entity, snapshot, actions);
+            if (!containsIgnoreCase(entity.name, query))
+                continue;
+            const OutlinerEntitySnapshot *current = &entity;
+            while (current && visible.emplace(current->id).second &&
+                   current->parent) {
+                const auto parent = byId.find(*current->parent);
+                current = parent == byId.end() ? nullptr : parent->second;
+            }
         }
-    } else {
-        for (const OutlinerEntitySnapshot &entity : snapshot.entities) {
-            if (!entity.parent)
-                drawEntity(entity, snapshot, actions);
-        }
+    }
+    const std::unordered_set<PersistentEntityId> *visibleFilter =
+        query.empty() ? nullptr : &visible;
+    for (const OutlinerEntitySnapshot &entity : snapshot.entities) {
+        if (!entity.parent &&
+            (!visibleFilter || visibleFilter->count(entity.id) != 0))
+            drawEntity(entity, snapshot, actions, children, visibleFilter);
     }
     if (ImGui::IsWindowHovered() &&
         ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
@@ -138,20 +169,27 @@ void OutlinerPanel::draw(const OutlinerPanelSnapshot &snapshot,
 
 void OutlinerPanel::drawEntity(const OutlinerEntitySnapshot &entity,
                                const OutlinerPanelSnapshot &snapshot,
-                               const OutlinerPanelActions &actions) {
+                               const OutlinerPanelActions &actions,
+                               const EntityChildren &children,
+                               const std::unordered_set<PersistentEntityId>
+                                   *visible) {
     const std::string id = entity.id.toString();
-    bool hasChildren = false;
-    for (const OutlinerEntitySnapshot &candidate : snapshot.entities) {
-        if (candidate.parent && *candidate.parent == entity.id) {
-            hasChildren = true;
-            break;
-        }
-    }
+    const auto childRange = children.find(entity.id);
+    const bool hasChildren = childRange != children.end() &&
+                             !childRange->second.empty();
     ImGui::PushID(id.c_str());
     bool enabled = entity.enabled;
     ImGui::BeginDisabled(!snapshot.editable);
-    if (ImGui::Checkbox("##Enabled", &enabled) && actions.setEnabled)
+    if (editor::toggleIconButton("Enabled", enabled ? icons::Eye
+                                                    : icons::EyeOff,
+                                 enabled ? "V" : "-",
+                                 enabled ? "Disable entity"
+                                         : "Enable entity",
+                                 enabled) &&
+        actions.setEnabled) {
+        enabled = !enabled;
         actions.setEnabled(entity.id, enabled);
+    }
     ImGui::EndDisabled();
     ImGui::SameLine();
 
@@ -161,8 +199,18 @@ void OutlinerPanel::drawEntity(const OutlinerEntitySnapshot &entity,
         flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
     if (entity.selected)
         flags |= ImGuiTreeNodeFlags_Selected;
+    if (visible)
+        ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+    std::string label;
+    if (editor::iconsAvailable()) {
+        label = entityIcon(entity);
+        label += "  ";
+    }
+    label += entity.name;
+    if (entity.activeCamera)
+        label += "  [Active]";
     const bool open = ImGui::TreeNodeEx("Entity", flags, "%s",
-                                        entity.name.c_str());
+                                        label.c_str());
     if (entity.hasModel && entity.modelState != ModelBindingState::Ready) {
         ImGui::SameLine();
         ImGui::TextDisabled("[%s]", modelBindingStateName(entity.modelState));
@@ -225,9 +273,9 @@ void OutlinerPanel::drawEntity(const OutlinerEntitySnapshot &entity,
         ImGui::EndPopup();
     }
     if (hasChildren && open) {
-        for (const OutlinerEntitySnapshot &child : snapshot.entities) {
-            if (child.parent && *child.parent == entity.id)
-                drawEntity(child, snapshot, actions);
+        for (const OutlinerEntitySnapshot *child : childRange->second) {
+            if (!visible || visible->count(child->id) != 0)
+                drawEntity(*child, snapshot, actions, children, visible);
         }
         ImGui::TreePop();
     }

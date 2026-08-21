@@ -35,12 +35,10 @@ SpotShadowPass::SpotShadowPass(Device &device,
                                std::array<RenderImageHandle, 4>
                                    shadowDepthByCapacity,
                                DescriptorAllocator &descriptorAllocator,
-                               std::string vertPath,
-                               std::string maskFragPath)
+                               std::string vertPath)
     : device_(&device),
       shadowDepthByCapacity_(std::move(shadowDepthByCapacity)),
-      vertPath_(std::move(vertPath)),
-      maskFragPath_(std::move(maskFragPath)) {
+      vertPath_(std::move(vertPath)) {
     sliceBuffer_ = std::make_unique<PunctualShadowSliceBuffer>(
         device, descriptorAllocator, kMaxSpotShadowLights,
         VK_SHADER_STAGE_VERTEX_BIT, "SpotShadowSliceBuffer");
@@ -130,7 +128,7 @@ void SpotShadowPass::recordLight(
         sliceBuffer_->descriptorSet(frame.frameIndex);
     drawConfig.dynamicOffset = sliceBuffer_->dynamicOffset(lightIdx);
     drawConfig.vertexShader = vertPath_;
-    drawConfig.maskFragmentShader = maskFragPath_;
+    drawConfig.maskProgramPass = MaterialShaderPass::SpotShadowMask;
     drawConfig.pipelinePrefix = "SpotShadow";
     drawConfig.rasterDepthBias = true;
     ShadowCasterDrawRecorder::record(

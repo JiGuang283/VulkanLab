@@ -156,6 +156,15 @@ struct RendererResourceHandles {
     RenderImageHandle surfaceNormalRoughness{};
     RenderImageHandle surfaceMotion{};
     RenderImageHandle surfaceAlbedoMetallic{};
+    RenderImageHandle gBufferDepth{};
+    RenderImageHandle gBufferBaseColorMetallic{};
+    RenderImageHandle gBufferNormalRoughnessOcclusion{};
+    RenderImageHandle gBufferEmissiveSurfaceFlags{};
+    RenderImageHandle gBufferMotion{};
+    RenderImageHandle deferredHdrColor{};
+    RenderImageHandle deferredBaselineDiffuse{};
+    RenderImageHandle deferredBaselineSpecular{};
+    RenderImageHandle depthHierarchyMinMax{};
     RenderImageHandle visibilityHiZ{};
     RenderImageHandle screenDepthPyramid{};
     RenderImageHandle sceneColorPyramid{};

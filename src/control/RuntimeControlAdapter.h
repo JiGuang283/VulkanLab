@@ -34,7 +34,7 @@ struct RenderViewLightStats;
 class SceneCatalog;
 struct SceneEntry;
 struct SceneLoadContext;
-struct ShaderVariant;
+struct ViewMode;
 struct VisibilityFrame;
 
 struct RuntimeViewportSnapshot {
@@ -118,6 +118,8 @@ class RuntimeControlAdapter final : public RuntimeControlHost {
     ControlJson runtimeCameraSet(const RuntimeCameraPose &pose) override;
     ControlJson runtimeWindowResize(uint32_t width, uint32_t height) override;
     ControlJson runtimeRenderStatus() override;
+    ControlJson runtimeRenderPathGet() override;
+    ControlJson runtimeRenderPathSet(RenderPathRequest request) override;
     ControlJson runtimeRenderSettingsGet() override;
     ControlJson runtimeRenderSettingsSet(const RenderSettingsPatch &patch) override;
     ControlJson runtimeEnvironmentList() override;
@@ -145,10 +147,10 @@ class RuntimeControlAdapter final : public RuntimeControlHost {
     uint64_t reloadCurrentEnvironment();
     bool cancelLoadOperation(uint64_t taskId);
     bool hasUnsavedSceneChanges() const;
-    void setShaderVariant(const std::string &id);
+    void setViewMode(const std::string &id);
     void applyRenderSettings(const RenderSettingsPatch &patch);
     const RenderSettings &renderSettings() const;
-    const ShaderVariant &currentShaderVariant() const;
+    const ViewMode &currentViewMode() const;
     int findSceneIndexByName(const std::string &name) const;
     const CatalogEnvironment *
     findEnvironmentByName(const std::string &name) const;

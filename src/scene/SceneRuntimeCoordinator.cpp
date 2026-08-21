@@ -137,6 +137,7 @@ void logLoadStats(const SceneLoadStats &stats) {
 SceneRuntimeCoordinator::SceneRuntimeCoordinator(
     Device &device, DescriptorAllocator &descriptorAllocator,
     MaterialSystem &materialSystem, Renderer &renderer,
+    const ShaderRegistry &shaderRegistry,
     FrameSync &frameSync, Camera &camera,
     const ProjectContext &projectContext, const SceneCatalog &catalog,
     const std::vector<SceneEntry> &sceneRegistry, SceneLoadContext &loadContext,
@@ -147,7 +148,8 @@ SceneRuntimeCoordinator::SceneRuntimeCoordinator(
       sceneRegistry_(&sceneRegistry), loadContext_(&loadContext),
       callbacks_(std::move(callbacks)),
       assetRepository_(std::make_unique<AssetRepository>(
-          device, descriptorAllocator, materialSystem)),
+          device, descriptorAllocator, materialSystem,
+          shaderRegistry)),
       sceneLoadManager_(std::make_unique<SceneLoadManager>()),
       environmentAssetRepository_(
           std::make_unique<EnvironmentAssetRepository>(device)) {}

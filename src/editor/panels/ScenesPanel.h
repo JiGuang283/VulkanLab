@@ -1,5 +1,6 @@
 #pragma once
 
+#include "editor/EditorTypes.h"
 #include "workflows/SceneWorkflowTypes.h"
 
 #include <array>
@@ -11,7 +12,9 @@ class ScenesPanel {
   public:
     void draw(const SceneWorkflowSnapshot &snapshot,
               const SceneWorkflowActions &actions,
-              bool modelsOnly = false);
+              bool modelsOnly = false,
+              ContentBrowserViewMode viewMode =
+                  ContentBrowserViewMode::List);
 
   private:
     void drawImportDialog(const SceneWorkflowSnapshot &snapshot,

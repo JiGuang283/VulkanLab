@@ -87,9 +87,7 @@ void TaaPass::setup(RenderGraphBuilder &builder,
         builder.useImage({image, RenderImageAccess::SampledRead, layout,
                           layout, frame});
     };
-    sampled(context.features.lightingCompositeRequired
-                ? resourceHandles_.compositedHdrColor
-                : resourceHandles_.hdrColor,
+    sampled(context.features.postLightingHdr(resourceHandles_),
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     sampled(resourceHandles_.surfaceDepth,
             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
@@ -155,9 +153,7 @@ void TaaPass::recordNode(RenderGraphPassContext &context, uint32_t,
 
     updateColorSource(
         resources, frame.frameIndex,
-        frame.features.lightingCompositeRequired
-            ? resourceHandles_.compositedHdrColor
-            : resourceHandles_.hdrColor);
+        frame.features.postLightingHdr(resourceHandles_));
 
     VKL_PROFILE_ZONE("Record TAA");
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "TAA");

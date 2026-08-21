@@ -6,6 +6,8 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace vkr {
@@ -36,6 +38,10 @@ struct OutlinerEntitySnapshot {
     bool selected = false;
     ModelBindingState modelState = ModelBindingState::Unresolved;
     bool hasModel = false;
+    bool hasLight = false;
+    bool hasCamera = false;
+    bool activeCamera = false;
+    bool atmosphereSun = false;
     bool lightLimitExceeded = false;
     bool hasAtmosphere = false;
     ModelBindingState reflectionProbeState =
@@ -73,9 +79,13 @@ class OutlinerPanel {
                      const std::string &currentName);
 
   private:
+    using EntityChildren = std::unordered_map<
+        PersistentEntityId, std::vector<const OutlinerEntitySnapshot *>>;
     void drawEntity(const OutlinerEntitySnapshot &entity,
                     const OutlinerPanelSnapshot &snapshot,
-                    const OutlinerPanelActions &actions);
+                    const OutlinerPanelActions &actions,
+                    const EntityChildren &children,
+                    const std::unordered_set<PersistentEntityId> *visible);
     void drawCreateMenu(const OutlinerPanelActions &actions,
                         std::optional<PersistentEntityId> parent,
                         bool canCreateAtmosphere,

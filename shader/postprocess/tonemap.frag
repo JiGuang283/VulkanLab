@@ -1,11 +1,21 @@
 #version 450
 
+#extension GL_GOOGLE_include_directive : require
+#include "include/surface_encoding.glsl"
+
 layout(location = 0) in vec2 fragUv;
 layout(set = 0, binding = 0) uniform sampler2D hdrColor;
 layout(set = 0, binding = 1) uniform sampler2D bloomColor;
 layout(set = 0, binding = 2) uniform sampler2D surfaceNormalRoughness;
 layout(set = 0, binding = 3) uniform sampler2D surfaceMotion;
 layout(set = 0, binding = 4) uniform sampler2D screenDebugSource;
+layout(set = 0, binding = 5) uniform sampler2D gBufferBaseColorMetallic;
+layout(set = 0, binding = 6) uniform sampler2D gBufferNormalRoughnessOcclusion;
+layout(set = 0, binding = 7) uniform sampler2D gBufferEmissiveSurfaceFlags;
+layout(set = 0, binding = 8) uniform sampler2D gBufferMotion;
+layout(set = 0, binding = 9) uniform sampler2D deferredHdrColor;
+layout(set = 0, binding = 10) uniform sampler2D deferredBaselineDiffuse;
+layout(set = 0, binding = 11) uniform sampler2D deferredBaselineSpecular;
 
 layout(push_constant) uniform ToneMapPushConstants {
     float exposureEv;
@@ -20,6 +30,10 @@ layout(push_constant) uniform ToneMapPushConstants {
     uint screenDebugMip;
     float cameraNear;
     float cameraFar;
+    uint gBufferDebugMode;
+    uint deferredLightingDebugMode;
+    uint reserved1;
+    uint reserved2;
 } push;
 
 layout(location = 0) out vec4 outColor;
@@ -60,6 +74,61 @@ vec3 applyDisplayTransform(vec3 color, bool allowToneMap)
 
 void main()
 {
+    if (push.deferredLightingDebugMode != 0u) {
+        vec3 deferredColor = texture(deferredHdrColor, fragUv).rgb;
+        vec3 debugColor = deferredColor;
+        bool allowToneMap = true;
+        if (push.deferredLightingDebugMode == 2u)
+            debugColor = texture(deferredBaselineDiffuse, fragUv).rgb;
+        else if (push.deferredLightingDebugMode == 3u)
+            debugColor = texture(deferredBaselineSpecular, fragUv).rgb;
+        else if (push.deferredLightingDebugMode == 4u) {
+            vec3 forwardColor = texture(hdrColor, fragUv).rgb;
+            debugColor = clamp(abs(deferredColor - forwardColor) * 4.0,
+                               vec3(0.0), vec3(1.0));
+            allowToneMap = false;
+        }
+        outColor = vec4(applyDisplayTransform(debugColor, allowToneMap), 1.0);
+        return;
+    }
+
+    if (push.gBufferDebugMode != 0u) {
+        vec4 baseMetallic = texture(gBufferBaseColorMetallic, fragUv);
+        vec4 normalRoughnessOcclusion =
+            texture(gBufferNormalRoughnessOcclusion, fragUv);
+        vec4 emissiveFlags =
+            texture(gBufferEmissiveSurfaceFlags, fragUv);
+        vec3 debugColor = vec3(0.0);
+        bool allowToneMap = false;
+        if (push.gBufferDebugMode == 1u)
+            debugColor = baseMetallic.rgb;
+        else if (push.gBufferDebugMode == 2u)
+            debugColor = vklOctDecode(normalRoughnessOcclusion.rg) * 0.5 + 0.5;
+        else if (push.gBufferDebugMode == 3u)
+            debugColor = vec3(baseMetallic.a);
+        else if (push.gBufferDebugMode == 4u)
+            debugColor = vec3(normalRoughnessOcclusion.b);
+        else if (push.gBufferDebugMode == 5u)
+            debugColor = vec3(normalRoughnessOcclusion.a);
+        else if (push.gBufferDebugMode == 6u) {
+            debugColor = emissiveFlags.rgb;
+            allowToneMap = true;
+        } else if (push.gBufferDebugMode == 7u) {
+            debugColor = vec3(texture(gBufferMotion, fragUv).rg *
+                                  push.motionDebugScale +
+                              vec2(0.5), 0.5);
+        } else if (push.gBufferDebugMode == 8u) {
+            uint flags = vklDecodeSurfaceFlags(emissiveFlags.a);
+            debugColor = vec3(
+                (flags & VKL_SURFACE_FLAG_HISTORY_VALID_BIT) != 0u ? 1.0 : 0.0,
+                float(vklDecodeShadingModel(flags)) / 7.0,
+                (flags & VKL_SURFACE_FLAG_RECEIVES_SCREEN_AO_BIT) != 0u
+                    ? 1.0 : 0.0);
+        }
+        outColor = vec4(applyDisplayTransform(debugColor, allowToneMap), 1.0);
+        return;
+    }
+
     if (push.surfaceDebugMode != 0u) {
         vec4 surface = texture(surfaceNormalRoughness, fragUv);
         vec3 debugColor = vec3(0.0);

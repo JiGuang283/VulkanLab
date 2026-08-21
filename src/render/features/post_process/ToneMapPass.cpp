@@ -14,7 +14,7 @@
 #include "render/graph/RenderGraph.h"
 #include "render/graph/RenderResourcePool.h"
 #include "render/frame/RenderView.h"
-#include "render/shader/ShaderVariant.h"
+#include "render/shader/ShaderTypes.h"
 #include "diagnostics/Profiling.h"
 #include "diagnostics/TracyProfiler.h"
 
@@ -114,6 +114,14 @@ uint32_t screenDebugModeValue(ScreenSpaceDebugView view) {
     return 0;
 }
 
+uint32_t gBufferDebugModeValue(GBufferDebugView view) {
+    return static_cast<uint32_t>(view);
+}
+
+uint32_t deferredLightingDebugModeValue(DeferredLightingDebugView view) {
+    return static_cast<uint32_t>(view);
+}
+
 } // namespace
 
 ToneMapPass::ToneMapPass(Device &device,
@@ -127,6 +135,8 @@ ToneMapPass::ToneMapPass(Device &device,
                          RenderImageHandle surfaceNormalRoughness,
                          RenderImageHandle surfaceMotion,
                          RenderSamplerHandle surfaceSampler,
+                         GBufferResources gBuffer,
+                         DeferredLightingResources deferredLighting,
                          RenderImageHandle screenDepthPyramid,
                          RenderImageHandle sceneColorPyramid,
                          RenderImageHandle ssaoRaw,
@@ -160,6 +170,7 @@ ToneMapPass::ToneMapPass(Device &device,
       viewportColor_(viewportColor),
       surfaceNormalRoughness_(surfaceNormalRoughness),
       surfaceMotion_(surfaceMotion), surfaceSampler_(surfaceSampler),
+      gBuffer_(gBuffer), deferredLighting_(deferredLighting),
       screenDepthPyramid_(screenDepthPyramid),
       sceneColorPyramid_(sceneColorPyramid), ssaoRaw_(ssaoRaw),
       ssaoFiltered_(ssaoFiltered), cacaoOutput_(cacaoOutput),
@@ -202,13 +213,22 @@ void ToneMapPass::setup(RenderGraphBuilder &builder,
     const FrameRenderFeatures &features = context.features;
     sampled(context.features.lightingCompositeRequired
                 ? compositedHdrColor_
-                : hdrColor_);
+                : context.features.opaqueProducts.hdrColor);
     if (features.bloomRequired)
         sampled(bloomColor_, VK_IMAGE_LAYOUT_GENERAL);
     if (features.surfaceNormalsRequired)
         sampled(surfaceNormalRoughness_);
     if (features.surfaceMotionRequired)
         sampled(surfaceMotion_);
+    if (features.gBufferRequired) {
+        for (RenderImageHandle handle : gBuffer_.colors())
+            sampled(handle);
+    }
+    if (features.deferredLightingRequired) {
+        sampled(deferredLighting_.hdrColor);
+        sampled(deferredLighting_.baselineDiffuse);
+        sampled(deferredLighting_.baselineSpecular);
+    }
     if (features.screenDepthPyramidRequired)
         sampled(screenDepthPyramid_);
     if (features.sceneColorPyramidRequired)
@@ -256,10 +276,12 @@ void ToneMapPass::recordNode(RenderGraphPassContext &context, uint32_t,
     const RenderResourcePool &resources = context.resources;
     VKL_PROFILE_ZONE("Record ToneMap");
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "ToneMap");
-    if (!frame.pipelineCache || !frame.view || !frame.shaderVariant)
+    if (!frame.pipelineCache || !frame.view || !frame.viewMode)
         return;
     updateScreenDescriptors(resources, frame.frameIndex, frame.features,
-                            frame.view->settings.screenSpaceDebugView);
+                            frame.view->settings.screenSpaceDebugView,
+                            frame.view->settings.gBufferDebugView,
+                            frame.view->settings.deferredLightingDebugView);
 
     VkViewport viewport{};
     viewport.width = static_cast<float>(frame.viewportExtent.width);
@@ -306,6 +328,14 @@ void ToneMapPass::recordNode(RenderGraphPassContext &context, uint32_t,
         const bool surfaceDebug =
             frame.view->settings.surfaceDebugView != SurfaceDebugView::None &&
             surfaceNormalRoughness_.valid() && surfaceMotion_.valid();
+        const bool gBufferDebug =
+            frame.view->settings.gBufferDebugView != GBufferDebugView::None &&
+            frame.features.gBufferRequired && gBuffer_.valid();
+        const bool deferredLightingDebug =
+            frame.view->settings.deferredLightingDebugView !=
+                DeferredLightingDebugView::None &&
+            frame.features.deferredLightingRequired &&
+            deferredLighting_.valid();
         const ScreenSpaceDebugView requestedScreenDebug =
             frame.view->settings.screenSpaceDebugView;
         const bool screenDebug =
@@ -337,17 +367,23 @@ void ToneMapPass::recordNode(RenderGraphPassContext &context, uint32_t,
              requestedScreenDebug == ScreenSpaceDebugView::TaaHistory);
         const bool configurableOutput =
             sceneColorDebug ||
-            (!surfaceDebug && !screenDebug &&
-             frame.shaderVariant->toneMapping ==
+            (!surfaceDebug && !gBufferDebug && !deferredLightingDebug &&
+             !screenDebug &&
+             frame.viewMode->toneMapping ==
                  ShaderToneMappingPolicy::Configurable);
-        if (configurableOutput) {
+        const bool deferredHdrDebug =
+            deferredLightingDebug &&
+            frame.view->settings.deferredLightingDebugView !=
+                DeferredLightingDebugView::ForwardDifference;
+        if (configurableOutput || deferredHdrDebug) {
             push.exposureEv = frame.view->settings.exposureEv;
             push.toneMapper = toneMapperValue(frame.view->settings.toneMapper);
             push.applyExposure = 1;
         }
-        if (!surfaceDebug && !screenDebug && bloomColor_.valid() &&
+        if (!surfaceDebug && !gBufferDebug && !deferredLightingDebug &&
+            !screenDebug && bloomColor_.valid() &&
             frame.view->settings.bloomEnabled &&
-            frame.shaderVariant->supportsBloom) {
+            frame.viewMode->supportsBloom) {
             push.bloomIntensity = frame.view->settings.bloomIntensity;
             push.applyBloom = 1;
         }
@@ -362,12 +398,22 @@ void ToneMapPass::recordNode(RenderGraphPassContext &context, uint32_t,
         push.motionDebugScale =
             frame.view->settings.surfaceMotionDebugScale;
         push.screenDebugMode =
-            !surfaceDebug && screenDebug
+            !surfaceDebug && !gBufferDebug && screenDebug
                 ? screenDebugModeValue(requestedScreenDebug)
                 : 0u;
         push.screenDebugMip = frame.view->settings.screenSpaceDebugMip;
         push.cameraNear = frame.view->cameraNearPlane;
         push.cameraFar = frame.view->cameraFarPlane;
+        push.gBufferDebugMode =
+            gBufferDebug
+                ? gBufferDebugModeValue(
+                      frame.view->settings.gBufferDebugView)
+                : 0u;
+        push.deferredLightingDebugMode =
+            deferredLightingDebug
+                ? deferredLightingDebugModeValue(
+                      frame.view->settings.deferredLightingDebugView)
+                : 0u;
         vkCmdPushConstants(frame.cmd, pipeline.layout(),
                            VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push),
                            &push);
@@ -378,7 +424,7 @@ void ToneMapPass::recordNode(RenderGraphPassContext &context, uint32_t,
 
 void ToneMapPass::createDescriptors(
     const RenderResourcePool &resources) {
-    std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 12> bindings{};
     for (uint32_t bindingIndex = 0; bindingIndex < bindings.size();
          ++bindingIndex) {
         bindings[bindingIndex].binding = bindingIndex;
@@ -400,7 +446,7 @@ void ToneMapPass::createDescriptors(
     for (uint32_t frame = 0; frame < sourceDescriptorSets_.size(); ++frame) {
         sourceDescriptorSets_[frame] = descriptorAllocator_->allocate(
             sourceDescriptorSetLayout_,
-            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5}},
+            {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 12}},
             "Pass/ToneMap/SourceDescriptorSet/Frame" +
                 std::to_string(frame));
     }
@@ -423,7 +469,7 @@ void ToneMapPass::updateDescriptors(
         VkDescriptorImageInfo motionInfo = hdrInfo;
         VkDescriptorImageInfo debugInfo = hdrInfo;
 
-        std::array<VkWriteDescriptorSet, 5> writes{};
+        std::array<VkWriteDescriptorSet, 12> writes{};
         for (uint32_t bindingIndex = 0; bindingIndex < writes.size();
              ++bindingIndex) {
             writes[bindingIndex].sType =
@@ -440,6 +486,10 @@ void ToneMapPass::updateDescriptors(
         writes[2].pImageInfo = &normalRoughnessInfo;
         writes[3].pImageInfo = &motionInfo;
         writes[4].pImageInfo = &debugInfo;
+        for (uint32_t bindingIndex = 5; bindingIndex < writes.size();
+             ++bindingIndex) {
+            writes[bindingIndex].pImageInfo = &hdrInfo;
+        }
         vkUpdateDescriptorSets(
             device_->logicalDevice(),
             static_cast<uint32_t>(writes.size()), writes.data(), 0,
@@ -449,11 +499,16 @@ void ToneMapPass::updateDescriptors(
 
 void ToneMapPass::updateScreenDescriptors(
     const RenderResourcePool &resources, uint32_t frameIndex,
-    const FrameRenderFeatures &features, ScreenSpaceDebugView debugView) {
+    const FrameRenderFeatures &features, ScreenSpaceDebugView debugView,
+    GBufferDebugView, DeferredLightingDebugView deferredDebugView) {
     VkDescriptorImageInfo fallback{};
     fallback.sampler = resources.sampler(hdrSampler_);
     const RenderImageHandle primaryHdr =
-        features.lightingCompositeRequired ? compositedHdrColor_ : hdrColor_;
+        deferredDebugView == DeferredLightingDebugView::ForwardDifference
+            ? hdrColor_
+            : (features.lightingCompositeRequired
+                   ? compositedHdrColor_
+                   : features.opaqueProducts.hdrColor);
     fallback.imageView = resources.image(primaryHdr, frameIndex).imageView();
     fallback.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
@@ -617,6 +672,62 @@ void ToneMapPass::updateScreenDescriptors(
     vkUpdateDescriptorSets(device_->logicalDevice(),
                            static_cast<uint32_t>(writes.size()),
                            writes.data(), 0, nullptr);
+
+    std::array<VkDescriptorImageInfo, 4> gBufferInfos{};
+    const auto gBufferHandles = gBuffer_.colors();
+    for (uint32_t index = 0; index < gBufferInfos.size(); ++index) {
+        gBufferInfos[index] = fallback;
+        if (features.gBufferRequired && gBufferHandles[index].valid() &&
+            resources.resident(gBufferHandles[index])) {
+            gBufferInfos[index] = {
+                resources.sampler(surfaceSampler_),
+                resources.image(gBufferHandles[index], frameIndex).imageView(),
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        }
+    }
+    std::array<VkWriteDescriptorSet, 4> gBufferWrites{};
+    for (uint32_t index = 0; index < gBufferWrites.size(); ++index) {
+        gBufferWrites[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        gBufferWrites[index].dstSet = sourceDescriptorSets_.at(frameIndex);
+        gBufferWrites[index].dstBinding = index + 5u;
+        gBufferWrites[index].descriptorType =
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        gBufferWrites[index].descriptorCount = 1;
+        gBufferWrites[index].pImageInfo = &gBufferInfos[index];
+    }
+    vkUpdateDescriptorSets(device_->logicalDevice(),
+                           static_cast<uint32_t>(gBufferWrites.size()),
+                           gBufferWrites.data(), 0, nullptr);
+
+    std::array<VkDescriptorImageInfo, 3> deferredInfos{};
+    const std::array<RenderImageHandle, 3> deferredHandles = {
+        deferredLighting_.hdrColor, deferredLighting_.baselineDiffuse,
+        deferredLighting_.baselineSpecular};
+    for (uint32_t index = 0; index < deferredInfos.size(); ++index) {
+        deferredInfos[index] = fallback;
+        if (features.deferredLightingRequired &&
+            deferredHandles[index].valid() &&
+            resources.resident(deferredHandles[index])) {
+            deferredInfos[index] = {
+                resources.sampler(hdrSampler_),
+                resources.image(deferredHandles[index], frameIndex)
+                    .imageView(),
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        }
+    }
+    std::array<VkWriteDescriptorSet, 3> deferredWrites{};
+    for (uint32_t index = 0; index < deferredWrites.size(); ++index) {
+        deferredWrites[index] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        deferredWrites[index].dstSet = sourceDescriptorSets_.at(frameIndex);
+        deferredWrites[index].dstBinding = index + 9u;
+        deferredWrites[index].descriptorType =
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        deferredWrites[index].descriptorCount = 1;
+        deferredWrites[index].pImageInfo = &deferredInfos[index];
+    }
+    vkUpdateDescriptorSets(device_->logicalDevice(),
+                           static_cast<uint32_t>(deferredWrites.size()),
+                           deferredWrites.data(), 0, nullptr);
 }
 
 } // namespace vkr

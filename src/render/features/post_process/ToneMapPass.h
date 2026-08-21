@@ -1,6 +1,8 @@
 #pragma once
 
 #include "render/graph/IRenderPass.h"
+#include "render/features/surface/GBufferResources.h"
+#include "render/features/deferred/DeferredLightingResources.h"
 #include "core/FrameSync.h"
 
 #include <array>
@@ -18,6 +20,8 @@ class SwapChain;
 struct RenderFrameContext;
 struct FrameRenderFeatures;
 enum class ScreenSpaceDebugView;
+enum class GBufferDebugView;
+enum class DeferredLightingDebugView;
 
 class ToneMapPass final : public IRenderPass {
   public:
@@ -31,6 +35,8 @@ class ToneMapPass final : public IRenderPass {
                 RenderImageHandle surfaceNormalRoughness,
                 RenderImageHandle surfaceMotion,
                 RenderSamplerHandle surfaceSampler,
+                GBufferResources gBuffer,
+                DeferredLightingResources deferredLighting,
                 RenderImageHandle screenDepthPyramid,
                 RenderImageHandle sceneColorPyramid,
                 RenderImageHandle ssaoRaw,
@@ -80,7 +86,9 @@ class ToneMapPass final : public IRenderPass {
     void updateScreenDescriptors(const RenderResourcePool &resources,
                                  uint32_t frameIndex,
                                  const FrameRenderFeatures &features,
-                                 ScreenSpaceDebugView debugView);
+                                 ScreenSpaceDebugView debugView,
+                                 GBufferDebugView gBufferDebugView,
+                                 DeferredLightingDebugView deferredDebugView);
 
     Device *device_ = nullptr;
     RenderImageHandle hdrColor_{};
@@ -92,6 +100,8 @@ class ToneMapPass final : public IRenderPass {
     RenderImageHandle surfaceNormalRoughness_{};
     RenderImageHandle surfaceMotion_{};
     RenderSamplerHandle surfaceSampler_{};
+    GBufferResources gBuffer_{};
+    DeferredLightingResources deferredLighting_{};
     RenderImageHandle screenDepthPyramid_{};
     RenderImageHandle sceneColorPyramid_{};
     RenderImageHandle ssaoRaw_{};

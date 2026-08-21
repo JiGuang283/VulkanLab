@@ -6,6 +6,7 @@
 #include "render/material/MaterialInstance.h"
 #include "render/material/MaterialSystem.h"
 #include "render/material/MaterialTemplate.h"
+#include "render/shader/ShaderRegistry.h"
 #include "render/geometry/Mesh.h"
 #include "render/pipeline/PipelineCache.h"
 #include "render/frame/RenderFrame.h"
@@ -22,7 +23,7 @@ void ShadowCasterDrawRecorder::record(
     const RenderFrameContext &frame, const VisibilityFrame &visibility,
     const std::vector<RenderItemIndex> &casters,
     const ShadowCasterDrawConfig &config) {
-    if (!frame.pipelineCache || !frame.view ||
+    if (!frame.pipelineCache || !frame.view || !frame.shaderRegistry ||
         config.rendering.depthAttachmentFormat == VK_FORMAT_UNDEFINED ||
         config.sliceDescriptorLayout == VK_NULL_HANDLE ||
         config.sliceDescriptorSet == VK_NULL_HANDLE) {
@@ -49,6 +50,12 @@ void ShadowCasterDrawRecorder::record(
         const bool alphaMasked = params.alphaMode == AlphaMode::Mask;
         const MaterialTemplate &materialTemplate =
             command.material->materialTemplate();
+        const ShaderProgram *maskProgram =
+            alphaMasked
+                ? &frame.shaderRegistry->materialProgram(
+                      materialTemplate.shaderFamily(),
+                      config.maskProgramPass)
+                : nullptr;
         const VkCullModeFlags cullMode =
             params.doubleSided ? VK_CULL_MODE_NONE
                                : VK_CULL_MODE_BACK_BIT;
@@ -66,9 +73,12 @@ void ShadowCasterDrawRecorder::record(
         if (cached == pipelineVariants.end()) {
             PipelineConfigBuilder builder;
             builder
-                .shaders(config.vertexShader,
-                         alphaMasked ? config.maskFragmentShader
-                                     : config.opaqueFragmentShader)
+                .shaders(alphaMasked ? maskProgram->vertSpvPath
+                                     : config.vertexShader,
+                         alphaMasked
+                             ? maskProgram->fragmentSpvPath(
+                                   frame.materialSystem->activeMode())
+                             : config.opaqueFragmentShader)
                 .defaultVertexLayout()
                 .rasterization(
                     cullMode,
@@ -84,6 +94,7 @@ void ShadowCasterDrawRecorder::record(
             PipelineConfig pipelineConfig = builder.build();
             pipelineConfig.debugName =
                 "Pipeline/" + config.pipelinePrefix + "/" +
+                (alphaMasked ? maskProgram->id + "/" : std::string{}) +
                 (alphaMasked ? "Mask" : "Opaque") + "/" +
                 (cullMode == VK_CULL_MODE_NONE ? "CullNone" : "CullBack");
 

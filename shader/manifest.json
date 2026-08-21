@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "programs": [
     {
       "id": "forward.legacy",
@@ -16,6 +16,7 @@
       "materialTextures": true,
       "lightingMrt": true,
       "sceneLights": true,
+      "clusteredLighting": true,
       "atmosphere": true,
       "screenSpace": true,
       "ddgi": true
@@ -28,9 +29,17 @@
       "materialTextures": true,
       "lightingMrt": true,
       "sceneLights": true,
+      "clusteredLighting": true,
       "atmosphere": true,
       "screenSpace": true,
       "ddgi": true
+    },
+    {
+      "id": "forward.unlit",
+      "contract": "main-forward",
+      "vertex": "material_debug/material.vert",
+      "fragment": "unlit/forward.frag",
+      "materialTextures": true
     },
     {
       "id": "debug.base-color",
@@ -93,6 +102,12 @@
       "contract": "main-forward",
       "vertex": "pbr_lite/forward.vert",
       "fragment": "material_debug/shadow.frag"
+    },
+    {
+      "id": "debug.shadow-cascades",
+      "contract": "main-forward",
+      "vertex": "pbr_lite/forward.vert",
+      "fragment": "material_debug/shadow_cascades.frag"
     },
     {
       "id": "debug.ibl-diffuse",
@@ -162,9 +177,74 @@
       "surfaceMrt": true
     },
     {
+      "id": "surface.prepass-unlit-opaque",
+      "contract": "surface-prepass",
+      "vertex": "visibility/surface.vert",
+      "fragment": "visibility/surface_unlit_opaque.frag",
+      "materialTextures": true,
+      "surfaceMrt": true
+    },
+    {
+      "id": "surface.prepass-unlit-mask",
+      "contract": "surface-prepass",
+      "vertex": "visibility/surface.vert",
+      "fragment": "visibility/surface_unlit_mask.frag",
+      "materialTextures": true,
+      "surfaceMrt": true
+    },
+    {
+      "id": "gbuffer.default-lit-opaque",
+      "contract": "gbuffer",
+      "vertex": "visibility/surface.vert",
+      "fragment": "deferred/gbuffer_default_lit_opaque.frag",
+      "materialTextures": true
+    },
+    {
+      "id": "gbuffer.default-lit-mask",
+      "contract": "gbuffer",
+      "vertex": "visibility/surface.vert",
+      "fragment": "deferred/gbuffer_default_lit_mask.frag",
+      "materialTextures": true
+    },
+    {
+      "id": "gbuffer.unlit-opaque",
+      "contract": "gbuffer",
+      "vertex": "visibility/surface.vert",
+      "fragment": "deferred/gbuffer_unlit_opaque.frag",
+      "materialTextures": true
+    },
+    {
+      "id": "gbuffer.unlit-mask",
+      "contract": "gbuffer",
+      "vertex": "visibility/surface.vert",
+      "fragment": "deferred/gbuffer_unlit_mask.frag",
+      "materialTextures": true
+    },
+    {
+      "id": "deferred.lighting",
+      "contract": "deferred-lighting",
+      "compute": "deferred/lighting.comp",
+      "clusteredLighting": true
+    },
+    {
+      "id": "lighting.cluster-build",
+      "contract": "compute",
+      "compute": "lighting/cluster_build.comp"
+    },
+    {
       "id": "visibility.hiz-init",
       "contract": "compute",
       "compute": "visibility/hiz_init.comp"
+    },
+    {
+      "id": "visibility.depth-hierarchy-init",
+      "contract": "compute",
+      "compute": "visibility/depth_hierarchy_init.comp"
+    },
+    {
+      "id": "visibility.depth-hierarchy-reduce",
+      "contract": "compute",
+      "compute": "visibility/depth_hierarchy_reduce.comp"
     },
     {
       "id": "visibility.hiz-reduce",
@@ -332,7 +412,45 @@
       "atmosphere": true
     }
   ],
-  "variants": [
+  "materialShaderFamilies": [
+    {
+      "id": "builtin.default-lit",
+      "displayName": "Default Lit",
+      "category": "builtin",
+      "default": true,
+      "order": 0,
+      "programs": {
+        "forwardOpaque": "forward.pbr-lite-normal-mapped",
+        "forwardTransparent": "forward.pbr-lite-normal-mapped",
+        "surfaceOpaque": "surface.prepass-opaque",
+        "surfaceMask": "surface.prepass-mask",
+        "gBufferOpaque": "gbuffer.default-lit-opaque",
+        "gBufferMask": "gbuffer.default-lit-mask",
+        "directionalShadowMask": "shadow.mask",
+        "pointShadowMask": "shadow.point-mask",
+        "spotShadowMask": "shadow.spot-mask"
+      }
+    },
+    {
+      "id": "builtin.unlit",
+      "displayName": "Unlit",
+      "category": "builtin",
+      "default": false,
+      "order": 10,
+      "programs": {
+        "forwardOpaque": "forward.unlit",
+        "forwardTransparent": "forward.unlit",
+        "surfaceOpaque": "surface.prepass-unlit-opaque",
+        "surfaceMask": "surface.prepass-unlit-mask",
+        "gBufferOpaque": "gbuffer.unlit-opaque",
+        "gBufferMask": "gbuffer.unlit-mask",
+        "directionalShadowMask": "shadow.mask",
+        "pointShadowMask": "shadow.point-mask",
+        "spotShadowMask": "shadow.spot-mask"
+      }
+    }
+  ],
+  "viewModes": [
     {
       "id": "legacy-forward",
       "displayName": "Legacy Forward",
@@ -355,7 +473,6 @@
     {
       "id": "pbr-lite-normal-mapped",
       "displayName": "PBR-lite NormalMapped",
-      "program": "forward.pbr-lite-normal-mapped",
       "category": "pbr",
       "toneMapping": "configurable",
       "bloom": true,
@@ -442,6 +559,15 @@
       "toneMapping": "pass-through",
       "default": false,
       "order": 180
+    },
+    {
+      "id": "debug-shadow-cascades",
+      "displayName": "Debug Shadow Cascades",
+      "program": "debug.shadow-cascades",
+      "category": "debug",
+      "toneMapping": "pass-through",
+      "default": false,
+      "order": 185
     },
     {
       "id": "debug-ibl-diffuse",

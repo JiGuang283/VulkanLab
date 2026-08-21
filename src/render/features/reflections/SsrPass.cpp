@@ -1,4 +1,5 @@
 #include "render/features/reflections/SsrPass.h"
+#include "render/features/surface/DepthHierarchyResources.h"
 
 #include "render/pipeline/ComputePipeline.h"
 #include "render/pipeline/ComputePipelineConfig.h"
@@ -115,7 +116,8 @@ void SsrPass::setup(RenderGraphBuilder &builder,
     builder.addNode("SSR/Trace", RgPassType::Compute,
                     RgQueueClass::Compute, 0);
     surfaceReads();
-    builder.useImage({resources_.screenDepthPyramid,
+    builder.useImage({depthHierarchyResources(resources_)
+                          .image(DepthHierarchySemantic::Nearest),
                       RenderImageAccess::SampledRead,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
@@ -259,7 +261,9 @@ void SsrPass::recordStage(const RenderFrameContext &frame,
         push.dimensions = {stepCount(frame.view->settings.ssrQuality), 4,
                            full.width, full.height};
         push.sampling = {
-            float(resources.mipLevelCount(resources_.screenDepthPyramid) - 1),
+            float(resources.mipLevelCount(
+                      depthHierarchyResources(resources_)
+                          .image(DepthHierarchySemantic::Nearest)) - 1),
             float(resources.mipLevelCount(resources_.sceneColorPyramid) - 1),
             float(frame.submissionSerial & 7u), 0.0f};
         ComputePipelineConfig config{};
@@ -418,7 +422,10 @@ void SsrPass::createDescriptors(const RenderResourcePool &registry) {
         std::array<VkDescriptorImageInfo, 5> traceInfos = {{
             {depthSampler, depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
             {surfaceSampler, normal, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-            {pyramidSampler, view(resources_.screenDepthPyramid), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+            {pyramidSampler,
+             view(depthHierarchyResources(resources_)
+                      .image(DepthHierarchySemantic::Nearest)),
+             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
             {pyramidSampler, view(resources_.sceneColorPyramid), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
             {VK_NULL_HANDLE, raw, VK_IMAGE_LAYOUT_GENERAL}}};
         std::array<VkWriteDescriptorSet, 5> traceWrites{};

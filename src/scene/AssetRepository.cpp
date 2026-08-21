@@ -9,6 +9,7 @@
 #include "diagnostics/Profiling.h"
 #include "render/material/MaterialTemplate.h"
 #include "render/material/MaterialSystem.h"
+#include "render/shader/ShaderRegistry.h"
 
 #include <algorithm>
 #include <atomic>
@@ -171,13 +172,30 @@ ModelAssetHandleSnapshot ModelAssetHandle::snapshot() const {
 class AssetRepository::Impl {
   public:
     Impl(Device &device, DescriptorAllocator &descriptorAllocator,
-         MaterialSystem &materialSystem)
+         MaterialSystem &materialSystem,
+         const ShaderRegistry &shaderRegistry)
         : device_(&device), descriptorAllocator_(&descriptorAllocator),
           materialTemplate_(std::make_shared<MaterialTemplate>(
               standardPipelineConfig(device),
-              materialSystem.descriptorSetLayout())),
+              materialSystem.descriptorSetLayout(),
+              shaderRegistry.defaultMaterialShaderFamily())),
           materialSystem_(&materialSystem),
-          worker_([this] { workerLoop(); }) {}
+          worker_([this] { workerLoop(); }) {
+        const auto &families = shaderRegistry.materialShaderFamilies();
+        for (uint32_t index = 0; index < families.size(); ++index) {
+            const MaterialShaderFamily &family = families[index];
+            MaterialShaderFamilyHandle handle{index};
+            if (handle == shaderRegistry.defaultMaterialShaderFamily()) {
+                materialTemplates_.emplace(family.id, materialTemplate_);
+                continue;
+            }
+            materialTemplates_.emplace(
+                family.id,
+                std::make_shared<MaterialTemplate>(
+                    standardPipelineConfig(device),
+                    materialSystem.descriptorSetLayout(), handle));
+        }
+    }
 
     ~Impl() { shutdown(); }
 
@@ -349,6 +367,7 @@ class AssetRepository::Impl {
             context.stats = &record->stats;
             context.cancellation = record->cancellation;
             context.materialTemplate = materialTemplate_;
+            context.materialTemplates = materialTemplates_;
             gpuRecord_ = record;
             gpuBuilder_ = std::make_unique<ModelGpuBuilder>(
                 *device_, *materialSystem_, std::move(context),
@@ -480,6 +499,7 @@ class AssetRepository::Impl {
         active_.clear();
         inactive_.clear();
         materialTemplate_.reset();
+        materialTemplates_.clear();
     }
 
   private:
@@ -626,6 +646,8 @@ class AssetRepository::Impl {
     Device *device_ = nullptr;
     DescriptorAllocator *descriptorAllocator_ = nullptr;
     std::shared_ptr<MaterialTemplate> materialTemplate_;
+    std::unordered_map<std::string, std::shared_ptr<MaterialTemplate>>
+        materialTemplates_;
     MaterialSystem *materialSystem_ = nullptr;
     std::unordered_map<ModelAssetKey, std::shared_ptr<Record>,
                        ModelAssetKeyHash>
@@ -649,9 +671,10 @@ class AssetRepository::Impl {
 
 AssetRepository::AssetRepository(Device &device,
                                  DescriptorAllocator &descriptorAllocator,
-                                 MaterialSystem &materialSystem)
+                                 MaterialSystem &materialSystem,
+                                 const ShaderRegistry &shaderRegistry)
     : impl_(std::make_unique<Impl>(device, descriptorAllocator,
-                                  materialSystem)) {}
+                                  materialSystem, shaderRegistry)) {}
 
 AssetRepository::~AssetRepository() = default;
 

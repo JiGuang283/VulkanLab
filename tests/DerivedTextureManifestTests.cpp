@@ -35,6 +35,23 @@ class TemporaryDirectory {
     std::filesystem::path path_;
 };
 
+vkr::DerivedTextureEntry makeTextureEntry(
+    int32_t imageIndex, vkr::TextureSemantic semantic,
+    vkr::DerivedMipmapWrap mipWrap, uint32_t width, uint32_t height,
+    std::string cacheKey, std::string blob,
+    vkr::DerivedFileStamp source = {}) {
+    vkr::DerivedTextureEntry entry;
+    entry.imageIndex = imageIndex;
+    entry.semantic = semantic;
+    entry.mipWrap = mipWrap;
+    entry.width = width;
+    entry.height = height;
+    entry.cacheKey = std::move(cacheKey);
+    entry.blob = std::move(blob);
+    entry.source = std::move(source);
+    return entry;
+}
+
 void testManifestPathsAndLookup() {
     const std::filesystem::path scene =
         "models/main_sponza/NewSponza_Main_glTF_003.gltf";
@@ -61,22 +78,14 @@ void testManifestPathsAndLookup() {
                     "stable manifest path is wrong");
 
     vkr::DerivedTextureManifest manifest;
-    manifest.entries.push_back({7,
-                                vkr::TextureSemantic::SrgbColor,
-                                vkr::DerivedMipmapWrap::Repeat,
-                                1024,
-                                512,
-                                "srgb-key",
-                                "blobs/srgb-key.ktx2",
-                                {}});
-    manifest.entries.push_back({7,
-                                vkr::TextureSemantic::Normal,
-                                vkr::DerivedMipmapWrap::Repeat,
-                                1024,
-                                512,
-                                "normal-key",
-                                "blobs/normal-key.ktx2",
-                                {}});
+    manifest.entries.push_back(makeTextureEntry(
+        7, vkr::TextureSemantic::SrgbColor,
+        vkr::DerivedMipmapWrap::Repeat, 1024, 512, "srgb-key",
+        "blobs/srgb-key.ktx2"));
+    manifest.entries.push_back(makeTextureEntry(
+        7, vkr::TextureSemantic::Normal,
+        vkr::DerivedMipmapWrap::Repeat, 1024, 512, "normal-key",
+        "blobs/normal-key.ktx2"));
 
     const auto *normal = manifest.find(7, vkr::TextureSemantic::Normal,
                                        vkr::DerivedMipmapWrap::Repeat);
@@ -101,14 +110,11 @@ void testManifestRoundTrip() {
     source.encoderSettings = "encoder-settings-v1";
     source.textureLimit = 2048;
     source.scene = {"models/test/scene.gltf", 1234, 5678, "scene-sha256"};
-    source.entries.push_back({3,
-                              vkr::TextureSemantic::LinearData,
-                              vkr::DerivedMipmapWrap::Reflect,
-                              2048,
-                              1024,
-                              "linear-key",
-                              "blobs/linear-key.ktx2",
-                              {"textures/data.png", 42, 99, "image-sha256"}});
+    source.entries.push_back(makeTextureEntry(
+        3, vkr::TextureSemantic::LinearData,
+        vkr::DerivedMipmapWrap::Reflect, 2048, 1024, "linear-key",
+        "blobs/linear-key.ktx2",
+        {"textures/data.png", 42, 99, "image-sha256"}));
 
     std::string error;
     requireManifest(vkr::saveDerivedTextureManifest(manifestPath, source,

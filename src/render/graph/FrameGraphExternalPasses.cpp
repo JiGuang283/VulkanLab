@@ -43,9 +43,7 @@ void ScreenshotCopyPass::setup(
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
         break;
     case FrameCaptureSource::Hdr:
-        builder.useImage({context.features.lightingCompositeRequired
-                              ? resources_.compositedHdrColor
-                              : resources_.hdrColor,
+        builder.useImage({context.features.postLightingHdr(resources_),
                           RenderImageAccess::TransferRead,
                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});

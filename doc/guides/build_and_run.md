@@ -476,7 +476,7 @@ dist/my-scene/
   package_manifest.json
   assets/catalog.json
   assets/scenes/*.vkscene.json
-  shader/manifest.json               # Shader program/variant 权威清单
+  shader/manifest.json               # Program / Material Family / View Mode 权威清单
   shader/...                         # Manifest 实际引用的唯一 SPIR-V
   models/...                         # glTF/GLB 与必要 buffer，不含源图片
   runtime_assets/artifact_index.json

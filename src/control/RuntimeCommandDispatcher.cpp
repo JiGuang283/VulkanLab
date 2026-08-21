@@ -117,6 +117,14 @@ std::optional<float> optionalFiniteFloat(const RuntimeCommand &command,
 
 RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
     RenderSettingsPatch patch;
+    if (const auto renderPath = optionalString(command, "renderPath")) {
+        patch.renderPath = renderPathRequestFromName(*renderPath);
+        if (!patch.renderPath) {
+            throw RuntimeCommandError(
+                "invalid_params",
+                "Parameter 'renderPath' must be auto, forward, or deferred.");
+        }
+    }
     patch.shadowsEnabled = optionalBoolValue(command, "shadowsEnabled");
     patch.shadowReceiverBias =
         optionalFiniteFloat(command, "shadowReceiverBias");
@@ -214,6 +222,28 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
                 "invalid_params",
                 "Parameter 'surfaceDebugView' must be none, normal, "
                 "roughness, motion, or history-validity.");
+        }
+    }
+    if (const auto debugView =
+            optionalString(command, "gBufferDebugView")) {
+        patch.gBufferDebugView = gBufferDebugViewFromName(*debugView);
+        if (!patch.gBufferDebugView) {
+            throw RuntimeCommandError(
+                "invalid_params",
+                "Parameter 'gBufferDebugView' must be none, base-color, "
+                "normal, metallic, roughness, occlusion, emissive, motion, "
+                "or surface-flags.");
+        }
+    }
+    if (const auto debugView =
+            optionalString(command, "deferredLightingDebugView")) {
+        patch.deferredLightingDebugView =
+            deferredLightingDebugViewFromName(*debugView);
+        if (!patch.deferredLightingDebugView) {
+            throw RuntimeCommandError(
+                "invalid_params",
+                "Parameter 'deferredLightingDebugView' must be none, final, "
+                "diffuse, specular, or difference.");
         }
     }
     if (const auto aoMode =
@@ -325,7 +355,8 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
                 "ssgi-variance, or ssgi-rejection.");
         }
     }
-    if (!patch.shadowsEnabled && !patch.shadowReceiverBias &&
+    if (!patch.renderPath && !patch.shadowsEnabled &&
+        !patch.shadowReceiverBias &&
         !patch.pointShadowReceiverBiasWorld &&
         !patch.shadowConstantBias && !patch.shadowSlopeBias &&
         !patch.maxPointShadowLights && !patch.maxSpotShadowLights &&
@@ -340,7 +371,8 @@ RenderSettingsPatch renderSettingsPatch(const RuntimeCommand &command) {
         !patch.smallObjectCullingEnabled &&
         !patch.minProjectedSizePixels && !patch.occlusionCullingEnabled &&
         !patch.occlusionMinCandidates && !patch.occlusionDepthBias &&
-        !patch.surfaceDebugView &&
+        !patch.surfaceDebugView && !patch.gBufferDebugView &&
+        !patch.deferredLightingDebugView &&
         !patch.surfaceMotionDebugScale && !patch.ambientOcclusionMode &&
         !patch.ssaoQuality && !patch.ssaoRadius && !patch.ssaoBias &&
         !patch.ssaoIntensity && !patch.ssaoPower && !patch.cacaoQuality &&
@@ -479,6 +511,17 @@ RuntimeDispatchResult RuntimeCommandDispatcher::dispatch(
                 requiredWindowDimension(command, "height"));
         } else if (command.method == "render.status") {
             result = host.runtimeRenderStatus();
+        } else if (command.method == "render_path.get") {
+            result = host.runtimeRenderPathGet();
+        } else if (command.method == "render_path.set") {
+            const std::string value = requiredString(command, "mode");
+            const auto request = renderPathRequestFromName(value);
+            if (!request) {
+                throw RuntimeCommandError(
+                    "invalid_params",
+                    "Parameter 'mode' must be auto, forward, or deferred.");
+            }
+            result = host.runtimeRenderPathSet(*request);
         } else if (command.method == "render_settings.get") {
             result = host.runtimeRenderSettingsGet();
         } else if (command.method == "render_settings.set") {

@@ -1,8 +1,8 @@
 # 渲染流程
 
 > Status: Current
-> Last verified: 2026-08-15
-> Verified against: `62f6cc4`
+> Last verified: 2026-08-21
+> Verified against: Forward / Deferred Stage 7 working tree
 
 ## 帧图与 Pass 顺序
 
@@ -19,20 +19,27 @@ SpotShadowPass
         -> shared 4-layer perspective-depth array
 SurfacePrepass
         -> sampled depth + normal/roughness + motion/history + albedo/metallic
-HiZBuildPass
-        -> max-depth mip pyramid
+DepthHierarchyPass
+        -> farthest depth for occlusion + nearest depth for screen-space effects
 OcclusionCullPass
         -> per-draw indirect instanceCount
-ScreenDepthPyramidPass
-        -> nearest/min-depth mip chain when requested
 SsaoPass
         -> half-resolution raw + bilateral-filtered AO
 DdgiPass
         -> Ray Query trace + persistent irradiance/distance probe atlases
+ClusteredLightCullingPass
+        -> per-cluster Point/Spot light records and index list
 SkyBackgroundPass
         -> procedural atmosphere / skybox / clear
-MainForwardPass (Opaque)
-        -> opaque HDR + baseline indirect specular + baseline indirect diffuse
+Opaque Render Path
+  Forward:
+        MainForwardPass (Opaque)
+          -> opaque HDR + baseline indirect specular/diffuse
+  Deferred:
+        GBufferPass
+          -> material surface MRT + depth
+        DeferredLightingPass
+          -> opaque HDR + baseline indirect specular/diffuse
 SceneColorPyramidPass
         -> opaque HDR color mip chain when requested
 SsrPass
@@ -67,11 +74,41 @@ ScreenshotCopyPass (conditional)
 
 所有 Graphics 节点使用 Dynamic Rendering。Graph 根据 attachment 声明组装 `VkRenderingInfo` 并调用 `vkCmdBeginRendering()`/`vkCmdEndRendering()`；Pipeline Cache 使用 color/depth/stencil format、sample count、view mask 和 blend attachment 数量组成的 `PipelineRenderingSignature`，不再以 `VkRenderPass/subpass` 为 key。Pass 不持有 `VkRenderPass` 或 `VkFramebuffer`，viewport resize 只重建尺寸相关物理资源和 descriptor 引用。
 
+## Render Path 契约
+
+Renderer 只有一个 RenderGraph、ResourcePool、PipelineCache 和 MaterialSystem。Forward 与
+Deferred 不是两套 Renderer，只是不透明阶段的两种 Graph 装配。请求使用
+`RenderPathRequest {Auto, Forward, Deferred}`，Pass 只接收解析后的
+`RenderPathMode {Forward, Deferred}`。
+
+`Auto` 在 GBuffer/Deferred Lighting capability 可用且当前 View Mode兼容时选择 Deferred，
+否则回退 Forward并记录原因；显式 Forward始终使用 Forward。显式 Deferred在设置入口验证，
+不满足条件时拒绝修改。路径变化只重编译或复用 Graph topology并失效 temporal history，不重建
+Device、Swapchain或长期资源系统。
+
+两条路径通过 `OpaqueRenderProducts` 返回相同逻辑产品：HDR、geometry depth、baseline
+diffuse/specular和 canonical screen-space surface。Forward由 MainForward Opaque写入；Deferred由
+GBuffer + Deferred Lighting写入。后续 SSR、SSGI、DDGI composite、Forward Transparent、TAA、
+Bloom和 ToneMap只消费标准产品，不直接判断路径专有 handle。
+
+GBuffer契约为 BaseColor/Metallic `RGBA8 UNORM`、Normal/Roughness/Material AO
+`RGBA16F`、Emissive/Surface Flags `RGBA16F`、Motion `RG16F`和单采样 Depth，名义开销
+28 B/px。Surface Flags保存 history validity、shading model和 screen-space AO participation；
+C++ static assertions与 `shader/include/surface_encoding.glsl`共同定义 channel与 bit约定。
+
+Opaque/MASK 可进入任一路径；BLEND、Transmission和不能编码进 GBuffer的材质始终由共享
+Forward Transparent在 opaque lighting之后绘制。Deferred为单采样并依赖 TAA；Forward继续保留
+MSAA和兼容 View Mode。
+
 ## Feature 所有权
 
 Renderer 的实现按实际维护边界放在 `src/render/features/`：
 
-- `core_forward/`：Surface、Opaque/Transparent Forward、HDR Composite、ToneMap 和 Present。
+- `forward/`：Opaque/Transparent Forward绘制。
+- `deferred/`：GBuffer之后的 Deferred Lighting与标准输出。
+- `post_process/`：共享 HDR Composite、ToneMap和 Present。
+- `surface/`：跨 Forward/Deferred共享的 SurfacePrepass、motion/history 与 GBuffer contract。
+- `lighting/`：Forward与 Deferred共享的 Clustered Light Culling和 per-frame buffers。
 - `shadows_visibility/`：CSM、Point/Spot Shadow、CPU visibility、Hi-Z 和 occlusion。
 - `ambient_occlusion/`：SSAO、GTAO 与可选 CACAO backend。
 - `reflections/`：SSR。
@@ -106,7 +143,7 @@ SkyBackgroundPass 负责清空 HDR color，并按优先级绘制程序化 Atmosp
 GPU 遮挡链路只处理 CPU 可见的 Opaque/MASK：
 
 1. `SurfacePrepass` 使用独立的单采样 MRT 绘制遮挡物；MASK 继续执行 BaseColor alpha cutoff，BLEND/transmission 不写入。它同时输出可采样深度、oct 编码 world normal、roughness、motion vector、history-validity，以及供 SSGI 使用的 linear albedo/metallic。
-2. `HiZBuildPass` 将 depth 复制到 `R32_SFLOAT` mip 0，并按普通 Z 对每个 2x2 区域取最大深度，构建完整 mip chain。
+2. `DepthHierarchyPass` 从 Surface Depth构建 Farthest语义；普通 Z下每级对 2x2区域取最大深度。
 3. `OcclusionCullPass` 将每个 world AABB 投影到屏幕，矩形扩张 2 像素，选择可覆盖矩形的保守 mip，并比较对象 nearest depth 与覆盖 texel 的最大深度。
 4. Compute 为每个候选写出完整 `VkDrawIndexedIndirectCommand`，只通过 `instanceCount=0/1` 控制 MainForward 是否执行该 draw。
 
@@ -116,11 +153,15 @@ Surface Data 要求存在可采样 depth、`R16G16B16A16_SFLOAT` normal/roughnes
 
 `IRenderWorld` 现在输出稳定的 canonical `RenderItem`；VisibilityFrame 只用 index list 表示 camera opaque、camera transparent 和 shadow caster 队列，避免复制后身份漂移。每个 item 的 key 由 owner、Entity UUID、ModelAsset generation 和 primitive index 构成，legacy 路径使用确定性的 fallback ordinal。直接 draw 和 indirect draw 的 `firstInstance` 都是该 canonical item index。
 
-`VisibilitySystem` 在 frame submit 成功后提交 current world/view-projection，下一帧按 RenderItem key 生成 previous transform。首次运行、scene generation 变化、Editor/Active Camera 切换、viewport resize、projection 改变、Shader variant 变化和 camera cut 会使 history generation 递增，并将本帧 motion 置零。`TemporalFrameHistoryData` 区分 stable projection 与 jittered view-projection：前者用于剔除、阴影拟合和失效判断，后者用于实际光栅化、motion 与时域重投影。Surface Data 调试视图可查看 Normal、Roughness、Motion 和 History Validity；TAA、GTAO、SSR 与 SSGI 复用 frame-level invalidation，但各自维护独立 history。
+`VisibilitySystem` 在 frame submit 成功后提交 current world/view-projection，下一帧按 RenderItem key 生成 previous transform。首次运行、scene generation 变化、Editor/Active Camera 切换、viewport resize、projection 改变、View Mode 或 Render Path 变化和 camera cut 会使 history generation 递增，并将本帧 motion 置零。`TemporalFrameHistoryData` 区分 stable projection 与 jittered view-projection：前者用于剔除、阴影拟合和失效判断，后者用于实际光栅化、motion 与时域重投影。Surface Data 调试视图可查看 Normal、Roughness、Motion 和 History Validity；TAA、GTAO、SSR 与 SSGI 复用 frame-level invalidation，但各自维护独立 history。
 
 ## 屏幕空间基础与环境遮蔽
 
-屏幕空间效果使用独立资源，不复用遮挡剔除的 max-depth Hi-Z。`ScreenDepthPyramidPass` 从 Surface Depth 生成普通 Z 的最小深度 mip chain；`SceneColorPyramidPass` 在 Opaque Forward 后、Transparent 前从未包含本帧 SSR/SSGI 的 HDR 生成 2x2 box-average mip chain。两者默认不执行，只有对应 Debug View、SSR 或 SSGI 声明需求时才 dispatch。
+`DepthHierarchyPass`统一提供 Nearest与 Farthest语义。设备支持 `RG32F` sampled/storage时，
+一条 min/max mip chain同时保存普通 Z的最近与最远深度；否则回退两张 `R32F` chain。Occlusion
+只读取 Farthest，SSR/SSGI和 depth debug只读取 Nearest，消费者不感知物理格式。
+`SceneColorPyramidPass`在 Opaque后、Transparent前从未包含本帧 SSR/SSGI的活动路径 HDR生成
+2x2 box-average mip chain。Depth与 Color hierarchy只有在对应剔除、Debug、SSR或 SSGI请求时执行。
 
 `SsaoPass` 位于 Occlusion 与 Sky Background 之间。它从每个半分辨率像素覆盖的 2x2 full-resolution texel 中选择最近表面，使用 inverse view-projection 重建位置，并以 world normal 转换后的 view-space normal 建立稳定旋转的半球 kernel。Low、Medium 与 High 固定使用 8、16 与 32 个样本；结果约定为 `1 = fully visible`、`0 = fully occluded`。Raw AO 随后经过 horizontal 与 vertical 两次 5-tap depth/normal bilateral blur。
 
@@ -128,7 +169,7 @@ Surface Data 要求存在可采样 depth、`R16G16B16A16_SFLOAT` normal/roughnes
 
 `GtaoPass` 使用半分辨率 `R16_SFLOAT` Raw、History、Temp、Filtered 和 Debug 资源。Trace 通过 nearest-depth pyramid 搜索 horizon，Low/Medium/High 分别执行 2x2、3x4 和 4x6 的 slice/step 组合。Temporal 阶段使用 motion 重投影 previous history，并通过 depth/normal discontinuity、3x3 AO neighborhood clamp 和 frame-level history generation 拒绝失效样本；之后复用 SSAO 的 horizontal/vertical bilateral blur。GTAO history 与 TAA history 相互独立，参数变化、不连续执行和全局 history invalidation 只重置 GTAO 自身。
 
-MainForward 的固定 `set=4` 包含 32B ScreenSpace UBO 和 filtered AO。只有 Manifest 声明 `screenSpace=true` 的两个 PBR variant 使用它；AO Off 或不兼容 variant 绑定 1x1 white fallback。Opaque/MASK 的间接项使用：
+MainForward 的固定 `set=4` 包含 32B ScreenSpace UBO 和 filtered AO。只有 Manifest 声明 `screenSpace=true` 的 PBR Program 使用它；AO Off 或不兼容 View Mode绑定 1x1 white fallback。Opaque/MASK 的间接项使用：
 
 ```glsl
 indirectOcclusion = materialOcclusion * screenSpaceAo;
@@ -140,9 +181,9 @@ Direct Lighting、Shadow、Emissive 与 Atmosphere direct transmittance 不乘 s
 
 ## Screen-Space Reflections
 
-SSR 默认关闭，只在两个 PBR variant、Surface Data、nearest-depth pyramid 和 Scene Color pyramid 均可用时激活。Opaque Forward 的第二个 MRT 保存已经计入最终 HDR 的 baseline indirect specular；Scene Color pyramid 在 Opaque 后、Transparent 前从不透明 HDR 生成，因此 trace 不会递归采样本帧 SSR，也不会把透明层当作稳定反射源。
+SSR 默认关闭，只在支持 screen-space 的 Lit材质路径、Surface Data、nearest-depth pyramid 和 Scene Color pyramid 均可用时激活。Opaque路径的 baseline specular保存已经计入最终 HDR 的间接镜面项；Scene Color pyramid 在 Opaque 后、Transparent 前从不透明 HDR 生成，因此 trace 不会递归采样本帧 SSR，也不会把透明层当作稳定反射源。
 
-`SsrPass` 使用五张半分辨率 `RGBA16F` per-frame image：Raw、History、Temp、Filtered 和 Debug。Trace 从每个 2x2 full-resolution block 选择最近表面，按 normal、view vector 和 roughness 发射 reflection ray，并使用 nearest-depth pyramid 的 mip 做保守步进；输出 RGB radiance 与 alpha confidence。Temporal 阶段使用 motion、previous depth/normal、3x3 neighborhood clamp 和独立 history generation 做重投影，之后执行两次 depth/normal bilateral blur。camera cut、resize、scene generation、camera mode、projection、Shader variant、参数签名或不连续执行只重置 SSR 自身 history。
+`SsrPass` 使用五张半分辨率 `RGBA16F` per-frame image：Raw、History、Temp、Filtered 和 Debug。Trace 从每个 2x2 full-resolution block 选择最近表面，按 normal、view vector 和 roughness 发射 reflection ray，并使用 nearest-depth pyramid 的 mip 做保守步进；输出 RGB radiance 与 alpha confidence。Temporal 阶段使用 motion、previous depth/normal、3x3 neighborhood clamp 和独立 history generation 做重投影，之后执行两次 depth/normal bilateral blur。camera cut、resize、scene generation、camera mode、projection、View Mode、Render Path、参数签名或不连续执行只重置 SSR 自身 history。
 
 `HdrCompositePass` 在 SSR active 时执行：
 
@@ -157,7 +198,7 @@ SSR 要求 graphics compute、Surface Data、`R32_SFLOAT` sampled/storage 以及
 
 ## Screen-Space Global Illumination
 
-SSGI 默认关闭，只在两个 PBR variant、Surface Data、albedo/metallic MRT、nearest-depth pyramid 与 Scene Color pyramid 均可用时激活。Opaque PBR Forward 的第三个 MRT 保存已经计入 HDR 的 baseline indirect diffuse；其 alpha 保存 material occlusion，使 SSGI 命中和 ambient/IBL fallback 能使用不同的 AO 语义。
+SSGI 默认关闭，只在支持 screen-space 的 Lit材质路径、Surface Data、albedo/metallic、nearest-depth pyramid 与 Scene Color pyramid 均可用时激活。活动 opaque路径的 baseline indirect diffuse保存已经计入 HDR 的间接漫反射；其 alpha 保存 material occlusion，使 SSGI 命中和 ambient/IBL fallback 能使用不同的 AO 语义。
 
 `SsgiPass` 使用六张半分辨率 `RGBA16F` per-frame image：Raw、History、Moments、Temp、Filtered 和 Debug。Trace 按 cosine-weighted hemisphere 发射 4/6/8 条 diffuse ray，并以 nearest-depth hierarchy 搜索命中，从 opaque Scene Color pyramid 读取 incident radiance。Temporal 阶段使用 motion、previous depth/normal、3x3 radiance clamp、luminance moments 和独立 history generation；随后执行两轮 depth/normal/variance-guided A-Trous 滤波。所有 previous-frame descriptor 在 history 无效时绑定当前已初始化资源，避免 resize 或首次启用读取 undefined image。
 
@@ -173,7 +214,7 @@ result = opaque - baselineSpecular - baselineDiffuse
 
 因此 SSGI miss 回退 ambient/IBL baseline，hit 不再次乘完整 screen-space AO，也不会从已经合成 SSGI 的颜色递归采样。SSR 或 SSGI 单独关闭时，对应输入绑定到合法 fallback 且 replacement confidence 为零；两者都关闭时 Composite 只复制 opaque HDR。Transparent 在合成后绘制，不参与 SSGI trace/history。
 
-SSGI history 与 TAA、GTAO、SSR 分离，并响应共享的 camera cut、resize、scene generation、camera mode、projection 和 Shader variant 失效事件；参数签名或执行序列中断只重置 SSGI。Raw、Temporal、Filtered、Confidence、Variance 和 Rejection 可通过 ToneMap 动态 debug source 查看。`render.status.screenSpace` 分别报告 requested GI mode、active fallback、support、extent、history generation 和 reset 原因。
+SSGI history 与 TAA、GTAO、SSR 分离，并响应共享的 camera cut、resize、scene generation、camera mode、projection、View Mode和 Render Path失效事件；参数签名或执行序列中断只重置 SSGI。Raw、Temporal、Filtered、Confidence、Variance 和 Rejection 可通过 ToneMap 动态 debug source 查看。`render.status.screenSpace` 分别报告 requested GI mode、active fallback、support、extent、history generation 和 reset 原因。
 
 ## Dynamic Diffuse Global Illumination
 
@@ -197,7 +238,7 @@ PBR 的 diffuse baseline 按以下顺序构造：
 SSGI confidence replacement -> DDGI -> global IBL / constant ambient
 ```
 
-`DDGI` 模式直接使用 probe baseline；`SSGI + DDGI` 让 SSGI 只在可靠的屏幕空间命中处覆盖 DDGI。AO 继续只影响间接项，local Reflection Probe 只影响 specular，Direct、Shadow 和 Emissive 不改变。DDGI 默认关闭，且只有 Manifest 声明 `ddgi=true` 的两个 PBR variant 绑定 set 5。Irradiance、Distance 与 Classification 调试视图由同一 PBR fragment ABI 输出。
+`DDGI` 模式直接使用 probe baseline；`SSGI + DDGI` 让 SSGI 只在可靠的屏幕空间命中处覆盖 DDGI。AO 继续只影响间接项，local Reflection Probe 只影响 specular，Direct、Shadow 和 Emissive 不改变。DDGI 默认关闭，且只有 Manifest 声明 `ddgi=true` 的 PBR Program绑定 set 5。Irradiance、Distance 与 Classification 调试视图由同一 PBR fragment ABI 输出。
 
 该实现参考 Hillaire 的 irradiance/distance moment 与 probe visibility论文以及 RTXGI 的 relocation/classification 结构，但没有 include、link 或分发 RTXGI。v1 不支持多个/滚动 volume、hit texture lookup、shadowed hit lighting、动态 BLAS、probe priority 或 async compute。为支持会话内即时切换，Ray Query 可用设备会在 Mesh 上传时提前构建 BLAS，即使当前 GI mode 为 Off；这是明确的加载和显存代价，后续依据 Tracy/VMA 数据再决定 lazy residency。
 
@@ -207,7 +248,7 @@ TAA 默认关闭，要求 Surface Data 和 `RGBA16F` sampled/linear/storage 支�
 
 `TaaPass` 位于完整 MainForward 后，读取当前 HDR、当前/上一 frame slot 的 depth 与 normal、motion 和上一 slot 的 TAA History，并写入当前 slot 的全分辨率 `RGBA16F` History 与 Debug。SurfacePrepass motion 已经包含 current/previous jitter 差异，几何重投影直接使用 `previousUv = uv + motion`，不得再次补偿 jitter；天空继续通过 current inverse VP 与 previous VP 重投影。Resolve 还使用 nearest-depth motion、depth/normal/history-validity rejection、3x3 YCoCg variance clipping、自适应 history weight 和轻量 sharpening。BLEND/transmission 不进入 SurfacePrepass，v1 尚无 reactive mask，因此存在透明 draw 时保守限制 history weight。
 
-History 通过 RenderResourcePool 的 `Previous` sampled-read 契约表达，且只在 scene generation、camera identity、stable projection、Shader variant、viewport 和提交序列连续时复用。resize 会等待现有 frame fences，释放 descriptor 后重建 per-frame history，不调用 device idle。TAA 激活时 Scene Color Pyramid、Bloom 和 ToneMap 直接读取 resolve History；关闭时读取 MainForward HDR，不产生额外全屏复制。History、Rejection 和 History Weight 可通过 ToneMap 调试，UI 仍只在 Present 阶段绘制，因此不经过 TAA。
+History 通过 RenderResourcePool 的 `Previous` sampled-read 契约表达，且只在 scene generation、camera identity、stable projection、View Mode、Render Path、viewport 和提交序列连续时复用。resize 会等待现有 frame fences，释放 descriptor 后重建 per-frame history，不调用 device idle。TAA 激活时 Scene Color Pyramid、Bloom 和 ToneMap 直接读取 resolve History；关闭时读取活动路径的 HDR，不产生额外全屏复制。History、Rejection 和 History Weight 可通过 ToneMap 调试，UI 仍只在 Present 阶段绘制，因此不经过 TAA。
 
 ## 阴影系统
 
@@ -245,20 +286,20 @@ RenderResourcePool 为 Atmosphere 注册四张 `RGBA16F` storage/sampled image�
 
 Atmosphere Sun 由 SceneDocument 中标记 `atmosphereSunIndex=0` 的 Directional Light 显式选择，与 shadow caster 独立。`buildRenderView()` 会在 256 灯上限内优先保留两者，并把 Atmosphere Sun 的最终 SSBO index 写入 frame data。LUT 使用单位太阳输入，天空、太阳圆盘、直射光透射和 aerial in-scattering 最终乘该灯的 color/intensity。
 
-SkyBackgroundPass 在 PBR variant、Atmosphere 和静态 LUT 都有效时绘制程序化天空；否则保留原 Skybox/clear 路径。两个 PBR fragment shader对 Atmosphere Sun 的 direct contribution 采样 Transmittance，并在材质光照完成后应用：
+SkyBackgroundPass 在 Lit View Mode、Atmosphere 和静态 LUT 都有效时绘制程序化天空；否则保留原 Skybox/clear 路径。PBR材质 Program对 Atmosphere Sun 的 direct contribution采样 Transmittance，并在材质光照完成后应用：
 
 ```glsl
 color = color * aerialTransmittance + aerialInScattering;
 ```
 
-最大 aerial 距离为 `min(cameraFar, 96 km)`，计算使用 camera-relative kilometer 坐标，避免在 shader 中直接对 6360 km 行星坐标做大数相减。Legacy 和材质 Debug variants 不声明 Atmosphere descriptor，也不改变既有基线。程序化天空控制可见背景，Environment IBL 仍可独立启用；v1 不从天空动态生成 diffuse/specular IBL。
+最大 aerial 距离为 `min(cameraFar, 96 km)`，计算使用 camera-relative kilometer 坐标，避免在 shader 中直接对 6360 km 行星坐标做大数相减。Legacy 和材质 Debug View Mode不声明 Atmosphere descriptor，也不改变既有基线。程序化天空控制可见背景，Environment IBL 仍可独立启用；v1 不从天空动态生成 diffuse/specular IBL。
 
 ## HDR、Viewport Color 与 Present
 
 MainForwardPass 输出线性 HDR；MSAA 开启时 resolve 到单采样 HDR image，并转换为 `SHADER_READ_ONLY_OPTIMAL`。ToneMapPass 使用无 vertex buffer 的 fullscreen triangle 采样当前 frame slot 的 HDR image，并可同时采样 Bloom 第 0 级。其输出写入与当前 Scene Viewport 物理像素一致的 per-frame Viewport Color，而不是 Swapchain。
 
-- PBR-lite 两个 variant 先合成 `hdr + bloom * intensity`，再应用 `color *= exp2(exposureEv)`，最后按设置执行 ACES fitted、Reinhard 或 PassThrough。
-- Legacy 和材质通道/Shadow Debug variant 强制 PassThrough，以维持基线和材质通道语义；两个 Debug IBL variant 使用可配置 tone mapping，因为其输出是线性 HDR。
+- Lit View Mode先合成 `hdr + bloom * intensity`，再应用 `color *= exp2(exposureEv)`，最后按设置执行 ACES fitted、Reinhard 或 PassThrough。
+- Legacy 和材质通道/Shadow Debug View Mode强制 PassThrough，以维持基线和材质通道语义；两个 Debug IBL View Mode使用可配置 tone mapping，因为其输出是线性 HDR。
 - Viewport Color 与 Swapchain 使用同一 format：sRGB format 由硬件编码，非 sRGB UNORM format 由 ToneMap shader 显式 gamma encode。
 - ToneMapPass 不绘制 ImGui；UI 因此不受曝光或 tone mapping 影响。
 
@@ -266,7 +307,7 @@ ToneMapPass 将 Viewport Color 转为 `SHADER_READ_ONLY_OPTIMAL`。Editor 构建
 
 ## Compute Bloom
 
-Bloom 默认关闭，并且只有 Manifest 中声明 `bloom: true` 的两个 PBR-lite variant 可以激活。设置会在 Shader 切换时保留；Legacy 或 Debug variant 下 `enabled` 可以保持为 true，但 `active` 为 false。
+Bloom 默认关闭，并且只有 Manifest 中声明 `bloom: true` 的 Lit View Mode可以激活。设置会在 View Mode切换时保留；Legacy 或 Debug View Mode下 `enabled` 可以保持为 true，但 `active` 为 false。
 
 设备能力检查要求选中的 graphics queue 同时支持 compute、`shaderStorageImageExtendedFormats` 可启用，并且 `VK_FORMAT_R16G16B16A16_SFLOAT` 支持 sampled、linear filtering 和 storage image。任一条件不满足时 Renderer 不创建 Bloom 资源或 BloomPass，其他渲染功能继续运行；UI 和 Runtime Control 会报告不可用原因。
 
@@ -286,7 +327,7 @@ BloomPass 使用当前 graphics command buffer 和 queue：
 
 `RenderSettings` 中的 `iblEnabled`、`skyboxEnabled`、`environmentIntensity` 和 `environmentRotationRadians` 默认分别为 false、false、1 和 0。选择 Environment 不自动打开 IBL/Skybox。环境旋转统一作用于 diffuse lookup、reflection vector 和 Skybox，因此光照方向与可见背景保持一致。
 
-两个 PBR-lite variant 使用 metallic-roughness split-sum IBL：
+Default Lit材质使用 metallic-roughness split-sum IBL：
 
 ```text
 F0       = mix(0.04, albedo, metallic)
@@ -301,7 +342,7 @@ SkyBackgroundPass 在 Atmosphere 未接管背景时，使用 fullscreen triangle
 
 ## Pipeline、材质与 Descriptor
 
-MaterialTemplate 保存基础 PipelineConfig，并引用 MaterialSystem 提供的活动 set 1 layout。MaterialInstance 保存 CPU 材质参数、BaseColor、Normal、MetallicRoughness、Occlusion、Emissive 五个纹理引用，以及带 generation 的 GPU MaterialHandle。缺失槽统一引用 MaterialSystem 的全局 fallback texture，不再按 ModelAsset 重复创建。
+MaterialTemplate 保存基础 PipelineConfig、稳定的 MaterialShaderFamily handle，并引用 MaterialSystem 提供的活动 set 1 layout。Shader Manifest schema v3 将低级 ShaderProgram、MaterialShaderFamily 和全局 ViewMode 分开：Lit ViewMode 由每个材质 family 选择 Forward/Surface/Shadow program，Legacy 和 Debug ViewMode 仅作为显式覆盖策略。当前内置 family 为 `builtin.default-lit` 与 `builtin.unlit`；glTF `KHR_materials_unlit` 自动选择后者。MaterialInstance 保存 CPU 材质参数、BaseColor、Normal、MetallicRoughness、Occlusion、Emissive 五个纹理引用，以及带 generation 的 GPU MaterialHandle。缺失槽统一引用 MaterialSystem 的全局 fallback texture，不再按 ModelAsset 重复创建。
 
 材质后端在进程启动时确定。Auto 在设备和 Shader Manifest 均支持时使用 Bindless；
 否则回退 Legacy。Bindless 使用固定容量的全局 Material SSBO 和 combined-image-sampler
@@ -309,7 +350,7 @@ MaterialTemplate 保存基础 PipelineConfig，并引用 MaterialSystem 提供�
 Legacy 使用同一 Material SSBO，但每个材质持有一套 binding 1..5 的不可变 descriptor，
 材质变化时绑定。两条路径共用相同 `GpuMaterial` 和 draw push ABI。
 
-PipelineConfig 支持零或多个 color blend attachment、零 vertex binding、可选 fragment shader、topology 和 depth bias。`PipelineCache::getOrCreate()` 接收完整 `PipelineConfig` 和 Graph 提供的 `PipelineRenderingSignature`，由 cache 内部规范化并生成 key。Key 覆盖 shader 路径、vertex layout、topology、raster/depth/blend/MSAA 状态、descriptor layouts、push ranges，以及 Dynamic Rendering 的 color/depth/stencil formats、sample count、view mask 和 blend attachment 数量；不再包含 pass、材质指针、ShaderVariant、queue 或 alpha-masked 等语义标签，也不依赖 `VkRenderPass/subpass`。Pipeline 创建直接使用 key 内保存的 config，因此不存在手工 key 与实际 Vulkan 状态分叉。
+PipelineConfig 支持零或多个 color blend attachment、零 vertex binding、可选 fragment shader、topology 和 depth bias。`PipelineCache::getOrCreate()` 接收完整 `PipelineConfig` 和 Graph 提供的 `PipelineRenderingSignature`，由 cache 内部规范化并生成 key。Key 覆盖 shader 路径、vertex layout、topology、raster/depth/blend/MSAA 状态、descriptor layouts、push ranges，以及 Dynamic Rendering 的 color/depth/stencil formats、sample count、view mask 和 blend attachment 数量；不再包含 pass、材质指针、View Mode、queue 或 alpha-masked 等语义标签，也不依赖 `VkRenderPass/subpass`。Pipeline 创建直接使用 key 内保存的 config，因此不存在手工 key 与实际 Vulkan 状态分叉。
 
 Compute 使用独立的 `ComputePipelineConfig`、`ComputePipelineKey` 和 `PipelineCache::getOrCreateCompute()`。Compute key 覆盖 compute shader、descriptor layouts 和 push ranges；与 graphics pipeline 一样，`debugName` 只用于对象命名，不参与缓存身份。`PipelineCache::clear()` 会同时销毁 graphics 和 compute pipelines。
 
@@ -330,35 +371,57 @@ Forward descriptor 约定为：
   - binding 6：每帧 Reflection Probe metadata SSBO。
   - binding 7：共享 Point cube-array comparison map。
   - binding 8：共享 Spot 2D-array comparison map。
-- `set=3`：Atmosphere descriptor，仅 Atmosphere programs 和两个 PBR variants 声明。
+- `set=3`：Atmosphere descriptor，仅 Atmosphere programs 和支持 Atmosphere 的材质 Program声明。
   - binding 0：每帧 `AtmosphereGpuParams` UBO。
   - binding 1：Transmittance LUT。
   - binding 2：Multiple Scattering LUT。
   - binding 3：Sky View LUT。
   - binding 4：Aerial Perspective 2D-array LUT。
-- `set=4`：Screen-Space descriptor，仅两个 PBR variants 声明。
+- `set=4`：Screen-Space descriptor，仅支持 Screen-Space 的材质 Program声明。
   - binding 0：Screen-Space UBO。
   - binding 1：当前 active AO 或 white fallback。
-- `set=5`：DDGI sampling descriptor，仅 `ddgi=true` 的 PBR variants 声明。
+- `set=5`：DDGI sampling descriptor，仅 `ddgi=true` 的材质 Program声明。
   - binding 0：当前 frame slot 的 DDGI parameters UBO。
   - binding 1：Irradiance 2D-array atlas。
   - binding 2：Distance-moments 2D-array atlas。
   - binding 3：Probe state SSBO。
+- `set=6`：Clustered Lighting descriptor，仅 PBR Forward和 Deferred Lighting声明。
+  - binding 0：每 cluster的 offset/count/overflow record SSBO。
+  - binding 1：Point/Spot Scene Light index SSBO。
 - 128 字节 `GpuDrawPushBlock`：model matrix、material index、render item index、shadow slice/pass flags 和预留字段；材质因子不再逐 draw push。
 
 Lighting 的九个 binding 始终绑定真实资源或合法 fallback，不依赖 partially-bound descriptor。Point/Spot Shadow Pass 另外使用 pass-local `UNIFORM_BUFFER_DYNAMIC`：每个 frame slot 预写 24 个 Point face slice 和 4 个 Spot slice，draw 只切换对齐后的 dynamic offset，不在录制期间覆盖同一 UBO 数据。局部 Reflection Probe 按 priority 和 Entity UUID 稳定选择最多 8 个；Box/Sphere influence 与 box parallax correction 在 PBR fragment shader 中完成。SSR 使用 confidence 替换 `Local Probe -> Global IBL` 的 specular baseline，global diffuse irradiance 不被局部探针替换。sampler array 通过常量 switch 访问，因此不要求 sampled-image array dynamic indexing。ToneMap 使用固定五 binding 的 pass-local descriptor：当前 HDR、Bloom、Surface Normal-Roughness、Motion 和按当前 debug mode 选择的单一 Debug Source。Depth/Color pyramid、AO、TAA、GTAO、SSR 与 SSGI 调试图像都在 CPU 更新 descriptor 时映射到该动态 source，避免每新增一个算法就扩大 ToneMap descriptor ABI。未在本帧生成的输入绑定已初始化 fallback，push constant 禁止采样。Present 使用另一个 pass-local descriptor，只包含当前 frame slot 的 Viewport Color。
 
-## Shader Variant
+## Shader Program、Material Family 与 View Mode
 
-`shader/manifest.json` 是 Shader program 和 selectable variant 的唯一权威清单。CMake 在配置阶段读取 Manifest、去重所有 stage 源文件，并为 `glslc` 配置 include 路径和依赖；每个产物必须先通过 `spirv-val`，再从 `generated/<Config>/shader/` stage 到 runtime `shader/`。Manifest 本身也进入开发 runtime 和 Cook package。
+`shader/manifest.json` schema v3 是三类信息的唯一权威清单：
 
-Application 在创建 Window/Vulkan 前加载 `ShaderRegistry`。当前选择使用稳定 variant ID，UI 使用 display name；ToneMap 和 Bloom 兼容性由 variant metadata 决定。Shadow、Bloom、ToneMap 与 Present 通过稳定 program ID 查询，不再维护 C++ 路径常量。MaterialTemplate 的基础 PipelineConfig 不携带默认 Shader，MainForwardPass 在创建 pipeline 前必须写入当前 variant 路径。
+- `programs`：低级 graphics/compute stage组合与 descriptor/MRT capability。
+- `materialShaderFamilies`：材质在 Forward、GBuffer、Surface和 Shadow Pass使用的 Program映射。
+- `viewModes`：Lit、Legacy和材质/光照 Debug等全局观察方式。
 
-测试目标静态链接固定版本的 SPIRV-Reflect，按 Manifest program contract 遍历全部 Forward、Shadow、Atmosphere、Sky Background、Visibility、Screen-Space、Bloom、ToneMap 与 Present program，校验 stage、descriptor、UBO/push size 和 member offset、vertex location/format、跨阶段 varying及 fragment output。反射不进入 VulkanLab 运行时，也不自动生成 DescriptorSetLayout；生产布局仍由显式 C++ 代码创建。
+Application在创建 Window/Vulkan前加载 `ShaderRegistry`。`MaterialTemplate`持有稳定 Family
+handle和 render state，`MaterialInstance`持有参数、纹理和 GPU material handle。Pass通过
+`(family, MaterialShaderPass, material binding backend)`解析实际 Program；全局 UI不再选择一个
+shader替换所有材质。默认 Lit View Mode不覆盖 Program，因此 Default Lit和 Unlit材质可以在同一
+帧使用各自 Family；Legacy/Debug View Mode才显式覆盖材质并强制 Forward。
 
-当前 variant 包含 Legacy、两个 PBR-lite、BaseColor/Normal/Roughness/Metallic/Occlusion/Emissive/Alpha/Transmission 调试视图，以及 `Debug Shadow`、`Debug IBL Diffuse` 和 `Debug IBL Specular`。启动默认使用 `PBR-lite NormalMapped`；Legacy 保留为显式基线和兼容性检查。只有两个 PBR-lite variant 在 Manifest 中声明 `bloom: true`。PBR-lite 使用 baseColor、metallicRoughness、AO、emissive 和可选 IBL；NormalMapped 额外使用 tangent/TBN 与 normal scale。Transmission 当前仍是 alpha 与 Fresnel 轮廓近似，不采样场景颜色。
+Forward与 Deferred共用 `material_surface.glsl`、PBR BRDF、direct lighting、shadow、IBL、
+atmosphere和 screen-space helper。Forward fragment直接消费求值后的 Surface；GBuffer编码同一
+Surface；Deferred Lighting解码后调用同一 lighting helper。Clustered Lighting通过固定 set 6
+同时供 PBR Forward和 Deferred compute使用，Directional仍作为全局灯遍历。
 
-新增兼容 Main Forward ABI 的 variant 只需增加 GLSL 和 Manifest 条目；构建、运行时 UI、Cook 和 contract tests 会自动包含它。当前不支持目录扫描、热重载或第三方 Shader 插件，具体流程见 [Shader Registry](../guides/shader_registry.md)。
+CMake读取 Manifest、去重 GLSL source、配置 include依赖并运行 `glslc`与 `spirv-val`。带
+`materialTextures`的 fragment生成 Legacy/Bindless两套产物；带 lighting/surface MRT的 Program
+还生成缩减 attachment版本。测试目标用 SPIRV-Reflect校验 program contract、descriptor、
+UBO/push offset、varying和 fragment output；反射不进入运行时。
+
+Cook只使用 `ShaderRegistry::spirvPaths()`收集产物。Package Verify重新加载同一 Registry，验证
+Default Lit Family的 Forward/GBuffer映射、Deferred Lighting、Cluster Build、ToneMap和 Present，
+并确认所有 SPIR-V都位于 package root且受 hash清单覆盖。
+
+当前不支持目录扫描、运行时编译、热重载、任意用户 shader或第三方 Shader插件。扩展流程见
+[Shader Registry](../guides/shader_registry.md)。
 
 顶点布局固定为 position、normal、UV0、tangent、UV1 和 vertex color，location 为 0 到 5。AO 可选择 UV0/UV1；其他纹理当前使用 UV0。
 
@@ -368,7 +431,21 @@ SceneLight 支持 Directional、Point 和 Spot。glTF loader 解析 `KHR_lights_
 
 `GlobalFrameUbo` 只保存 `directional/point/spot/total` 计数，不再内嵌灯数组。`set=0 binding=1` 是 Fragment stage 的只读 `std430` Scene Light SSBO；`GpuLight` stride 固定 64 字节。Renderer 为每个 frame slot 分配持续映射的独立 buffer，容量从 16 按 2 的幂增长，最多 256 且不自动收缩；替换只发生在该 slot 的 fence 已完成后，不调用 `vkDeviceWaitIdle()`。
 
-PBR Forward 按 Directional、Point、Spot 三段遍历 SSBO，Point/Spot 在超出 range 时提前跳过。三类灯共享 256 灯上限，超出部分保留在 SceneDocument 并计入 ignored；Legacy 继续使用 baseline 光照且不读取 SSBO。存在任意有效场景灯光时不注入 fallback Sun；如果场景灯全部无效，则按兼容规则使用 fallback Sun。颜色和 intensity 保持 glTF 物理单位，不做自动缩放；高强度场景通过 Exposure EV 和 Tone Mapping 调整。没有可用 IBL 时，环境项由 ambient color/intensity 提供；AO 只影响间接项。
+Scene Light SSBO按 Directional、Point、Spot三段打包，三类灯共享 256灯上限，超出部分保留在
+SceneDocument并计入 ignored。Directional数量通常很少，PBR Forward和 Deferred直接遍历；
+Point/Spot达到 8盏时启用共享 Clustered Light Culling。
+
+Cluster grid使用 viewport XY tile和 24个 logarithmic view-Z slice。基础 tile为 16像素；为把每个
+frame slot的 light-index buffer控制在 32 MiB内，可扩展到 32或 64像素。每个 cluster最多保存
+32个 punctual light引用。Compute build输出 cluster record、index list和统计；Forward Opaque、
+Forward Transparent与 Deferred Lighting通过固定 `set=6` 查询同一列表。若 cluster overflow，
+对应 pixel/draw回退完整 punctual loop，保证只损失性能而不丢光。少于 8盏 punctual light时跳过
+build并直接遍历。
+
+Legacy View Mode继续使用 baseline光照且不读取 Scene Light SSBO。存在任意有效场景灯光时不注入
+fallback Sun；如果场景灯全部无效，则按兼容规则使用 fallback Sun。颜色和 intensity保持 glTF
+物理单位，不做自动缩放；高强度场景通过 Exposure EV和 Tone Mapping调整。没有可用 IBL时，
+环境项由 ambient color/intensity提供；AO只影响间接项。
 
 Directional shadow 使用四级 CSM。split distance、receiver fit、scene-bounds Z range、5% XY padding 和 texel snapping 由 `ShadowSystem` 统一计算；每个 cascade只绘制对应的 caster queue。Point/Spot 使用持久 stable-key allocator 与 25% hysteresis，而不是每帧按相机距离重新编号。`GpuLight.params.z` 保存显式 shadow slot，`.w` 保存实际 shadow far plane，因此阴影灯无需位于对应类型数组前部。Spot 使用普通透视深度；Point 对六个 cubemap face写入 `distance(worldPosition, lightPosition) / shadowFar`，PBR 通过 `samplerCubeArrayShadow` 做方向空间 3x3 PCF。Opaque/MASK 投影，MASK 保留 alpha cutoff；BLEND/transmission 不投射实体阴影。
 

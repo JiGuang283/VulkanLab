@@ -121,6 +121,14 @@ class FakeRuntimeHost final : public vkr::RuntimeControlHost {
     vkr::ControlJson runtimeRenderStatus() override {
         return reply("render.status");
     }
+    vkr::ControlJson runtimeRenderPathGet() override {
+        return reply("render_path.get");
+    }
+    vkr::ControlJson
+    runtimeRenderPathSet(vkr::RenderPathRequest request) override {
+        return reply("render_path.set",
+                     {{"renderPath", vkr::renderPathRequestName(request)}});
+    }
     vkr::ControlJson runtimeRenderSettingsGet() override {
         return reply("render_settings.get");
     }
@@ -157,6 +165,15 @@ class FakeRuntimeHost final : public vkr::RuntimeControlHost {
             arguments["bloomSoftKnee"] = *patch.bloomSoftKnee;
         if (patch.bloomIntensity)
             arguments["bloomIntensity"] = *patch.bloomIntensity;
+        if (patch.gBufferDebugView) {
+            arguments["gBufferDebugView"] =
+                vkr::gBufferDebugViewName(*patch.gBufferDebugView);
+        }
+        if (patch.deferredLightingDebugView) {
+            arguments["deferredLightingDebugView"] =
+                vkr::deferredLightingDebugViewName(
+                    *patch.deferredLightingDebugView);
+        }
         return reply("render_settings.set", std::move(arguments));
     }
     vkr::ControlJson runtimeEnvironmentList() override {
@@ -274,7 +291,9 @@ void testAllProtocolMethods() {
           {"bloomEnabled", true},
           {"bloomThreshold", 1.25},
           {"bloomSoftKnee", 0.4},
-          {"bloomIntensity", 0.2}},
+          {"bloomIntensity", 0.2},
+          {"gBufferDebugView", "normal"},
+          {"deferredLightingDebugView", "none"}},
          result("render_settings.set",
                 {{"shadowsEnabled", false},
                  {"shadowReceiverBias", 0.002f},
@@ -289,7 +308,9 @@ void testAllProtocolMethods() {
                  {"bloomEnabled", true},
                  {"bloomThreshold", 1.25f},
                  {"bloomSoftKnee", 0.4f},
-                 {"bloomIntensity", 0.2f}})},
+                 {"bloomIntensity", 0.2f},
+                 {"gBufferDebugView", "normal"},
+                 {"deferredLightingDebugView", "none"}})},
         {"capture.screenshot", {{"path", "suite/frame.png"}},
          result("capture.screenshot",
                 {{"path", "suite/frame.png"}, {"includeGui", false}})},

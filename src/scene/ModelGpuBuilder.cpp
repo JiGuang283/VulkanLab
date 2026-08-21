@@ -224,6 +224,19 @@ void ModelGpuBuilder::pump(const Budget &budget) {
                materialIndex_ < prepared_->materials.size() &&
                !budgetExpired(start, recordedBytes, budget)) {
             PreparedMaterial &source = prepared_->materials[materialIndex_];
+            std::shared_ptr<MaterialTemplate> materialTemplate =
+                context_.materialTemplate;
+            if (!source.shaderFamilyId.empty()) {
+                const auto family =
+                    context_.materialTemplates.find(source.shaderFamilyId);
+                if (family == context_.materialTemplates.end()) {
+                    throw std::runtime_error(
+                        "Unknown material shader family '" +
+                        source.shaderFamilyId + "' in model '" +
+                        context_.modelId + "'");
+                }
+                materialTemplate = family->second;
+            }
             MaterialTextureSet textureSet{};
             for (size_t slotIndex = 0;
                  slotIndex < kMaterialTextureSlotCount; ++slotIndex) {
@@ -237,7 +250,7 @@ void ModelGpuBuilder::pump(const Budget &budget) {
                         : materialSystem_->fallbackTexture(slot);
             }
             materials_.push_back(std::make_shared<MaterialInstance>(
-                *materialSystem_, context_.materialTemplate,
+                *materialSystem_, std::move(materialTemplate),
                 std::move(textureSet), std::move(source.params)));
             ++materialIndex_;
         }

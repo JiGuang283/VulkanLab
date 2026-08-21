@@ -208,6 +208,41 @@ bool buildFrustumCorners(const glm::mat4 &inverseView,
     return true;
 }
 
+bool finiteVec3(const glm::vec3 &value) {
+    return std::isfinite(value.x) && std::isfinite(value.y) &&
+           std::isfinite(value.z);
+}
+
+bool finiteMatrix(const glm::mat4 &matrix) {
+    for (uint32_t column = 0; column < 4; ++column) {
+        for (uint32_t row = 0; row < 4; ++row) {
+            if (!std::isfinite(matrix[column][row]))
+                return false;
+        }
+    }
+    return true;
+}
+
+bool stableLightUp(const glm::vec3 &direction, glm::vec3 &up) {
+    const glm::vec3 forward = -direction;
+    const glm::vec3 absolute = glm::abs(forward);
+    glm::vec3 helper(0.0f);
+    if (absolute.x <= absolute.y && absolute.x <= absolute.z)
+        helper.x = 1.0f;
+    else if (absolute.y <= absolute.z)
+        helper.y = 1.0f;
+    else
+        helper.z = 1.0f;
+
+    const glm::vec3 right = glm::cross(forward, helper);
+    const float rightLength2 = glm::dot(right, right);
+    if (!std::isfinite(rightLength2) || rightLength2 <= 1.0e-8f)
+        return false;
+    const glm::vec3 normalizedRight = right / std::sqrt(rightLength2);
+    up = glm::normalize(glm::cross(normalizedRight, forward));
+    return finiteVec3(up);
+}
+
 } // namespace
 
 std::array<float, kCsmCascadeCount> computeCsmSplits(
@@ -258,14 +293,14 @@ CsmFrameData buildCsmFrameData(
     const glm::mat4 inverseProjection =
         glm::inverse(camera.projection);
 
-    const glm::vec3 primaryUp(0.0f, 1.0f, 0.0f);
-    const glm::vec3 fallbackUp(0.0f, 0.0f, 1.0f);
-    const glm::vec3 up = std::abs(glm::dot(direction, primaryUp)) > 0.9999f
-                             ? fallbackUp
-                             : primaryUp;
-
-    const float fullRadius = std::max(bounds.radius, 0.1f);
+    glm::vec3 up(0.0f);
+    if (!stableLightUp(direction, up))
+        return result;
+    const glm::vec3 lightForward = -direction;
+    const glm::vec3 lightRight = glm::normalize(
+        glm::cross(lightForward, up));
     float cascadeNear = std::max(camera.nearPlane, 0.001f);
+    const std::array<glm::vec3, 8> sceneCorners = boundsCorners(bounds);
 
     for (uint32_t cascade = 0; cascade < kCsmCascadeCount; ++cascade) {
         const float cascadeFar = splits[cascade];
@@ -278,55 +313,86 @@ CsmFrameData buildCsmFrameData(
             return CsmFrameData{};
         }
 
-        // Compute light-space view
+        // A frustum-slice sphere is invariant under camera rotation. Keeping
+        // the projection square avoids the light-space AABB breathing that
+        // previously exposed receivers and casters near the viewport edge.
         glm::vec3 frustumCenter(0.0f);
         for (const glm::vec3 &corner : frustumCorners)
             frustumCenter += corner;
         frustumCenter /= 8.0f;
+        float radius = 0.0f;
+        for (const glm::vec3 &corner : frustumCorners)
+            radius = std::max(radius, glm::length(corner - frustumCenter));
+        if (!std::isfinite(radius) || radius <= 1.0e-4f)
+            return CsmFrameData{};
+        const float quantizedRadius =
+            std::ceil(radius / kCsmRadiusQuantization) *
+            kCsmRadiusQuantization;
+        const float guardedRadius =
+            std::max(quantizedRadius * (1.0f + kCsmGuardBandRatio), 0.05f);
+        const float worldUnitsPerTexel =
+            guardedRadius * 2.0f / static_cast<float>(shadowMapSize);
+        if (!std::isfinite(worldUnitsPerTexel) ||
+            worldUnitsPerTexel <= 1.0e-7f) {
+            return CsmFrameData{};
+        }
 
-        const glm::vec3 eye =
-            frustumCenter + direction * (fullRadius * 2.0f + 1.0f);
+        // Snap in a fixed light basis. Snapping a lookAt-local origin would
+        // always snap zero and would not stabilize world-space translation.
+        const float centerRight = glm::dot(frustumCenter, lightRight);
+        const float centerUp = glm::dot(frustumCenter, up);
+        const float snappedRight =
+            std::round(centerRight / worldUnitsPerTexel) *
+            worldUnitsPerTexel;
+        const float snappedUp =
+            std::round(centerUp / worldUnitsPerTexel) *
+            worldUnitsPerTexel;
+        const glm::vec3 snappedCenter =
+            frustumCenter + lightRight * (snappedRight - centerRight) +
+            up * (snappedUp - centerUp);
+
+        // Place the light-space eye beyond every receiver and scene-bound
+        // caster. This prevents valid geometry from ending up behind the
+        // synthetic orthographic camera as the view rotates.
+        float maximumTowardLight = std::numeric_limits<float>::lowest();
+        for (const glm::vec3 &corner : frustumCorners) {
+            maximumTowardLight = std::max(
+                maximumTowardLight,
+                glm::dot(corner - snappedCenter, direction));
+        }
+        for (const glm::vec3 &corner : sceneCorners) {
+            maximumTowardLight = std::max(
+                maximumTowardLight,
+                glm::dot(corner - snappedCenter, direction));
+        }
+        if (!std::isfinite(maximumTowardLight))
+            return CsmFrameData{};
+        const float eyeDistance =
+            std::max(maximumTowardLight + std::max(bounds.radius * 0.1f, 0.5f),
+                     1.0f);
+        const glm::vec3 eye = snappedCenter + direction * eyeDistance;
         const glm::mat4 lightView =
-            glm::lookAtRH(eye, frustumCenter, up);
+            glm::lookAtRH(eye, snappedCenter, up);
+        if (!finiteMatrix(lightView))
+            return CsmFrameData{};
 
-        // Project frustum corners to light space to get XY bounds
-        glm::vec2 lightMin(std::numeric_limits<float>::max());
-        glm::vec2 lightMax(std::numeric_limits<float>::lowest());
         float lightMinZ = std::numeric_limits<float>::max();
         float lightMaxZ = std::numeric_limits<float>::lowest();
         for (const glm::vec3 &corner : frustumCorners) {
             const glm::vec3 ls =
                 glm::vec3(lightView * glm::vec4(corner, 1.0f));
-            lightMin = glm::min(lightMin, glm::vec2(ls));
-            lightMax = glm::max(lightMax, glm::vec2(ls));
             lightMinZ = std::min(lightMinZ, ls.z);
             lightMaxZ = std::max(lightMaxZ, ls.z);
         }
 
         // Also include scene bounds in Z range to catch occluders
         // behind the frustum
-        for (const glm::vec3 &corner : boundsCorners(bounds)) {
+        for (const glm::vec3 &corner : sceneCorners) {
             const float z =
                 (lightView * glm::vec4(corner, 1.0f)).z;
             lightMinZ = std::min(lightMinZ, z);
             lightMaxZ = std::max(lightMaxZ, z);
         }
-
-        glm::vec2 halfExtent =
-            glm::max((lightMax - lightMin) * 0.525f,
-                     glm::vec2(0.05f));
-        glm::vec2 orthoCenter = (lightMin + lightMax) * 0.5f;
-
-        // Texel-size snapping to avoid shimmering
-        const glm::vec2 worldUnitsPerTexel =
-            (halfExtent * 2.0f) /
-            static_cast<float>(shadowMapSize);
-        orthoCenter.x =
-            std::round(orthoCenter.x / worldUnitsPerTexel.x) *
-            worldUnitsPerTexel.x;
-        orthoCenter.y =
-            std::round(orthoCenter.y / worldUnitsPerTexel.y) *
-            worldUnitsPerTexel.y;
 
         const float depthRange =
             std::max(lightMaxZ - lightMinZ, 0.1f);
@@ -339,18 +405,24 @@ CsmFrameData buildCsmFrameData(
                      -lightMinZ + depthPadding);
 
         glm::mat4 proj = glm::orthoRH_ZO(
-            orthoCenter.x - halfExtent.x,
-            orthoCenter.x + halfExtent.x,
-            orthoCenter.y - halfExtent.y,
-            orthoCenter.y + halfExtent.y,
+            -guardedRadius, guardedRadius, -guardedRadius, guardedRadius,
             nearPlaneLS, farPlaneLS);
         proj[1][1] *= -1.0f;
+        const glm::mat4 lightViewProjection = proj * lightView;
+        if (!finiteMatrix(lightViewProjection))
+            return CsmFrameData{};
 
-        result.cascades[cascade].lightViewProjection =
-            proj * lightView;
-        result.cascades[cascade].splitDistance = cascadeFar;
-        result.cascades[cascade].texelSize =
+        CsmCascadeData &cascadeData = result.cascades[cascade];
+        cascadeData.lightViewProjection = lightViewProjection;
+        cascadeData.nearDistance = cascadeNear;
+        cascadeData.splitDistance = cascadeFar;
+        cascadeData.blendStartDistance =
+            cascadeFar - (cascadeFar - cascadeNear) * kCsmBlendRatio;
+        cascadeData.stableRadius = guardedRadius;
+        cascadeData.worldUnitsPerTexel = worldUnitsPerTexel;
+        cascadeData.texelSize =
             1.0f / static_cast<float>(shadowMapSize);
+        cascadeData.valid = true;
 
         cascadeNear = cascadeFar;
     }

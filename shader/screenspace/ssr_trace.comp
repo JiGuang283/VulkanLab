@@ -3,6 +3,7 @@
 #extension GL_GOOGLE_include_directive : require
 #include "include/global_frame.glsl"
 #include "include/screen_temporal.glsl"
+#include "include/depth_hierarchy.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -63,6 +64,20 @@ bool projectWorld(vec3 position, out vec2 uv, out float depth)
     return depth > 0.0 && depth < 1.0 && screenUvInBounds(uv);
 }
 
+uint pcgHash(uint value)
+{
+    uint state = value * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+float randomPhase(ivec2 pixel, ivec2 size, uint framePhase)
+{
+    uint seed = uint(pixel.x) + uint(pixel.y) * uint(size.x);
+    seed ^= framePhase * 0x9e3779b9u;
+    return float(pcgHash(seed) & 0x00ffffffu) / 16777216.0;
+}
+
 void main()
 {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -87,8 +102,8 @@ void main()
 
     vec2 fullSize = vec2(push.dimensions.zw);
     vec2 centerUv = (vec2(fullPixel) + 0.5) / fullSize;
-    vec3 origin = reconstructWorld(centerUv, centerDepth);
-    vec3 viewDirection = normalize(origin - ubo.cameraPosWS.xyz);
+    vec3 surfacePosition = reconstructWorld(centerUv, centerDepth);
+    vec3 viewDirection = normalize(surfacePosition - ubo.cameraPosWS.xyz);
     vec3 rayDirection = normalize(reflect(viewDirection, normalWS));
     if (dot(rayDirection, normalWS) <= 0.0) {
         imageStore(destination, pixel, vec4(0.0));
@@ -97,10 +112,13 @@ void main()
 
     uint steps = max(push.dimensions.x, 1u);
     float maxDistance = max(push.parameters.x, 0.01);
+    float thickness = max(push.parameters.y, 1.0e-4);
     float stride = maxDistance / float(steps);
-    float phase = fract(float(pixel.x * 3 + pixel.y * 5) * 0.61803398875 +
-                        push.sampling.z * 0.754877666);
-    float previousT = max(stride * (0.5 + phase), 0.02);
+    float phase = randomPhase(pixel, outputSize, uint(push.sampling.z));
+    vec3 origin = surfacePosition + normalWS * max(thickness, 0.01);
+    float previousT = max(stride * (0.25 + phase), 0.02);
+    float previousSeparation = 0.0;
+    bool previousValid = false;
     vec2 hitUv = vec2(0.0);
     float hitT = 0.0;
     bool hit = false;
@@ -116,22 +134,68 @@ void main()
             break;
         float footprint = max(t / maxDistance * 16.0, 1.0);
         float mip = clamp(floor(log2(footprint)), 0.0, push.sampling.x);
-        float sceneDepth = textureLod(nearestDepthPyramid, uv, mip).r;
+        float sceneDepth = vklSampleNearestDepth(
+            nearestDepthPyramid, uv, mip);
         if (sceneDepth >= 1.0) {
-            previousT = t;
+            previousValid = false;
             continue;
         }
         vec3 scenePosition = reconstructWorld(uv, sceneDepth);
         vec3 rayVS = (ubo.view * vec4(rayPosition, 1.0)).xyz;
         vec3 sceneVS = (ubo.view * vec4(scenePosition, 1.0)).xyz;
         float separation = rayVS.z - sceneVS.z;
-        if (separation <= 0.0 && abs(separation) <= push.parameters.y) {
-            hit = true;
-            hitUv = uv;
-            hitT = t;
-            break;
+        if (separation <= 0.0) {
+            if (previousValid && previousSeparation > 0.0) {
+                float frontT = previousT;
+                float backT = t;
+                vec2 refinedUv = uv;
+                uint refinements = min(push.dimensions.y, 8u);
+                for (uint refinement = 0u; refinement < 8u; ++refinement) {
+                    if (refinement >= refinements)
+                        break;
+                    float candidateT = 0.5 * (frontT + backT);
+                    vec3 candidatePosition =
+                        origin + rayDirection * candidateT;
+                    vec2 candidateUv;
+                    float candidateDepth;
+                    if (!projectWorld(candidatePosition, candidateUv,
+                                      candidateDepth)) {
+                        backT = candidateT;
+                        continue;
+                    }
+                    float candidateSceneDepth = vklSampleNearestDepth(
+                        nearestDepthPyramid, candidateUv, 0.0);
+                    if (candidateSceneDepth >= 1.0) {
+                        frontT = candidateT;
+                        continue;
+                    }
+                    vec3 candidateScene =
+                        reconstructWorld(candidateUv, candidateSceneDepth);
+                    float candidateSeparation =
+                        (ubo.view * vec4(candidatePosition, 1.0)).z -
+                        (ubo.view * vec4(candidateScene, 1.0)).z;
+                    if (candidateSeparation > 0.0) {
+                        frontT = candidateT;
+                    } else {
+                        backT = candidateT;
+                        refinedUv = candidateUv;
+                    }
+                }
+                hit = true;
+                hitUv = refinedUv;
+                hitT = backT;
+                break;
+            }
+            if (abs(separation) <= thickness) {
+                hit = true;
+                hitUv = uv;
+                hitT = t;
+                break;
+            }
         }
         previousT = t;
+        previousSeparation = separation;
+        previousValid = separation > 0.0;
     }
 
     if (!hit) {

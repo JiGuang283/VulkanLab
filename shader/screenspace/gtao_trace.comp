@@ -3,6 +3,7 @@
 #extension GL_GOOGLE_include_directive : require
 #include "include/global_frame.glsl"
 #include "include/screen_temporal.glsl"
+#include "include/depth_hierarchy.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -76,7 +77,8 @@ float sampleHorizon(vec2 uv, vec3 centerVS, vec3 viewDirection,
 {
     if (!screenUvInBounds(uv))
         return lowHorizon;
-    float depth = textureLod(nearestDepthPyramid, uv, mipLevel).r;
+    float depth = vklSampleNearestDepth(
+        nearestDepthPyramid, uv, mipLevel);
     if (depth >= 1.0)
         return lowHorizon;
     vec3 sampleVS = (ubo.view * vec4(reconstructWorld(uv, depth), 1.0)).xyz;

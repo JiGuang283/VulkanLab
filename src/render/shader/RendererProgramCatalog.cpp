@@ -7,48 +7,30 @@
 
 namespace vkr {
 
-ShadowPrograms ShadowPrograms::resolve(
-    const ShaderRegistry &registry, MaterialBindingMode materialMode) {
+ShadowPrograms ShadowPrograms::resolve(const ShaderRegistry &registry) {
     ShadowPrograms result;
-    const auto materialFragment = [materialMode](const ShaderProgram &program)
-        -> const std::string & {
-        return program.fragmentSpvPath(materialMode);
-    };
 
     const ShaderProgram &shadowOpaque = registry.program("shadow.opaque");
-    const ShaderProgram &shadowMask = registry.program("shadow.mask");
     const ShaderProgram &pointOpaque =
         registry.program("shadow.point-opaque");
-    const ShaderProgram &pointMask = registry.program("shadow.point-mask");
     const ShaderProgram &spotOpaque = registry.program("shadow.spot-opaque");
-    const ShaderProgram &spotMask = registry.program("shadow.spot-mask");
     result.directionalVertex = shadowOpaque.vertSpvPath;
-    result.directionalMaskFragment = materialFragment(shadowMask);
     result.punctualVertex = pointOpaque.vertSpvPath;
     result.pointFragment = pointOpaque.fragSpvPath;
-    result.pointMaskFragment = materialFragment(pointMask);
     if (spotOpaque.vertSpvPath != result.punctualVertex) {
         throw std::runtime_error(
             "point and spot shadow programs must share the punctual vertex shader");
     }
-    result.spotMaskFragment = materialFragment(spotMask);
     return result;
 }
 
 SurfaceVisibilityPrograms SurfaceVisibilityPrograms::resolve(
-    const ShaderRegistry &registry, MaterialBindingMode materialMode) {
+    const ShaderRegistry &registry) {
     SurfaceVisibilityPrograms result;
-    const ShaderProgram &surfaceOpaque =
-        registry.program("surface.prepass-opaque");
-    const ShaderProgram &surfaceMask =
-        registry.program("surface.prepass-mask");
-    result.surfaceVertex = surfaceOpaque.vertSpvPath;
-    for (uint32_t attachments = 0; attachments <= 3; ++attachments) {
-        result.surfaceOpaqueFragments[attachments] =
-            surfaceOpaque.fragmentSpvPath(materialMode, attachments);
-        result.surfaceMaskFragments[attachments] =
-            surfaceMask.fragmentSpvPath(materialMode, attachments);
-    }
+    result.depthHierarchyInitCompute =
+        registry.program("visibility.depth-hierarchy-init").computeSpvPath;
+    result.depthHierarchyReduceCompute =
+        registry.program("visibility.depth-hierarchy-reduce").computeSpvPath;
     result.hiZInitCompute =
         registry.program("visibility.hiz-init").computeSpvPath;
     result.hiZReduceCompute =
@@ -118,6 +100,15 @@ AtmosphereGiPrograms AtmosphereGiPrograms::resolve(
     return result;
 }
 
+DeferredPrograms DeferredPrograms::resolve(const ShaderRegistry &registry) {
+    DeferredPrograms result;
+    result.lightingCompute =
+        registry.program("deferred.lighting").computeSpvPath;
+    result.clusterBuildCompute =
+        registry.program("lighting.cluster-build").computeSpvPath;
+    return result;
+}
+
 PostProcessPrograms PostProcessPrograms::resolve(
     const ShaderRegistry &registry) {
     PostProcessPrograms result;
@@ -134,11 +125,12 @@ PostProcessPrograms PostProcessPrograms::resolve(
 }
 
 RendererProgramCatalog RendererProgramCatalog::resolve(
-    const ShaderRegistry &registry, MaterialBindingMode materialMode) {
-    return {ShadowPrograms::resolve(registry, materialMode),
-            SurfaceVisibilityPrograms::resolve(registry, materialMode),
+    const ShaderRegistry &registry, MaterialBindingMode) {
+    return {ShadowPrograms::resolve(registry),
+            SurfaceVisibilityPrograms::resolve(registry),
             ScreenSpacePrograms::resolve(registry),
             AtmosphereGiPrograms::resolve(registry),
+            DeferredPrograms::resolve(registry),
             PostProcessPrograms::resolve(registry)};
 }
 

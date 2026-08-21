@@ -2,12 +2,39 @@
 
 #include <cstdint>
 #include <limits>
+#include <string_view>
 #include <vulkan/vulkan.h>
 
 namespace vkr {
 
 enum class RgPassType { Graphics, Compute, Transfer, External };
 enum class RgQueueClass { Graphics, Compute, Transfer };
+
+constexpr std::string_view rgPassTypeName(RgPassType type) {
+    switch (type) {
+    case RgPassType::Graphics:
+        return "graphics";
+    case RgPassType::Compute:
+        return "compute";
+    case RgPassType::Transfer:
+        return "transfer";
+    case RgPassType::External:
+        return "external";
+    }
+    return "unknown";
+}
+
+constexpr std::string_view rgQueueClassName(RgQueueClass queue) {
+    switch (queue) {
+    case RgQueueClass::Graphics:
+        return "graphics";
+    case RgQueueClass::Compute:
+        return "compute";
+    case RgQueueClass::Transfer:
+        return "transfer";
+    }
+    return "unknown";
+}
 enum class RgPassCondition {
     Always,
     Atmosphere,
@@ -15,6 +42,10 @@ enum class RgPassCondition {
     PointShadow,
     SpotShadow,
     SurfaceData,
+    GBuffer,
+    DeferredLighting,
+    ClusteredLighting,
+    DepthHierarchy,
     HiZ,
     Occlusion,
     ScreenDepthPyramid,

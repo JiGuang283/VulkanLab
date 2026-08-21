@@ -2,6 +2,7 @@
 
 #include "render/pipeline/PipelineConfig.h"
 #include "render/geometry/RenderItem.h"
+#include "render/shader/ShaderTypes.h"
 
 #include <string>
 #include <vector>
@@ -19,7 +20,7 @@ struct ShadowCasterDrawConfig {
     uint32_t dynamicOffset = 0;
     std::string vertexShader;
     std::string opaqueFragmentShader;
-    std::string maskFragmentShader;
+    MaterialShaderPass maskProgramPass = MaterialShaderPass::PointShadowMask;
     std::string pipelinePrefix;
     bool rasterDepthBias = true;
 };

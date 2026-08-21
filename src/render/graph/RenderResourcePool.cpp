@@ -832,7 +832,84 @@ registerDefaultRendererResources(RenderResourcePool &registry,
         }
     }
 
-    if (device.occlusionCullingSupport().available) {
+    if (device.gBufferSupport().available) {
+        const GBufferSupport &support = device.gBufferSupport();
+        const auto registerGBufferColor =
+            [&](std::string name, VkFormat format) {
+                RenderImageDesc desc{};
+                desc.name = std::move(name);
+                desc.extentPolicy = RenderExtentPolicy::Viewport;
+                desc.multiplicity = RenderResourceMultiplicity::PerFrame;
+                desc.format = format;
+                desc.samples = VK_SAMPLE_COUNT_1_BIT;
+                desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                             VK_IMAGE_USAGE_SAMPLED_BIT;
+                desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+                return registry.registerImage(std::move(desc));
+            };
+
+        RenderImageDesc depth{};
+        depth.name = "GBuffer Depth";
+        depth.extentPolicy = RenderExtentPolicy::Viewport;
+        depth.multiplicity = RenderResourceMultiplicity::PerFrame;
+        depth.format = support.depthFormat;
+        depth.samples = VK_SAMPLE_COUNT_1_BIT;
+        depth.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                      VK_IMAGE_USAGE_SAMPLED_BIT;
+        depth.aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+        handles.gBufferDepth = registry.registerImage(std::move(depth));
+        handles.gBufferBaseColorMetallic = registerGBufferColor(
+            "GBuffer BaseColor Metallic", support.baseColorMetallicFormat);
+        handles.gBufferNormalRoughnessOcclusion = registerGBufferColor(
+            "GBuffer Normal Roughness Occlusion",
+            support.normalRoughnessOcclusionFormat);
+        handles.gBufferEmissiveSurfaceFlags = registerGBufferColor(
+            "GBuffer Emissive Surface Flags",
+            support.emissiveSurfaceFlagsFormat);
+        handles.gBufferMotion = registerGBufferColor(
+            "GBuffer Motion", support.motionFormat);
+    }
+
+    if (device.gBufferSupport().available &&
+        device.computeBloomSupport().available) {
+        const auto registerDeferredOutput =
+            [&](std::string name, bool supportsTransparentComposition) {
+            RenderImageDesc desc{};
+            desc.name = std::move(name);
+            desc.extentPolicy = RenderExtentPolicy::Viewport;
+            desc.multiplicity = RenderResourceMultiplicity::PerFrame;
+            desc.format = device.computeBloomSupport().format;
+            desc.samples = VK_SAMPLE_COUNT_1_BIT;
+            desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                         VK_IMAGE_USAGE_STORAGE_BIT;
+            if (supportsTransparentComposition)
+                desc.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+            desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+            return registry.registerImage(std::move(desc));
+        };
+        handles.deferredHdrColor =
+            registerDeferredOutput("Deferred HDR Color", true);
+        handles.deferredBaselineDiffuse =
+            registerDeferredOutput("Deferred Baseline Diffuse", false);
+        handles.deferredBaselineSpecular =
+            registerDeferredOutput("Deferred Baseline Specular", false);
+    }
+
+    const DepthHierarchySupport &depthHierarchy =
+        device.depthHierarchySupport();
+    if (depthHierarchy.combined()) {
+        RenderImageDesc hierarchy{};
+        hierarchy.name = "Depth Hierarchy Min Max";
+        hierarchy.extentPolicy = RenderExtentPolicy::Viewport;
+        hierarchy.multiplicity = RenderResourceMultiplicity::PerFrame;
+        hierarchy.format = depthHierarchy.format;
+        hierarchy.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                          VK_IMAGE_USAGE_STORAGE_BIT;
+        hierarchy.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        hierarchy.mipPolicy = RenderMipPolicy::FullChain;
+        handles.depthHierarchyMinMax =
+            registry.registerImage(std::move(hierarchy));
+    } else if (device.occlusionCullingSupport().available) {
         RenderImageDesc hiZ{};
         hiZ.name = "Visibility HiZ";
         hiZ.extentPolicy = RenderExtentPolicy::Viewport;
@@ -845,7 +922,8 @@ registerDefaultRendererResources(RenderResourcePool &registry,
         handles.visibilityHiZ = registry.registerImage(std::move(hiZ));
     }
 
-    if (screenSupport.depthPyramidAvailable) {
+    if (!depthHierarchy.combined() &&
+        screenSupport.depthPyramidAvailable) {
         RenderImageDesc depthPyramid{};
         depthPyramid.name = "Screen Depth Pyramid";
         depthPyramid.extentPolicy = RenderExtentPolicy::Viewport;
@@ -1103,6 +1181,10 @@ registerDefaultRendererResources(RenderResourcePool &registry,
             desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
             desc.arrayLayers = ddgiSupported ? kMaxDdgiProbes : 1u;
             desc.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+            // DDGI atlases accumulate across frame-graph executions. The
+            // first active frame still records DDGI/Reset; later frames
+            // import the contents produced by the preceding submission.
+            desc.externallyInitialized = ddgiSupported;
             return registry.registerImage(std::move(desc));
         };
     handles.ddgiIrradiance = registerDdgiImage(
@@ -1203,7 +1285,8 @@ registerDefaultRendererResources(RenderResourcePool &registry,
             registry.registerSampler(std::move(surfaceSampler));
     }
 
-    if (device.occlusionCullingSupport().available) {
+    if (!depthHierarchy.combined() &&
+        device.occlusionCullingSupport().available) {
         RenderSamplerDesc hiZSampler{};
         hiZSampler.name = "Visibility HiZ Sampler";
         hiZSampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
@@ -1214,7 +1297,8 @@ registerDefaultRendererResources(RenderResourcePool &registry,
             registry.registerSampler(std::move(hiZSampler));
     }
 
-    if (screenSupport.depthPyramidAvailable ||
+    if (depthHierarchy.combined() ||
+        screenSupport.depthPyramidAvailable ||
         screenSupport.colorPyramidAvailable) {
         RenderSamplerDesc pyramidSampler{};
         pyramidSampler.name = "Screen Pyramid Sampler";

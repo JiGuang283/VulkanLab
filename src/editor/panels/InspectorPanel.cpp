@@ -1,5 +1,7 @@
 #include "InspectorPanel.h"
 
+#include "editor/EditorIcons.h"
+#include "editor/EditorTheme.h"
 #include "editor/EditorWidgets.h"
 
 #include <imgui.h>
@@ -75,6 +77,22 @@ bool isDescendantOf(const InspectorPanelSnapshot &snapshot,
     return false;
 }
 
+const char *entityIcon(const RuntimeEntitySnapshot &entity) {
+    if (entity.atmosphere)
+        return icons::Environment;
+    if (entity.camera)
+        return icons::Camera;
+    if (entity.light)
+        return entity.light->atmosphereSunIndex ? icons::Sun : icons::Light;
+    if (entity.reflectionProbe)
+        return icons::Image;
+    if (entity.ddgiProbeVolume)
+        return icons::Grid;
+    if (entity.modelInstance)
+        return icons::Model;
+    return icons::Box;
+}
+
 } // namespace
 
 void InspectorPanel::draw(const InspectorPanelSnapshot &snapshot,
@@ -87,6 +105,19 @@ void InspectorPanel::draw(const InspectorPanelSnapshot &snapshot,
             ImGui::TextDisabled("Select an entity in the Outliner.");
         } else {
             const RuntimeEntitySnapshot &entity = *snapshot.entity;
+            if (editor::iconsAvailable()) {
+                ImGui::Text("%s", entityIcon(entity));
+                ImGui::SameLine();
+            }
+            ImGui::TextUnformatted(entity.name.c_str());
+            ImGui::SameLine();
+            if (editor::iconButton("CopyUuid", icons::Copy, "C",
+                                   "Copy entity UUID")) {
+                const std::string id = entity.id.toString();
+                ImGui::SetClipboardText(id.c_str());
+            }
+            ImGui::TextDisabled("%s", entity.id.toString().c_str());
+            ImGui::Separator();
             ImGui::BeginDisabled(!snapshot.editable);
             char name[192]{};
             std::snprintf(name, sizeof(name), "%s", entity.name.c_str());
@@ -98,6 +129,59 @@ void InspectorPanel::draw(const InspectorPanelSnapshot &snapshot,
             bool enabled = entity.enabled;
             if (ImGui::Checkbox("Enabled", &enabled) && actions.setEnabled)
                 actions.setEnabled(entity.id, enabled);
+
+            if (editor::iconButton("AddComponent", icons::Plus, "+",
+                                   "Add component"))
+                ImGui::OpenPopup("Add Component");
+            ImGui::SameLine();
+            ImGui::TextUnformatted("Add Component");
+            if (ImGui::BeginPopup("Add Component")) {
+                if (!entity.modelInstance && ImGui::BeginMenu("Model")) {
+                    for (const InspectorModelOption &model : snapshot.models) {
+                        ImGui::BeginDisabled(!model.instanceable);
+                        if (ImGui::MenuItem(model.displayName.c_str()) &&
+                            actions.setModel) {
+                            actions.setModel(
+                                entity.id,
+                                ModelInstanceDocument{ModelAssetId(model.id)});
+                        }
+                        ImGui::EndDisabled();
+                    }
+                    ImGui::EndMenu();
+                }
+                if (!entity.light && ImGui::MenuItem("Light") &&
+                    actions.setLight) {
+                    actions.setLight(entity.id, LightComponentDocument{});
+                }
+                if (!entity.camera && ImGui::MenuItem("Camera") &&
+                    actions.setCamera) {
+                    actions.setCamera(entity.id, CameraComponentDocument{});
+                }
+                ImGui::BeginDisabled(snapshot.atmospherePresent ||
+                                     entity.parent.has_value());
+                if (!entity.atmosphere &&
+                    ImGui::MenuItem("Sky Atmosphere") &&
+                    actions.setAtmosphere) {
+                    actions.setAtmosphere(
+                        entity.id, AtmosphereComponentDocument{});
+                }
+                ImGui::EndDisabled();
+                if (!entity.reflectionProbe &&
+                    ImGui::MenuItem("Reflection Probe") &&
+                    actions.setReflectionProbe) {
+                    actions.setReflectionProbe(
+                        entity.id, ReflectionProbeComponentDocument{});
+                }
+                ImGui::BeginDisabled(entity.parent.has_value());
+                if (!entity.ddgiProbeVolume &&
+                    ImGui::MenuItem("DDGI Probe Volume") &&
+                    actions.setDdgiProbeVolume) {
+                    actions.setDdgiProbeVolume(
+                        entity.id, DdgiProbeVolumeComponentDocument{});
+                }
+                ImGui::EndDisabled();
+                ImGui::EndPopup();
+            }
 
             const char *parentName = "None";
             if (entity.parent) {

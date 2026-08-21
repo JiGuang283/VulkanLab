@@ -8,12 +8,19 @@ layout(std140, set = 4, binding = 0) uniform ScreenSpaceLightingBuffer {
 
 layout(set = 4, binding = 1) uniform sampler2D filteredScreenSpaceAo;
 
-float screenSpaceAmbientOcclusion()
+float screenSpaceAmbientOcclusionAtUv(vec2 uv)
 {
     if (screenSpaceLighting.modes.y == 0u)
         return 1.0;
-    vec2 uv = gl_FragCoord.xy * screenSpaceLighting.viewportSizeInvSize.zw;
     return clamp(texture(filteredScreenSpaceAo, uv).r, 0.0, 1.0);
 }
+
+#ifndef VKL_SCREEN_SPACE_COMPUTE
+float screenSpaceAmbientOcclusion()
+{
+    vec2 uv = gl_FragCoord.xy * screenSpaceLighting.viewportSizeInvSize.zw;
+    return screenSpaceAmbientOcclusionAtUv(uv);
+}
+#endif
 
 #endif

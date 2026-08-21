@@ -11,13 +11,25 @@
 #include "render/graph/RenderGraph.h"
 #include "render/graph/RenderResourcePool.h"
 #include "render/frame/RenderView.h"
-#include "render/shader/ShaderVariant.h"
+#include "render/shader/ShaderTypes.h"
 #include "diagnostics/Profiling.h"
 #include "diagnostics/TracyProfiler.h"
 
 #include <utility>
 
 namespace vkr {
+
+namespace {
+
+RenderImageHandle skyTarget(const FrameRenderFeatures &features,
+                            const RendererResourceHandles &resources) {
+    if (features.renderPath.active == RenderPathMode::Deferred)
+        return resources.hdrColor;
+    return resources.hdrMsaaColor.valid() ? resources.hdrMsaaColor
+                                          : resources.hdrColor;
+}
+
+} // namespace
 
 SkyBackgroundPass::SkyBackgroundPass(
     Device &device, const RenderResourcePool &,
@@ -69,9 +81,7 @@ void SkyBackgroundPass::setup(
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
     }
     const RenderImageHandle target =
-        resourceHandles_.hdrMsaaColor.valid()
-            ? resourceHandles_.hdrMsaaColor
-            : resourceHandles_.hdrColor;
+        skyTarget(context.features, resourceHandles_);
     builder.addColorAttachment(
         target, RenderImageAccess::ColorAttachmentWrite,
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -86,14 +96,12 @@ void SkyBackgroundPass::recordNode(RenderGraphPassContext &context, uint32_t,
     VKL_PROFILE_ZONE("Record Sky Background");
     VKL_PROFILE_GPU_ZONE(*frame.tracyProfiler, frame.cmd, "Sky Background");
     const RenderImageHandle target =
-        resourceHandles_.hdrMsaaColor.valid()
-            ? resourceHandles_.hdrMsaaColor
-            : resourceHandles_.hdrColor;
+        skyTarget(frame.features, resourceHandles_);
     const VkExtent2D extent = resources.extent(target);
     const bool drawAtmosphere =
-        frame.view && frame.shaderVariant && frame.pipelineCache &&
+        frame.view && frame.viewMode && frame.pipelineCache &&
         frame.atmosphereReady && frame.view->atmosphere.active &&
-        frame.shaderVariant->supportsAtmosphere;
+        frame.viewMode->supportsAtmosphere;
     const bool drawSkybox =
         !drawAtmosphere && frame.environmentReady && frame.view &&
         frame.view->settings.skyboxEnabled && frame.pipelineCache;

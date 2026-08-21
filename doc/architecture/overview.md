@@ -1,8 +1,8 @@
 # 系统架构概览
 
 > Status: Current
-> Last verified: 2026-08-15
-> Verified against: `62f6cc4`
+> Last verified: 2026-08-21
+> Verified against: Forward / Deferred Stage 7 working tree
 
 VulkanLab 是一个开发中的 Windows Vulkan 1.3 实时渲染器。当前架构以
 `Application` 为组合根，以类型化 service、snapshot、action 和 submission
@@ -38,7 +38,7 @@ Application
   Artifact Index、任务状态和统一 UI/Runtime Control workflow action。
 - `SceneRuntimeCoordinator`：Asset/Environment Repository、SceneLoadManager、当前
   和退役 World、异步发布、environment generation、加载统计和 GPU 生命周期。
-- `RenderSettingsController`：Shader variant、requested settings、参数校验、设备
+- `RenderSettingsController`：Render Path、View Mode、requested settings、参数校验、设备
   capability fallback、active runtime state 和 `FrameRenderFeatures` 解析。
 
 `EditorController` 只在 `VKL_ENABLE_EDITOR_UI=ON` 时存在，拥有 Docking workspace、
@@ -59,7 +59,7 @@ Viewport、authoring session、Undo/Redo、panels 和纯 UI 状态。
 | `src/render/geometry/` | Mesh、Vertex、bounds、RenderItem、RenderQueue 和 tangent。 |
 | `src/render/material/` | Texture、Material、fallback resources 和全局 MaterialSystem。 |
 | `src/render/pipeline/` | Graphics/Compute pipeline config、cache 和完整 state key。 |
-| `src/render/shader/` | Shader Manifest registry、variant 和 Renderer program catalog。 |
+| `src/render/shader/` | Shader Manifest registry、Material Shader Family、View Mode 和 Renderer program catalog。 |
 | `src/render/features/` | 按功能族组织的全部 Graph Pass 和算法实现。 |
 | `src/scene/` | `IRenderWorld` 实现、RuntimeWorld、ModelAsset、Repository、GPU builder 和场景加载。 |
 | `src/scene_data/` | 无 Vulkan/Renderer/ImGui 依赖的 SceneDocument DTO、持久 ID、验证和原子存储。 |
@@ -75,7 +75,11 @@ Renderer 的功能目录直接对应维护边界：
 
 ```text
 src/render/features/
-  core_forward/             Forward, Surface, HDR Composite, ToneMap, Present
+  forward/                  Opaque/Transparent Forward drawing
+  deferred/                 Deferred Lighting and path outputs
+  surface/                  SurfacePrepass, GBuffer and Depth Hierarchy
+  lighting/                 Shared Clustered Light Culling
+  post_process/             HDR Composite, ToneMap and Present
   shadows_visibility/       CSM, Point/Spot Shadow, Visibility, Hi-Z
   ambient_occlusion/        SSAO, GTAO, CACAO adapter/backend
   reflections/              SSR

@@ -1,7 +1,7 @@
 # 开发文档工作区
 
 > Status: Current
-> Last verified: 2026-08-15
+> Last verified: 2026-08-21
 > Verified against: `62f6cc4`
 
 本目录只存放正在讨论或执行的开发计划。不要根据历史归档推断下一阶段目标。
@@ -14,6 +14,7 @@
 
 ## Completed Records
 
+- [Forward / Deferred Render Path 与 Material Shader Family](../archive/plans/render_architecture/deferred_render_paths_and_material_shaders_plan.md)：已完成共享 opaque path contract、材质 Shader Family、Deferred GBuffer、Clustered Lighting、Auto 路径策略及 Cooked Runtime 收口。
 - [工程基础到自动视觉回归执行记录](../archive/plans/engineering/engineering_to_visual_regression_execution_plan.md)：已完成 M0-M7，包含提交、自动测试和人工门禁证据。
 - [工程结构与构建系统重构计划](../archive/plans/engineering/engineering_refactor_plan.md)：target、Shader、ProjectContext 与早期 Application 边界设计的历史计划。
 - [渲染器收口与 Application 重构计划](../archive/plans/engineering/renderer_consolidation_and_app_refactor_plan.md)：已完成 Viking/OBJ 退役、Graph 资源驻留、Controller 拆分、Renderer 功能目录和文档收口。

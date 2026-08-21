@@ -1,5 +1,7 @@
 #pragma once
 
+#include "render/path/RenderPathMode.h"
+
 #include <cstdint>
 #include <optional>
 #include <string_view>
@@ -19,6 +21,26 @@ enum class SurfaceDebugView {
     Roughness,
     Motion,
     HistoryValidity,
+};
+
+enum class GBufferDebugView {
+    None,
+    BaseColor,
+    Normal,
+    Metallic,
+    Roughness,
+    Occlusion,
+    Emissive,
+    Motion,
+    SurfaceFlags,
+};
+
+enum class DeferredLightingDebugView {
+    None,
+    FinalColor,
+    BaselineDiffuse,
+    BaselineSpecular,
+    ForwardDifference,
 };
 
 enum class AmbientOcclusionMode {
@@ -496,6 +518,85 @@ surfaceDebugViewFromName(std::string_view name) {
     return std::nullopt;
 }
 
+inline const char *gBufferDebugViewName(GBufferDebugView view) {
+    switch (view) {
+    case GBufferDebugView::None:
+        return "none";
+    case GBufferDebugView::BaseColor:
+        return "base-color";
+    case GBufferDebugView::Normal:
+        return "normal";
+    case GBufferDebugView::Metallic:
+        return "metallic";
+    case GBufferDebugView::Roughness:
+        return "roughness";
+    case GBufferDebugView::Occlusion:
+        return "occlusion";
+    case GBufferDebugView::Emissive:
+        return "emissive";
+    case GBufferDebugView::Motion:
+        return "motion";
+    case GBufferDebugView::SurfaceFlags:
+        return "surface-flags";
+    }
+    return "none";
+}
+
+inline std::optional<GBufferDebugView>
+gBufferDebugViewFromName(std::string_view name) {
+    if (name == "none")
+        return GBufferDebugView::None;
+    if (name == "base-color")
+        return GBufferDebugView::BaseColor;
+    if (name == "normal")
+        return GBufferDebugView::Normal;
+    if (name == "metallic")
+        return GBufferDebugView::Metallic;
+    if (name == "roughness")
+        return GBufferDebugView::Roughness;
+    if (name == "occlusion")
+        return GBufferDebugView::Occlusion;
+    if (name == "emissive")
+        return GBufferDebugView::Emissive;
+    if (name == "motion")
+        return GBufferDebugView::Motion;
+    if (name == "surface-flags")
+        return GBufferDebugView::SurfaceFlags;
+    return std::nullopt;
+}
+
+inline const char *
+deferredLightingDebugViewName(DeferredLightingDebugView view) {
+    switch (view) {
+    case DeferredLightingDebugView::None:
+        return "none";
+    case DeferredLightingDebugView::FinalColor:
+        return "final";
+    case DeferredLightingDebugView::BaselineDiffuse:
+        return "diffuse";
+    case DeferredLightingDebugView::BaselineSpecular:
+        return "specular";
+    case DeferredLightingDebugView::ForwardDifference:
+        return "difference";
+    }
+    return "none";
+}
+
+inline std::optional<DeferredLightingDebugView>
+deferredLightingDebugViewFromName(std::string_view name) {
+    if (name == "none")
+        return DeferredLightingDebugView::None;
+    if (name == "final")
+        return DeferredLightingDebugView::FinalColor;
+    if (name == "diffuse")
+        return DeferredLightingDebugView::BaselineDiffuse;
+    if (name == "specular")
+        return DeferredLightingDebugView::BaselineSpecular;
+    if (name == "difference")
+        return DeferredLightingDebugView::ForwardDifference;
+    return std::nullopt;
+}
+
 struct CullingSettings {
     bool  frustumEnabled = true;
     bool  shadowCullingEnabled = true;
@@ -538,6 +639,7 @@ inline std::optional<ToneMapper> toneMapperFromName(std::string_view name) {
 }
 
 struct RenderSettings {
+    RenderPathRequest renderPath = RenderPathRequest::Auto;
     bool       shadowsEnabled = true;
     float      shadowReceiverBias = 0.0015f;
     float      pointShadowReceiverBiasWorld = 0.02f;
@@ -558,6 +660,9 @@ struct RenderSettings {
     float      environmentIntensity = 1.0f;
     float environmentRotationRadians = 0.0f;
     SurfaceDebugView surfaceDebugView = SurfaceDebugView::None;
+    GBufferDebugView gBufferDebugView = GBufferDebugView::None;
+    DeferredLightingDebugView deferredLightingDebugView =
+        DeferredLightingDebugView::None;
     float surfaceMotionDebugScale = 32.0f;
     AmbientOcclusionMode ambientOcclusionMode = AmbientOcclusionMode::Off;
     SsaoQuality ssaoQuality = SsaoQuality::Medium;
@@ -593,6 +698,7 @@ struct RenderSettings {
 };
 
 struct RenderSettingsPatch {
+    std::optional<RenderPathRequest> renderPath;
     std::optional<bool>       shadowsEnabled;
     std::optional<float>      shadowReceiverBias;
     std::optional<float>      pointShadowReceiverBiasWorld;
@@ -613,6 +719,8 @@ struct RenderSettingsPatch {
     std::optional<float>      environmentIntensity;
     std::optional<float> environmentRotationRadians;
     std::optional<SurfaceDebugView> surfaceDebugView;
+    std::optional<GBufferDebugView> gBufferDebugView;
+    std::optional<DeferredLightingDebugView> deferredLightingDebugView;
     std::optional<float> surfaceMotionDebugScale;
     std::optional<AmbientOcclusionMode> ambientOcclusionMode;
     std::optional<SsaoQuality> ssaoQuality;
@@ -666,6 +774,8 @@ struct RenderSettingsPatch {
 
 inline void applyRenderSettingsPatch(RenderSettings &settings,
                                      const RenderSettingsPatch &patch) {
+    if (patch.renderPath)
+        settings.renderPath = *patch.renderPath;
     if (patch.shadowsEnabled)
         settings.shadowsEnabled = *patch.shadowsEnabled;
     if (patch.shadowReceiverBias)
@@ -709,6 +819,11 @@ inline void applyRenderSettingsPatch(RenderSettings &settings,
     }
     if (patch.surfaceDebugView)
         settings.surfaceDebugView = *patch.surfaceDebugView;
+    if (patch.gBufferDebugView)
+        settings.gBufferDebugView = *patch.gBufferDebugView;
+    if (patch.deferredLightingDebugView)
+        settings.deferredLightingDebugView =
+            *patch.deferredLightingDebugView;
     if (patch.surfaceMotionDebugScale)
         settings.surfaceMotionDebugScale = *patch.surfaceMotionDebugScale;
     if (patch.ambientOcclusionMode)

@@ -3,6 +3,7 @@
 #include "ModelAssetHandle.h"
 #include "ModelGpuBuilder.h"
 #include "ModelPrepareFactory.h"
+#include "render/shader/ShaderTypes.h"
 
 #include <filesystem>
 #include <memory>
@@ -15,6 +16,7 @@ namespace vkr {
 class DescriptorAllocator;
 class Device;
 class MaterialSystem;
+class ShaderRegistry;
 
 enum class ModelAssetRequestPolicy { UseCached, Reload };
 
@@ -55,7 +57,8 @@ struct AssetRepositorySnapshot {
 class AssetRepository {
   public:
     AssetRepository(Device &device, DescriptorAllocator &descriptorAllocator,
-                    MaterialSystem &materialSystem);
+                    MaterialSystem &materialSystem,
+                    const ShaderRegistry &shaderRegistry);
     ~AssetRepository();
 
     AssetRepository(const AssetRepository &) = delete;

@@ -1,4 +1,4 @@
-#include "render/features/core_forward/HdrCompositePass.h"
+#include "render/features/post_process/HdrCompositePass.h"
 
 #include "core/Device.h"
 #include "render/pipeline/ComputePipeline.h"
@@ -51,12 +51,14 @@ void HdrCompositePass::setup(RenderGraphBuilder &builder,
     builder.addNode("ScreenSpaceLightingComposite/Compute",
                     RgPassType::Compute, RgQueueClass::Compute, 0);
     builder.setActive(context.features.lightingCompositeRequired);
-    builder.useImage({resources_.hdrColor, RenderImageAccess::SampledRead,
+    const OpaqueRenderProducts &products =
+        context.features.opaqueProducts;
+    builder.useImage({products.hdrColor, RenderImageAccess::SampledRead,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
     if (context.features.ssrActive) {
         for (RenderImageHandle handle :
-             {resources_.baselineSpecular, resources_.ssrFiltered}) {
+             {products.baselineSpecular, resources_.ssrFiltered}) {
             if (handle.valid()) {
                 builder.useImage({handle, RenderImageAccess::SampledRead,
                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -66,7 +68,7 @@ void HdrCompositePass::setup(RenderGraphBuilder &builder,
     }
     if (context.features.ssgiActive) {
         for (RenderImageHandle handle :
-             {resources_.baselineDiffuse, resources_.ssgiFiltered}) {
+             {products.baselineDiffuse, resources_.ssgiFiltered}) {
             if (handle.valid()) {
                 builder.useImage({handle, RenderImageAccess::SampledRead,
                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -97,9 +99,11 @@ void HdrCompositePass::recordComposite(
                             resources_.ssgiFiltered.valid();
     if (!frame.pipelineCache || (!ssrActive && !ssgiActive))
         return;
-    updateDescriptor(resources, frame.frameIndex, ssrActive, ssgiActive);
+    const OpaqueRenderProducts &products = frame.features.opaqueProducts;
+    updateDescriptor(resources, frame.frameIndex, ssrActive, ssgiActive,
+                     products);
     struct CompositePush { glm::uvec4 dimensions{}; } push;
-    const VkExtent2D extent = resources.extent(resources_.hdrColor);
+    const VkExtent2D extent = resources.extent(products.hdrColor);
     push.dimensions = {ssrActive ? 1u : 0u, ssgiActive ? 1u : 0u,
                        extent.width, extent.height};
     ComputePipelineConfig config{};
@@ -163,13 +167,17 @@ void HdrCompositePass::createDescriptors(
             {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5},
              {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1}},
             "ScreenSpaceLightingComposite/Frame" + std::to_string(frame));
-        updateDescriptor(registry, frame, false, false);
+        updateDescriptor(
+            registry, frame, false, false,
+            vkr::opaqueRenderProducts(RenderPathMode::Forward, resources_,
+                                      false));
     }
 }
 
 void HdrCompositePass::updateDescriptor(
     const RenderResourcePool &registry, uint32_t frame,
-    bool ssrActive, bool ssgiActive) {
+    bool ssrActive, bool ssgiActive,
+    const OpaqueRenderProducts &products) {
     if (descriptorSets_[frame] == VK_NULL_HANDLE) {
         throw std::logic_error(
             "screen-space lighting composite descriptor set is unavailable");
@@ -180,11 +188,11 @@ void HdrCompositePass::updateDescriptor(
     const VkSampler ssgiSampler = resources_.ssgiSampler.valid()
         ? registry.sampler(resources_.ssgiSampler) : hdrSampler;
     const VkImageView fallback =
-        registry.image(resources_.hdrColor, frame).imageView();
+        registry.image(products.hdrColor, frame).imageView();
     const VkImageView baselineSpecular =
-        ssrActive && resources_.baselineSpecular.valid() &&
-                registry.resident(resources_.baselineSpecular)
-        ? registry.image(resources_.baselineSpecular, frame).imageView()
+        ssrActive && products.baselineSpecular.valid() &&
+                registry.resident(products.baselineSpecular)
+        ? registry.image(products.baselineSpecular, frame).imageView()
         : fallback;
     const VkImageView ssr =
         ssrActive && resources_.ssrFiltered.valid() &&
@@ -192,9 +200,9 @@ void HdrCompositePass::updateDescriptor(
         ? registry.image(resources_.ssrFiltered, frame).imageView()
         : fallback;
     const VkImageView baselineDiffuse =
-        ssgiActive && resources_.baselineDiffuse.valid() &&
-                registry.resident(resources_.baselineDiffuse)
-        ? registry.image(resources_.baselineDiffuse, frame).imageView()
+        ssgiActive && products.baselineDiffuse.valid() &&
+                registry.resident(products.baselineDiffuse)
+        ? registry.image(products.baselineDiffuse, frame).imageView()
         : fallback;
     const VkImageView ssgi =
         ssgiActive && resources_.ssgiFiltered.valid() &&

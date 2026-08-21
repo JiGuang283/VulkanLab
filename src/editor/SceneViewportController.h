@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EditorDockWorkspace.h"
+#include "EditorTypes.h"
 #include "scene_data/SceneIds.h"
 
 #include <glm/glm.hpp>
@@ -12,9 +13,6 @@
 namespace vkr {
 
 class SceneEditorSession;
-
-enum class GizmoOperation { Select, Translate, Rotate, Scale };
-enum class GizmoSpace { Local, World };
 
 struct SceneViewportCamera {
     glm::mat4 view{1.0f};
@@ -29,6 +27,9 @@ struct SceneViewportActions {
         instantiateModel;
     std::function<std::string(const std::string &)> modelDisplayName;
     std::function<void(std::string)> reportError;
+    bool showBounds = true;
+    bool showLights = true;
+    bool showProbes = true;
 };
 
 class SceneViewportController {
@@ -48,6 +49,10 @@ class SceneViewportController {
     bool manipulationActive() const { return manipulationActive_; }
     bool blocksViewportInput() const;
     void cancelManipulation();
+    GizmoOperation operation() const { return operation_; }
+    GizmoSpace space() const { return space_; }
+    void setOperation(GizmoOperation operation) { operation_ = operation; }
+    void setSpace(GizmoSpace space) { space_ = space; }
 
   private:
     static std::optional<Ray>

@@ -1,6 +1,8 @@
 #include "ScenesPanel.h"
 
 #include "editor/EditorDragDrop.h"
+#include "editor/EditorIcons.h"
+#include "editor/EditorTheme.h"
 #include "editor/EditorWidgets.h"
 
 #include <imgui.h>
@@ -44,11 +46,17 @@ editor::StatusTone statusTone(const std::string &state, bool available) {
     return editor::StatusTone::Neutral;
 }
 
+std::string compactLabel(const std::string &value, size_t limit = 24) {
+    if (value.size() <= limit)
+        return value;
+    return value.substr(0, limit - 3) + "...";
+}
+
 } // namespace
 
 void ScenesPanel::draw(const SceneWorkflowSnapshot &snapshot,
                        const SceneWorkflowActions &actions,
-                       bool modelsOnly) {
+                       bool modelsOnly, ContentBrowserViewMode viewMode) {
     if (!modelsOnly) {
         ImGui::SetNextItemWidth(-92.0f);
         ImGui::InputTextWithHint("##SceneSearch", "Search scenes...",
@@ -65,6 +73,11 @@ void ScenesPanel::draw(const SceneWorkflowSnapshot &snapshot,
         }
         ImGui::BeginChild("NativeSceneBrowser", ImVec2(0.0f, 0.0f),
                           ImGuiChildFlags_Borders);
+        const float tileWidth = 150.0f;
+        const int columns = std::max(
+            1, static_cast<int>(ImGui::GetContentRegionAvail().x /
+                                (tileWidth + ImGui::GetStyle().ItemSpacing.x)));
+        int visibleIndex = 0;
         for (const SceneWorkflowItemSnapshot &item : snapshot.nativeScenes) {
             if (!containsIgnoreCase(item.displayName, search_.data()) &&
                 !containsIgnoreCase(item.id, search_.data())) {
@@ -73,7 +86,32 @@ void ScenesPanel::draw(const SceneWorkflowSnapshot &snapshot,
             ImGui::PushID(item.id.c_str());
             ImGui::BeginDisabled(!item.available);
             const bool selected = item.index == snapshot.selectedIndex;
-            if (ImGui::Selectable(item.displayName.c_str(), selected)) {
+            bool activated = false;
+            if (viewMode == ContentBrowserViewMode::Grid) {
+                std::string label;
+                if (editor::iconsAvailable()) {
+                    label = icons::Scene;
+                    label += "\n";
+                }
+                label += compactLabel(item.displayName);
+                if (selected)
+                    ImGui::PushStyleColor(
+                        ImGuiCol_Button,
+                        ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+                activated = ImGui::Button(label.c_str(),
+                                          ImVec2(tileWidth, 58.0f));
+                if (selected)
+                    ImGui::PopStyleColor();
+            } else {
+                std::string label;
+                if (editor::iconsAvailable()) {
+                    label = icons::Scene;
+                    label += "  ";
+                }
+                label += item.displayName;
+                activated = ImGui::Selectable(label.c_str(), selected);
+            }
+            if (activated) {
                 if (actions.selectModel)
                     actions.selectModel(item.index);
                 if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
@@ -92,6 +130,9 @@ void ScenesPanel::draw(const SceneWorkflowSnapshot &snapshot,
                 ImGui::SameLine();
                 ImGui::TextDisabled("Open");
             }
+            if (viewMode == ContentBrowserViewMode::Grid &&
+                (++visibleIndex % columns) != 0)
+                ImGui::SameLine();
             ImGui::PopID();
         }
         ImGui::EndChild();
@@ -137,7 +178,13 @@ void ScenesPanel::draw(const SceneWorkflowSnapshot &snapshot,
                 snapshot.enginePrimitives[index];
             ImGui::PushID(primitive.id.c_str());
             ImGui::BeginDisabled(!primitive.canInstantiate);
-            ImGui::Button(primitive.displayName.c_str(),
+            std::string primitiveLabel;
+            if (editor::iconsAvailable()) {
+                primitiveLabel = icons::Box;
+                primitiveLabel += "  ";
+            }
+            primitiveLabel += primitive.displayName;
+            ImGui::Button(primitiveLabel.c_str(),
                           ImVec2(itemWidth, 30.0f));
             ImGui::EndDisabled();
             if (primitive.canInstantiate && ImGui::BeginDragDropSource()) {
@@ -173,7 +220,8 @@ void ScenesPanel::draw(const SceneWorkflowSnapshot &snapshot,
     const ImGuiTableFlags flags =
         ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg |
         ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_ScrollY;
-    if (ImGui::BeginTable("ModelPreviewTable", 2, flags)) {
+    if (viewMode == ContentBrowserViewMode::List &&
+        ImGui::BeginTable("ModelPreviewTable", 2, flags)) {
         ImGui::TableSetupColumn("Model", ImGuiTableColumnFlags_WidthStretch,
                                 0.72f);
         ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed,
@@ -233,6 +281,55 @@ void ScenesPanel::draw(const SceneWorkflowSnapshot &snapshot,
                                     reason);
         }
         ImGui::EndTable();
+    } else if (viewMode == ContentBrowserViewMode::Grid) {
+        const float tileWidth = 150.0f;
+        const int columns = std::max(
+            1, static_cast<int>(ImGui::GetContentRegionAvail().x /
+                                (tileWidth + ImGui::GetStyle().ItemSpacing.x)));
+        int visibleIndex = 0;
+        for (const SceneWorkflowItemSnapshot &item : snapshot.models) {
+            if (!containsIgnoreCase(item.displayName, search) &&
+                !containsIgnoreCase(item.id, search))
+                continue;
+            ImGui::PushID(item.id.c_str());
+            ImGui::BeginDisabled(!item.available);
+            std::string label;
+            if (editor::iconsAvailable()) {
+                label = icons::Model;
+                label += "\n";
+            }
+            label += compactLabel(item.displayName);
+            const bool selected = item.index == snapshot.selectedIndex;
+            if (selected)
+                ImGui::PushStyleColor(
+                    ImGuiCol_Button,
+                    ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            const bool activated =
+                ImGui::Button(label.c_str(), ImVec2(tileWidth, 64.0f));
+            if (selected)
+                ImGui::PopStyleColor();
+            if (activated && actions.selectModel)
+                actions.selectModel(item.index);
+            if (activated && ImGui::IsMouseDoubleClicked(
+                                 ImGuiMouseButton_Left) &&
+                actions.loadPreview)
+                actions.loadPreview(item.index);
+            ImGui::EndDisabled();
+            if (item.canInstantiate && ImGui::BeginDragDropSource()) {
+                ImGui::SetDragDropPayload(
+                    editor::kModelAssetPayload, item.id.c_str(),
+                    item.id.size() + 1);
+                ImGui::TextUnformatted(item.displayName.c_str());
+                ImGui::TextDisabled("Drop into the Viewport");
+                ImGui::EndDragDropSource();
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("%s\n%s", item.id.c_str(),
+                                  item.artifactState.c_str());
+            if ((++visibleIndex % columns) != 0)
+                ImGui::SameLine();
+            ImGui::PopID();
+        }
     }
     ImGui::EndChild();
 

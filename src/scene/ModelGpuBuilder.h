@@ -9,6 +9,7 @@
 #include <exception>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace vkr {
@@ -44,6 +45,9 @@ class ModelGpuBuilder {
         SceneLoadStats *stats = nullptr;
         std::shared_ptr<std::atomic_bool> cancellation;
         std::shared_ptr<MaterialTemplate> materialTemplate;
+        std::unordered_map<std::string,
+                           std::shared_ptr<MaterialTemplate>>
+            materialTemplates;
     };
 
     ModelGpuBuilder(Device &device, MaterialSystem &materialSystem,

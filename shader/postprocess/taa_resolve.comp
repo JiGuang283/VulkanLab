@@ -1,6 +1,7 @@
 #version 450
 
 #extension GL_GOOGLE_include_directive : require
+#include "include/surface_encoding.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -57,25 +58,6 @@ vec3 currentAt(ivec2 pixel, ivec2 size)
     return texelFetch(currentColor, clamp(pixel, ivec2(0), size - 1), 0).rgb;
 }
 
-void nearestSurfaceMotion(ivec2 pixel, ivec2 size, out float depth,
-                          out vec4 surface, out vec2 motion)
-{
-    depth = 1.0;
-    ivec2 selected = pixel;
-    for (int y = -1; y <= 1; ++y) {
-        for (int x = -1; x <= 1; ++x) {
-            ivec2 candidate = clamp(pixel + ivec2(x, y), ivec2(0), size - 1);
-            float candidateDepth = texelFetch(currentDepth, candidate, 0).r;
-            if (candidateDepth < depth) {
-                depth = candidateDepth;
-                selected = candidate;
-            }
-        }
-    }
-    surface = texelFetch(currentNormalRoughness, selected, 0);
-    motion = texelFetch(currentMotion, selected, 0).xy;
-}
-
 vec2 skyPreviousUv(vec2 uv)
 {
     vec4 world = taa.currentInverseViewProjection *
@@ -105,10 +87,9 @@ void main()
 
     vec2 uv = (vec2(pixel) + 0.5) * taa.viewportSizeInvSize.zw;
     vec3 current = currentAt(pixel, size);
-    float depth;
-    vec4 surface;
-    vec2 motion;
-    nearestSurfaceMotion(pixel, size, depth, surface, motion);
+    float depth = texelFetch(currentDepth, pixel, 0).r;
+    vec4 surface = texelFetch(currentNormalRoughness, pixel, 0);
+    vec2 motion = texelFetch(currentMotion, pixel, 0).xy;
 
     bool sky = depth >= 0.999999;
     vec2 previousUv;
@@ -132,7 +113,11 @@ void main()
             vec3 oldNormal = octDecode(oldSurface.rg);
             float motionPixels = length(motion * taa.viewportSizeInvSize.xy);
             float depthThreshold = 0.0015 + motionPixels * 0.00015;
-            valid = surface.a > 0.5 && oldSurface.a > 0.5 &&
+            valid =
+                (vklDecodeSurfaceFlags(surface.a) &
+                 VKL_SURFACE_FLAG_HISTORY_VALID_BIT) != 0u &&
+                (vklDecodeSurfaceFlags(oldSurface.a) &
+                 VKL_SURFACE_FLAG_HISTORY_VALID_BIT) != 0u &&
                     abs(depth - oldDepth) <= depthThreshold &&
                     dot(currentNormal, oldNormal) >= 0.75;
         }
@@ -174,16 +159,15 @@ void main()
                               ? clamp(taa.parameters.x, 0.0, 0.99) *
                                     motionConfidence * colorConfidence
                               : 0.0;
-    // Transparent geometry is absent from SurfacePrepass. Without a reactive
-    // mask, cap temporal reuse conservatively whenever the frame contains it.
-    if (taa.flags.w != 0u)
-        historyWeight = min(historyWeight, 0.5);
     if (taa.flags.z != 0u)
         historyWeight = min(historyWeight, 0.1);
     vec3 resolved = mix(current, clippedHistory, historyWeight);
     crossAverage *= 0.2;
-    resolved += (current - crossAverage) *
-                clamp(taa.parameters.y, 0.0, 1.0);
+    // Sharpening the jittered current sample directly exposes the sample
+    // sequence. Fade sharpening as temporal confidence grows instead.
+    resolved += (resolved - crossAverage) *
+                clamp(taa.parameters.y, 0.0, 1.0) *
+                (1.0 - historyWeight);
     resolved = max(resolved, vec3(0.0));
 
     imageStore(resolvedHistory, pixel, vec4(resolved, 1.0));

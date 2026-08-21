@@ -11,6 +11,9 @@ struct SceneLight;
 
 inline constexpr uint32_t kDirectionalShadowMapSize = 2048;
 inline constexpr uint32_t kCsmCascadeCount = 4;
+inline constexpr float kCsmGuardBandRatio = 0.10f;
+inline constexpr float kCsmBlendRatio = 0.10f;
+inline constexpr float kCsmRadiusQuantization = 1.0f / 16.0f;
 
 struct DirectionalShadowFrameData {
     glm::mat4 lightViewProjection{1.0f};
@@ -25,8 +28,13 @@ struct DirectionalShadowFrameData {
 
 struct CsmCascadeData {
     glm::mat4 lightViewProjection{1.0f};
+    float nearDistance = 0.0f;
     float splitDistance = 0.0f;
+    float blendStartDistance = 0.0f;
+    float stableRadius = 0.0f;
+    float worldUnitsPerTexel = 0.0f;
     float texelSize = 0.0f;
+    bool valid = false;
 };
 
 struct CsmFrameData {

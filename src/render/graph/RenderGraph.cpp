@@ -432,6 +432,14 @@ bool conditionActive(RgPassCondition condition,
         return features.spotShadowRequired;
     case RgPassCondition::SurfaceData:
         return features.surfaceDataRequired;
+    case RgPassCondition::GBuffer:
+        return features.gBufferRequired;
+    case RgPassCondition::DeferredLighting:
+        return features.deferredLightingRequired;
+    case RgPassCondition::ClusteredLighting:
+        return features.clusteredLightingRequired;
+    case RgPassCondition::DepthHierarchy:
+        return features.depthHierarchyRequired;
     case RgPassCondition::HiZ:
         return features.hiZRequired;
     case RgPassCondition::Occlusion:
@@ -475,6 +483,8 @@ uint64_t featureKey(
     hashCombine(key, features.directionalShadowCascadeCount);
     hashCombine(key, features.pointShadowLightCount);
     hashCombine(key, features.spotShadowLightCount);
+    hashCombine(key, static_cast<uint64_t>(features.renderPath.active));
+    hashCombine(key, features.forwardOpaqueRequired);
     hashCombine(key, features.atmosphereRequired);
     hashCombine(key, features.transparentRequired);
     hashCombine(key, features.directionalShadowRequired);
@@ -484,6 +494,11 @@ uint64_t featureKey(
     hashCombine(key, features.surfaceNormalsRequired);
     hashCombine(key, features.surfaceMotionRequired);
     hashCombine(key, features.surfaceAlbedoRequired);
+    hashCombine(key, features.gBufferRequired);
+    hashCombine(key, features.deferredLightingRequired);
+    hashCombine(key, features.clusteredLightingRequired);
+    hashCombine(key, features.punctualLightCount);
+    hashCombine(key, features.depthHierarchyRequired);
     hashCombine(key, features.hiZRequired);
     hashCombine(key, features.occlusionRequired);
     hashCombine(key, features.screenDepthPyramidRequired);
@@ -534,8 +549,15 @@ RenderGraphDiagnostics makeDiagnostics(
     std::unordered_set<uint32_t> activeImages;
     std::unordered_map<uint32_t, uint32_t> resourceRows;
     std::unordered_map<uint32_t, uint32_t> bufferRows;
+    const auto appendPass = [&diagnostics, &compiled](uint32_t passIndex,
+                                                      bool active) {
+        const RenderGraphPassDeclaration &pass = compiled.passes[passIndex];
+        diagnostics.passes.push_back(
+            {pass.name, pass.groupName, pass.type, pass.queue, active});
+    };
     for (uint32_t passIndex : compiled.executionOrder) {
         const auto &pass = compiled.passes[passIndex];
+        appendPass(passIndex, true);
         diagnostics.executionOrder.push_back(pass.name);
         for (const auto &image : pass.images) {
             activeImages.insert(image.physical.image.index);
@@ -621,8 +643,10 @@ RenderGraphDiagnostics makeDiagnostics(
             }
         }
     }
-    for (uint32_t passIndex : compiled.culledPasses)
+    for (uint32_t passIndex : compiled.culledPasses) {
+        appendPass(passIndex, false);
         diagnostics.culledNames.push_back(compiled.passes[passIndex].name);
+    }
     for (uint32_t image : activeImages) {
         if (image != kInvalidRenderResource)
             diagnostics.activeImageBytes += resources.estimatedBytes({image});
@@ -1641,7 +1665,21 @@ std::string RenderGraph::toJson() const {
         << ",\"logicalImageBytes\":" << diagnostics_.logicalImageBytes
         << ",\"residentImageBytes\":" << diagnostics_.residentImageBytes
         << ",\"retiringImageBytes\":" << diagnostics_.retiringImageBytes
-        << ",\"executionOrder\":[";
+        << ",\"passes\":[";
+    for (size_t i = 0; i < diagnostics_.passes.size(); ++i) {
+        if (i)
+            out << ',';
+        const auto &pass = diagnostics_.passes[i];
+        out << "{\"name\":" << quote(pass.name)
+            << ",\"group\":" << quote(pass.groupName)
+            << ",\"type\":"
+            << quote(std::string(rgPassTypeName(pass.type)))
+            << ",\"queue\":"
+            << quote(std::string(rgQueueClassName(pass.queue)))
+            << ",\"active\":" << (pass.active ? "true" : "false")
+            << '}';
+    }
+    out << "],\"executionOrder\":[";
     for (size_t i = 0; i < diagnostics_.executionOrder.size(); ++i) {
         if (i)
             out << ',';
@@ -1718,11 +1756,38 @@ std::string RenderGraph::toJson() const {
 std::string RenderGraph::toDot() const {
     std::ostringstream out;
     out << "digraph RenderGraph {\n  rankdir=LR;\n";
+    std::vector<std::string> groups;
+    std::unordered_map<std::string, std::vector<uint32_t>> groupedPasses;
     for (uint32_t index = 0; index < compiled_.passes.size(); ++index) {
-        const auto &pass = compiled_.passes[index];
-        out << "  p" << index << " [label=\"" << pass.name
-            << "\", style=filled, fillcolor=\""
-            << (pass.active ? "#b7e4c7" : "#d9d9d9") << "\"];\n";
+        const std::string &group = compiled_.passes[index].groupName;
+        auto [it, inserted] = groupedPasses.try_emplace(group);
+        if (inserted)
+            groups.push_back(group);
+        it->second.push_back(index);
+    }
+    for (uint32_t groupIndex = 0; groupIndex < groups.size(); ++groupIndex) {
+        const std::string &group = groups[groupIndex];
+        out << "  subgraph cluster_g" << groupIndex << " {\n"
+            << "    label=\"" << group << "\";\n"
+            << "    color=\"#9aa0a6\";\n";
+        for (uint32_t index : groupedPasses.at(group)) {
+            const auto &pass = compiled_.passes[index];
+            const char *typeColor =
+                pass.type == RgPassType::Graphics
+                    ? "#b7e4c7"
+                    : pass.type == RgPassType::Compute
+                          ? "#bde0fe"
+                          : pass.type == RgPassType::Transfer
+                                ? "#ffe8a1"
+                                : "#d8c4f1";
+            out << "    p" << index << " [label=\"" << pass.name
+                << "\", style=filled, fillcolor=\""
+                << (pass.active ? typeColor : "#d9d9d9")
+                << "\", tooltip=\""
+                << rgPassTypeName(pass.type) << " / "
+                << rgQueueClassName(pass.queue) << "\"];\n";
+        }
+        out << "  }\n";
     }
     for (const auto &edge : compiled_.dependencies) {
         out << "  p" << edge.producer << " -> p" << edge.consumer;

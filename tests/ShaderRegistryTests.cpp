@@ -89,24 +89,24 @@ bool loadFailsWith(const ShaderRegistryFixture &fixture,
     return false;
 }
 
-void testRegistryLoadsAndSortsVariants() {
+void testRegistryLoadsAndSortsViewModes() {
     ShaderRegistryFixture fixture;
     fixture.write(validManifest());
     const vkr::ShaderRegistry registry =
         vkr::ShaderRegistry::load(fixture.manifest());
-    requireRegistry(registry.variants().size() == 2,
-                    "shader variants were not loaded");
-    requireRegistry(registry.variants()[0].id == "first" &&
-                        registry.variants()[1].id == "second",
-                    "shader variants were not sorted by order");
-    requireRegistry(registry.defaultVariant().id == "first",
-                    "default shader variant was not selected");
-    requireRegistry(registry.findVariant("first") != nullptr &&
-                        registry.findVariant("FIRST") != nullptr &&
-                        registry.findVariant("second") != nullptr,
+    requireRegistry(registry.viewModes().size() == 2,
+                    "view modes were not loaded");
+    requireRegistry(registry.viewModes()[0].id == "first" &&
+                        registry.viewModes()[1].id == "second",
+                    "view modes were not sorted by order");
+    requireRegistry(registry.defaultViewMode().id == "first",
+                    "default view mode was not selected");
+    requireRegistry(registry.findViewMode("first") != nullptr &&
+                        registry.findViewMode("FIRST") != nullptr &&
+                        registry.findViewMode("second") != nullptr,
                     "shader ID/display-name lookup failed");
     requireRegistry(
-        registry.defaultVariant().toneMapping ==
+        registry.defaultViewMode().toneMapping ==
             vkr::ShaderToneMappingPolicy::Configurable,
         "shader tone mapping policy was not parsed");
     requireRegistry(registry.spirvPaths().size() == 2,
@@ -146,7 +146,7 @@ void testProjectManifestPreservesPublicVariants() {
         std::filesystem::absolute(VKL_TEST_SHADER_ROOT).lexically_normal();
     const vkr::ShaderRegistry registry =
         vkr::ShaderRegistry::load(shaderRoot / "manifest.json");
-    static constexpr std::array<std::string_view, 14> expectedIds = {
+    static constexpr std::array<std::string_view, 15> expectedIds = {
         "legacy-forward",
         "pbr-lite-forward",
         "pbr-lite-normal-mapped",
@@ -159,20 +159,21 @@ void testProjectManifestPreservesPublicVariants() {
         "debug-alpha",
         "debug-transmission",
         "debug-shadow",
+        "debug-shadow-cascades",
         "debug-ibl-diffuse",
         "debug-ibl-specular",
     };
-    requireRegistry(registry.variants().size() == expectedIds.size(),
-                    "project shader variant count changed");
+    requireRegistry(registry.viewModes().size() == expectedIds.size(),
+                    "project view mode count changed");
     for (size_t index = 0; index < expectedIds.size(); ++index) {
-        requireRegistry(registry.variants()[index].id == expectedIds[index],
-                        "project shader variant order changed");
+        requireRegistry(registry.viewModes()[index].id == expectedIds[index],
+                        "project view mode order changed");
     }
-    requireRegistry(registry.defaultVariant().id ==
+    requireRegistry(registry.defaultViewMode().id ==
                         "pbr-lite-normal-mapped",
                     "project default shader variant changed");
     requireRegistry(
-        registry.defaultVariant().toneMapping ==
+        registry.defaultViewMode().toneMapping ==
             vkr::ShaderToneMappingPolicy::Configurable,
         "project default shader must use configurable tone mapping");
     requireRegistry(registry.findProgram("shadow.opaque") != nullptr &&
@@ -184,21 +185,42 @@ void testProjectManifestPreservesPublicVariants() {
                             "postprocess.bloom-downsample") != nullptr &&
                         registry.findProgram(
                             "postprocess.bloom-upsample") != nullptr &&
+                        registry.findProgram(
+                            "gbuffer.default-lit-opaque") != nullptr &&
+                        registry.findProgram(
+                            "gbuffer.default-lit-mask") != nullptr &&
                         registry.findProgram("skybox") != nullptr &&
                         registry.findProgram(
                             "atmosphere.transmittance") != nullptr &&
-                        registry.findProgram("atmosphere.sky") != nullptr,
+                        registry.findProgram("atmosphere.sky") != nullptr &&
+                        registry.findProgram("deferred.lighting") != nullptr,
                     "required internal shader program is missing");
-    requireRegistry(registry.defaultVariant().supportsBloom,
+    const vkr::ShaderProgram *deferredLighting =
+        registry.findProgram("deferred.lighting");
+    requireRegistry(deferredLighting != nullptr &&
+                        deferredLighting->contract ==
+                            vkr::ShaderProgramContract::DeferredLighting,
+                    "deferred lighting program contract mismatch");
+    requireRegistry(registry.defaultViewMode().supportsBloom,
                     "project default shader must support Bloom");
-    requireRegistry(registry.defaultVariant().supportsAtmosphere,
+    requireRegistry(registry.defaultViewMode().supportsAtmosphere,
                     "project default shader must support Atmosphere");
-    requireRegistry(registry.defaultVariant().supportsScreenSpace,
+    requireRegistry(registry.defaultViewMode().supportsScreenSpace,
                     "project default shader must support screen-space effects");
+    const vkr::ShaderProgram &defaultProgram = registry.materialProgram(
+        registry.defaultMaterialShaderFamily(),
+        vkr::MaterialShaderPass::ForwardOpaque,
+        &registry.defaultViewMode());
     requireRegistry(registry.supportsBindlessMaterials() &&
-                        !registry.defaultVariant()
-                             .bindlessFragSpvPath.empty(),
+                        !defaultProgram.bindlessFragSpvPath.empty(),
                     "project material shaders must provide bindless variants");
+    const vkr::ShaderProgram &gBufferProgram = registry.materialProgram(
+        registry.defaultMaterialShaderFamily(),
+        vkr::MaterialShaderPass::GBufferOpaque);
+    requireRegistry(gBufferProgram.contract ==
+                        vkr::ShaderProgramContract::GBuffer &&
+                        !gBufferProgram.bindlessFragSpvPath.empty(),
+                    "default material family must provide a bindless GBuffer program");
 }
 
 void testRegistryRejectsDuplicateDisplayName() {
@@ -298,7 +320,7 @@ void testRegistryRejectsUnknownPolicyAndStageConflict() {
 } // namespace
 
 void runShaderRegistryTests() {
-    testRegistryLoadsAndSortsVariants();
+    testRegistryLoadsAndSortsViewModes();
     testRegistryLoadsMaterialBindingVariants();
     testProjectManifestPreservesPublicVariants();
     testRegistryRejectsDuplicateDisplayName();

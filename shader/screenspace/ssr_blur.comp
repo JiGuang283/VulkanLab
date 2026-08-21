@@ -21,12 +21,31 @@ vec3 octDecode(vec2 e) {
     return normalize(n);
 }
 
+ivec2 nearestSurfacePixel(ivec2 halfPixel)
+{
+    ivec2 fullSize = ivec2(push.dimensions.xy);
+    ivec2 base = halfPixel * 2;
+    ivec2 selected = min(base, fullSize - 1);
+    float selectedDepth = 1.0;
+    for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 2; ++x) {
+            ivec2 candidate = min(base + ivec2(x, y), fullSize - 1);
+            float depth = texelFetch(surfaceDepth, candidate, 0).r;
+            if (depth < selectedDepth) {
+                selectedDepth = depth;
+                selected = candidate;
+            }
+        }
+    }
+    return selected;
+}
+
 void main()
 {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     ivec2 size = imageSize(destination);
     if (any(greaterThanEqual(pixel, size))) return;
-    ivec2 fullPixel = min(pixel * 2, ivec2(push.dimensions.xy) - 1);
+    ivec2 fullPixel = nearestSurfacePixel(pixel);
     float centerDepth = texelFetch(surfaceDepth, fullPixel, 0).r;
     vec3 centerNormal = octDecode(texelFetch(surfaceNormalRoughness,
                                              fullPixel, 0).rg);
@@ -35,7 +54,7 @@ void main()
     float total = 0.0;
     for (int offset = -2; offset <= 2; ++offset) {
         ivec2 p = clamp(pixel + axis * offset, ivec2(0), size - 1);
-        ivec2 fp = min(p * 2, ivec2(push.dimensions.xy) - 1);
+        ivec2 fp = nearestSurfacePixel(p);
         float depth = texelFetch(surfaceDepth, fp, 0).r;
         vec3 normal = octDecode(texelFetch(surfaceNormalRoughness, fp, 0).rg);
         float spatial = offset == 0 ? 0.4 : (abs(offset) == 1 ? 0.24 : 0.06);

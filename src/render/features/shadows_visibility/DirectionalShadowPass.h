@@ -22,8 +22,7 @@ class DirectionalShadowPass final : public IRenderPass {
                           const RenderResourcePool &resources,
                           RenderImageHandle shadowDepth,
                           VkDescriptorSetLayout globalDescriptorSetLayout,
-                          std::string shadowVertPath,
-                          std::string shadowMaskFragPath);
+                          std::string shadowVertPath);
     ~DirectionalShadowPass() override;
 
     DirectionalShadowPass(const DirectionalShadowPass &) = delete;
@@ -53,7 +52,6 @@ class DirectionalShadowPass final : public IRenderPass {
     RenderImageHandle shadowDepth_{};
     VkDescriptorSetLayout globalDescriptorSetLayout_ = VK_NULL_HANDLE;
     std::string shadowVertPath_;
-    std::string shadowMaskFragPath_;
     VkFormat depthFormat_ = VK_FORMAT_UNDEFINED;
 };
 

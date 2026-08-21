@@ -73,21 +73,39 @@ void requireEnumInRange(const std::optional<Enum> &value, Enum last,
 RenderSettingsController::RenderSettingsController(
     const std::filesystem::path &manifestPath)
     : shaderRegistry_(ShaderRegistry::load(manifestPath)),
-      currentShaderVariantId_(shaderRegistry_.defaultVariant().id) {}
+      currentViewModeId_(shaderRegistry_.defaultViewMode().id) {}
 
-const ShaderVariant &RenderSettingsController::currentShaderVariant() const {
-    const ShaderVariant *variant =
-        shaderRegistry_.findVariant(currentShaderVariantId_);
-    if (!variant)
-        throw std::logic_error("current shader variant is not registered");
-    return *variant;
+const ViewMode &RenderSettingsController::currentViewMode() const {
+    const ViewMode *viewMode =
+        shaderRegistry_.findViewMode(currentViewModeId_);
+    if (!viewMode)
+        throw std::logic_error("current view mode is not registered");
+    return *viewMode;
 }
 
-void RenderSettingsController::setShaderVariant(const std::string &id) {
-    const ShaderVariant *variant = shaderRegistry_.findVariant(id);
-    if (!variant || variant->id != id)
-        throw RenderSettingsError("invalid_shader", "Invalid shader ID.");
-    currentShaderVariantId_ = variant->id;
+void RenderSettingsController::setViewMode(const std::string &id) {
+    const ViewMode *viewMode = shaderRegistry_.findViewMode(id);
+    if (!viewMode || viewMode->id != id)
+        throw RenderSettingsError("invalid_view_mode", "Invalid view mode ID.");
+    if (settings_.renderPath == RenderPathRequest::Deferred &&
+        !viewMode->supportsDeferred) {
+        throw RenderSettingsError(
+            "view_mode_unsupported",
+            "The selected view mode is Forward-only while Deferred is "
+            "forced.");
+    }
+    currentViewModeId_ = viewMode->id;
+}
+
+RenderPathSelection RenderSettingsController::renderPathSelection() const {
+    RenderPathCapabilities capabilities{};
+    capabilities.forward = true;
+    capabilities.deferred = support_.gBuffer.supported &&
+                            support_.deferredLighting.supported;
+    capabilities.gBuffer = support_.gBuffer.supported;
+    capabilities.forwardTransparent = true;
+    return resolveRenderPath(settings_.renderPath, capabilities,
+                             currentViewMode().supportsDeferred);
 }
 
 void RenderSettingsController::configure(RenderFeatureSupport support,
@@ -104,6 +122,30 @@ void RenderSettingsController::updateRuntimeState(
 
 void RenderSettingsController::validatePatch(
     const RenderSettingsPatch &patch) const {
+    if (patch.renderPath &&
+        *patch.renderPath == RenderPathRequest::Deferred) {
+        if (configured_ &&
+            (!support_.gBuffer.supported ||
+             !support_.deferredLighting.supported)) {
+            throw RenderSettingsError(
+                "render_path_unsupported",
+                "Deferred rendering is unavailable on this device.");
+        }
+        if (!currentViewMode().supportsDeferred) {
+            throw RenderSettingsError(
+                "render_path_unsupported",
+                "The active view mode is Forward-only.");
+        }
+    }
+    if (patch.deferredLightingDebugView &&
+        *patch.deferredLightingDebugView ==
+            DeferredLightingDebugView::ForwardDifference &&
+        settings_.renderPath == RenderPathRequest::Deferred) {
+        throw RenderSettingsError(
+            "render_path_unsupported",
+            "Forward difference debug is unavailable while Deferred is "
+            "forced.");
+    }
     for (const auto &[label, value] :
          std::initializer_list<
              std::pair<const char *, const std::optional<float> *>>{
@@ -162,6 +204,12 @@ void RenderSettingsController::validatePatch(
     requireEnumInRange(patch.surfaceDebugView,
                        SurfaceDebugView::HistoryValidity,
                        "surfaceDebugView");
+    requireEnumInRange(patch.gBufferDebugView,
+                       GBufferDebugView::SurfaceFlags,
+                       "gBufferDebugView");
+    requireEnumInRange(patch.deferredLightingDebugView,
+                       DeferredLightingDebugView::ForwardDifference,
+                       "deferredLightingDebugView");
     requireEnumInRange(patch.ambientOcclusionMode,
                        AmbientOcclusionMode::Gtao,
                        "ambientOcclusionMode");
@@ -204,6 +252,19 @@ void RenderSettingsController::validatePatch(
         !support_.surfaceData.supported) {
         unsupported("surface_data_unsupported", "Surface data",
                     support_.surfaceData);
+    }
+    if (patch.gBufferDebugView &&
+        *patch.gBufferDebugView != GBufferDebugView::None &&
+        !support_.gBuffer.supported) {
+        unsupported("gbuffer_unsupported", "Deferred GBuffer",
+                    support_.gBuffer);
+    }
+    if (patch.deferredLightingDebugView &&
+        *patch.deferredLightingDebugView !=
+            DeferredLightingDebugView::None &&
+        !support_.deferredLighting.supported) {
+        unsupported("deferred_lighting_unsupported", "Deferred lighting",
+                    support_.deferredLighting);
     }
     if (patch.ambientOcclusionMode) {
         switch (*patch.ambientOcclusionMode) {
@@ -252,6 +313,28 @@ void RenderSettingsController::validatePatch(
         throw RenderSettingsError(
             "conflicting_debug_views",
             "Surface and screen-space debug views cannot be active together.");
+    }
+    const bool surfaceDebugRequested =
+        patch.surfaceDebugView &&
+        *patch.surfaceDebugView != SurfaceDebugView::None;
+    const bool gBufferDebugRequested =
+        patch.gBufferDebugView &&
+        *patch.gBufferDebugView != GBufferDebugView::None;
+    const bool deferredLightingDebugRequested =
+        patch.deferredLightingDebugView &&
+        *patch.deferredLightingDebugView !=
+            DeferredLightingDebugView::None;
+    const bool screenDebugRequested =
+        patch.screenSpaceDebugView &&
+        *patch.screenSpaceDebugView != ScreenSpaceDebugView::None;
+    if ((gBufferDebugRequested && surfaceDebugRequested) ||
+        (gBufferDebugRequested && screenDebugRequested) ||
+        (deferredLightingDebugRequested && surfaceDebugRequested) ||
+        (deferredLightingDebugRequested && gBufferDebugRequested) ||
+        (deferredLightingDebugRequested && screenDebugRequested)) {
+        throw RenderSettingsError(
+            "conflicting_debug_views",
+            "Deferred lighting, GBuffer, Surface, and screen-space debug views are mutually exclusive.");
     }
     if (!patch.screenSpaceDebugView)
         return;
@@ -358,13 +441,37 @@ void RenderSettingsController::apply(const RenderSettingsPatch &patch) {
     validatePatch(patch);
     RenderSettings next = settings_;
     applyRenderSettingsPatch(next, patch);
+    if (patch.renderPath &&
+        *patch.renderPath == RenderPathRequest::Deferred &&
+        next.deferredLightingDebugView ==
+            DeferredLightingDebugView::ForwardDifference) {
+        next.deferredLightingDebugView =
+            DeferredLightingDebugView::None;
+    }
     if (patch.surfaceDebugView &&
         *patch.surfaceDebugView != SurfaceDebugView::None) {
+        next.screenSpaceDebugView = ScreenSpaceDebugView::None;
+        next.gBufferDebugView = GBufferDebugView::None;
+        next.deferredLightingDebugView = DeferredLightingDebugView::None;
+    }
+    if (patch.gBufferDebugView &&
+        *patch.gBufferDebugView != GBufferDebugView::None) {
+        next.surfaceDebugView = SurfaceDebugView::None;
+        next.screenSpaceDebugView = ScreenSpaceDebugView::None;
+        next.deferredLightingDebugView = DeferredLightingDebugView::None;
+    }
+    if (patch.deferredLightingDebugView &&
+        *patch.deferredLightingDebugView !=
+            DeferredLightingDebugView::None) {
+        next.surfaceDebugView = SurfaceDebugView::None;
+        next.gBufferDebugView = GBufferDebugView::None;
         next.screenSpaceDebugView = ScreenSpaceDebugView::None;
     }
     if (patch.screenSpaceDebugView &&
         *patch.screenSpaceDebugView != ScreenSpaceDebugView::None) {
         next.surfaceDebugView = SurfaceDebugView::None;
+        next.gBufferDebugView = GBufferDebugView::None;
+        next.deferredLightingDebugView = DeferredLightingDebugView::None;
     }
     normalize(next);
 
@@ -377,15 +484,20 @@ void RenderSettingsController::apply(const RenderSettingsPatch &patch) {
 
 RenderSettings RenderSettingsController::activeSettings() const {
     RenderSettings active = settings_;
-    const ShaderVariant &shader = currentShaderVariant();
+    const ViewMode &viewMode = currentViewMode();
     active.bloomEnabled = active.bloomEnabled && support_.bloom.supported &&
-                          shader.supportsBloom;
+                          viewMode.supportsBloom;
     active.culling.occlusionEnabled =
         active.culling.occlusionEnabled && support_.occlusionCulling.supported;
     if (!support_.surfaceData.supported)
         active.surfaceDebugView = SurfaceDebugView::None;
+    if (!support_.gBuffer.supported)
+        active.gBufferDebugView = GBufferDebugView::None;
+    if (!support_.deferredLighting.supported)
+        active.deferredLightingDebugView =
+            DeferredLightingDebugView::None;
 
-    const bool screenSpaceShader = shader.supportsScreenSpace;
+    const bool screenSpaceShader = viewMode.supportsScreenSpace;
     if (!screenSpaceShader ||
         (active.ambientOcclusionMode == AmbientOcclusionMode::Ssao &&
          !support_.ssao.supported) ||
@@ -401,7 +513,7 @@ RenderSettings RenderSettingsController::activeSettings() const {
         active.reflectionMode = ReflectionMode::IblOnly;
 
     const bool ssgi = screenSpaceShader && support_.ssgi.supported;
-    const bool ddgi = shader.supportsDdgi && support_.ddgi.supported;
+    const bool ddgi = viewMode.supportsDdgi && support_.ddgi.supported;
     switch (active.globalIlluminationMode) {
     case GlobalIlluminationMode::AmbientOrIbl:
         break;
@@ -431,9 +543,10 @@ RenderSettingsSnapshot RenderSettingsController::snapshot() const {
     result.active = activeSettings();
     result.support = support_;
     result.runtime = runtime_;
-    const ShaderVariant &shader = currentShaderVariant();
-    result.shaderVariantId = shader.id;
-    result.shaderDisplayName = shader.displayName;
+    result.renderPath = renderPathSelection();
+    const ViewMode &viewMode = currentViewMode();
+    result.viewModeId = viewMode.id;
+    result.viewModeDisplayName = viewMode.displayName;
     return result;
 }
 

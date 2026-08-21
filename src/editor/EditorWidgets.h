@@ -24,4 +24,15 @@ bool segmentedControl(const char *id, int &selected,
                       const char *const *labels, size_t labelCount,
                       float totalWidth = 0.0f);
 
+bool iconButton(const char *id, const char *icon, const char *fallback,
+                const char *tooltip, ImVec2 size = {});
+bool toggleIconButton(const char *id, const char *icon,
+                      const char *fallback, const char *tooltip,
+                      bool active, ImVec2 size = {});
+void statusChip(const char *label, StatusTone tone);
+bool sectionHeader(const char *label, bool *enabled = nullptr,
+                   StatusTone tone = StatusTone::Neutral,
+                   const char *status = nullptr);
+bool resetButton(const char *id, const char *tooltip = "Reset");
+
 } // namespace vkr::editor

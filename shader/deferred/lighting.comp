@@ -1,0 +1,85 @@
+#version 450
+
+#extension GL_GOOGLE_include_directive : require
+#define VKL_SCREEN_SPACE_COMPUTE 1
+
+#include "include/global_frame.glsl"
+#include "include/surface_encoding.glsl"
+#include "include/screen_space_lighting.glsl"
+#include "include/pbr_surface_lighting.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 1, binding = 0) uniform sampler2D gBufferBaseColorMetallic;
+layout(set = 1, binding = 1) uniform sampler2D gBufferNormalRoughnessOcclusion;
+layout(set = 1, binding = 2) uniform sampler2D gBufferEmissiveSurfaceFlags;
+layout(set = 1, binding = 3) uniform sampler2D gBufferDepth;
+layout(set = 1, binding = 4) uniform sampler2D forwardBackground;
+layout(rgba16f, set = 1, binding = 5) uniform writeonly image2D deferredHdr;
+layout(rgba16f, set = 1, binding = 6) uniform writeonly image2D deferredDiffuse;
+layout(rgba16f, set = 1, binding = 7) uniform writeonly image2D deferredSpecular;
+
+vec3 reconstructWorldPosition(vec2 uv, float depth)
+{
+    vec4 world = ubo.inverseViewProjection *
+        vec4(uv * 2.0 - 1.0, depth, 1.0);
+    return world.xyz / max(abs(world.w), 1.0e-6);
+}
+
+void storeDeferred(ivec2 pixel, vec3 color, vec3 diffuse, vec3 specular,
+                   float materialOcclusion)
+{
+    imageStore(deferredHdr, pixel, vec4(color, 1.0));
+    imageStore(deferredDiffuse, pixel,
+               vec4(diffuse, materialOcclusion));
+    imageStore(deferredSpecular, pixel, vec4(specular, 1.0));
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 extent = imageSize(deferredHdr);
+    if (any(greaterThanEqual(pixel, extent)))
+        return;
+
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(extent);
+    float depth = texelFetch(gBufferDepth, pixel, 0).r;
+    if (depth >= 1.0 - 1.0e-7) {
+        vec3 background = texelFetch(forwardBackground, pixel, 0).rgb;
+        storeDeferred(pixel, background, vec3(0.0), vec3(0.0), 1.0);
+        return;
+    }
+
+    vec4 baseColorMetallic =
+        texelFetch(gBufferBaseColorMetallic, pixel, 0);
+    vec4 normalRoughnessOcclusion =
+        texelFetch(gBufferNormalRoughnessOcclusion, pixel, 0);
+    vec4 emissiveSurfaceFlags =
+        texelFetch(gBufferEmissiveSurfaceFlags, pixel, 0);
+    uint surfaceFlags = vklDecodeSurfaceFlags(emissiveSurfaceFlags.a);
+    uint shadingModel = vklDecodeShadingModel(surfaceFlags);
+
+    if (shadingModel == VKL_SHADING_MODEL_UNLIT) {
+        storeDeferred(pixel, baseColorMetallic.rgb, vec3(0.0),
+                      vec3(0.0), normalRoughnessOcclusion.a);
+        return;
+    }
+
+    PbrSurfaceLightingInput surface;
+    surface.positionWS = reconstructWorldPosition(uv, depth);
+    surface.normalWS = vklOctDecode(normalRoughnessOcclusion.xy);
+    surface.baseColor = baseColorMetallic.rgb;
+    surface.roughness = normalRoughnessOcclusion.z;
+    surface.metallic = baseColorMetallic.a;
+    surface.materialOcclusion = normalRoughnessOcclusion.a;
+    surface.emissive = emissiveSurfaceFlags.rgb;
+    surface.receivesScreenAo =
+        (surfaceFlags & VKL_SURFACE_FLAG_RECEIVES_SCREEN_AO_BIT) != 0u
+            ? 1u : 0u;
+
+    PbrSurfaceLightingResult lighting = vklEvaluatePbrSurfaceLighting(
+        surface, screenSpaceAmbientOcclusionAtUv(uv));
+    vklApplyPbrAerialPerspective(lighting, surface.positionWS);
+    storeDeferred(pixel, lighting.color, lighting.baselineDiffuse,
+                  lighting.baselineSpecular, surface.materialOcclusion);
+}

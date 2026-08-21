@@ -72,6 +72,15 @@ struct PunctualShadowSelection {
     bool focused = false;
 };
 
+struct CsmCascadeDiagnostics {
+    float nearDistance = 0.0f;
+    float splitDistance = 0.0f;
+    float blendStartDistance = 0.0f;
+    float stableRadius = 0.0f;
+    float worldUnitsPerTexel = 0.0f;
+    bool valid = false;
+};
+
 struct RenderViewLightStats {
     uint32_t effectiveLights = 0;
     uint32_t directionalLights = 0;
@@ -82,6 +91,7 @@ struct RenderViewLightStats {
     uint32_t ignoredLights = 0;
     uint32_t pointShadowLights = 0;
     uint32_t spotShadowLights = 0;
+    std::array<CsmCascadeDiagnostics, kCsmCascadeCount> csmCascades{};
     std::vector<PunctualShadowSelection> pointShadowSelections;
     std::vector<PunctualShadowSelection> spotShadowSelections;
     std::vector<PersistentEntityId> ignoredEntityIds;

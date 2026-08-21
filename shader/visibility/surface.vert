@@ -9,6 +9,7 @@ layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inTexCoord;
 layout(location = 3) in vec4 inTangent;
+layout(location = 4) in vec2 inTexCoord1;
 layout(location = 5) in vec4 inColor;
 
 layout(location = 0) out vec3 fragNormalWS;
@@ -18,6 +19,7 @@ layout(location = 3) out vec4 fragColor;
 layout(location = 4) out vec4 fragCurrentClip;
 layout(location = 5) out vec4 fragPreviousClip;
 layout(location = 6) flat out uint fragHistoryValid;
+layout(location = 7) out vec2 fragTexCoord1;
 
 void main()
 {
@@ -34,6 +36,7 @@ void main()
     fragNormalWS = normalWS;
     fragTangentWS = vec4(tangentWS, inTangent.w);
     fragTexCoord = inTexCoord;
+    fragTexCoord1 = inTexCoord1;
     fragColor = inColor;
     fragHistoryValid = surfaceFrame.params.x != 0u &&
                        history.params.x != 0u ? 1u : 0u;

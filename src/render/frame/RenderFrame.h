@@ -1,5 +1,7 @@
 #pragma once
 
+#include "render/path/RenderPath.h"
+
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -10,14 +12,18 @@ namespace vkr {
 class GpuDebugUtils;
 class PipelineCache;
 class MaterialSystem;
+class ShaderRegistry;
 class TracyProfiler;
 struct RenderView;
-struct ShaderVariant;
+struct ViewMode;
 struct GpuVisibilityDrawStream;
 
 enum class FrameCaptureSource { Viewport, Workspace, Hdr };
 
 struct FrameRenderFeatures {
+    RenderPathSelection renderPath{};
+    OpaqueRenderProducts opaqueProducts{};
+    bool forwardOpaqueRequired = true;
     bool atmosphereRequired = false;
     bool transparentRequired = false;
     bool directionalShadowRequired = false;
@@ -30,6 +36,11 @@ struct FrameRenderFeatures {
     bool surfaceNormalsRequired = false;
     bool surfaceMotionRequired = false;
     bool surfaceAlbedoRequired = false;
+    bool gBufferRequired = false;
+    bool deferredLightingRequired = false;
+    bool clusteredLightingRequired = false;
+    uint32_t punctualLightCount = 0;
+    bool depthHierarchyRequired = false;
     bool hiZRequired = false;
     bool occlusionRequired = false;
     bool screenDepthPyramidRequired = false;
@@ -52,6 +63,12 @@ struct FrameRenderFeatures {
     bool bloomRequired = false;
     bool captureRequired = false;
     std::optional<FrameCaptureSource> captureSource;
+
+    RenderImageHandle postLightingHdr(
+        const RendererResourceHandles &resources) const {
+        return vkr::postLightingHdr(opaqueProducts, resources,
+                                    lightingCompositeRequired);
+    }
 };
 
 struct RenderFrameContext {
@@ -73,12 +90,16 @@ struct RenderFrameContext {
     VkDescriptorSetLayout screenSpaceDescriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorSet ddgiDescriptorSet = VK_NULL_HANDLE;
     VkDescriptorSetLayout ddgiDescriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSet clusteredLightingDescriptorSet = VK_NULL_HANDLE;
+    VkDescriptorSetLayout clusteredLightingDescriptorSetLayout =
+        VK_NULL_HANDLE;
     PipelineCache  *pipelineCache = nullptr;
     MaterialSystem *materialSystem = nullptr;
+    const ShaderRegistry *shaderRegistry = nullptr;
     const GpuDebugUtils *debugUtils = nullptr;
     const TracyProfiler *tracyProfiler = nullptr;
     std::function<void(VkCommandBuffer)> drawUi;
-    const ShaderVariant *shaderVariant = nullptr;
+    const ViewMode *viewMode = nullptr;
     const RenderView *view = nullptr;
     bool environmentReady = false;
     bool atmosphereReady = false;

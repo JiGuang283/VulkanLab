@@ -74,11 +74,15 @@ struct alignas(16) GlobalFrameUbo {
     glm::uvec4 lightCounts;
     glm::mat4 cascadeViewProj[kCsmCascadeCount];
     glm::vec4 cascadeSplits{0.0f};
+    glm::vec4 cascadeBlendStarts{0.0f};
     glm::vec4 shadowParams{0.0f};
     glm::ivec4 punctualShadowCounts{0};
     glm::vec4 punctualShadowParams{0.0f};
     glm::mat4 spotShadowViewProj[kMaxSpotShadowLights];
     glm::vec4 environmentParams{0.0f};
+    glm::uvec4 clusterGrid{0u};
+    glm::uvec4 clusterViewport{0u};
+    glm::vec4 clusterDepthParams{0.0f};
 };
 
 // Shared by atmosphere compute, sky, and PBR fragment programs (std140).
@@ -136,6 +140,10 @@ struct alignas(16) ToneMapPushConstants {
     uint32_t screenDebugMip = 0;
     float cameraNear = 0.1f;
     float cameraFar = 1000.0f;
+    uint32_t gBufferDebugMode = 0;
+    uint32_t deferredLightingDebugMode = 0;
+    uint32_t reserved1 = 0;
+    uint32_t reserved2 = 0;
 };
 
 struct alignas(16) BloomPushConstants {
@@ -158,7 +166,7 @@ static_assert(offsetof(GpuLight, positionRange) == 0);
 static_assert(offsetof(GpuLight, directionInnerCos) == 16);
 static_assert(offsetof(GpuLight, colorIntensity) == 32);
 static_assert(offsetof(GpuLight, params) == 48);
-static_assert(sizeof(GlobalFrameUbo) == 832);
+static_assert(sizeof(GlobalFrameUbo) == 896);
 static_assert(sizeof(AtmosphereGpuParams) == 192);
 static_assert(sizeof(SurfaceFrameUbo) == 96);
 static_assert(sizeof(ScreenSpaceLightingUbo) == 32);
@@ -185,11 +193,15 @@ static_assert(offsetof(GlobalFrameUbo, ambientColorIntensity) == 208);
 static_assert(offsetof(GlobalFrameUbo, lightCounts) == 224);
 static_assert(offsetof(GlobalFrameUbo, cascadeViewProj) == 240);
 static_assert(offsetof(GlobalFrameUbo, cascadeSplits) == 496);
-static_assert(offsetof(GlobalFrameUbo, shadowParams) == 512);
-static_assert(offsetof(GlobalFrameUbo, punctualShadowCounts) == 528);
-static_assert(offsetof(GlobalFrameUbo, punctualShadowParams) == 544);
-static_assert(offsetof(GlobalFrameUbo, environmentParams) == 816);
-static_assert(sizeof(ToneMapPushConstants) == 48);
+static_assert(offsetof(GlobalFrameUbo, cascadeBlendStarts) == 512);
+static_assert(offsetof(GlobalFrameUbo, shadowParams) == 528);
+static_assert(offsetof(GlobalFrameUbo, punctualShadowCounts) == 544);
+static_assert(offsetof(GlobalFrameUbo, punctualShadowParams) == 560);
+static_assert(offsetof(GlobalFrameUbo, environmentParams) == 832);
+static_assert(offsetof(GlobalFrameUbo, clusterGrid) == 848);
+static_assert(offsetof(GlobalFrameUbo, clusterViewport) == 864);
+static_assert(offsetof(GlobalFrameUbo, clusterDepthParams) == 880);
+static_assert(sizeof(ToneMapPushConstants) == 64);
 static_assert(offsetof(ToneMapPushConstants, exposureEv) == 0);
 static_assert(offsetof(ToneMapPushConstants, bloomIntensity) == 4);
 static_assert(offsetof(ToneMapPushConstants, toneMapper) == 8);
@@ -202,6 +214,8 @@ static_assert(offsetof(ToneMapPushConstants, screenDebugMode) == 32);
 static_assert(offsetof(ToneMapPushConstants, screenDebugMip) == 36);
 static_assert(offsetof(ToneMapPushConstants, cameraNear) == 40);
 static_assert(offsetof(ToneMapPushConstants, cameraFar) == 44);
+static_assert(offsetof(ToneMapPushConstants, gBufferDebugMode) == 48);
+static_assert(offsetof(ToneMapPushConstants, deferredLightingDebugMode) == 52);
 static_assert(sizeof(BloomPushConstants) == 16);
 
 } // namespace vkr

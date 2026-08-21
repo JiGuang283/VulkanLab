@@ -8,6 +8,7 @@ namespace vkr {
 
 class Device;
 class DescriptorAllocator;
+struct OpaqueRenderProducts;
 
 class HdrCompositePass final : public IRenderPass {
   public:
@@ -44,7 +45,8 @@ class HdrCompositePass final : public IRenderPass {
     void createDescriptors(const RenderResourcePool &resources);
     void updateDescriptor(const RenderResourcePool &resources,
                           uint32_t frameIndex, bool ssrActive,
-                          bool ssgiActive);
+                          bool ssgiActive,
+                          const OpaqueRenderProducts &products);
     void recordComposite(const RenderFrameContext &frame,
                          const RenderResourcePool &resources);
     void freeDescriptors();

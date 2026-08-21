@@ -1,209 +1,132 @@
-# 编辑器 Docking 与 Scene Viewport
+# 编辑器工作区与 Scene Viewport
 
 > Status: Current
-> Last verified: 2026-08-15
-> Verified against: Bindless Material Resources v1
+> Last verified: 2026-08-21
+> Verified against: Forward / Deferred Stage 7 working tree
 
-VulkanLab 的开发 UI 使用 Dear ImGui `v1.92.7-docking`，在主 GLFW
-窗口内创建一个全屏 DockSpace。Viewport、Outliner、Inspector、Scenes、Assets、
-Render、Materials 和 Diagnostics 是可以停靠、合并为 Tab、浮动或隐藏的独立窗口。
-
-当前没有启用 ImGui Multi-viewports，不会为工具窗口创建额外的操作系统窗口。
-
-## 默认布局
-
-首次运行时，宽度不低于 `1100px` 使用 Viewport preset：
+VulkanLab 的开发编辑器基于 Dear ImGui docking branch。当前界面按三类主要工作流组织：
 
 ```text
-┌ View / Layout ─── Scene ─── FPS / GPU / Loading ┐
-│ Outliner        │      Viewport        │Inspector│
-│ Scenes / Assets │                      │Render/Mat│
-└─────────────────┴──────────────────────┴─────────┘
+Scene    -> 场景层级、Viewport、Inspector、Content Browser
+LookDev  -> 材质、灯光、环境和渲染效果
+Debug    -> RenderGraph、性能、资源和任务诊断
 ```
 
-- Outliner 位于左上，Scenes 与 Assets 位于左下同一节点。
-- Inspector 位于右上，Render 与 Materials 位于右下同一节点。
-- Diagnostics 默认隐藏，但已经停靠到左侧节点，可通过 View 菜单打开。
-- Viewport 默认停靠在中央节点，显示 Renderer 生成的 per-frame Viewport Color。
-- 窗口宽度小于 `1100px` 时首次使用 Compact preset，只显示 Scenes 和 Render
-  两个侧栏 Tab；Assets、Materials 和 Diagnostics 可从 View 菜单按需打开。
+编辑器仍使用单个操作系统窗口和单个 Scene Viewport，不启用 ImGui Multi-viewports。
 
-左右面板使用目标像素宽度和上下限计算，常见窗口下 Render 属性标签不会因
-面板过窄而被默认裁切，超宽屏下也不会无上限占用场景区域。
+## 工作区
 
-用户拖动后的节点、Tab 和浮动窗口状态由 `imgui.ini` 保存。程序不会在普通窗口
-resize 时重排用户布局。DockSpace v3 会执行一次布局迁移；删除现有 ini 或选择
-布局 preset 可以恢复预设结构。
+`Workspace` 菜单提供以下预设：
 
-`Layout` 提供三种 preset：
+- `Scene`：左侧 Outliner 和 Content Browser，中央 Viewport，右侧 Inspector。
+- `LookDev`：左侧 Content Browser，中央 Viewport，右侧 Inspector、Render 和 Materials。
+- `Debug`：Render、Viewport、Inspector 为主要区域，底部 Diagnostics 默认展开。
+- `Compact`：工具页合并到单个侧栏，适合窄窗口。
 
-- `Viewport`：左右工具栏和最大化的中央 Viewport，Diagnostics 默认隐藏。
-- `Debugging`：在 Viewport 下方增加约 28% 高度的 Diagnostics。
-- `Compact`：所有工具都预先停靠在单个侧栏，默认只打开 Scenes 和 Render。
+窗口首次运行时会根据可用宽度选择 `Scene` 或 `Compact`。`Reset Current Layout` 可恢复当前预设。`Ctrl+Space` 临时最大化或恢复 Viewport。
 
-## 菜单与状态
+Scene 和 LookDev 的底部区域默认只显示状态栏。状态栏包含当前场景、Dirty 标记、活动任务、FPS、GPU frame time 和错误数量。点击左侧抽屉按钮可展开 `Tasks / Performance / Load Stats / Capture`，高度可在 `180-360px` 之间拖动。
 
-DockSpace 顶部菜单栏提供：
+## 本机偏好
 
-- `File`：New/Open/Save/Save As/Close Native Scene，以及把当前模型预览转换为 SceneDocument。
-- `Edit`：Undo/Redo。
-- `View`：显示或隐藏 Viewport、Outliner、Inspector、Scenes、Assets、Render、Materials 和 Diagnostics。
-- `Layout -> Viewport/Debugging/Compact`：应用指定工作区 preset。
-- `Layout -> Reset Current Layout`：恢复当前 preset 的默认节点结构。
-- 状态区：当前 Scene、FPS、可用时的 GPU frame time，以及活跃加载任务的
-  阶段和完成百分比。
+编辑器状态不写入项目目录。每个项目使用独立目录：
 
-Dock Tab 不显示关闭按钮，减少窄节点中的标签占用。窗口显隐统一由 View 菜单
-控制。
+```text
+%LOCALAPPDATA%/VulkanLab/Editor/<projectId>/
+  preferences.json
+  layout.ini
+```
 
-## 视觉与控件约定
+`preferences.json` 当前保存：
 
-Editor 使用中性深灰主题和 Windows Segoe UI，字体与间距按 GLFW content scale
-初始化。蓝色只用于当前选择和交互焦点；绿色、黄色、红色和青色分别表示 Ready、
-Stale/Warning、Error 和 Loading。
+- 工作区预设和底部抽屉状态。
+- Content Browser 列表/网格模式。
+- Render Advanced 状态。
+- Viewport Gizmo operation/space 和 overlay 状态。
+- Editor Camera 移动速度。
 
-`EditorWidgets` 统一提供属性表、状态点、路径值、空状态和分段模式选择。长路径在
-容器中裁剪，悬停显示完整值，右键复制。UI helper 不持有 Application、Scene 或
-Vulkan 对象。
+偏好修改采用 1 秒 debounce 和同目录原子替换；退出前强制 flush。损坏的偏好文件会记录 warning 并回退默认值。旧 `Viewport`/`Debugging` 预设分别迁移为 `Scene`/`Debug`。
 
-## 工具窗口
+## Content Browser
 
-### Scenes
+独立的 Scenes 和 Assets 窗口已合并为 `Content Browser`。它提供：
 
-Scenes 只显示 Catalog v3 的 Native Scene Documents。双击或点击 Load 会启动事务式
-Native Scene 加载；当前文档在列表中标记为 Open。加载期间旧 World 继续渲染，详细阶段、
-模型解析进度和 Cancel 位于窗口底部。
+- `All`、`Scenes`、`Models / Primitives`、`Environments` 分类。
+- 列表和固定尺寸图标网格。
+- 场景、模型、基础几何体和环境类型图标。
+- 模型 artifact/validation 状态和环境派生状态。
 
-### Assets
+双击 Native Scene 会打开场景；双击 Model 会进入 Model Preview。可实例化的 Model 和 Primitive 可拖入 Native Scene Viewport。模型导入、Validator、Reimport、派生缓存构建和 Environment 操作继续使用原有事务与异步任务系统。
 
-Assets 包含 `Models`、`Environments` 与 `Jobs / Cache` 三个 Tab。Models 管理导入、
-Validator、预览、重导入和模型派生资源；Environments 管理 HDR 导入及 IBL artifact；
-Jobs / Cache 显示项目 cache、当前任务、取消、日志和历史。
+Jobs/Cache 不再占用独立资产页面，统一显示在底部 `Tasks`。场景加载、模型验证/导入、BC7、环境构建和 Capture 的终态只产生一次 notification；错误通知保持显示，可直接展开 Tasks。
 
-打开 Native Scene 后，可实例化的 glTF 模型行可以直接拖入 Viewport。拖动 payload
-只保存稳定 `modelId`；释放后创建 root Model Entity，并复用 AssetRepository 的异步
-绑定与共享 GPU 资源。缺失模型或没有 Native Scene 会话时不会提供拖放。
+## Render 与诊断
 
-### Outliner 与 Inspector
+Render 面板按用途分为：
 
-Outliner 显示 Native Scene 的实体层级，支持搜索、单选、创建 Empty/Model/三类 Light/
-Camera/Sky Atmosphere/Reflection Probe/DDGI Probe Volume、重命名、enabled、复制和删除 subtree。一个 Scene 最多创建一个
-Sky Atmosphere和一个 DDGI Probe Volume；Atmosphere 只能位于 Scene Root。Inspector 的 Entity 页编辑 parent、局部
-Translation/Euler Rotation/Scale，以及 Model、Light、Camera、Atmosphere、Reflection Probe 和 DDGI component；Scene 页编辑
-ambient、environment 和 active camera。Parent picker 使用 Keep Local。
+- `Output`：Render Path、View Mode、Texture Limit、Exposure 和 Tone Mapper。
+- `Lighting`：Shadow、场景灯、Sun、Environment、IBL 和 Atmosphere。
+- `Effects`：AO、TAA、SSR、SSGI/DDGI、Bloom 等后处理和间接光效果。
+- `Visibility`：Frustum、Distance、Small Object、Shadow 和 Hi-Z Occlusion culling。
+- `Camera`：位置、移动速度、clip plane 和 Scene bounds。
 
-Outliner 的 Entity 可以拖到另一个 Entity，或拖到显式 `Scene Root` 行解除父子关系。
-这条拖放路径使用 Keep World：系统先保存旧 world matrix，再计算并分解新 local TRS。
-如果父级非均匀缩放与旋转形成无法用 TRS 表示的 shear，操作以
-`transform_not_decomposable` 原子失败，原层级与 Transform 保持不变。
+`Advanced` 只改变控件可见性，不修改 `RenderSettings`。Surface Data 和算法内部状态放入 Advanced 或底部 Diagnostics；资源尺寸、generation、history reset、GPU pass time 和 RenderGraph 信息不占用日常调参区域。
 
-删除 active Camera 或移除其 Camera component 会被拒绝，必须先指定另一台 Camera。
-Directional、Point 和 Spot 共享 256 盏有效灯光上限。超限灯仍保存在文档中，并按上一帧 RenderView 的精确结果标记为 Not uploaded。显式灯的 `Casts Shadow` 映射为 `Forced/Disabled` policy；Point/Spot 最多各有四盏实际占用稳定 shadow slot，其余显示 `Budget Exceeded`。Lighting 面板同时显示 slot、贡献度、slot age、retained/selected 状态和最近 eviction 原因。
+不支持的渲染功能保留原有位置并显示不可用状态；切换工作区或隐藏 Advanced 不会重置效果参数。
 
-Directional Light Inspector 还提供 `Use as Atmosphere Sun` 和太阳角半径。设置新 Sun 会在同一条 Undo 命令中清除旧 Sun。Atmosphere Inspector 提供 Earth Preset、基础行星/空气参数和 Advanced 散射参数；Atmosphere Entity 禁止 reparent、rotate、scale、duplicate，删除时会同步解除 Sun 绑定。
+Render Path使用 `Auto / Forward / Deferred`。`Auto`在设备和当前 View Mode兼容时选择 Deferred，
+否则显示 Forward fallback原因；显式 Deferred不可用时控件禁用或拒绝设置。View Mode只改变全局
+观察方式，Lit模式由每个材质自己的 Shader Family选择 Forward/GBuffer/Shadow Program。
 
-Reflection Probe Inspector 提供 Environment、Box/Sphere shape、extents/radius、blend distance、priority、intensity、box projection 和 capture offset。`Capture and Bake` 会临时以探针位置和六个固定 90° 方向依次捕获 256×256 线性 HDR，拼接为 2:1 RGBE HDR，并调用现有 EnvironmentAssetTool 离线生成 KTX2。只有全部 bake/upload 成功后才通过一条 Editor 命令绑定新 Environment；失败时保留旧探针资产和场景状态。该操作是显式的，不会因移动物体或灯光而自动重新捕获。
+Materials面板显示选中 ModelInstance的 Family、Shading Model、GPU material/texture index、
+Forward/GBuffer支持和实际 fallback。编辑器不提供“用一个全局 Shader替换所有材质”的控件。
 
-DDGI Probe Volume Inspector 提供 probe counts/spacing、rays per probe、每帧更新预算、max ray distance、hysteresis、normal/view bias、intensity、relocation 和 classification。选中该 Entity 时 Viewport 显示 volume 边界和 probe grid；`Render -> Post Processing -> Global Illumination` 可切换 DDGI/SSGI + DDGI，并查看 Irradiance、Distance、Classification 调试输出、TLAS instance、update cursor、generation/reset、显存和 GPU pass time。
+## Outliner 与 Inspector
 
-### Render
+Outliner 为每帧 snapshot 建立 parent/children 索引，避免递归绘制时反复扫描全实体数组。搜索结果保留匹配实体的祖先路径。实体行显示类型、enabled 状态、Active Camera、Atmosphere Sun、异步加载、错误和灯光未上传状态。
 
-Render 使用六个折叠区：
+Inspector 顶部显示实体类型、名称和 UUID，并提供 UUID 复制。`Add Component` 统一创建 Model、Light、Camera、Sky Atmosphere、Reflection Probe 和 DDGI Probe Volume；现有组件继续使用一致的折叠属性区和 SceneEditorSession Undo/Redo。
 
-- `Common`：Shader variant、Texture Limit、Exposure EV 和 Tone Mapper。
-- `Post Processing`：Bloom、AO backend、TAA、SSR、SSGI/DDGI 模式和对应调试视图；
-  低频 tuning 参数放入各自的折叠区。DDGI 状态同时显示 Probe Volume、TLAS、
-  update cursor、generation/reset 和固定 atlas 显存。
-- `Lighting`：阴影、ambient、场景灯光、fallback Sun、IBL/Skybox、Reflection Probe 数量/Repository/capture 状态，以及 Atmosphere support、active Sun、相机高度和 LUT generation/dirty/update 状态。
-- `Culling`：Camera/Shadow/Distance/Small Object/Hi-Z Occlusion 开关、阈值、CPU/GPU 可见性统计和 indirect buffer 容量。
-- `Surface Data`：Normal、Roughness、Motion、History Validity 调试视图，以及 history generation、有效 item 数、失效原因和 per-frame buffer 容量。
-- `Camera & Clip`：位置、移动速度、near/far clip plane 和 Scene bounds，默认折叠。
+Outliner drag/drop 继续使用 Keep World reparent，Inspector parent picker 使用 Keep Local。无法分解 shear 的 Keep World 操作原子失败，不修改原层级和 Transform。
 
-Shadow bias 放入默认折叠的 Shadow Tuning；场景灯光数量和逐灯数据放入 Light
-Diagnostics。不可用功能保留控件位置，并通过禁用状态或 tooltip 说明原因。
+## Viewport
 
-这些控件继续直接修改 Application 当前渲染状态，与 Runtime Control 共用同一
-设置入口。
+Viewport 显示 Renderer 的 per-frame LDR Viewport Color。HDR、Depth、屏幕空间资源和 Bloom 按内容区物理像素创建；拖动 Dock 时临时缩放旧图像，尺寸稳定 120ms 后重建 viewport-dependent 资源，不重建 Swapchain 或清空 Pipeline Cache。
 
-### Materials
+工具栏提供：
 
-Materials 仍是只读诊断窗口。模型预览时显示整个预览的材质；Native Scene 中优先
-显示 Outliner 当前选中 ModelInstance 所共享的 ModelAsset 材质。窗口顶部显示当前
-GPU binding backend 和 Material Table 用量；单个材质显示稳定 GPU material index。
-Bindless 模式下五个纹理槽显示全局 texture slot index，Legacy 模式下显示固定
-descriptor binding。
+- Select/Translate/Rotate/Scale 图标，保留 `Q/W/E/R`。
+- Local/World space。
+- Editor Camera / Active Camera。
+- Bounds、Lights、Probes overlay。
 
-### Diagnostics
+`F` 将 Editor Camera 聚焦到当前选中实体的 world bounds；Active Camera 模式下不执行。右键相机模式只允许从实际图像区域启动，Gizmo、drag/drop、Dock 和活动控件会阻止 picking/camera 冲突。
 
-Diagnostics 保留内部 Tabs：
+模型 picking 仍使用 CPU ray 与 ModelAsset bounds，不实现 primitive picking、重叠对象循环选择或 GPU Object-ID Pass。
 
-- `Performance`：摘要属性、最近 180 帧 FPS/GPU 时间曲线，以及 GPU Pass 占比条。
-- `Load Stats`：最近加载的阶段耗时、资源、上传、cache 和 VMA 数据。
-- `Capture`：通过 `Viewport | Workspace` 分段控件选择来源，并显示任务状态、
-  输出路径和错误。
+## Command Palette 与反馈
 
-## Viewport 与相机输入
+`Ctrl+P` 打开 Command Palette。File/Edit/View 菜单、快捷键和 Palette 使用同一个 `EditorActionRegistry`，共享 command ID、enabled 状态、图标和 callback。
 
-Viewport 是独立的场景渲染目标，不是 Swapchain 背景的透传区域。HDR、Depth、
-Bloom 和 tone-mapped Viewport Color 按 Viewport 内容区的物理像素 1:1 创建；
-相机 aspect ratio 每帧直接使用当前内容区比例。
+Info/Success notification 自动消失，Warning 显示更久，Error 保持到手动关闭。删除资源、未保存场景和磁盘冲突仍使用 modal，避免误执行破坏性操作。
 
-Viewport 图像上方保留一行只读状态，显示当前 render extent；资源 debounce
-期间显示 `Resizing...`。
-
-拖动 Dock 分隔线时，ImGui 临时缩放上一张有效图像。尺寸稳定 120 ms 后，Renderer
-等待全部 frame fence，重新创建 viewport-dependent image 和 descriptor 引用；Dynamic Rendering 不创建 framebuffer；
-该过程不重建 Swapchain、不清空 Pipeline Cache，也不调用 `vkDeviceWaitIdle()`。
-首次出现有效尺寸会在下一帧立即应用。隐藏、折叠或零尺寸时继续使用最后一个
-有效 render extent。
-
-Native Scene 的 Viewport toolbar 可在 `Editor Camera` 与 `Active Camera` 间切换。
-Active Camera 直接使用场景 Camera component，且不会响应 FPS 相机输入。
-
-Toolbar 的 `Q/W/E/R` 分别切换 Select、Translate、Rotate 和 Scale；Translate/Rotate
-支持 Local/World，Scale 固定使用 Local。左键点击使用 CPU ray 与 Ready ModelInstance
-的 asset-space bounds 求交，选择最近命中的实体；点击空白清除选择。选中模型绘制 bounds
-线框，Light、Camera 和 Empty Entity 显示 pivot 标记并继续通过 Outliner 选择。
-
-Sky Atmosphere 只允许使用 Translate Gizmo移动地表原点；Rotate 和 Scale 被禁用，相关约束也由 RuntimeWorld 与 SceneDocument validator 强制执行。
-
-Gizmo 拖动开始时捕获一次 SceneDocument before 状态，拖动期间直接更新 RuntimeWorld，
-释放时只生成一条 Undo 命令。`Escape` 取消并恢复 before 状态；隐藏 Viewport、切换选择
-或重载场景也会取消未完成操作。Active Camera 模式下不能直接操纵当前 active Camera，
-需要先切回 Editor Camera。
-
-右键相机模式只能从实际 Viewport 图像区域启动。在标题栏、Tab、工具窗口、菜单、
-modal 或 docking 拖动目标上按右键不会进入相机模式。进入 CameraDrag 后仍使用
-现有 GLFW 鼠标捕获和 `W/S/A/D/Q/E` 移动逻辑。
-
-模型拖入 Viewport 时优先与 `Z=0` 平面求交；相机射线没有有效正向地面交点时，使用穿过
-当前选择、Scene bounds center 或原点的相机朝向平面。拖动期间只显示落点与模型名称，
-释放后创建实体，不绘制临时模型副本。
-
-## 截图与无 UI 构建
-
-- `includeGui=true` 从最终 Swapchain 截图，包含菜单栏和当前 Docking 工作区。
-- `includeGui=false` 从 Viewport Color 截图，输出纯场景和实际 Viewport 原生分辨率；
-  当前 ImGui frame 不会被丢弃，用户窗口不会闪烁。
-- `--no-gui` 不创建 ImGui Context 或 DockSpace，PresentPass 将 Viewport Color
-  fullscreen 显示到 Swapchain。
-- `VKL_ENABLE_EDITOR_UI=OFF` 不编译 EditorDockWorkspace，也不链接 ImGui，仍保留
-  同一条离屏 Viewport 渲染和 fullscreen present 路径。
-
-当前只支持一个 Scene Viewport 和单选。Picking 使用 ModelAsset bounds，不提供 primitive
-选择、重叠对象循环选择或 GPU Object-ID Pass；Gizmo 暂无 snapping。可调 render scale、
-outline postprocess 和 ImGui Multi-viewports 尚未实现。
-
-## 文件与快捷键
+## 快捷键
 
 - `Ctrl+N/O/S`：New/Open/Save。
 - `Ctrl+Shift+S`：Save As。
 - `Ctrl+Z/Y`：Undo/Redo。
+- `Ctrl+P`：Command Palette。
+- `Ctrl+Space`：最大化/恢复 Viewport。
 - `Ctrl+D`：复制选中 subtree。
 - `Delete`：删除选中 subtree。
 - `F2`：重命名选中实体。
-- `Q/W/E/R`：Viewport Select/Translate/Rotate/Scale。
+- `F`：Frame Selected。
+- `Q/W/E/R`：Select/Translate/Rotate/Scale。
 
-切换场景、关闭或退出时，Dirty 会话提供 Save/Discard/Cancel。保存使用加载时的 file
-stamp；外部修改冲突只允许 Reload、Save As 或 Cancel，不提供强制覆盖。文本输入活跃
-或 modal 打开时不会触发实体快捷键。
+文本输入、modal、Gizmo 操作或 drag/drop 活跃时不会触发实体快捷键。
+
+## Editor-only 依赖
+
+Editor 构建使用 `lucide-static 1.27.0` 的 icon font，并与 Segoe UI 合并到同一 ImGui atlas。字体位于 `external/lucide-static/lucide.ttf`，版本和 ISC License 同目录保存。运行时缺少字体时回退到文字标签和 `Q/W/E/R`，不阻止启动。
+
+`windows-msvc-runtime` 的 `VKL_ENABLE_EDITOR_UI=OFF`，不会编译或链接 ImGui、ImGuizmo、Lucide、Editor preferences 或上述 panels；PresentPass 仍将 Viewport Color 全屏显示到 Swapchain。

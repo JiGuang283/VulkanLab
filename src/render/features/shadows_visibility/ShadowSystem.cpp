@@ -268,6 +268,16 @@ void hashString(uint64_t &hash, const std::string &value) {
 
 uint64_t contentHash(const ShadowFramePlan &plan) {
     uint64_t hash = 1469598103934665603ull;
+    hashValue(hash, plan.csm.enabled);
+    for (const CsmCascadeData &cascade : plan.csm.cascades) {
+        hashValue(hash, cascade.lightViewProjection);
+        hashValue(hash, cascade.nearDistance);
+        hashValue(hash, cascade.splitDistance);
+        hashValue(hash, cascade.blendStartDistance);
+        hashValue(hash, cascade.stableRadius);
+        hashValue(hash, cascade.worldUnitsPerTexel);
+        hashValue(hash, cascade.valid);
+    }
     for (size_t index = 0; index < plan.effectiveLights.size(); ++index) {
         const SceneLight &light = plan.effectiveLights[index];
         hashString(hash, sceneLightStableKey(light, index));

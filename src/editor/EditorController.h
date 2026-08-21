@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/Config.h"
+#include "editor/EditorPreferences.h"
 #include "render/frame/RenderView.h"
 #include "scene/EnvironmentAssetRepository.h"
 #include "scene/SceneEntry.h"
@@ -18,6 +19,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace vkr {
@@ -25,14 +27,21 @@ namespace vkr {
 class AssetsPanel;
 class Camera;
 class CaptureService;
+class ContentBrowserPanel;
 class Device;
+class EditorActionRegistry;
+class EditorCommandPalette;
 class EditorDockWorkspace;
+class EditorNotificationService;
 class FrameSync;
 class GuiSystem;
 class InspectorPanel;
+class DiagnosticsPanel;
 class MaterialSystem;
+class MaterialsPanel;
 class OutlinerPanel;
 class RenderSettingsController;
+class RenderSettingsPanel;
 class Renderer;
 class RuntimeWorld;
 class SceneEditorSession;
@@ -47,7 +56,7 @@ struct EditorUiState;
 struct ProjectContext;
 struct RenderSettings;
 struct RenderSettingsPatch;
-struct ShaderVariant;
+struct ViewMode;
 class SceneCatalog;
 struct SceneRuntimePublication;
 struct VisibilityFrame;
@@ -62,6 +71,7 @@ struct EditorControllerActions {
 
 struct EditorControllerServices {
     Config &config;
+    EditorStoragePaths editorStorage;
     ProjectContext &projectContext;
     const SceneCatalog &catalog;
     const std::vector<SceneEntry> &sceneRegistry;
@@ -173,10 +183,10 @@ class EditorController final {
         bool forceReimport = false, bool reloadAsset = false);
     uint64_t setTextureLimit(uint32_t limit);
     uint64_t setEnvironment(const std::string &id);
-    void setShaderVariant(const std::string &id);
+    void setViewMode(const std::string &id);
     void applyRenderSettings(const RenderSettingsPatch &patch);
     const RenderSettings &renderSettings() const;
-    const ShaderVariant &currentShaderVariant() const;
+    const ViewMode &currentViewMode() const;
 
     void refreshSceneRegistry(const std::string &selectSceneId = {});
     void requestEditorSceneLoad(int index);
@@ -186,7 +196,9 @@ class EditorController final {
     void updateReflectionProbeCapture();
     void requestManualCapture(bool includeGui);
 
-    void drawScenePanel(bool modelsOnly = false);
+    void drawScenePanel(
+        bool modelsOnly = false,
+        ContentBrowserViewMode viewMode = ContentBrowserViewMode::List);
     void drawOutlinerPanel();
     void drawInspectorPanel();
     void drawSceneAuthoringDialogs();
@@ -194,18 +206,10 @@ class EditorController final {
     void executePendingEditorAction(bool saveFirst);
     void deleteSelectedEditorEntity();
     void duplicateSelectedEditorEntity();
+    void frameSelectedEditorEntity();
     void handleEditorShortcuts();
     void drawSceneLoadingPanel();
     void drawAssetsPanel(bool environmentsOnly = false);
-    void drawRenderPanel();
-    void drawPostProcessingPanel();
-    void drawSurfaceDataPanel();
-    void drawCullingPanel();
-    void drawLightingPanel();
-    void drawCameraPanel();
-    void drawMaterialsPanel();
-    void drawPerformancePanel();
-    void drawLoadStatsPanel();
     void drawCapturePanel();
 
     Config &config_;
@@ -236,10 +240,18 @@ class EditorController final {
     std::function<bool()> cameraDragging_;
     EditorControllerActions actions_;
 
+    std::unique_ptr<EditorPreferencesStore> preferences_;
     std::unique_ptr<EditorDockWorkspace> editorDockWorkspace_;
+    std::unique_ptr<EditorActionRegistry> actionRegistry_;
+    std::unique_ptr<EditorCommandPalette> commandPalette_;
+    std::unique_ptr<EditorNotificationService> notifications_;
     std::unique_ptr<AssetsPanel> assetsPanel_;
+    std::unique_ptr<ContentBrowserPanel> contentBrowserPanel_;
+    std::unique_ptr<DiagnosticsPanel> diagnosticsPanel_;
+    std::unique_ptr<MaterialsPanel> materialsPanel_;
     std::unique_ptr<ScenesPanel> scenesPanel_;
     std::unique_ptr<OutlinerPanel> outlinerPanel_;
+    std::unique_ptr<RenderSettingsPanel> renderSettingsPanel_;
     std::unique_ptr<InspectorPanel> inspectorPanel_;
     std::unique_ptr<SceneEditorSession> sceneEditorSession_;
     std::unique_ptr<SceneViewportController> sceneViewportController_;
@@ -253,6 +265,12 @@ class EditorController final {
     uint64_t lastCaptureTaskId_ = 0;
     bool captureIncludeGui_ = false;
     std::string captureUiError_;
+    std::string lastNotifiedSceneError_;
+    std::string lastNotifiedCaptureError_;
+    std::unordered_set<uint64_t> notifiedSceneTasks_;
+    std::unordered_set<uint64_t> notifiedAssetTasks_;
+    std::unordered_set<uint64_t> notifiedCaptureTasks_;
+    AssetWorkflowSnapshot assetWorkflowSnapshot_;
 };
 
 } // namespace vkr

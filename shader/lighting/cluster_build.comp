@@ -1,0 +1,130 @@
+#version 450
+
+#extension GL_GOOGLE_include_directive : require
+
+#include "include/global_frame.glsl"
+#include "include/scene_lights.glsl"
+
+#define VKL_CLUSTER_OVERFLOW_BIT 0x80000000u
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 1, binding = 0) buffer ClusterLightCounts {
+    uint counts[];
+} clusterLightCounts;
+
+layout(std430, set = 1, binding = 1) buffer ClusterLightIndices {
+    uint indices[];
+} clusterLightIndices;
+
+layout(std430, set = 1, binding = 2) buffer ClusterStatistics {
+    uint nonEmptyClusters;
+    uint totalLightReferences;
+    uint overflowClusters;
+    uint maxLightReferences;
+    uint testedPunctualLights;
+    uint overflowLightReferences;
+    uint reserved1;
+    uint reserved2;
+} clusterStatistics;
+
+vec3 viewRayForPixel(vec2 pixel)
+{
+    vec2 uv = pixel / vec2(ubo.clusterViewport.xy);
+    vec2 ndc = uv * 2.0 - 1.0;
+    vec4 world = ubo.inverseViewProjection * vec4(ndc, 1.0, 1.0);
+    world /= max(abs(world.w), 1.0e-6);
+    vec3 positionVS = (ubo.view * vec4(world.xyz, 1.0)).xyz;
+    return positionVS / max(-positionVS.z, 1.0e-6);
+}
+
+float sliceDistance(uint boundary)
+{
+    return exp2((float(boundary) - ubo.clusterDepthParams.w) /
+                max(ubo.clusterDepthParams.z, 1.0e-6));
+}
+
+void includePoint(inout vec3 minimumValue, inout vec3 maximumValue,
+                  vec3 value)
+{
+    minimumValue = min(minimumValue, value);
+    maximumValue = max(maximumValue, value);
+}
+
+bool sphereIntersectsAabb(vec3 center, float radius,
+                          vec3 minimumValue, vec3 maximumValue)
+{
+    if (radius <= 0.0)
+        return true;
+    vec3 closest = clamp(center, minimumValue, maximumValue);
+    vec3 delta = center - closest;
+    return dot(delta, delta) <= radius * radius;
+}
+
+void main()
+{
+    uint clusterIndex = gl_GlobalInvocationID.x;
+    uint clustersPerSlice = ubo.clusterGrid.x * ubo.clusterGrid.y;
+    uint clusterCount = clustersPerSlice * ubo.clusterGrid.z;
+    if (clusterIndex >= clusterCount)
+        return;
+
+    uint slice = clusterIndex / clustersPerSlice;
+    uint tileIndex = clusterIndex - slice * clustersPerSlice;
+    uvec2 tile = uvec2(tileIndex % ubo.clusterGrid.x,
+                       tileIndex / ubo.clusterGrid.x);
+    vec2 pixelMin = vec2(tile * ubo.clusterViewport.z);
+    vec2 pixelMax = min(vec2((tile + uvec2(1u)) * ubo.clusterViewport.z),
+                        vec2(ubo.clusterViewport.xy));
+    float depthNear = max(sliceDistance(slice), ubo.clusterDepthParams.x);
+    float depthFar = min(sliceDistance(slice + 1u),
+                         ubo.clusterDepthParams.y);
+
+    vec3 minimumValue = vec3(3.402823466e+38);
+    vec3 maximumValue = vec3(-3.402823466e+38);
+    vec2 corners[4] = vec2[4](
+        vec2(pixelMin.x, pixelMin.y),
+        vec2(pixelMax.x, pixelMin.y),
+        vec2(pixelMin.x, pixelMax.y),
+        vec2(pixelMax.x, pixelMax.y));
+    for (uint corner = 0u; corner < 4u; ++corner) {
+        vec3 ray = viewRayForPixel(corners[corner]);
+        includePoint(minimumValue, maximumValue, ray * depthNear);
+        includePoint(minimumValue, maximumValue, ray * depthFar);
+    }
+
+    uint directionalCount = ubo.lightCounts.x;
+    uint punctualCount = ubo.lightCounts.y + ubo.lightCounts.z;
+    uint actualCount = 0u;
+    uint storedCount = 0u;
+    for (uint localIndex = 0u; localIndex < punctualCount; ++localIndex) {
+        uint lightIndex = directionalCount + localIndex;
+        GpuLight light = sceneLightBuffer.lights[lightIndex];
+        vec3 centerVS =
+            (ubo.view * vec4(light.positionRange.xyz, 1.0)).xyz;
+        if (!sphereIntersectsAabb(centerVS, light.positionRange.w,
+                                  minimumValue, maximumValue))
+            continue;
+        if (storedCount < ubo.clusterGrid.w) {
+            clusterLightIndices.indices[
+                clusterIndex * ubo.clusterGrid.w + storedCount] =
+                lightIndex;
+            ++storedCount;
+        }
+        ++actualCount;
+    }
+
+    bool overflowed = actualCount > ubo.clusterGrid.w;
+    clusterLightCounts.counts[clusterIndex] =
+        storedCount | (overflowed ? VKL_CLUSTER_OVERFLOW_BIT : 0u);
+    if (actualCount > 0u)
+        atomicAdd(clusterStatistics.nonEmptyClusters, 1u);
+    atomicAdd(clusterStatistics.totalLightReferences, storedCount);
+    atomicMax(clusterStatistics.maxLightReferences, actualCount);
+    atomicMax(clusterStatistics.testedPunctualLights, punctualCount);
+    if (overflowed) {
+        atomicAdd(clusterStatistics.overflowClusters, 1u);
+        atomicAdd(clusterStatistics.overflowLightReferences,
+                  actualCount - storedCount);
+    }
+}

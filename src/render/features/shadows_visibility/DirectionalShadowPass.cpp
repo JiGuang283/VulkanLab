@@ -11,6 +11,7 @@
 #include "render/material/MaterialInstance.h"
 #include "render/material/MaterialSystem.h"
 #include "render/material/MaterialTemplate.h"
+#include "render/shader/ShaderRegistry.h"
 #include "render/geometry/Mesh.h"
 #include "render/pipeline/PipelineCache.h"
 #include "render/pipeline/PipelineKey.h"
@@ -34,11 +35,10 @@ DirectionalShadowPass::DirectionalShadowPass(
     Device &device, const RenderResourcePool &resources,
     RenderImageHandle shadowDepth,
     VkDescriptorSetLayout globalDescriptorSetLayout,
-    std::string shadowVertPath, std::string shadowMaskFragPath)
+    std::string shadowVertPath)
     : device_(&device), shadowDepth_(shadowDepth),
       globalDescriptorSetLayout_(globalDescriptorSetLayout),
-      shadowVertPath_(std::move(shadowVertPath)),
-      shadowMaskFragPath_(std::move(shadowMaskFragPath)) {
+      shadowVertPath_(std::move(shadowVertPath)) {
     depthFormat_ = resources.description(shadowDepth_).format;
 }
 
@@ -93,7 +93,7 @@ void DirectionalShadowPass::drawCasters(
     const RenderFrameContext &frame,
     const VisibilityFrame &visibility,
     uint32_t cascadeIndex) {
-    if (!frame.pipelineCache || !frame.view)
+    if (!frame.pipelineCache || !frame.view || !frame.shaderRegistry)
         return;
 
     struct CachedPipeline {
@@ -117,6 +117,12 @@ void DirectionalShadowPass::drawCasters(
         const bool alphaMasked = params.alphaMode == AlphaMode::Mask;
         const MaterialTemplate &materialTemplate =
             command.material->materialTemplate();
+        const ShaderProgram *maskProgram =
+            alphaMasked
+                ? &frame.shaderRegistry->materialProgram(
+                      materialTemplate.shaderFamily(),
+                      MaterialShaderPass::DirectionalShadowMask)
+                : nullptr;
         const VkCullModeFlags cullMode =
             params.doubleSided ? VK_CULL_MODE_NONE
                                : VK_CULL_MODE_BACK_BIT;
@@ -134,8 +140,12 @@ void DirectionalShadowPass::drawCasters(
         if (cached == pipelineVariants.end()) {
             PipelineConfigBuilder builder;
             builder
-                .shaders(shadowVertPath_,
-                         alphaMasked ? shadowMaskFragPath_ : std::string{})
+                .shaders(alphaMasked ? maskProgram->vertSpvPath
+                                     : shadowVertPath_,
+                         alphaMasked
+                             ? maskProgram->fragmentSpvPath(
+                                   frame.materialSystem->activeMode())
+                             : std::string{})
                 .defaultVertexLayout()
                 .rasterization(
                     cullMode,
@@ -150,6 +160,7 @@ void DirectionalShadowPass::drawCasters(
             PipelineConfig config = builder.build();
             config.debugName =
                 "Pipeline/DirectionalShadow/" +
+                (alphaMasked ? maskProgram->id + "/" : std::string{}) +
                 std::string(alphaMasked ? "Mask" : "Opaque") + "/" +
                 (cullMode == VK_CULL_MODE_NONE ? "CullNone" : "CullBack");
 

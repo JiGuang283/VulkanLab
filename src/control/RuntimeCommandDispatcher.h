@@ -62,6 +62,8 @@ class RuntimeControlHost {
     virtual ControlJson runtimeWindowResize(uint32_t width,
                                             uint32_t height) = 0;
     virtual ControlJson runtimeRenderStatus() = 0;
+    virtual ControlJson runtimeRenderPathGet() = 0;
+    virtual ControlJson runtimeRenderPathSet(RenderPathRequest request) = 0;
     virtual ControlJson runtimeRenderSettingsGet() = 0;
     virtual ControlJson
     runtimeRenderSettingsSet(const RenderSettingsPatch &patch) = 0;

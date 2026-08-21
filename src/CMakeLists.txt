@@ -76,6 +76,7 @@ target_link_libraries(vkl_asset_core
         vkl_glm
         vkl_scene_data
     PRIVATE
+        vkl_shader_catalog
         vkl_json
         bcrypt
 )
@@ -210,17 +211,32 @@ set(VKL_RENDER_SHADER_SOURCES
 )
 
 set(VKL_RENDER_CORE_FORWARD_SOURCES
-    render/features/core_forward/HdrCompositePass.cpp
-    render/features/core_forward/MainForwardPass.cpp
-    render/features/core_forward/PresentPass.cpp
-    render/features/core_forward/SurfacePrepass.cpp
-    render/features/core_forward/ToneMapPass.cpp
+    render/features/forward/MainForwardPass.cpp
+    render/features/post_process/HdrCompositePass.cpp
+    render/features/post_process/PresentPass.cpp
+    render/features/post_process/ToneMapPass.cpp
+)
+
+set(VKL_RENDER_SURFACE_SOURCES
+    render/features/surface/DepthHierarchyPass.cpp
+    render/features/surface/GBufferPass.cpp
+    render/features/surface/SurfaceFrameData.cpp
+    render/features/surface/SurfaceDrawRecorder.cpp
+    render/features/surface/SurfacePrepass.cpp
+)
+
+set(VKL_RENDER_DEFERRED_SOURCES
+    render/features/deferred/DeferredLightingPass.cpp
+)
+
+set(VKL_RENDER_LIGHTING_SOURCES
+    render/features/lighting/ClusteredLighting.cpp
+    render/features/lighting/ClusteredLightCullingPass.cpp
 )
 
 set(VKL_RENDER_SHADOW_VISIBILITY_SOURCES
     render/features/shadows_visibility/DirectionalShadow.cpp
     render/features/shadows_visibility/DirectionalShadowPass.cpp
-    render/features/shadows_visibility/HiZBuildPass.cpp
     render/features/shadows_visibility/OcclusionCullPass.cpp
     render/features/shadows_visibility/PointShadowPass.cpp
     render/features/shadows_visibility/PunctualShadow.cpp
@@ -277,6 +293,9 @@ set(VKL_RENDERER_SOURCES
     ${VKL_RENDER_PIPELINE_SOURCES}
     ${VKL_RENDER_SHADER_SOURCES}
     ${VKL_RENDER_CORE_FORWARD_SOURCES}
+    ${VKL_RENDER_SURFACE_SOURCES}
+    ${VKL_RENDER_DEFERRED_SOURCES}
+    ${VKL_RENDER_LIGHTING_SOURCES}
     ${VKL_RENDER_SHADOW_VISIBILITY_SOURCES}
     ${VKL_RENDER_AO_SOURCES}
     ${VKL_RENDER_REFLECTION_SOURCES}
@@ -421,9 +440,16 @@ if(VKL_ENABLE_EDITOR_UI)
         editor/ReflectionProbeCapture.cpp
         editor/EditorTheme.cpp
         editor/EditorWidgets.cpp
+        editor/EditorPreferences.cpp
+        editor/EditorActionRegistry.cpp
+        editor/EditorNotificationService.cpp
         editor/panels/AssetsPanel.cpp
+        editor/panels/ContentBrowserPanel.cpp
+        editor/panels/DiagnosticsPanel.cpp
+        editor/panels/MaterialsPanel.cpp
         editor/panels/InspectorPanel.cpp
         editor/panels/OutlinerPanel.cpp
+        editor/panels/RenderSettingsPanel.cpp
         editor/panels/ScenesPanel.cpp
     )
     if(VKL_ENABLE_ASSET_AUTHORING)
@@ -448,6 +474,7 @@ if(VKL_ENABLE_EDITOR_UI)
         PRIVATE
             vkl_foundation
             vkl_image_codecs
+            vkl_json
             vkl_tracy
             ole32
             uuid
@@ -533,6 +560,18 @@ if(VKL_ENABLE_RUNTIME_CONTROL)
 endif()
 if(VKL_ENABLE_EDITOR_UI)
     target_link_libraries(VulkanLab PRIVATE vkl_editor)
+    add_custom_command(TARGET VulkanLab POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:VulkanLab>/editor"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/external/lucide-static/lucide.ttf"
+            "$<TARGET_FILE_DIR:VulkanLab>/editor/lucide.ttf"
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:VulkanLab>/licenses/Lucide"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/external/lucide-static/LICENSE"
+            "$<TARGET_FILE_DIR:VulkanLab>/licenses/Lucide/LICENSE"
+    )
 endif()
 add_dependencies(VulkanLab VulkanLabShaders)
 

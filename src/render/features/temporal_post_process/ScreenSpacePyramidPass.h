@@ -14,16 +14,10 @@ class DescriptorAllocator;
 class Device;
 class RenderResourcePool;
 
-enum class ScreenSpacePyramidKind {
-    NearestDepth,
-    SceneColor,
-};
-
 class ScreenSpacePyramidPass final : public IRenderPass {
   public:
     ScreenSpacePyramidPass(Device &device,
                            const RenderResourcePool &resources,
-                           ScreenSpacePyramidKind kind,
                            RenderImageHandle source,
                            RenderSamplerHandle sourceSampler,
                            RenderImageHandle alternateSource,
@@ -38,9 +32,7 @@ class ScreenSpacePyramidPass final : public IRenderPass {
     std::string_view name() const override { return name_; }
     RgPassType passType() const override { return RgPassType::Compute; }
     RgPassCondition condition() const override {
-        return kind_ == ScreenSpacePyramidKind::NearestDepth
-                   ? RgPassCondition::ScreenDepthPyramid
-                   : RgPassCondition::SceneColorPyramid;
+        return RgPassCondition::SceneColorPyramid;
     }
     void setup(RenderGraphBuilder &builder,
                const RenderGraphBuildContext &context) const override;
@@ -65,7 +57,6 @@ class ScreenSpacePyramidPass final : public IRenderPass {
                    uint32_t mip);
 
     Device *device_ = nullptr;
-    ScreenSpacePyramidKind kind_ = ScreenSpacePyramidKind::NearestDepth;
     std::string name_;
     RenderImageHandle source_{};
     RenderSamplerHandle sourceSampler_{};

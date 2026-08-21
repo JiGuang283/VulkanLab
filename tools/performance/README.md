@@ -22,8 +22,14 @@ Profiles:
 - `Ssao`: Minimal plus SSAO.
 - `Ssr`: Minimal plus SSR.
 - `Ssgi`: Minimal plus SSGI.
+- `Taa`: Minimal plus TAA.
+- `Ddgi`: Minimal plus DDGI; the selected Native Scene must contain an
+  active DDGI probe volume and the device must support ray query.
+- `SsgiDdgi`: Minimal plus combined SSGI/DDGI under the same DDGI
+  prerequisites.
 
 The benchmark defaults to a 1280x720 no-GUI automation window. Pass `-Gui` to
 include the editor workspace. The result includes presented FPS, estimated CPU
 frame time, median GPU frame/pass times, active RenderGraph counts, material
-binding backend, and validation error count.
+binding backend, active render path, full RenderGraph execution order,
+screen-space runtime state, and validation error count.

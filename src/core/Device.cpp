@@ -319,6 +319,7 @@ void Device::pickPhysicalDevice() {
         *selectedFamilies.graphicsFamily < queueProperties.size() &&
         (queueProperties[*selectedFamilies.graphicsFamily].queueFlags &
          VK_QUEUE_COMPUTE_BIT) != 0;
+    graphicsQueueSupportsCompute_ = graphicsQueueSupportsCompute;
 
     VkFormatProperties bloomFormatProperties{};
     vkGetPhysicalDeviceFormatProperties(
@@ -451,6 +452,28 @@ void Device::pickPhysicalDevice() {
         surfaceDataSupport_.albedoMetallicAvailable = true;
     }
 
+    gBufferSupport_.depthFormat = surfaceDataSupport_.depthFormat;
+    const VkPhysicalDeviceProperties gBufferDeviceProperties =
+        physicalDeviceProperties();
+    if (!surfaceDataSupport_.available) {
+        gBufferSupport_.reason = surfaceDataSupport_.reason;
+    } else if (!surfaceDataSupport_.albedoMetallicAvailable) {
+        gBufferSupport_.reason =
+            surfaceDataSupport_.albedoMetallicReason;
+    } else if (gBufferDeviceProperties.limits.maxColorAttachments <
+               gBufferSupport_.requiredColorAttachments) {
+        gBufferSupport_.reason =
+            "fewer than four simultaneous color attachments are supported";
+    } else {
+        gBufferSupport_.available = true;
+    }
+    if (gBufferSupport_.available) {
+        VKR_LOG_INFO("Device", "Deferred GBuffer attachments are supported");
+    } else {
+        VKR_LOG_WARN("Device", "Deferred GBuffer unavailable: {}",
+                     gBufferSupport_.reason);
+    }
+
     VkFormatProperties hiZProperties{};
     vkGetPhysicalDeviceFormatProperties(physicalDevice_,
                                         VK_FORMAT_R32_SFLOAT,
@@ -521,6 +544,36 @@ void Device::pickPhysicalDevice() {
             surfaceDataSupport_.reason;
     } else {
         screenSpaceEffectsSupport_.depthPyramidAvailable = true;
+    }
+
+    if (!occlusionCullingSupport_.available ||
+        !screenSpaceEffectsSupport_.depthPyramidAvailable) {
+        depthHierarchySupport_.reason =
+            !occlusionCullingSupport_.available
+                ? occlusionCullingSupport_.reason
+                : screenSpaceEffectsSupport_.depthPyramidReason;
+    } else if (features.shaderStorageImageExtendedFormats &&
+               supportsSampledStorage(VK_FORMAT_R32G32_SFLOAT, false)) {
+        depthHierarchySupport_.mode =
+            DepthHierarchyMode::CombinedMinMax;
+        depthHierarchySupport_.format = VK_FORMAT_R32G32_SFLOAT;
+    } else {
+        depthHierarchySupport_.mode = DepthHierarchyMode::SplitR32;
+        depthHierarchySupport_.format = VK_FORMAT_R32_SFLOAT;
+        depthHierarchySupport_.reason =
+            "RG32F sampled storage images are unavailable; using split R32F chains";
+    }
+    if (depthHierarchySupport_.available()) {
+        VKR_LOG_INFO(
+            "Device", "Depth hierarchy mode: {} ({})",
+            depthHierarchySupport_.combined() ? "combined-min-max"
+                                              : "split-r32",
+            depthHierarchySupport_.combined()
+                ? "RG32F"
+                : depthHierarchySupport_.reason);
+    } else {
+        VKR_LOG_WARN("Device", "Depth hierarchy unavailable: {}",
+                     depthHierarchySupport_.reason);
     }
 
     if (!graphicsQueueSupportsCompute) {

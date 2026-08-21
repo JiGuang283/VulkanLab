@@ -27,8 +27,7 @@ class SpotShadowPass final : public IRenderPass {
                    const RenderResourcePool &resources,
                    std::array<RenderImageHandle, 4> shadowDepthByCapacity,
                    DescriptorAllocator &descriptorAllocator,
-                   std::string vertPath,
-                   std::string maskFragPath);
+                   std::string vertPath);
     ~SpotShadowPass() override;
 
     SpotShadowPass(const SpotShadowPass &) = delete;
@@ -52,7 +51,6 @@ class SpotShadowPass final : public IRenderPass {
     Device *device_ = nullptr;
     std::array<RenderImageHandle, 4> shadowDepthByCapacity_{};
     std::string vertPath_;
-    std::string maskFragPath_;
     VkFormat depthFormat_ = VK_FORMAT_UNDEFINED;
     std::unique_ptr<PunctualShadowSliceBuffer> sliceBuffer_;
 };

@@ -38,16 +38,13 @@ struct PyramidPush {
 
 ScreenSpacePyramidPass::ScreenSpacePyramidPass(
     Device &device, const RenderResourcePool &resources,
-    ScreenSpacePyramidKind kind, RenderImageHandle source,
+    RenderImageHandle source,
     RenderSamplerHandle sourceSampler, RenderImageHandle alternateSource,
     RenderSamplerHandle alternateSourceSampler, RenderImageHandle pyramid,
     RenderSamplerHandle pyramidSampler,
     DescriptorAllocator &descriptorAllocator, std::string initShaderPath,
     std::string reduceShaderPath)
-    : device_(&device), kind_(kind),
-      name_(kind == ScreenSpacePyramidKind::NearestDepth
-                ? "ScreenDepthPyramid"
-                : "SceneColorPyramid"),
+    : device_(&device), name_("SceneColorPyramid"),
       source_(source), sourceSampler_(sourceSampler),
       alternateSource_(alternateSource),
       alternateSourceSampler_(alternateSourceSampler), pyramid_(pyramid),
@@ -96,23 +93,22 @@ void ScreenSpacePyramidPass::setup(
     RenderGraphBuilder &builder,
     const RenderGraphBuildContext &context) const {
     const uint32_t mipCount = context.resources.mipLevelCount(pyramid_);
-    const VkImageLayout sourceLayout =
-        kind_ == ScreenSpacePyramidKind::NearestDepth
-            ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
-            : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     for (uint32_t mip = 0; mip < mipCount; ++mip) {
         builder.addNode(name_ + "/Mip" + std::to_string(mip),
                         RgPassType::Compute, RgQueueClass::Compute, mip);
         if (mip == 0) {
-            if (kind_ == ScreenSpacePyramidKind::SceneColor &&
-                context.features.taaActive && alternateSource_.valid()) {
+            if (context.features.renderPath.active ==
+                    RenderPathMode::Deferred &&
+                alternateSource_.valid()) {
                 builder.useImage(
                     {alternateSource_, RenderImageAccess::SampledRead,
                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
             } else {
-                builder.useImage({source_, RenderImageAccess::SampledRead,
-                                  sourceLayout, sourceLayout});
+                builder.useImage(
+                    {source_, RenderImageAccess::SampledRead,
+                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
             }
         } else {
             builder.useImage(
@@ -146,8 +142,8 @@ void ScreenSpacePyramidPass::recordMip(
     if (!frame.pipelineCache || mip >= resources.mipLevelCount(pyramid_))
         return;
     const bool useAlternateSource =
-        kind_ == ScreenSpacePyramidKind::SceneColor &&
-        frame.features.taaActive && alternateSource_.valid();
+        frame.features.renderPath.active == RenderPathMode::Deferred &&
+        alternateSource_.valid();
     if (mip == 0)
         updateInitialSource(resources, frame.frameIndex,
                             useAlternateSource);
@@ -190,9 +186,7 @@ void ScreenSpacePyramidPass::updateInitialSource(
     VkDescriptorImageInfo info{
         resources.sampler(sampler),
         resources.image(source, frameIndex).imageView(),
-        kind_ == ScreenSpacePyramidKind::NearestDepth
-            ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
-            : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     write.dstSet = sets_[frameIndex].front();
     write.dstBinding = 0;
@@ -222,10 +216,8 @@ void ScreenSpacePyramidPass::createDescriptorSetLayout() {
 void ScreenSpacePyramidPass::createDescriptors(
     const RenderResourcePool &resources) {
     const uint32_t mipCount = resources.mipLevelCount(pyramid_);
-    const VkImageLayout initialSourceLayout =
-        kind_ == ScreenSpacePyramidKind::NearestDepth
-            ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
-            : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    constexpr VkImageLayout initialSourceLayout =
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     for (uint32_t frame = 0; frame < sets_.size(); ++frame) {
         sets_[frame].resize(mipCount);
         for (uint32_t mip = 0; mip < mipCount; ++mip) {

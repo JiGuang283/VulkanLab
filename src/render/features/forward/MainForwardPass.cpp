@@ -16,8 +16,10 @@
 #include "render/frame/RenderFrame.h"
 #include "render/graph/RenderGraph.h"
 #include "render/graph/RenderResourcePool.h"
-#include "render/shader/ShaderVariant.h"
+#include "render/shader/ShaderTypes.h"
+#include "render/shader/ShaderRegistry.h"
 #include "render/features/shadows_visibility/Visibility.h"
+#include "render/features/lighting/ClusteredLighting.h"
 #include "diagnostics/Profiling.h"
 #include "diagnostics/TracyProfiler.h"
 
@@ -44,6 +46,37 @@ float alphaModeToShaderValue(AlphaMode mode) {
     }
 }
 
+RenderImageHandle transparentColorHandle(
+    const FrameRenderFeatures &features,
+    const RendererResourceHandles &resources) {
+    if (features.renderPath.active == RenderPathMode::Deferred)
+        return features.postLightingHdr(resources);
+    if (features.lightingCompositeRequired)
+        return resources.compositedHdrColor;
+    if (features.surfaceDataRequired || !resources.hdrMsaaColor.valid())
+        return resources.hdrColor;
+    return resources.hdrMsaaColor;
+}
+
+RenderImageHandle transparentResolveHandle(
+    const FrameRenderFeatures &features,
+    const RendererResourceHandles &resources) {
+    const bool resolvesForwardMsaa =
+        features.renderPath.active == RenderPathMode::Forward &&
+        !features.lightingCompositeRequired &&
+        !features.surfaceDataRequired && resources.hdrMsaaColor.valid();
+    return resolvesForwardMsaa ? resources.hdrColor : RenderImageHandle{};
+}
+
+RenderImageHandle transparentDepthHandle(
+    const FrameRenderFeatures &features,
+    const RendererResourceHandles &resources) {
+    if (features.renderPath.active == RenderPathMode::Deferred)
+        return features.opaqueProducts.geometryDepth;
+    return features.surfaceDataRequired ? resources.surfaceDepth
+                                        : resources.mainDepth;
+}
+
 } // namespace
 
 MainForwardPass::MainForwardPass(Device &device,
@@ -55,11 +88,13 @@ MainForwardPass::MainForwardPass(Device &device,
                                  VkDescriptorSetLayout
                                      atmosphereDescriptorSetLayout,
                                  VkDescriptorSetLayout
-                                     ddgiDescriptorSetLayout)
+                                     ddgiDescriptorSetLayout,
+                                 ClusteredLightingResources &clusteredLighting)
     : device_(&device), resourceHandles_(resourceHandles), phase_(phase),
       lightingDescriptorSetLayout_(lightingDescriptorSetLayout),
       atmosphereDescriptorSetLayout_(atmosphereDescriptorSetLayout),
-      ddgiDescriptorSetLayout_(ddgiDescriptorSetLayout) {}
+      ddgiDescriptorSetLayout_(ddgiDescriptorSetLayout),
+      clusteredLighting_(&clusteredLighting) {}
 
 MainForwardPass::~MainForwardPass() = default;
 
@@ -68,7 +103,9 @@ void MainForwardPass::setup(RenderGraphBuilder &builder,
     builder.addNode(std::string(name()), RgPassType::Graphics,
                     RgQueueClass::Graphics);
     const FrameRenderFeatures &features = context.features;
-    if (phase_ == ForwardPhase::Transparent)
+    if (phase_ == ForwardPhase::Opaque)
+        builder.setActive(features.forwardOpaqueRequired);
+    else
         builder.setActive(features.transparentRequired);
     const auto sampled = [&](RenderImageHandle handle,
                              VkImageLayout layout) {
@@ -107,6 +144,16 @@ void MainForwardPass::setup(RenderGraphBuilder &builder,
         sampled(resourceHandles_.ddgiDistance,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
+    if (features.clusteredLightingRequired) {
+        for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+            builder.useBuffer(
+                clusteredLighting_->clusterCountBuffer(frame),
+                RgBufferAccess::StorageRead, 0, VK_WHOLE_SIZE, frame);
+            builder.useBuffer(
+                clusteredLighting_->lightIndexBuffer(frame),
+                RgBufferAccess::StorageRead, 0, VK_WHOLE_SIZE, frame);
+        }
+    }
     if (features.ssaoActive)
         sampled(resourceHandles_.ssaoFiltered,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -118,17 +165,10 @@ void MainForwardPass::setup(RenderGraphBuilder &builder,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     if (phase_ == ForwardPhase::Transparent) {
-        const bool useSurfaceDepth = features.surfaceDataRequired;
         const RenderImageHandle transparentColor =
-            features.lightingCompositeRequired
-                ? resourceHandles_.compositedHdrColor
-                : (useSurfaceDepth || !resourceHandles_.hdrMsaaColor.valid()
-                       ? resourceHandles_.hdrColor
-                       : resourceHandles_.hdrMsaaColor);
+            transparentColorHandle(features, resourceHandles_);
         const RenderImageHandle transparentResolve =
-            !useSurfaceDepth && resourceHandles_.hdrMsaaColor.valid()
-                ? resourceHandles_.hdrColor
-                : RenderImageHandle{};
+            transparentResolveHandle(features, resourceHandles_);
         builder.addColorAttachment(
             transparentColor,
             RenderImageAccess::ColorAttachmentReadWrite,
@@ -143,15 +183,10 @@ void MainForwardPass::setup(RenderGraphBuilder &builder,
                 ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                 : VK_IMAGE_LAYOUT_UNDEFINED);
         builder.addDepthAttachment(
-            useSurfaceDepth ? resourceHandles_.surfaceDepth
-                            : resourceHandles_.mainDepth,
+            transparentDepthHandle(features, resourceHandles_),
             RenderImageAccess::DepthAttachmentRead,
-            useSurfaceDepth
-                ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
-                : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-            useSurfaceDepth
-                ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
-                : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
             VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_DONT_CARE);
         return;
     }
@@ -226,9 +261,7 @@ void MainForwardPass::recordNode(RenderGraphPassContext &context, uint32_t,
     const RenderImageHandle colorHandle =
         phase_ == ForwardPhase::Opaque
             ? resourceHandles_.hdrColor
-            : (frame.features.lightingCompositeRequired
-                   ? resourceHandles_.compositedHdrColor
-                   : resourceHandles_.hdrColor);
+            : transparentColorHandle(frame.features, resourceHandles_);
     const VkExtent2D extent = resources.extent(colorHandle);
     VkViewport viewport{};
     viewport.width = static_cast<float>(extent.width);
@@ -243,7 +276,7 @@ void MainForwardPass::recordNode(RenderGraphPassContext &context, uint32_t,
 void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                                 const RenderResourcePool &resources,
                                 const VisibilityFrame &visibility) {
-    if (!frame.pipelineCache || !frame.shaderVariant)
+    if (!frame.pipelineCache || !frame.viewMode || !frame.shaderRegistry)
         return;
 
     const bool transparent = phase_ == ForwardPhase::Transparent;
@@ -255,6 +288,7 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
         struct CachedPipeline {
             const MaterialTemplate *materialTemplate = nullptr;
             VkCullModeFlags cullMode = VK_CULL_MODE_NONE;
+            const ShaderProgram *program = nullptr;
             Pipeline *pipeline = nullptr;
         };
 
@@ -271,6 +305,13 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
 
             const auto &materialTemplate = command.material->materialTemplate();
             const auto &p = command.material->params();
+            const MaterialShaderPass materialPass =
+                transparent ? MaterialShaderPass::ForwardTransparent
+                            : MaterialShaderPass::ForwardOpaque;
+            const ShaderProgram &program =
+                frame.shaderRegistry->materialProgram(
+                    materialTemplate.shaderFamily(), materialPass,
+                    frame.viewMode);
             const VkCullModeFlags cullMode =
                 p.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
             auto cached = std::find_if(
@@ -302,20 +343,20 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                 pipelineConfig.depthTest = true;
                 pipelineConfig.depthWrite = !transparent;
                 pipelineConfig.cullMode = cullMode;
-                const bool transparentUsesSurfaceDepth =
-                    transparent && frame.features.surfaceDataRequired;
-                pipelineConfig.msaaSamples = transparentUsesSurfaceDepth
-                    ? VK_SAMPLE_COUNT_1_BIT
+                pipelineConfig.msaaSamples = transparent
+                    ? resources.description(transparentDepthHandle(
+                          frame.features, resourceHandles_)).samples
                     : resources.description(resourceHandles_.mainDepth)
                           .samples;
                 pipelineConfig.vertShaderPath =
-                    frame.shaderVariant->vertSpvPath;
+                    program.vertSpvPath;
                 pipelineConfig.fragShaderPath =
-                    frame.shaderVariant->fragmentSpvPath(
+                    program.fragmentSpvPath(
                         frame.materialSystem->activeMode(),
                         transparent ? 1u : opaqueAttachmentCount);
                 pipelineConfig.debugName =
-                    "Pipeline/MainForward/" + frame.shaderVariant->id +
+                    "Pipeline/MainForward/" + program.id +
+                    "/ViewMode-" + frame.viewMode->id +
                     "/" + (transparent ? "Transparent" : "Opaque") +
                     "/" +
                     (cullMode == VK_CULL_MODE_NONE ? "CullNone"
@@ -325,39 +366,34 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                     frame.globalDescriptorSetLayout);
                 pipelineConfig.descriptorLayouts.push_back(
                     lightingDescriptorSetLayout_);
-                if (frame.shaderVariant->supportsAtmosphere ||
-                    frame.shaderVariant->supportsScreenSpace) {
+                if (program.usesAtmosphere || program.usesScreenSpace) {
                     pipelineConfig.descriptorLayouts.push_back(
                         atmosphereDescriptorSetLayout_);
                 }
-                if (frame.shaderVariant->supportsScreenSpace) {
+                if (program.usesScreenSpace) {
                     pipelineConfig.descriptorLayouts.push_back(
                         frame.screenSpaceDescriptorSetLayout);
                 }
-                if (frame.shaderVariant->supportsDdgi) {
+                if (program.usesDdgi) {
                     pipelineConfig.descriptorLayouts.push_back(
                         ddgiDescriptorSetLayout_);
+                }
+                if (program.usesClusteredLighting) {
+                    pipelineConfig.descriptorLayouts.push_back(
+                        clusteredLighting_->descriptorSetLayout());
                 }
 
                 PipelineRenderingSignature signature{};
                 signature.samples = pipelineConfig.msaaSamples;
                 if (transparent) {
-                    const bool useSurfaceDepth =
-                        frame.features.surfaceDataRequired;
                     const RenderImageHandle transparentColor =
-                        frame.features.lightingCompositeRequired
-                            ? resourceHandles_.compositedHdrColor
-                            : (useSurfaceDepth ||
-                                       !resourceHandles_.hdrMsaaColor.valid()
-                                   ? resourceHandles_.hdrColor
-                                   : resourceHandles_.hdrMsaaColor);
+                        transparentColorHandle(frame.features,
+                                               resourceHandles_);
                     signature.colorAttachmentFormats = {
                         resources.description(transparentColor).format};
                     signature.depthAttachmentFormat =
-                        resources.description(
-                                     useSurfaceDepth
-                                         ? resourceHandles_.surfaceDepth
-                                         : resourceHandles_.mainDepth)
+                        resources.description(transparentDepthHandle(
+                                     frame.features, resourceHandles_))
                             .format;
                 } else {
                     const VkFormat hdrFormat =
@@ -378,7 +414,7 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                 Pipeline &pipeline = frame.pipelineCache->getOrCreate(
                     std::move(signature), std::move(pipelineConfig));
                 pipelineVariants.push_back(
-                    {&materialTemplate, cullMode, &pipeline});
+                    {&materialTemplate, cullMode, &program, &pipeline});
                 cached = std::prev(pipelineVariants.end());
             }
             Pipeline &pipeline = *cached->pipeline;
@@ -395,23 +431,29 @@ void MainForwardPass::drawQueue(const RenderFrameContext &frame,
                     frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                     pipeline.layout(), 2, 1,
                     &frame.lightingDescriptorSet, 0, nullptr);
-                if (frame.shaderVariant->supportsAtmosphere) {
+                if (cached->program->usesAtmosphere) {
                     vkCmdBindDescriptorSets(
                         frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                         pipeline.layout(), 3, 1,
                         &frame.atmosphereDescriptorSet, 0, nullptr);
                 }
-                if (frame.shaderVariant->supportsScreenSpace) {
+                if (cached->program->usesScreenSpace) {
                     vkCmdBindDescriptorSets(
                         frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                         pipeline.layout(), 4, 1,
                         &frame.screenSpaceDescriptorSet, 0, nullptr);
                 }
-                if (frame.shaderVariant->supportsDdgi) {
+                if (cached->program->usesDdgi) {
                     vkCmdBindDescriptorSets(
                         frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                         pipeline.layout(), 5, 1,
                         &frame.ddgiDescriptorSet, 0, nullptr);
+                }
+                if (cached->program->usesClusteredLighting) {
+                    vkCmdBindDescriptorSets(
+                        frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        pipeline.layout(), 6, 1,
+                        &frame.clusteredLightingDescriptorSet, 0, nullptr);
                 }
                 boundPipeline = &pipeline;
                 boundMaterial = nullptr;

@@ -12,6 +12,7 @@
 #include "render/frame/FrameGpuData.h"
 #include "render/frame/FrameFeatureResolver.h"
 #include "render/features/atmosphere_environment/EnvironmentGpuResources.h"
+#include "render/features/surface/SurfaceFrameData.h"
 #include "render/material/MaterialSystem.h"
 #include "render/pipeline/PipelineCache.h"
 #include "render/frame/RenderFrame.h"
@@ -20,15 +21,18 @@
 #include "render/features/global_illumination/RayTracingScene.h"
 #include "render/features/temporal_post_process/TemporalAA.h"
 #include "render/features/shadows_visibility/Visibility.h"
-#include "render/shader/ShaderVariant.h"
+#include "render/shader/ShaderTypes.h"
 #include "render/material/Texture.h"
 #include "render/features/shadows_visibility/DirectionalShadowPass.h"
 #include "render/graph/FrameGraphExternalPasses.h"
 #include "render/features/shadows_visibility/PointShadowPass.h"
 #include "render/features/shadows_visibility/SpotShadowPass.h"
-#include "render/features/core_forward/SurfacePrepass.h"
-#include "render/features/shadows_visibility/HiZBuildPass.h"
-#include "render/features/core_forward/HdrCompositePass.h"
+#include "render/features/surface/SurfacePrepass.h"
+#include "render/features/surface/GBufferPass.h"
+#include "render/features/deferred/DeferredLightingPass.h"
+#include "render/features/lighting/ClusteredLighting.h"
+#include "render/features/surface/DepthHierarchyResources.h"
+#include "render/features/post_process/HdrCompositePass.h"
 #include "render/features/shadows_visibility/OcclusionCullPass.h"
 #include "render/features/temporal_post_process/ScreenSpacePyramidPass.h"
 #include "render/features/ambient_occlusion/SsaoPass.h"
@@ -37,11 +41,11 @@
 #include "render/features/ambient_occlusion/CacaoNormalAdapterPass.h"
 #include "render/features/ambient_occlusion/CacaoPass.h"
 #include "render/features/ambient_occlusion/GtaoPass.h"
-#include "render/features/core_forward/MainForwardPass.h"
+#include "render/features/forward/MainForwardPass.h"
 #include "render/features/atmosphere_environment/SkyBackgroundPass.h"
-#include "render/features/core_forward/ToneMapPass.h"
+#include "render/features/post_process/ToneMapPass.h"
 #include "render/features/temporal_post_process/TaaPass.h"
-#include "render/features/core_forward/PresentPass.h"
+#include "render/features/post_process/PresentPass.h"
 #include "render/features/temporal_post_process/BloomPass.h"
 #include "render/features/atmosphere_environment/AtmosphereLutPass.h"
 #include "render/features/global_illumination/DdgiPass.h"
@@ -76,7 +80,7 @@ Renderer::Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
                    MaterialBindingMode materialBindingMode)
     : device_(&device), swapChain_(&swapChain), frameSync_(&frameSync),
       descriptorAllocator_(&descriptorAllocator),
-      materialSystem_(&materialSystem),
+      materialSystem_(&materialSystem), shaderRegistry_(&shaderRegistry),
       uniformBufferSize_(sizeof(GlobalFrameUbo)),
       programs_(RendererProgramCatalog::resolve(shaderRegistry,
                                                 materialBindingMode)) {
@@ -102,6 +106,12 @@ Renderer::Renderer(Device &device, SwapChain &swapChain, FrameSync &frameSync,
     resourceHandles_ = registerDefaultRendererResources(
         *renderResources_, device, swapChain.imageFormat());
     renderResources_->realize(swapChain.extent());
+    clusteredLighting_ = std::make_unique<ClusteredLightingResources>(
+        device, descriptorAllocator, swapChain.extent());
+    for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
+        clusteredLighting_->setSceneLightBuffer(
+            frame, sceneLightBuffers_[frame].buffer->handle());
+    }
     createScreenSpaceUniformBuffers();
     createScreenSpaceDescriptorSetLayout();
     createScreenSpaceFallback();
@@ -161,7 +171,7 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
                            const VisibilityFrame &visibility,
                            PipelineCache &pipelineCache,
                            std::function<void(VkCommandBuffer)> drawUi,
-                           const ShaderVariant &shaderVariant,
+                           const ViewMode &viewMode,
                            const RenderView &view,
                            std::optional<FrameCaptureSource> captureSource,
                            std::function<void(VkCommandBuffer)> screenshotCopy) {
@@ -175,8 +185,6 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     atmosphereStatus_.sunEntity = view.atmosphere.sunEntity;
     atmosphereStatus_.sunBufferIndex = view.atmosphere.sunBufferIndex;
     atmosphereStatus_.cameraAltitudeKm = view.atmosphere.cameraAltitudeKm;
-    std::memcpy(uniformBuffers_[frame.frameIndex]->mappedData(),
-                 &view.globalUbo, sizeof(view.globalUbo));
     std::memcpy(atmosphereUniformBuffers_[frame.frameIndex]->mappedData(),
                 &view.atmosphereGpuParams,
                 sizeof(view.atmosphereGpuParams));
@@ -192,14 +200,17 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     }
     activeSceneLightCount_ =
         static_cast<uint32_t>(view.sceneLights.size());
+    clusteredLighting_->setSceneLightBuffer(
+        frame.frameIndex, lightStorage.buffer->handle());
     updateReflectionProbes(view, frame.frameIndex);
     collectRetiredLightingGenerations();
 
     const RenderFeatureSupport support = featureSupport();
     FrameFeatureResolveInput featureInput;
     featureInput.settings = &view.settings;
-    featureInput.shaderVariant = &shaderVariant;
+    featureInput.viewMode = &viewMode;
     featureInput.support = &support;
+    featureInput.resources = &resourceHandles_;
     featureInput.atmosphereActive =
         view.atmosphere.active && atmosphereLutPass_;
     featureInput.transparentVisible =
@@ -210,6 +221,8 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
         view.shadow.punctual.activePointCount;
     featureInput.spotShadowLightCount =
         view.shadow.punctual.activeSpotCount;
+    featureInput.punctualLightCount =
+        view.globalUbo.lightCounts.y + view.globalUbo.lightCounts.z;
     featureInput.occlusionCandidates =
         visibility.cpuStats.occlusionCandidates;
     featureInput.ddgiSceneActive = view.ddgi.active;
@@ -217,6 +230,39 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
     featureInput.captureSource = captureSource;
     FrameFeatureResolution featureResolution =
         resolveFrameFeatures(featureInput);
+    clusteredLighting_->prepareFrame(
+        frame.frameIndex, frameSync_->lastSubmittedSerial() + 1u,
+        featureResolution.features.clusteredLightingRequired,
+        featureInput.punctualLightCount, view.cameraNearPlane,
+        view.cameraFarPlane);
+    const ClusteredLightingStatus &clusterStatus =
+        clusteredLighting_->status();
+    profilePlotNumber("Lighting/Punctual Lights",
+                      static_cast<int64_t>(featureInput.punctualLightCount));
+    profilePlotNumber(
+        "Lighting/Cluster Non-Empty",
+        static_cast<int64_t>(clusterStatus.nonEmptyClusters));
+    profilePlotNumber(
+        "Lighting/Cluster References",
+        static_cast<int64_t>(clusterStatus.totalLightReferences));
+    profilePlotNumber(
+        "Lighting/Cluster Overflow",
+        static_cast<int64_t>(clusterStatus.overflowClusters));
+    GlobalFrameUbo frameUbo = view.globalUbo;
+    const ClusterGridConfig &clusterGrid = clusteredLighting_->grid();
+    frameUbo.clusterGrid =
+        glm::uvec4(clusterGrid.tilesX, clusterGrid.tilesY,
+                   clusterGrid.depthSlices,
+                   clusterGrid.maxLightsPerCluster);
+    frameUbo.clusterViewport = glm::uvec4(
+        clusterGrid.viewport.width, clusterGrid.viewport.height,
+        clusterGrid.tileSize,
+        featureResolution.features.clusteredLightingRequired ? 1u : 0u);
+    frameUbo.clusterDepthParams =
+        glm::vec4(clusterGrid.nearPlane, clusterGrid.farPlane,
+                  clusterGrid.logScale, clusterGrid.logBias);
+    std::memcpy(uniformBuffers_[frame.frameIndex]->mappedData(),
+                &frameUbo, sizeof(frameUbo));
     const AmbientOcclusionMode activeAoMode =
         featureResolution.runtime.activeAmbientOcclusion;
     ScreenSpaceLightingUbo screenUbo{};
@@ -268,18 +314,28 @@ void Renderer::renderFrame(const FrameSync::FrameContext &frame,
         ddgiPass_->samplingDescriptorSet(frame.frameIndex);
     renderFrame.ddgiDescriptorSetLayout =
         ddgiPass_->samplingDescriptorSetLayout();
+    renderFrame.clusteredLightingDescriptorSet =
+        clusteredLighting_->descriptorSet(frame.frameIndex);
+    renderFrame.clusteredLightingDescriptorSetLayout =
+        clusteredLighting_->descriptorSetLayout();
     renderFrame.pipelineCache = &pipelineCache;
     renderFrame.materialSystem = materialSystem_;
+    renderFrame.shaderRegistry = shaderRegistry_;
     renderFrame.debugUtils = &device_->debugUtils();
     renderFrame.tracyProfiler = &device_->tracyProfiler();
     renderFrame.drawUi = std::move(drawUi);
-    renderFrame.shaderVariant = &shaderVariant;
+    renderFrame.viewMode = &viewMode;
     renderFrame.view = &view;
     renderFrame.environmentReady = environmentReady();
     renderFrame.atmosphereReady =
         atmosphereLutPass_ &&
         atmosphereLutPass_->readyFor(view.atmosphere.staticLutKey);
     renderFrame.features = featureResolution.features;
+    lastFrameFeatures_ = renderFrame.features;
+    lastDeferredLightingDebugView_ =
+        view.settings.deferredLightingDebugView;
+    if (activeViewModeId_ != viewMode.id)
+        activeViewModeId_ = viewMode.id;
     const RenderImageHandle directionalShadowImage =
         renderFrame.features.directionalShadowRequired
             ? resourceHandles_.directionalShadowDepth
@@ -448,6 +504,7 @@ void Renderer::resizeViewport(VkExtent2D extent) {
         updateScreenSpaceDescriptor(frame, AmbientOcclusionMode::Off);
     renderGraph_.releaseViewportResources();
     renderResources_->recreateViewportDependent(extent);
+    clusteredLighting_->resize(extent);
     for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame)
         updateScreenSpaceDescriptor(frame, AmbientOcclusionMode::Off);
     renderGraph_.onViewportResize(*renderResources_);
@@ -489,10 +546,11 @@ void Renderer::createUniformBuffers() {
 
 RendererHdrOutput Renderer::hdrOutput() const {
     RendererHdrOutput output{};
-    const RenderImageHandle source =
-        renderResources_->resident(resourceHandles_.compositedHdrColor)
-            ? resourceHandles_.compositedHdrColor
-            : resourceHandles_.hdrColor;
+    RenderImageHandle source = resourceHandles_.hdrColor;
+    if (lastFrameFeatures_.opaqueProducts.hdrColor.valid())
+        source = lastFrameFeatures_.postLightingHdr(resourceHandles_);
+    if (!renderResources_->resident(source))
+        source = resourceHandles_.hdrColor;
     output.extent = renderResources_->viewportExtent();
     output.format = renderResources_->description(source).format;
     for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
@@ -567,7 +625,8 @@ void Renderer::createGlobalDescriptorSetLayout() {
     bindings[1].binding = 1;
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[1].descriptorCount = 1;
-    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[1].stageFlags =
+        VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -658,10 +717,12 @@ void Renderer::createScreenSpaceUniformBuffers() {
 
 void Renderer::createScreenSpaceDescriptorSetLayout() {
     std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+    const VkShaderStageFlags lightingStages =
+        VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
     bindings[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
-                   VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+                   lightingStages, nullptr};
     bindings[1] = {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                   VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+                   lightingStages, nullptr};
     VkDescriptorSetLayoutCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     info.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -764,34 +825,36 @@ void Renderer::updateScreenSpaceDescriptor(uint32_t frameIndex,
 
 void Renderer::createLightingDescriptorSetLayout() {
     std::array<VkDescriptorSetLayoutBinding, 9> bindings{};
+    const VkShaderStageFlags lightingStages =
+        VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
     for (uint32_t binding = 0; binding < 5; ++binding) {
         bindings[binding].binding = binding;
         bindings[binding].descriptorType =
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[binding].descriptorCount = 1;
-        bindings[binding].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[binding].stageFlags = lightingStages;
     }
     bindings[5].binding = 5;
     bindings[5].descriptorType =
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[5].descriptorCount = kMaxReflectionProbes;
-    bindings[5].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[5].stageFlags = lightingStages;
     bindings[6].binding = 6;
     bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[6].descriptorCount = 1;
-    bindings[6].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[6].stageFlags = lightingStages;
     // Point shadow map array
     bindings[7].binding = 7;
     bindings[7].descriptorType =
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[7].descriptorCount = 1;
-    bindings[7].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[7].stageFlags = lightingStages;
     // Spot shadow map array
     bindings[8].binding = 8;
     bindings[8].descriptorType =
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[8].descriptorCount = 1;
-    bindings[8].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[8].stageFlags = lightingStages;
     VkDescriptorSetLayoutCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     info.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -1375,6 +1438,19 @@ RenderFeatureSupport Renderer::featureSupport() const {
         {occlusion.supported, occlusion.unavailableReason};
     const SurfaceDataStatus surface = surfaceDataStatus();
     result.surfaceData = {surface.supported, surface.unavailableReason};
+    result.gBuffer = {device_->gBufferSupport().available,
+                      device_->gBufferSupport().reason};
+    const bool deferredSupported = device_->gBufferSupport().available &&
+                                   device_->computeBloomSupport().available;
+    result.deferredLighting = {
+        deferredSupported,
+        !device_->gBufferSupport().available
+            ? device_->gBufferSupport().reason
+            : device_->computeBloomSupport().reason};
+    result.clusteredLighting = {
+        clusteredLighting_ && clusteredLighting_->supported(),
+        clusteredLighting_ ? clusteredLighting_->status().unavailableReason
+                           : "clustered lighting is not initialized"};
 
     const ScreenSpaceEffectsStatus screen = screenSpaceEffectsStatus();
     result.depthPyramid = {screen.depthPyramidSupported,
@@ -1430,9 +1506,12 @@ OcclusionCullingStatus Renderer::occlusionCullingStatus() const {
             ? lastOcclusionRequested_ - stream.candidateCount
             : 0;
     status.completed = occlusionCullPass_->completedStatistics();
-    if (resourceHandles_.visibilityHiZ.valid()) {
+    const RenderImageHandle farthest =
+        depthHierarchyResources(resourceHandles_)
+            .image(DepthHierarchySemantic::Farthest);
+    if (farthest.valid()) {
         status.hiZMipLevels =
-            renderResources_->mipLevelCount(resourceHandles_.visibilityHiZ);
+            renderResources_->mipLevelCount(farthest);
     }
     for (uint32_t frame = 0; frame < MAX_FRAMES_IN_FLIGHT; ++frame) {
         status.indirectCapacities[frame] =
@@ -1458,6 +1537,111 @@ SurfaceDataStatus Renderer::surfaceDataStatus() const {
             surfacePrepass_->historyCapacity(frame);
     }
     status.allocatedBytes = surfacePrepass_->allocatedBytes();
+    return status;
+}
+
+GBufferRuntimeStatus Renderer::gBufferStatus() const {
+    GBufferRuntimeStatus status{};
+    const GBufferSupport &support = device_->gBufferSupport();
+    status.supported = support.available;
+    status.active = support.available && lastFrameFeatures_.gBufferRequired;
+    status.unavailableReason = support.reason;
+    status.depthFormat = support.depthFormat;
+    status.baseColorMetallicFormat = support.baseColorMetallicFormat;
+    status.normalRoughnessOcclusionFormat =
+        support.normalRoughnessOcclusionFormat;
+    status.emissiveSurfaceFlagsFormat = support.emissiveSurfaceFlagsFormat;
+    status.motionFormat = support.motionFormat;
+
+    const GBufferResources resources = gBufferResources(resourceHandles_);
+    if (!renderResources_ || !resources.valid())
+        return status;
+
+    status.extent = renderResources_->extent(resources.depth);
+    const auto residentBytes = [this](RenderImageHandle image) {
+        return renderResources_->resident(image)
+                   ? renderResources_->estimatedBytes(image)
+                   : uint64_t{0};
+    };
+    status.residentBytes = residentBytes(resources.depth) +
+                           residentBytes(resources.baseColorMetallic) +
+                           residentBytes(resources.normalRoughnessOcclusion) +
+                           residentBytes(resources.emissiveSurfaceFlags) +
+                           residentBytes(resources.motion);
+    if (gBufferPass_)
+        status.drawCount = gBufferPass_->lastDrawCount();
+    return status;
+}
+
+DeferredLightingRuntimeStatus Renderer::deferredLightingStatus() const {
+    DeferredLightingRuntimeStatus result{};
+    const bool gbufferSupported = device_->gBufferSupport().available;
+    const bool outputSupported = device_->computeBloomSupport().available;
+    result.supported = gbufferSupported && outputSupported &&
+                       deferredLightingPass_ != nullptr;
+    result.active = result.supported &&
+                    lastFrameFeatures_.deferredLightingRequired;
+    result.unavailableReason =
+        !gbufferSupported ? device_->gBufferSupport().reason
+                          : device_->computeBloomSupport().reason;
+    result.debugView = lastDeferredLightingDebugView_;
+    if (deferredLightingPass_) {
+        const DeferredLightingStatus &status =
+            deferredLightingPass_->status();
+        result.extent = status.extent;
+        result.dispatchX = status.dispatchX;
+        result.dispatchY = status.dispatchY;
+        result.residentBytes = status.residentBytes;
+    }
+    return result;
+}
+
+ClusteredLightingStatus Renderer::clusteredLightingStatus() const {
+    return clusteredLighting_ ? clusteredLighting_->status()
+                              : ClusteredLightingStatus{};
+}
+
+OpaqueRenderProducts Renderer::opaqueRenderProducts() const {
+    if (lastFrameFeatures_.opaqueProducts.hdrColor.valid())
+        return lastFrameFeatures_.opaqueProducts;
+    return vkr::opaqueRenderProducts(RenderPathMode::Forward,
+                                     resourceHandles_, false);
+}
+
+RenderPathStatus Renderer::renderPathStatus() const {
+    RenderPathStatus status{};
+    status.requested = lastFrameFeatures_.renderPath.requested;
+    status.active = lastFrameFeatures_.renderPath.active;
+    status.capabilities = lastFrameFeatures_.renderPath.capabilities;
+    const GBufferRuntimeStatus gBuffer = gBufferStatus();
+    const OpaqueRenderProducts products = opaqueRenderProducts();
+    status.products.hdrColor = products.hdrColor.valid();
+    status.products.depth = products.geometryDepth.valid();
+    status.products.sampledDepth =
+        lastFrameFeatures_.surfaceDataRequired &&
+        products.screenSpace.depth.valid();
+    status.products.normalRoughness =
+        lastFrameFeatures_.surfaceNormalsRequired &&
+        products.screenSpace.normalRoughness.valid();
+    status.products.motion = lastFrameFeatures_.surfaceMotionRequired &&
+                             products.screenSpace.motion.valid();
+    status.products.baselineDiffuse =
+        lastFrameFeatures_.ssgiActive &&
+        products.baselineDiffuse.valid();
+    status.products.baselineSpecular =
+        (lastFrameFeatures_.ssrActive || lastFrameFeatures_.ssgiActive) &&
+        products.baselineSpecular.valid();
+    status.products.multisampled =
+        status.active == RenderPathMode::Forward &&
+        status.capabilities.multisampledOpaque;
+    status.products.colorAttachmentCount =
+        1u + (status.products.baselineSpecular ? 1u : 0u) +
+        (status.products.baselineDiffuse ? 1u : 0u);
+    status.gBuffer = gBufferContractStatus();
+    status.gBuffer.implemented = gBuffer.supported;
+    status.viewMode = activeViewModeId_;
+    status.unavailableReason =
+        lastFrameFeatures_.renderPath.fallbackReason;
     return status;
 }
 
@@ -1508,13 +1692,37 @@ ScreenSpaceEffectsStatus Renderer::screenSpaceEffectsStatus() const {
         }
         return bytes * MAX_FRAMES_IN_FLIGHT;
     };
-    if (resourceHandles_.screenDepthPyramid.valid()) {
-        status.depthMipLevels = renderResources_->mipLevelCount(
-            resourceHandles_.screenDepthPyramid);
-        status.depthExtent =
-            renderResources_->extent(resourceHandles_.screenDepthPyramid);
+    const DepthHierarchyResources hierarchy =
+        depthHierarchyResources(resourceHandles_);
+    const RenderImageHandle nearest =
+        hierarchy.image(DepthHierarchySemantic::Nearest);
+    if (nearest.valid()) {
+        const DepthHierarchySupport &hierarchySupport =
+            device_->depthHierarchySupport();
+        status.depthHierarchyMode = hierarchySupport.mode;
+        status.depthHierarchyFormat = hierarchySupport.format;
+        status.depthMipLevels = renderResources_->mipLevelCount(nearest);
+        status.depthExtent = renderResources_->extent(nearest);
+        const uint64_t singleChainBytes = mipBytes(nearest, 4);
+        status.depthHierarchySplitBaselineBytes = singleChainBytes * 2u;
+        status.depthHierarchyResidentBytes =
+            hierarchy.combined() ? mipBytes(nearest, 8)
+                                 : singleChainBytes * 2u;
+        status.depthHierarchySavedBytes =
+            status.depthHierarchySplitBaselineBytes >
+                    status.depthHierarchyResidentBytes
+                ? status.depthHierarchySplitBaselineBytes -
+                      status.depthHierarchyResidentBytes
+                : 0u;
+        const uint32_t requestedChains =
+            (lastFrameFeatures_.hiZRequired ? 1u : 0u) +
+            (lastFrameFeatures_.screenDepthPyramidRequired ? 1u : 0u);
+        status.depthHierarchyDispatches =
+            hierarchy.combined() && requestedChains > 0
+                ? status.depthMipLevels
+                : status.depthMipLevels * requestedChains;
         status.estimatedMemoryBytes +=
-            mipBytes(resourceHandles_.screenDepthPyramid, 4);
+            status.depthHierarchyResidentBytes;
     }
     if (resourceHandles_.sceneColorPyramid.valid()) {
         status.colorMipLevels = renderResources_->mipLevelCount(

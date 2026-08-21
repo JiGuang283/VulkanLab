@@ -1,6 +1,6 @@
 #extension GL_GOOGLE_include_directive : require
-#include "include/material_data.glsl"
-#include "include/material_textures.glsl"
+#include "include/material_surface.glsl"
+#include "include/surface_encoding.glsl"
 
 #ifndef VKL_SURFACE_NORMAL_OUTPUT
 #define VKL_SURFACE_NORMAL_OUTPUT 1
@@ -10,6 +10,15 @@
 #endif
 #ifndef VKL_SURFACE_ALBEDO_OUTPUT
 #define VKL_SURFACE_ALBEDO_OUTPUT 1
+#endif
+#ifndef VKL_SURFACE_SHADING_MODEL
+#define VKL_SURFACE_SHADING_MODEL VKL_SHADING_MODEL_DEFAULT_LIT
+#endif
+#ifndef VKL_SURFACE_RECEIVES_SCREEN_AO
+#define VKL_SURFACE_RECEIVES_SCREEN_AO 1
+#endif
+#ifndef VKL_SURFACE_NORMAL_MAPPING
+#define VKL_SURFACE_NORMAL_MAPPING 1
 #endif
 
 layout(location = 0) in vec3 fragNormalWS;
@@ -31,52 +40,35 @@ layout(location = 1) out vec2 outMotion;
 layout(location = 2) out vec4 outAlbedoMetallic;
 #endif
 
-vec2 octEncode(vec3 normal)
-{
-    normal /= abs(normal.x) + abs(normal.y) + abs(normal.z);
-    vec2 encoded = normal.xy;
-    if (normal.z < 0.0)
-        encoded = (1.0 - abs(encoded.yx)) * sign(encoded.xy);
-    return encoded * 0.5 + 0.5;
-}
-
-vec3 materialNormal()
-{
-    vec3 n = normalize(fragNormalWS);
-    vec3 t = normalize(fragTangentWS.xyz);
-    t = normalize(t - n * dot(n, t));
-    vec3 b = normalize(cross(n, t) * fragTangentWS.w);
-    vec3 tangentNormal = sampleNormal( fragTexCoord).xyz * 2.0 - 1.0;
-    tangentNormal.xy *= max(materialData().roughnessAlphaOcclusionNormal.w, 0.0);
-    vec3 result = normalize(mat3(t, b, n) * tangentNormal);
-    return gl_FrontFacing ? result : -result;
-}
-
 void main()
 {
 #if SURFACE_ALPHA_MASKED || VKL_SURFACE_ALBEDO_OUTPUT
-    vec4 baseColor = sampleBaseColor( fragTexCoord) *
-                     materialData().baseColorFactor * fragColor;
+    vec4 baseColor = vklEvaluateBaseColor(fragTexCoord, fragColor);
 #endif
 #if SURFACE_ALPHA_MASKED
-    if (baseColor.a < materialData().roughnessAlphaOcclusionNormal.y)
+    if (materialIsMask() &&
+        baseColor.a < materialData().roughnessAlphaOcclusionNormal.y)
         discard;
 #endif
 
 #if VKL_SURFACE_NORMAL_OUTPUT
-    vec3 normalWS = materialNormal();
-    float roughness = clamp(sampleMetallicRoughness(
-                                    fragTexCoord).g *
-                                materialData().roughnessAlphaOcclusionNormal.x,
-                            0.04, 1.0);
-    outNormalRoughness = vec4(octEncode(normalWS), roughness,
-                              fragHistoryValid != 0u ? 1.0 : 0.0);
+    vec3 normalWS;
+#if VKL_SURFACE_NORMAL_MAPPING
+    normalWS = vklMappedNormal(fragNormalWS, fragTangentWS,
+                               fragTexCoord, gl_FrontFacing);
+#else
+    normalWS = vklGeometricNormal(fragNormalWS, gl_FrontFacing);
+#endif
+    vec2 roughnessMetallic = vklEvaluateRoughnessMetallic(fragTexCoord);
+    uint surfaceFlags = vklPackSurfaceFlags(
+        VKL_SURFACE_SHADING_MODEL, fragHistoryValid != 0u,
+        VKL_SURFACE_RECEIVES_SCREEN_AO != 0);
+    outNormalRoughness = vec4(vklOctEncode(normalWS),
+                              roughnessMetallic.x,
+                              float(surfaceFlags));
 #endif
 #if VKL_SURFACE_ALBEDO_OUTPUT
-    float metallic = clamp(sampleMetallicRoughness(
-                                   fragTexCoord).b *
-                               materialData().emissiveMetallic.w,
-                           0.0, 1.0);
+    float metallic = vklEvaluateRoughnessMetallic(fragTexCoord).y;
     outAlbedoMetallic = vec4(baseColor.rgb, metallic);
 #endif
 

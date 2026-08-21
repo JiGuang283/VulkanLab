@@ -1,4 +1,5 @@
 #include "render/frame/RenderView.h"
+#include "render/path/RenderPathMode.h"
 
 #include <cmath>
 #include <stdexcept>
@@ -131,6 +132,40 @@ void testEnvironmentFrameDataRequiresReadyResources() {
                 "inverse view-projection was not packed");
 }
 
+void testRenderPathResolution() {
+    vkr::RenderPathCapabilities capabilities{};
+    capabilities.deferred = true;
+    capabilities.gBuffer = true;
+
+    vkr::RenderPathSelection selection = vkr::resolveRenderPath(
+        vkr::RenderPathRequest::Auto, capabilities, true);
+    requireView(selection.active == vkr::RenderPathMode::Deferred,
+                "Auto did not select the supported Deferred path");
+
+    selection = vkr::resolveRenderPath(vkr::RenderPathRequest::Auto,
+                                       capabilities, false);
+    requireView(selection.active == vkr::RenderPathMode::Forward &&
+                    !selection.fallbackReason.empty(),
+                "Auto did not report its Forward compatibility fallback");
+
+    selection = vkr::resolveRenderPath(vkr::RenderPathRequest::Forward,
+                                       capabilities, true);
+    requireView(selection.active == vkr::RenderPathMode::Forward,
+                "an explicit Forward request selected Deferred");
+
+    selection = vkr::resolveRenderPath(vkr::RenderPathRequest::Deferred,
+                                       capabilities, true);
+    requireView(selection.active == vkr::RenderPathMode::Deferred,
+                "an explicit supported Deferred request was rejected");
+
+    capabilities.deferred = false;
+    selection = vkr::resolveRenderPath(vkr::RenderPathRequest::Auto,
+                                       capabilities, true);
+    requireView(selection.active == vkr::RenderPathMode::Forward &&
+                    !selection.fallbackReason.empty(),
+                "Auto did not fall back when Deferred was unavailable");
+}
+
 } // namespace
 
 void runRenderViewTests() {
@@ -138,4 +173,5 @@ void runRenderViewTests() {
     testSceneWithoutDirectionalLightDisablesShadow();
     testGpuLightLimits();
     testEnvironmentFrameDataRequiresReadyResources();
+    testRenderPathResolution();
 }

@@ -13,13 +13,16 @@
 namespace vkr::editor {
 namespace {
 
+bool gIconsAvailable = false;
+
 ImVec4 color(float r, float g, float b, float a = 1.0f) {
     return ImVec4(r, g, b, a);
 }
 
 } // namespace
 
-void applyEditorTheme(GLFWwindow *window) {
+void applyEditorTheme(GLFWwindow *window,
+                      const std::filesystem::path &iconFontPath) {
     float xScale = 1.0f;
     float yScale = 1.0f;
     if (window)
@@ -44,6 +47,20 @@ void applyEditorTheme(GLFWwindow *window) {
     }
     if (!fontLoaded)
         io.Fonts->AddFontDefault(&fontConfig);
+
+    gIconsAvailable = false;
+    if (!iconFontPath.empty() && std::filesystem::is_regular_file(iconFontPath)) {
+        static constexpr ImWchar kIconRanges[] = {0xe000, 0xe7ff, 0};
+        ImFontConfig iconConfig{};
+        iconConfig.MergeMode = true;
+        iconConfig.PixelSnapH = true;
+        iconConfig.GlyphMinAdvanceX = fontConfig.SizePixels;
+        iconConfig.GlyphMaxAdvanceX = fontConfig.SizePixels;
+        gIconsAvailable = io.Fonts->AddFontFromFileTTF(
+                              iconFontPath.string().c_str(),
+                              fontConfig.SizePixels, &iconConfig,
+                              kIconRanges) != nullptr;
+    }
 
     ImGui::StyleColorsDark();
     ImGuiStyle &style = ImGui::GetStyle();
@@ -114,5 +131,7 @@ void applyEditorTheme(GLFWwindow *window) {
 
     style.ScaleAllSizes(dpiScale);
 }
+
+bool iconsAvailable() { return gIconsAvailable; }
 
 } // namespace vkr::editor
