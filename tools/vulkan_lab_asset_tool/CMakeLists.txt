@@ -14,7 +14,8 @@ target_include_directories(vkl_asset_tool_core PUBLIC
 )
 target_link_libraries(vkl_asset_tool_core
     PUBLIC
-        vkl_build_options
+        vkl_project_options
+        vkl_project_warnings
         vkl_asset_core
     PRIVATE
         vkl_shader_catalog
@@ -30,7 +31,8 @@ target_link_libraries(vkl_asset_tool_core
 
 add_executable(VulkanLabAssetTool main.cpp)
 target_link_libraries(VulkanLabAssetTool PRIVATE
-    vkl_build_options
+    vkl_project_options
+    vkl_project_warnings
     vkl_asset_core
     vkl_asset_tool_core
     vkl_json

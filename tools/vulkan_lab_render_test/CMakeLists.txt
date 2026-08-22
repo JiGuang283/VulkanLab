@@ -12,7 +12,8 @@ target_include_directories(vkl_render_test_core
 )
 target_link_libraries(vkl_render_test_core
     PUBLIC
-        vkl_build_options
+        vkl_project_options
+        vkl_project_warnings
         vkl_control
         vkl_json
     PRIVATE
@@ -23,7 +24,8 @@ target_link_libraries(vkl_render_test_core
 
 add_executable(VulkanLabRenderTest main.cpp)
 target_link_libraries(VulkanLabRenderTest PRIVATE
-    vkl_build_options
+    vkl_project_options
+    vkl_project_warnings
     vkl_render_test_core
 )
 add_dependencies(VulkanLabRenderTest VulkanLabRuntimeImage)

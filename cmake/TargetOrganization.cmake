@@ -60,6 +60,9 @@ vulkanlab_set_target_folder("VulkanLab/Workflows"
 vulkanlab_set_target_folder("VulkanLab/Build"
     VulkanLabBuildInfo
     vkl_build_options
+    vkl_project_options
+    vkl_project_warnings
+    vkl_runtime_features
 )
 
 # These are the dependency targets directly exposed to VulkanLab's build.

@@ -46,7 +46,7 @@ configure_file(
     "${PROJECT_SOURCE_DIR}/cmake/RuntimeFeatures.h.in"
     "${VKL_RUNTIME_FEATURES_INCLUDE_DIR}/RuntimeFeatures.h"
 )
-target_include_directories(vkl_build_options INTERFACE
+target_include_directories(vkl_runtime_features INTERFACE
     "${VKL_RUNTIME_FEATURES_INCLUDE_DIR}"
 )
 

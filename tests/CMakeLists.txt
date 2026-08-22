@@ -39,7 +39,8 @@ set_target_properties(VulkanLabCpuTests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/test-bin/$<CONFIG>"
 )
 target_link_libraries(VulkanLabCpuTests PRIVATE
-    vkl_build_options
+    vkl_project_options
+    vkl_project_warnings
     vkl_asset_core
     # The combined test executable exercises both offline KTX writing and
     # runtime KTX reading. Keep the complete provider before ktx_read's
