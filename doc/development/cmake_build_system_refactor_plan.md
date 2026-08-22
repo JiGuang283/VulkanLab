@@ -2,7 +2,7 @@
 
 > Status: Active
 > Last verified: 2026-08-22
-> Verified against: `98aba18`
+> Verified against: `ed1723c`
 
 ## Review Summary
 
@@ -561,6 +561,8 @@ Forward/Deferred和MRT组合增加，增量构建成本会持续放大。
 - Manifest解析只负责生成 job，不复制 custom command模板。
 - `glslc` 增加 depfile输出，并由 `add_custom_command(DEPFILE ...)` 消费，使每个 SPIR-V
   只依赖实际 include闭包。
+- 显式 `targetEnv` 是 Shader binary identity的一部分，输出名使用
+  `.<target-env>.spv` qualifier；默认 `vulkan1.0` 继续保留兼容文件名。
 - 继续对每个输出执行 `spirv-val`。
 - 保持规范 SPIR-V和 runtime-staged SPIR-V两层，不在源码树生成二进制。
 - 把 compile和stage目标分开：
@@ -568,8 +570,14 @@ Forward/Deferred和MRT组合增加，增量构建成本会持续放大。
   VulkanLabShaderCompile
   VulkanLabShaders
   ```
-- Manifest变更触发重新 Configure；单个 GLSL或 include变更只触发必要 job。
-- 失败时不把未通过 `spirv-val` 的产物 stage到 runtime image。
+- Manifest变更触发重新 Configure，并在 configure时清理已不再声明的 generated
+  SPIR-V、depfile和临时文件；单个 GLSL或 include变更只触发必要 job。
+- 每个 job先写临时 SPIR-V，通过 `spirv-val` 后才替换 canonical generated输出。
+  `VulkanLabShaders` 只在所有 canonical输出成功后集中发布 runtime shader目录和
+  Manifest，因此失败不会污染上一次可运行镜像。
+- `VulkanLabShaders` 在 Visual Studio下有意保持为轻量 always-run publisher：无改动
+  时不会执行 `glslc`，但能修复被手工删除的 runtime SPIR-V。复制使用
+  `ONLY_IF_DIFFERENT`，不会无条件改写全部文件。
 
 ### Edge Cases
 
@@ -586,6 +594,29 @@ Forward/Deferred和MRT组合增加，增量构建成本会持续放大。
 - 修改共享 ABI include仍正确重编译全部受影响 variant。
 - 删除 program后 `run/<Config>/shader` 不保留对应旧 SPIR-V。
 - Shader compile失败不会污染可运行镜像。
+
+### Stage 4 Verification Record
+
+实现提交：`ed1723c`。
+
+- Dev Debug、Full Debug和Runtime Release均生成127个 canonical SPIR-V、127个 runtime
+  SPIR-V和127个 depfile，没有遗留 `.tmp`。
+- 修改 `pbr_lite/forward_common.glsl` 只重编译12个真实 consumer；修改共享
+  `global_frame.glsl` 重编译36个真实 consumer；修改单个 Present fragment只重编译
+  1个 job。
+- 仅修改 Manifest会重新 Configure和发布，但不会重新编译未变化 Shader；模拟陈旧
+  generated/runtime SPIR-V后再次 Configure，两个陈旧文件均被清理。
+- 删除一个 runtime SPIR-V后执行 `VulkanLabShaders`，0个 compile job即可恢复运行时
+  文件。
+- 受控编译失败探针确认：runtime SPIR-V和canonical generated SPIR-V hash均不变，
+  publisher不执行，也不遗留临时文件。
+- 显式 `targetEnv=vulkan1.2` 的 DDGI输出使用 `.vulkan1.2.spv`，ShaderRegistry按相同
+  规则解析，避免不同 target environment共享输出和depfile。
+- Visual Studio canonical generator与临时 Ninja + MSVC生成树均验证了depfile；Ninja
+  clean build生成127个variant，局部 include修改同样只重编译12个consumer。
+- `windows-msvc-dev-fast`、`windows-msvc-full`和`windows-msvc-runtime`均完成构建；
+  Dev Runtime Control启动/退出和Runtime持续运行冒烟通过。Full测试 executable完成
+  链接，但遵循项目策略未执行测试套件。
 
 ## Stage 5: 声明式 Developer Runtime Image
 

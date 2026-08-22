@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-22
-> Verified against: `98aba18`
+> Verified against: `ed1723c`
 
 VulkanLab 是一个开发中的 Windows Vulkan 1.3 实时渲染器。当前架构以
 `Application` 为组合根，以类型化 service、snapshot、action 和 submission
@@ -137,6 +137,12 @@ feature header。第三方 target 不继承项目 warning policy。第三方依�
 `Core`、`Rendering`、`Editor`、`AssetTools` 和 `Diagnostics` 分文件管理；Editor、
 DirectXTex、Tracy、CACAO 和 SPIR-V Reflect 只在对应 feature 或 product 需要时进入
 生成图。KTX 的 read-only runtime 部分仍是所有配置都需要的派生纹理读取依赖。
+
+Shader构建分为`VulkanLabShaderCompile`和`VulkanLabShaders`。前者依据Manifest生成
+去重后的variant job，使用`glslc` depfile跟踪真实include闭包，并在`spirv-val`成功后
+发布canonical generated SPIR-V；后者只在全部编译成功后集中装配runtime shader镜像
+并清理陈旧输出。Shader源码、generated产物和runtime镜像因此具有明确的所有权与失败
+边界，单个编译失败不会替换上一次可运行镜像。
 
 构建开关只裁剪开发基础设施，不切换渲染算法 ABI。Editor、Runtime Control、
 Capture、Asset Authoring、Validation、Debug Utils、GPU Profiler 和 Tracy 可以独立

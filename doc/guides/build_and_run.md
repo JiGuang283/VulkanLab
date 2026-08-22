@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-22
-> Verified against: `98aba18`
+> Verified against: `ed1723c`
 
 ## 环境要求
 
@@ -160,7 +160,15 @@ cmake --build build --config Release
 
 构建会生成 Git revision/dirty、configuration、compiler、Vulkan SDK 和 `glslc` 版本信息。启用 Runtime Control 后可通过 `VulkanLabCtl.exe --json info` 查看。确定性窗口、fixed delta、无 GUI 和诊断输出配置见 [诊断与自动化启动配置](diagnostics.md)。
 
-CMake 将 `shader/` 下由 Manifest 引用的 GLSL 源增量编译到 `build-*/generated/<Config>/shader/`，每个产物通过 `spirv-val` 后再 stage 到可执行文件旁的 `shader/`。标记 `materialTextures=true` 的 fragment 还会生成 Bindless SPIR-V。共享 ABI include 会作为依赖触发相关 shader 重编译。源码树不保存 SPIR-V，也没有独立的 `compile.bat`；普通 C++ rebuild 不会重新调用 `glslc`，修改一个 Shader 只更新对应产物。需要单独构建 Shader 时使用：
+CMake 将 `shader/manifest.json` 声明的 GLSL job增量编译到
+`build/<profile>/generated/<Config>/shader/`。`glslc` 为每个variant生成depfile，
+因此局部和共享include都只重编译其真实consumer；显式`targetEnv`也会进入输出身份。
+每个临时产物通过`spirv-val`后才替换canonical SPIR-V，全部编译成功后再由
+`VulkanLabShaders`集中发布到`build/<profile>/run/<Config>/shader/`。发布阶段还会清理
+Manifest已不再声明的runtime产物，并能在不重新编译的情况下修复被删除的runtime
+文件。标记`materialTextures=true`的fragment继续生成Bindless SPIR-V。源码树不保存
+SPIR-V，也没有独立的`compile.bat`；普通C++ rebuild不会重新调用`glslc`。需要单独
+构建Shader时使用：
 
 ```powershell
 cmake --build --preset windows-msvc-dev-fast --target VulkanLabShaders
