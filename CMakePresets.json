@@ -7,104 +7,12 @@
   },
   "configurePresets": [
     {
-      "name": "windows-msvc-debug",
-      "displayName": "Windows MSVC Debug",
+      "name": "windows-msvc-base",
+      "hidden": true,
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
-      "binaryDir": "${sourceDir}/build/windows-msvc-debug",
-      "cacheVariables": {
-        "BUILD_TESTING": "ON",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "VKL_ENABLE_EDITOR_UI": "ON",
-        "VKL_ENABLE_RUNTIME_CONTROL": "ON",
-        "VKL_ENABLE_CAPTURE": "ON",
-        "VKL_ENABLE_ASSET_AUTHORING": "ON",
-        "VKL_ENABLE_VALIDATION": "ON",
-        "VKL_ENABLE_GPU_DEBUG_UTILS": "ON",
-        "VKL_ENABLE_GPU_PROFILING": "ON",
-        "VKL_ENABLE_TRACY": "OFF",
-        "VKL_ENABLE_CACAO": "OFF",
-        "VKL_BUILD_ASSET_TOOL": "ON",
-        "VKL_BUILD_CONTROL_TOOL": "ON",
-        "VKL_BUILD_RENDER_TEST": "ON"
-      }
-    },
-    {
-      "name": "windows-msvc-release",
-      "displayName": "Windows MSVC Release",
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64",
-      "binaryDir": "${sourceDir}/build/windows-msvc-release",
-      "cacheVariables": {
-        "BUILD_TESTING": "ON",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "VKL_ENABLE_EDITOR_UI": "ON",
-        "VKL_ENABLE_RUNTIME_CONTROL": "ON",
-        "VKL_ENABLE_CAPTURE": "ON",
-        "VKL_ENABLE_ASSET_AUTHORING": "ON",
-        "VKL_ENABLE_VALIDATION": "ON",
-        "VKL_ENABLE_GPU_DEBUG_UTILS": "ON",
-        "VKL_ENABLE_GPU_PROFILING": "ON",
-        "VKL_ENABLE_TRACY": "OFF",
-        "VKL_ENABLE_CACAO": "OFF",
-        "VKL_BUILD_ASSET_TOOL": "ON",
-        "VKL_BUILD_CONTROL_TOOL": "ON",
-        "VKL_BUILD_RENDER_TEST": "ON"
-      }
-    },
-    {
-      "name": "windows-msvc-dev-fast",
-      "displayName": "Windows MSVC Fast Development",
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64",
-      "binaryDir": "${sourceDir}/build/windows-msvc-dev-fast",
       "cacheVariables": {
         "BUILD_TESTING": "OFF",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "VKL_ENABLE_EDITOR_UI": "ON",
-        "VKL_ENABLE_RUNTIME_CONTROL": "ON",
-        "VKL_ENABLE_CAPTURE": "ON",
-        "VKL_ENABLE_ASSET_AUTHORING": "ON",
-        "VKL_ENABLE_VALIDATION": "ON",
-        "VKL_ENABLE_GPU_DEBUG_UTILS": "ON",
-        "VKL_ENABLE_GPU_PROFILING": "ON",
-        "VKL_ENABLE_TRACY": "OFF",
-        "VKL_ENABLE_CACAO": "OFF",
-        "VKL_BUILD_ASSET_TOOL": "ON",
-        "VKL_BUILD_CONTROL_TOOL": "OFF",
-        "VKL_BUILD_RENDER_TEST": "OFF"
-      }
-    },
-    {
-      "name": "windows-msvc-ao-compare",
-      "displayName": "Windows MSVC AO Comparison",
-      "inherits": "windows-msvc-dev-fast",
-      "binaryDir": "${sourceDir}/build/windows-msvc-ao-compare",
-      "cacheVariables": {
-        "VKL_ENABLE_CACAO": "ON",
-        "VKL_BUILD_CONTROL_TOOL": "ON"
-      }
-    },
-    {
-      "name": "windows-msvc-tracy",
-      "displayName": "Windows MSVC Tracy Profiling",
-      "inherits": "windows-msvc-dev-fast",
-      "binaryDir": "${sourceDir}/build/windows-msvc-tracy",
-      "cacheVariables": {
-        "VKL_ENABLE_TRACY": "ON",
-        "VKL_ENABLE_CACAO": "OFF",
-        "VKL_BUILD_CONTROL_TOOL": "ON"
-      }
-    },
-    {
-      "name": "windows-msvc-runtime",
-      "displayName": "Windows MSVC Minimal Runtime",
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64",
-      "binaryDir": "${sourceDir}/build/windows-msvc-runtime",
-      "cacheVariables": {
-        "BUILD_TESTING": "OFF",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "VKL_ENABLE_EDITOR_UI": "OFF",
         "VKL_ENABLE_RUNTIME_CONTROL": "OFF",
         "VKL_ENABLE_CAPTURE": "OFF",
@@ -118,19 +26,79 @@
         "VKL_BUILD_CONTROL_TOOL": "OFF",
         "VKL_BUILD_RENDER_TEST": "OFF"
       }
+    },
+    {
+      "name": "windows-msvc-editor-base",
+      "hidden": true,
+      "inherits": "windows-msvc-base",
+      "cacheVariables": {
+        "VKL_ENABLE_EDITOR_UI": "ON",
+        "VKL_ENABLE_RUNTIME_CONTROL": "ON",
+        "VKL_ENABLE_CAPTURE": "ON",
+        "VKL_ENABLE_ASSET_AUTHORING": "ON",
+        "VKL_ENABLE_VALIDATION": "ON",
+        "VKL_ENABLE_GPU_DEBUG_UTILS": "ON",
+        "VKL_ENABLE_GPU_PROFILING": "ON",
+        "VKL_BUILD_ASSET_TOOL": "ON"
+      }
+    },
+    {
+      "name": "windows-msvc-dev-fast",
+      "displayName": "Windows MSVC Fast Development",
+      "description": "Daily Debug editor build without tests or auxiliary control/test executables.",
+      "inherits": "windows-msvc-editor-base",
+      "binaryDir": "${sourceDir}/build/dev",
+      "cacheVariables": {
+        "VKL_BUILD_PROFILE": "dev"
+      }
+    },
+    {
+      "name": "windows-msvc-full",
+      "displayName": "Windows MSVC Full Toolchain",
+      "description": "Shared multi-config tree for full Debug and Release builds.",
+      "inherits": "windows-msvc-editor-base",
+      "binaryDir": "${sourceDir}/build/full",
+      "cacheVariables": {
+        "VKL_BUILD_PROFILE": "full",
+        "BUILD_TESTING": "ON",
+        "VKL_BUILD_CONTROL_TOOL": "ON",
+        "VKL_BUILD_RENDER_TEST": "ON"
+      }
+    },
+    {
+      "name": "windows-msvc-runtime",
+      "displayName": "Windows MSVC Minimal Runtime",
+      "description": "Release runtime without editor and development infrastructure.",
+      "inherits": "windows-msvc-base",
+      "binaryDir": "${sourceDir}/build/runtime",
+      "cacheVariables": {
+        "VKL_BUILD_PROFILE": "runtime"
+      }
+    },
+    {
+      "name": "windows-msvc-tracy",
+      "displayName": "Windows MSVC Tracy Profiling",
+      "inherits": "windows-msvc-editor-base",
+      "binaryDir": "${sourceDir}/build/tracy",
+      "cacheVariables": {
+        "VKL_BUILD_PROFILE": "tracy",
+        "VKL_ENABLE_TRACY": "ON",
+        "VKL_BUILD_CONTROL_TOOL": "ON"
+      }
+    },
+    {
+      "name": "windows-msvc-ao-compare",
+      "displayName": "Windows MSVC AO Comparison",
+      "inherits": "windows-msvc-editor-base",
+      "binaryDir": "${sourceDir}/build/cacao",
+      "cacheVariables": {
+        "VKL_BUILD_PROFILE": "cacao",
+        "VKL_ENABLE_CACAO": "ON",
+        "VKL_BUILD_CONTROL_TOOL": "ON"
+      }
     }
   ],
   "buildPresets": [
-    {
-      "name": "windows-msvc-debug",
-      "configurePreset": "windows-msvc-debug",
-      "configuration": "Debug"
-    },
-    {
-      "name": "windows-msvc-release",
-      "configurePreset": "windows-msvc-release",
-      "configuration": "Release"
-    },
     {
       "name": "windows-msvc-dev-fast",
       "configurePreset": "windows-msvc-dev-fast",
@@ -140,13 +108,54 @@
       ]
     },
     {
-      "name": "windows-msvc-ao-compare",
-      "configurePreset": "windows-msvc-ao-compare",
+      "name": "windows-msvc-dev-runtime",
+      "displayName": "Windows MSVC Development Runtime Only",
+      "configurePreset": "windows-msvc-dev-fast",
       "configuration": "Debug",
       "targets": [
+        "VulkanLab"
+      ]
+    },
+    {
+      "name": "windows-msvc-full-build-base",
+      "hidden": true,
+      "configurePreset": "windows-msvc-full",
+      "targets": [
         "VulkanLab",
+        "VulkanLabAssetTool",
         "VulkanLabCtl",
-        "VulkanLabAssetTool"
+        "VulkanLabRenderTest",
+        "VulkanLabCpuTests"
+      ]
+    },
+    {
+      "name": "windows-msvc-full-debug",
+      "displayName": "Windows MSVC Full Debug",
+      "inherits": "windows-msvc-full-build-base",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-msvc-full-release",
+      "displayName": "Windows MSVC Full Release",
+      "inherits": "windows-msvc-full-build-base",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-msvc-debug",
+      "displayName": "Windows MSVC Debug (Compatibility Alias)",
+      "inherits": "windows-msvc-full-debug"
+    },
+    {
+      "name": "windows-msvc-release",
+      "displayName": "Windows MSVC Release (Compatibility Alias)",
+      "inherits": "windows-msvc-full-release"
+    },
+    {
+      "name": "windows-msvc-runtime",
+      "configurePreset": "windows-msvc-runtime",
+      "configuration": "Release",
+      "targets": [
+        "VulkanLab"
       ]
     },
     {
@@ -160,19 +169,21 @@
       ]
     },
     {
-      "name": "windows-msvc-runtime",
-      "configurePreset": "windows-msvc-runtime",
-      "configuration": "Release",
+      "name": "windows-msvc-ao-compare",
+      "configurePreset": "windows-msvc-ao-compare",
+      "configuration": "Debug",
       "targets": [
-        "VulkanLab"
+        "VulkanLab",
+        "VulkanLabCtl",
+        "VulkanLabAssetTool"
       ]
     }
   ],
   "testPresets": [
     {
       "name": "windows-msvc-test",
-      "displayName": "Windows MSVC Debug Tests",
-      "configurePreset": "windows-msvc-debug",
+      "displayName": "Windows MSVC Full Debug Tests",
+      "configurePreset": "windows-msvc-full",
       "configuration": "Debug",
       "output": {
         "outputOnFailure": true

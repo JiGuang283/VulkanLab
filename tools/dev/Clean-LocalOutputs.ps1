@@ -1,8 +1,9 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [string[]]$KeepPreset = @(
-        'windows-msvc-dev-fast',
-        'windows-msvc-runtime'
+        'dev',
+        'full',
+        'runtime'
     )
 )
 

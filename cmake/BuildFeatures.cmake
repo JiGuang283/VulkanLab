@@ -1,5 +1,10 @@
 include_guard(GLOBAL)
 
+set(VKL_BUILD_PROFILE "custom" CACHE STRING
+    "Named VulkanLab configure profile used for diagnostics")
+set_property(CACHE VKL_BUILD_PROFILE PROPERTY STRINGS
+    custom dev full runtime tracy cacao)
+
 option(VKL_ENABLE_EDITOR_UI "Compile the Dear ImGui editor workspace" ON)
 option(VKL_ENABLE_RUNTIME_CONTROL
     "Compile the local named-pipe Runtime Control server" ON)
@@ -45,7 +50,13 @@ target_include_directories(vkl_build_options INTERFACE
     "${VKL_BUILD_FEATURES_INCLUDE_DIR}"
 )
 
-message(STATUS "VulkanLab build features")
+message(STATUS "VulkanLab configure profile")
+message(STATUS "  profile=${VKL_BUILD_PROFILE}")
+message(STATUS "  generator=${CMAKE_GENERATOR}")
+message(STATUS "  binaryDir=${PROJECT_BINARY_DIR}")
+message(STATUS "  runtimeOutput=${VKL_RUNTIME_OUTPUT_DIRECTORY}")
+
+message(STATUS "VulkanLab runtime features")
 foreach(VKL_FEATURE IN ITEMS
         VKL_ENABLE_EDITOR_UI
         VKL_ENABLE_RUNTIME_CONTROL
@@ -55,7 +66,12 @@ foreach(VKL_FEATURE IN ITEMS
         VKL_ENABLE_GPU_DEBUG_UTILS
         VKL_ENABLE_GPU_PROFILING
         VKL_ENABLE_TRACY
-        VKL_ENABLE_CACAO
+        VKL_ENABLE_CACAO)
+    message(STATUS "  ${VKL_FEATURE}=${${VKL_FEATURE}}")
+endforeach()
+
+message(STATUS "VulkanLab build products")
+foreach(VKL_FEATURE IN ITEMS
         VKL_BUILD_ASSET_TOOL
         VKL_BUILD_CONTROL_TOOL
         VKL_BUILD_RENDER_TEST

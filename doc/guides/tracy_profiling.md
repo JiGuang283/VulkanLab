@@ -45,7 +45,7 @@ cmake --build --preset windows-msvc-tracy
 从仓库根目录启动：
 
 ```powershell
-.\build\windows-msvc-tracy\run\Debug\VulkanLab.exe `
+.\build\tracy\run\Debug\VulkanLab.exe `
   --runtime-control `
   --runtime-control-pipe tracy `
   --validation off
@@ -133,7 +133,7 @@ Tracy Vulkan context 使用 graphics queue。初始化 context 允许官方实�
 ## 状态检查
 
 ```powershell
-.\build\windows-msvc-tracy\run\Debug\VulkanLabCtl.exe `
+.\build\tracy\run\Debug\VulkanLabCtl.exe `
   --pipe tracy --json info
 ```
 

@@ -14,8 +14,9 @@ CPU 与 Vulkan GPU 统一时间线见 [Tracy 性能分析](tracy_profiling.md)�
 Windows MSVC 开发环境提供以下 presets：
 
 ```text
-windows-msvc-debug
-windows-msvc-release
+windows-msvc-full
+windows-msvc-full-debug
+windows-msvc-full-release
 windows-msvc-dev-fast
 windows-msvc-tracy
 windows-msvc-runtime
@@ -25,15 +26,15 @@ windows-msvc-test
 推荐使用：
 
 ```powershell
-cmake --preset windows-msvc-debug
-cmake --build --preset windows-msvc-debug
+cmake --preset windows-msvc-full
+cmake --build --preset windows-msvc-full-debug
 ctest --preset windows-msvc-test
 
-cmake --preset windows-msvc-release
-cmake --build --preset windows-msvc-release
+cmake --build --preset windows-msvc-full-release
 ```
 
-Debug 和 Release 分别写入 `build/windows-msvc-debug/` 与 `build/windows-msvc-release/`，不会共享生成的 Shader 或 BuildInfo。
+完整 Debug 和 Release 共用 `build/full/` 多配置生成树，但生成的 Shader、
+BuildInfo 和运行产物仍按 `Debug`/`Release` 配置隔离。
 
 `windows-msvc-dev-fast` 保留全部运行时开发功能，但不生成测试、Ctl 或 RenderTest；`windows-msvc-tracy` 在同类 Debug 配置上启用 Tracy 并构建 Ctl；`windows-msvc-runtime` 是只保留渲染功能和 KTX2 读取的精简 Release。完整开关矩阵见[构建与运行](build_and_run.md#编译期功能开关)。
 

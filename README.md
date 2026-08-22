@@ -103,7 +103,7 @@ test targets:
 ```powershell
 cmake --preset windows-msvc-dev-fast
 cmake --build --preset windows-msvc-dev-fast
-./build/windows-msvc-dev-fast/run/Debug/VulkanLab.exe --project .
+./build/dev/run/Debug/VulkanLab.exe --project .
 ```
 
 The minimal runtime configuration is built with:
@@ -111,7 +111,7 @@ The minimal runtime configuration is built with:
 ```powershell
 cmake --preset windows-msvc-runtime
 cmake --build --preset windows-msvc-runtime
-./build/windows-msvc-runtime/run/Release/VulkanLab.exe --project .
+./build/runtime/run/Release/VulkanLab.exe --project .
 ```
 
 Large optional models, source HDR environments, generated KTX2 caches, build

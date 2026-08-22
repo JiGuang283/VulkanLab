@@ -13,10 +13,9 @@
     "C_Cpp.intelliSenseCacheSize": 512,
     "C_Cpp.workspaceParsingPriority": "low",
     "editor.quickSuggestionsDelay": 10,
+    "cmake.useCMakePresets": "always",
+    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
     "files.exclude": {
-        "**/build": true,
         "**/.git": true
-    },
-
-    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+    }
 }

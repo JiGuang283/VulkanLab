@@ -7,8 +7,8 @@ diagnostics but magnify per-draw C++ overhead.
 
 ```powershell
 .\tools\performance\Measure-Renderer.ps1 `
-  -Renderer .\build\windows-msvc-release\run\Release\VulkanLab.exe `
-  -ControlTool .\build\windows-msvc-release\run\Release\VulkanLabCtl.exe `
+  -Renderer .\build\full\run\Release\VulkanLab.exe `
+  -ControlTool .\build\full\run\Release\VulkanLabCtl.exe `
   -Scene "Main Sponza" `
   -Profile Default `
   -MaterialBinding bindless `

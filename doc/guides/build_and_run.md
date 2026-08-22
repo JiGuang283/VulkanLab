@@ -21,12 +21,13 @@ git submodule update --init --recursive
 
 ## 构建配置
 
-Windows MSVC 提供六个主要 configure/build preset：
+Windows MSVC 提供五类主要构建配置。完整 Debug/Release 共用同一个
+`build/full` 多配置生成树，避免重复生成 Visual Studio 工程：
 
 | Preset | 配置 | 用途 | 主要产物 |
 |---|---|---|---|
-| `windows-msvc-debug` | Debug，全功能，`BUILD_TESTING=ON` | 完整开发与诊断 | VulkanLab、AssetTool、Ctl、RenderTest 和测试目标 |
-| `windows-msvc-release` | Release，全功能，`BUILD_TESTING=ON` | 完整 Release 验证与 Cook 输入 | 与 Debug 相同的功能和工具 |
+| `windows-msvc-full` + `windows-msvc-full-debug` | Debug，全功能，`BUILD_TESTING=ON` | 完整开发与诊断 | VulkanLab、AssetTool、Ctl、RenderTest 和测试目标 |
+| `windows-msvc-full` + `windows-msvc-full-release` | Release，全功能，`BUILD_TESTING=ON` | 完整 Release 验证 | 与 Debug 相同的功能和工具 |
 | `windows-msvc-dev-fast` | Debug，全运行时功能，`BUILD_TESTING=OFF` | 日常快速迭代 | VulkanLab 和 AssetTool |
 | `windows-msvc-ao-compare` | Debug，基于 dev-fast，CACAO ON | SSAO/CACAO 质量与性能对比 | VulkanLab、AssetTool 和 Ctl |
 | `windows-msvc-tracy` | Debug，全运行时功能，Tracy ON，`BUILD_TESTING=OFF` | CPU/Vulkan GPU 深度性能分析 | VulkanLab、AssetTool 和 Ctl |
@@ -98,19 +99,21 @@ CMake 通过 `configure_file()` 生成 `BuildFeatures.h`。宏仅用于程序入
 
 未编译功能的启动参数不会被静默忽略。`--runtime-control`、`--runtime-control-pipe`、`--capture-root`、`--asset-mode ondemand`、`--asset-tool` 和非 `off` Validation profile 会在创建 Window/Vulkan 前返回明确错误。Editor 未编译时 `--no-gui` 仍被接受；Asset Authoring 未编译时默认模式为 `ReadOnly`。Runtime Control 已编译但某个子功能被裁剪时，对应协议方法返回 `feature_not_compiled`。
 
-推荐使用仓库 presets 配置、构建和测试：
+需要完整工具和测试目标时，先配置一次共享生成树，再选择构建配置：
 
 ```powershell
-cmake --preset windows-msvc-debug
-cmake --build --preset windows-msvc-debug
+cmake --preset windows-msvc-full
+cmake --build --preset windows-msvc-full-debug
 ctest --preset windows-msvc-test
 
-cmake --preset windows-msvc-release
-cmake --build --preset windows-msvc-release
-ctest --test-dir build/windows-msvc-release -C Release --output-on-failure
+cmake --build --preset windows-msvc-full-release
+ctest --test-dir build/full -C Release --output-on-failure
 ```
 
-Debug 和 Release 分别使用 `build/windows-msvc-debug/` 与 `build/windows-msvc-release/`。也可以继续使用自定义 build 目录，首次配置：
+`windows-msvc-debug` 和 `windows-msvc-release` 暂时保留为 build preset 兼容别名，
+均使用已经配置的 `build/full`；新脚本和文档不应再依赖旧的
+`build/windows-msvc-*` 目录名。
+也可以继续使用自定义 build 目录，首次配置：
 
 ```powershell
 cmake -S . -B build-debug
@@ -137,30 +140,30 @@ cmake --build --preset windows-msvc-dev-fast --target VulkanLabShaders
 开发构建只把 executable、运行时工具、`vulkanlab_project.json` locator 和生成的 SPIR-V 放入输出目录，不复制完整 `models/` 或 `textures/`。开发场景直接通过 ProjectContext 从源码项目读取源资产；Release 交付使用后文的 `cook` 命令生成经过校验的最小闭包。Windows 构建还会生成运行时控制工具。
 
 ```text
-build/windows-msvc-debug/run/Debug/VulkanLab.exe
-build/windows-msvc-debug/run/Debug/VulkanLabCtl.exe
-build/windows-msvc-release/run/Release/VulkanLab.exe
-build/windows-msvc-release/run/Release/VulkanLabCtl.exe
+build/full/run/Debug/VulkanLab.exe
+build/full/run/Debug/VulkanLabCtl.exe
+build/full/run/Release/VulkanLab.exe
+build/full/run/Release/VulkanLabCtl.exe
 ```
 
 阶段三的资产工具接入构建后还会生成：
 
 ```text
-build/windows-msvc-debug/run/Debug/VulkanLabAssetTool.exe
-build/windows-msvc-release/run/Release/VulkanLabAssetTool.exe
+build/full/run/Debug/VulkanLabAssetTool.exe
+build/full/run/Release/VulkanLabAssetTool.exe
 ```
 
 开发构建还会生成独立视觉测试程序，它不进入 Cook package：
 
 ```text
-build/windows-msvc-debug/run/Debug/VulkanLabRenderTest.exe
-build/windows-msvc-release/run/Release/VulkanLabRenderTest.exe
+build/full/run/Debug/VulkanLabRenderTest.exe
+build/full/run/Release/VulkanLabRenderTest.exe
 ```
 
 每个 preset 的目录按用途分层：
 
 ```text
-build/<preset>/
+build/<profile>/
   generated/<Config>/shader/  # Shader 中间产物
   lib/<Config>/               # 静态库
   symbols/<Config>/           # 编译和链接 PDB
@@ -203,7 +206,7 @@ ctest --preset windows-msvc-test -L visual --output-on-failure
 程序不依赖当前工作目录。下面是从输出目录启动的常用方式：
 
 ```powershell
-cd build\windows-msvc-dev-fast\run\Debug
+cd build\dev\run\Debug
 .\VulkanLab.exe
 ```
 
@@ -406,7 +409,7 @@ Catalog 当前包含以下初始 glTF model 条目：
 使用输出目录启动渲染器时，locator 仍会选择相同的用户级共享缓存：
 
 ```powershell
-cd build\windows-msvc-dev-fast\run\Debug
+cd build\dev\run\Debug
 .\VulkanLab.exe --runtime-control
 ```
 
@@ -474,15 +477,15 @@ Stage 7 的 Cook 只接受 Native SceneDocument 作为发布根，不再接受�
 
 ```powershell
 cmake --preset windows-msvc-runtime
-cmake --build build/windows-msvc-runtime --config Release --target VulkanLab
+cmake --build build/runtime --config Release --target VulkanLab
 
 cmake --preset windows-msvc-dev-fast
-cmake --build build/windows-msvc-dev-fast --config Debug `
+cmake --build build/dev --config Debug `
   --target VulkanLabAssetTool
 
-.\build\windows-msvc-dev-fast\run\Debug\VulkanLabAssetTool.exe cook `
+.\build\dev\run\Debug\VulkanLabAssetTool.exe cook `
   --project . `
-  --runtime-dir .\build\windows-msvc-runtime\run\Release `
+  --runtime-dir .\build\runtime\run\Release `
   --output .\dist\my-scene `
   --scene-id my-scene `
   --startup-scene my-scene `
@@ -498,7 +501,7 @@ Cook 会调用目标 `VulkanLab.exe --build-info-json`。目标必须是 `window
 交付前使用同一套 hash 校验：
 
 ```powershell
-.\build\windows-msvc-dev-fast\run\Debug\VulkanLabAssetTool.exe package verify `
+.\build\dev\run\Debug\VulkanLabAssetTool.exe package verify `
   --path .\dist\my-scene
 ```
 

@@ -57,8 +57,8 @@ Cooked package 保留 requested profile 供诊断，但 actual 强制为 `off`�
 
 在 RenderDoc 的 **Launch Application** 中填写：
 
-- Executable Path：`<repo>\build\windows-msvc-dev-fast\run\Debug\VulkanLab.exe`
-- Working Directory：`<repo>\build\windows-msvc-dev-fast\run\Debug`
+- Executable Path：`<repo>\build\dev\run\Debug\VulkanLab.exe`
+- Working Directory：`<repo>\build\dev\run\Debug`
 - Command-line Arguments：建议先用 `--validation off`，需要同时查看 Core Validation 时改为 `--validation core`
 - Capture API：Vulkan
 
@@ -69,7 +69,7 @@ Cooked package 保留 requested profile 供诊断，但 actual 强制为 `off`�
 也可以先从终端启动：
 
 ```powershell
-cd build\windows-msvc-dev-fast\run\Debug
+cd build\dev\run\Debug
 .\VulkanLab.exe --validation off
 ```
 
@@ -143,7 +143,7 @@ Release 示例：
 ```powershell
 .\tools\validation\Run-ValidationSmoke.ps1 `
   -Profile sync `
-  -BuildDirectory build/windows-msvc-release `
+  -BuildDirectory build/full `
   -Configuration Release
 ```
 

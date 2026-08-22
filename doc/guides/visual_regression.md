@@ -9,12 +9,12 @@
 ## 构建与运行
 
 ```powershell
-cmake --preset windows-msvc-debug
-cmake --build --preset windows-msvc-debug
+cmake --preset windows-msvc-full
+cmake --build --preset windows-msvc-full-debug
 
-.\build\windows-msvc-debug\run\Debug\VulkanLabRenderTest.exe run `
+.\build\full\run\Debug\VulkanLabRenderTest.exe run `
   --project . `
-  --runtime .\build\windows-msvc-debug\run\Debug\VulkanLab.exe `
+  --runtime .\build\full\run\Debug\VulkanLab.exe `
   --spec .\tests\render\renderer_smoke_legacy.json `
   --output .\out\test-results\render
 ```
@@ -36,7 +36,7 @@ ctest --preset windows-msvc-test -L visual --output-on-failure
 ctest --preset windows-msvc-test --output-on-failure
 
 # Release 全部测试
-ctest --test-dir build/windows-msvc-release -C Release --output-on-failure
+ctest --test-dir build/full -C Release --output-on-failure
 ```
 
 当前快速视觉集包含：
@@ -159,9 +159,9 @@ Smoke 检查尺寸、非黑像素比例和主导纯色比例，用于发现黑�
 4. 重新运行 Debug/Release golden，至少连续通过两次。
 
 ```powershell
-.\build\windows-msvc-debug\run\Debug\VulkanLabRenderTest.exe run `
+.\build\full\run\Debug\VulkanLabRenderTest.exe run `
   --project . `
-  --runtime .\build\windows-msvc-debug\run\Debug\VulkanLab.exe `
+  --runtime .\build\full\run\Debug\VulkanLab.exe `
   --spec .\tests\render\renderer_smoke_legacy_golden.json `
   --output .\out\test-results\golden-review `
   --accept

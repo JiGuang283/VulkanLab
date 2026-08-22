@@ -15,26 +15,25 @@ Runtime Control 默认关闭。启用时必须显式传入 `--runtime-control`�
 使用 presets 构建：
 
 ```powershell
-cmake --preset windows-msvc-debug
-cmake --build --preset windows-msvc-debug
+cmake --preset windows-msvc-full
+cmake --build --preset windows-msvc-full-debug
 
-cmake --preset windows-msvc-release
-cmake --build --preset windows-msvc-release
+cmake --build --preset windows-msvc-full-release
 ```
 
 每个配置都会生成渲染器和控制客户端：
 
 ```text
-build/windows-msvc-debug/run/Debug/VulkanLab.exe
-build/windows-msvc-debug/run/Debug/VulkanLabCtl.exe
-build/windows-msvc-release/run/Release/VulkanLab.exe
-build/windows-msvc-release/run/Release/VulkanLabCtl.exe
+build/full/run/Debug/VulkanLab.exe
+build/full/run/Debug/VulkanLabCtl.exe
+build/full/run/Release/VulkanLab.exe
+build/full/run/Release/VulkanLabCtl.exe
 ```
 
 启动默认 endpoint：
 
 ```powershell
-cd build\windows-msvc-debug\run\Debug
+cd build\full\run\Debug
 .\VulkanLab.exe --runtime-control
 ```
 
@@ -372,7 +371,7 @@ Catalog glTF 的最近验证报告可只读查询；响应最多包含 32 条 is
 下面的 PowerShell 示例启动隔离实例、等待场景和渲染稳定、截图并退出：
 
 ```powershell
-$runtime = Resolve-Path .\build\windows-msvc-release\run\Release
+$runtime = Resolve-Path .\build\full\run\Release
 $suffix = "smoke_$PID"
 $captureRoot = Join-Path $PWD "out\runtime-control\smoke-$PID"
 $app = Start-Process `

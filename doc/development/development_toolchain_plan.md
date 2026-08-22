@@ -100,10 +100,9 @@ CI 默认执行前两层和无需显示设备的 package 测试。GPU smoke、�
 ### Scope
 
 - 新增 `CMakePresets.json`，至少提供：
-  - `windows-msvc-debug`
-  - `windows-msvc-release`
-  - `windows-msvc-test`
-  - `windows-msvc-tracy`
+  - configure preset：`windows-msvc-full`、`windows-msvc-tracy`；
+  - build preset：`windows-msvc-full-debug`、`windows-msvc-full-release`；
+  - test preset：`windows-msvc-test`。
 - 新增统一诊断配置结构，例如 `DiagnosticsConfig`：
   - validation profile
   - RenderDoc capture availability
@@ -572,13 +571,12 @@ CI 不运行 Main Sponza，也不提交模型和 KTX2 cache。使用仓库内最
 每个近期阶段至少执行：
 
 ```powershell
-cmake --preset windows-msvc-debug
-cmake --build --preset windows-msvc-debug
+cmake --preset windows-msvc-full
+cmake --build --preset windows-msvc-full-debug
 ctest --preset windows-msvc-test
 
-cmake --preset windows-msvc-release
-cmake --build --preset windows-msvc-release
-ctest --preset windows-msvc-release
+cmake --build --preset windows-msvc-full-release
+ctest --test-dir build/full -C Release --output-on-failure
 ```
 
 具体 preset 名称在 Stage 0 实现时可以按 CMake 约束调整，但完成后文档和 CI 必须只使用最终稳定名称。
