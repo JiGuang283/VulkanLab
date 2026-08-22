@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "bundleId": "vulkanlab-development-assets",
+  "catalogModelAttributions": [
+    {
+      "modelId": "a-beautiful-game",
+      "sourceUrl": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/ABeautifulGame",
+      "legal": [
+        {
+          "license": "CC-BY-4.0",
+          "licenseUrl": "https://creativecommons.org/licenses/by/4.0/legalcode",
+          "artist": "MaterialX Project",
+          "owner": "ASWF",
+          "year": "2020",
+          "work": "Original model"
+        },
+        {
+          "license": "CC-BY-4.0",
+          "licenseUrl": "https://creativecommons.org/licenses/by/4.0/legalcode",
+          "artist": "Ed Mackey",
+          "owner": "Ed Mackey",
+          "year": "2022",
+          "work": "Conversion to glTF"
+        }
+      ]
+    },
+    {
+      "modelId": "anisotropy-barn-lamp",
+      "sourceUrl": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/AnisotropyBarnLamp",
+      "legal": [
+        {
+          "license": "CC-BY-4.0",
+          "licenseUrl": "https://creativecommons.org/licenses/by/4.0/legalcode",
+          "artist": "Eric Chadwick",
+          "owner": "Copyright 2023 Wayfair, LLC",
+          "year": "2023",
+          "work": "Model and textures"
+        }
+      ]
+    },
+    {
+      "modelId": "car-concept",
+      "sourceUrl": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/CarConcept",
+      "legal": [
+        {
+          "license": "CC-BY-4.0",
+          "licenseUrl": "https://creativecommons.org/licenses/by/4.0/legalcode",
+          "artist": "Eric Chadwick",
+          "owner": "Darmstadt Graphics Group GmbH",
+          "year": "2024",
+          "work": "Model and textures"
+        },
+        {
+          "license": "LicenseRef-LegalMark-Khronos",
+          "licenseUrl": "https://github.com/KhronosGroup/glTF-Sample-Assets/blob/main/LICENSES/LicenseRef-LegalMark-Khronos.txt",
+          "owner": "Khronos Group",
+          "work": "Khronos and 3D Commerce logos"
+        }
+      ]
+    },
+    {
+      "modelId": "chronograph-watch",
+      "sourceUrl": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/ChronographWatch",
+      "legal": [
+        {
+          "license": "CC-BY-4.0",
+          "licenseUrl": "https://creativecommons.org/licenses/by/4.0/legalcode",
+          "artist": "Eric Chadwick",
+          "owner": "Darmstadt Graphics Group GmbH",
+          "year": "2025",
+          "work": "Model and textures"
+        },
+        {
+          "license": "LicenseRef-LegalMark-Khronos",
+          "licenseUrl": "https://github.com/KhronosGroup/glTF-Sample-Assets/blob/main/LICENSES/LicenseRef-LegalMark-Khronos.txt",
+          "owner": "Khronos Group",
+          "work": "Khronos and 3D Commerce logos"
+        },
+        {
+          "license": "LicenseRef-LegalMark-DGG",
+          "licenseUrl": "https://github.com/KhronosGroup/glTF-Sample-Assets/blob/main/LICENSES/LicenseRef-LegalMark-DGG.txt",
+          "owner": "Darmstadt Graphics Group GmbH",
+          "work": "DGG logo"
+        }
+      ]
+    },
+    {
+      "modelId": "diffuse-transmission-teacup",
+      "sourceUrl": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/DiffuseTransmissionTeacup",
+      "legal": [
+        {
+          "license": "CC0-1.0",
+          "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/legalcode",
+          "artist": "Polyhaven.com and Eric Chadwick",
+          "owner": "Public domain",
+          "year": "2023",
+          "work": "Models and textures"
+        }
+      ]
+    },
+    {
+      "modelId": "pot-of-coals",
+      "sourceUrl": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/PotOfCoals",
+      "legal": [
+        {
+          "license": "CC-BY-4.0",
+          "licenseUrl": "https://creativecommons.org/licenses/by/4.0/legalcode",
+          "artist": "Eric Chadwick",
+          "owner": "Darmstadt Graphics Group GmbH",
+          "year": "2023",
+          "work": "Model and textures"
+        },
+        {
+          "license": "LicenseRef-LegalMark-Khronos",
+          "licenseUrl": "https://github.com/KhronosGroup/glTF-Sample-Assets/blob/main/LICENSES/LicenseRef-LegalMark-Khronos.txt",
+          "owner": "Khronos Group",
+          "work": "Khronos and glTF logos"
+        }
+      ]
+    }
+  ]
+}

@@ -429,6 +429,8 @@ Catalog 当前包含以下初始 glTF model 条目：
 
 `Main Sponza` 的入口是 `models/main_sponza/NewSponza_Main_glTF_003.gltf`。该路径从 `projectRoot` 解析；大型本地资产不会在普通构建后被复制到 Debug/Release 输出目录。
 
+大型模型通过 Git 之外的本地开发资产包在开发电脑之间传递。生成、分卷、完整性校验和安装流程见[开发资产包](development_assets.md)。资产包不会上传 GitHub；另一台电脑克隆代码后，从本地文件、局域网或网盘取得归档并运行安装脚本。
+
 ## KTX2 派生纹理缓存
 
 原始 glTF、GLB、PNG 和 JPEG 不会被修改。`VulkanLabAssetTool` 生成独立的 KTX2 缓存；既可显式调用，也可由 OnDemand admission 监督调用。当前 `desktop_512/1024/2048/full` profiles 使用 Native BC7：KTX-Software 负责缩放、Lanczos4 mipmap、wrap 和 normal normalize，DirectXTex 负责逐 mip BC7 压缩，libktx 负责写入 KTX2。默认共享根目录为 `%LOCALAPPDATA%/VulkanLab/DerivedAssets/<projectId>`，由 ProjectContext 和 Catalog 统一解析，因此 Debug、Release 和资产工具不再各自生成工作目录缓存。

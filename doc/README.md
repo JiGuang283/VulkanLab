@@ -9,6 +9,7 @@
 ## 当前文档
 
 - [构建与运行](guides/build_and_run.md)：环境、构建、开发运行、Cook/package 和启动参数。
+- [开发资产包](guides/development_assets.md)：在 Git 之外生成、传输和安装大型模型资源。
 - [Runtime Control](guides/runtime_control.md)：通过 `VulkanLabCtl.exe` 执行本机开发诊断与自动化控制。
 - [诊断与自动化启动配置](guides/diagnostics.md)：CMake Presets、BuildInfo 和确定性运行参数。
 - [RenderDoc 与 Vulkan Validation](guides/renderdoc_validation.md)：抓帧标签、对象命名、Validation Profiles 和 smoke workflow。

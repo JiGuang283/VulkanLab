@@ -132,6 +132,11 @@ outputs, captures, and logs are intentionally excluded from Git. Missing
 optional catalog entries remain unavailable until their source assets are
 imported locally.
 
+To reproduce the same large-model development workspace on another machine,
+generate and transfer a local development asset bundle. The bundle remains
+outside Git and is installed with hash verification; see the
+[development asset bundle guide](doc/guides/development_assets.md).
+
 Runnable images are isolated under `build/<preset>/run/<Config>`. Writable
 runtime data defaults to `%LOCALAPPDATA%/VulkanLab/Workspaces/<projectId>` and
 can be redirected with `--workspace <path>` for automation or diagnostics.
