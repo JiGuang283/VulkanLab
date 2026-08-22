@@ -8,6 +8,7 @@
 
 ## Active Plans
 
+- [CMake 与 Build 体系收口实施计划](cmake_build_system_refactor_plan.md)：收敛 Configure Profile、Preset 与 build tree，解除 Runtime/AssetTool/Shader 的错误硬依赖，改进 Shader 增量构建、开发运行镜像和 Cook/package 入口。
 - [Vulkan 底层性能优化路线与执行计划](vulkan_runtime_performance_optimization_plan.md)：收口 RenderGraph 与 descriptor CPU 开销，消除 Deferred 重复几何工作，缓存 Shadow，降低 GBuffer 带宽，并分阶段演进到 GPU-driven draw submission。
 
 - [AO、反射与全局光照算法路线](ao_reflection_gi_plan.md)：基于 Surface Data、Hi-Z、HDR 和 temporal history，分阶段实现 SSAO、TAA、GTAO、SSR、SSGI、Reflection Probe、DDGI 与可选硬件光追路径。
