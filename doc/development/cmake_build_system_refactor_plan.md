@@ -2,7 +2,7 @@
 
 > Status: Active
 > Last verified: 2026-08-22
-> Verified against: `b7f80a6`
+> Verified against: `48f0c5b`
 
 ## Review Summary
 
@@ -722,8 +722,8 @@ BC7、Environment、Catalog和 Shader hash。CPack不了解这些语义，接入
   optional repository-external launch
   ```
 - Cook默认使用 `build/runtime/run/Release`，并先检查 `--build-info-json`。
-- package输出默认进入 `dist/<package-name>`，临时 staging进入 Workspace或 `out/package`，
-  不进入源码资产目录。
+- package输出默认进入 `dist/<package-name>`；临时 staging由 AssetTool在输出目录同级
+  管理并原子发布，不进入源码资产目录或 Workspace。
 - `--build-missing`、Scene ID、Startup Scene和Output保持显式参数。
 - 失败不得覆盖之前已发布 package；沿用 Cook现有原子发布语义。
 
@@ -733,6 +733,25 @@ BC7、Environment、Catalog和 Shader hash。CPack不了解这些语义，接入
 - 一个命令可以生成、验证并可选启动 Cooked package。
 - package从仓库外启动时不读取源码 Catalog、models、DerivedAssets或 Workspace。
 - CMake build和AssetTool Cook的职责边界清晰，没有重复复制资产闭包。
+
+### Stage 6 Verification Record
+
+实现提交：`48f0c5b`。
+
+- 新增共享 PowerShell helper和 Configure、Developer Build、Runtime Build、Cook、Verify
+  五个稳定入口；全部兼容 Windows PowerShell 5.1。
+- `Build-Developer.ps1` 已完成 dev Debug增量构建；`Build-Runtime.ps1` 已完成 runtime
+  Release构建，并通过 `--build-info-json` 验证九项开发 feature全部关闭。
+- `Cook-Package.ps1` 仅构建 dev AssetTool target与 runtime image，没有将 Cook闭包、
+  Validator或hash规则复制到脚本层。
+- 使用 `build/` 下临时项目和一个小型 glTF Native Scene完成真实 `--build-missing`
+  Cook：生成 schema v3 package，包含1个Scene、1个Model、134个文件，约5.84 MB。
+- package在 `dist/` 中通过完整语义/hash验证；复制到
+  `%TEMP%/VulkanLab/PackageSmoke/<id>` 后再次验证，并由精简Runtime持续运行5秒。
+- `Verify-Package.ps1` 独立入口完成AssetTool target增量构建和既有package验证。
+- `Clean-LocalOutputs.ps1` 默认保留五个正式profile；只有显式
+  `-IncludePackages`才删除`dist/`。
+- 遵循项目策略，未运行CTest、Golden、视觉回归或Validation smoke。
 
 ## Stage 7: 构建性能测量与可选优化
 

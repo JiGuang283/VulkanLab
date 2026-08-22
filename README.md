@@ -101,17 +101,25 @@ The fast development preset builds the editor-enabled Debug renderer without
 test targets:
 
 ```powershell
-cmake --preset windows-msvc-dev-fast
-cmake --build --preset windows-msvc-dev-fast
+./tools/dev/Build-Developer.ps1
 ./build/dev/run/Debug/VulkanLab.exe --project .
 ```
 
 The minimal runtime configuration is built with:
 
 ```powershell
-cmake --preset windows-msvc-runtime
-cmake --build --preset windows-msvc-runtime
+./tools/dev/Build-Runtime.ps1
 ./build/runtime/run/Release/VulkanLab.exe --project .
+```
+
+The scripts are thin CMake/AssetTool orchestrators. Direct preset commands
+remain supported. A Native Scene package can be built, verified, and smoke
+launched outside the repository with one command:
+
+```powershell
+./tools/dev/Cook-Package.ps1 -PackageName my-scene `
+  -SceneId my-scene -StartupScene my-scene `
+  -BuildMissing -LaunchSmoke
 ```
 
 Large optional models, source HDR environments, generated KTX2 caches, build

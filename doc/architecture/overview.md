@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-22
-> Verified against: `b7f80a6`
+> Verified against: `48f0c5b`
 
 VulkanLab 是一个开发中的 Windows Vulkan 1.3 实时渲染器。当前架构以
 `Application` 为组合根，以类型化 service、snapshot、action 和 submission
@@ -118,6 +118,12 @@ src/CMakeLists.txt Application executable assembly
 - `vkl_scene_data`, `vkl_asset_core`, `vkl_asset_runtime`
 - `vkl_scene_runtime`, `vkl_scene_workflow`
 - `vkl_capture`
+
+开发者命令入口位于 `tools/dev/`。`Configure-Project.ps1`、
+`Build-Developer.ps1` 和 `Build-Runtime.ps1` 只选择上述 CMake preset/target；
+`Cook-Package.ps1` 和 `Verify-Package.ps1` 只串联 Runtime BuildInfo 检查与
+`VulkanLabAssetTool`。场景闭包、Validator、派生资产 admission、package hash 和原子
+发布仍由 AssetTool 数据层独占，PowerShell 不维护第二套 package 规则。
 - `vkl_editor` 和 `vkl_runtime_control_adapter`（条件构建）
 
 `VulkanLab` executable 只直接编译 `main.cpp` 与 `app/Application.cpp`，再链接所需

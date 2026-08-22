@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-22
-> Verified against: `b7f80a6`
+> Verified against: `48f0c5b`
 
 ## 环境要求
 
@@ -36,6 +36,18 @@ Windows MSVC 提供五类主要构建配置。完整 Debug/Release 共用同一�
 日常修改渲染器时优先使用快速配置：
 
 ```powershell
+.\tools\dev\Build-Developer.ps1
+```
+
+该入口会依次 Configure 和 Build，并输出可运行镜像路径。只需要重新生成工程时使用：
+
+```powershell
+.\tools\dev\Configure-Project.ps1 -Profile dev
+```
+
+底层等价命令仍然受支持：
+
+```powershell
 cmake --preset windows-msvc-dev-fast
 cmake --build --preset windows-msvc-dev-fast
 ```
@@ -43,8 +55,7 @@ cmake --build --preset windows-msvc-dev-fast
 需要统一 CPU/GPU 时间线时使用专用配置：
 
 ```powershell
-cmake --preset windows-msvc-tracy
-cmake --build --preset windows-msvc-tracy
+.\tools\dev\Build-Developer.ps1 -Profile tracy
 ```
 
 Profiler 安装、连接和 capture 工作流见 [Tracy 性能分析](tracy_profiling.md)。
@@ -52,16 +63,19 @@ Profiler 安装、连接和 capture 工作流见 [Tracy 性能分析](tracy_prof
 需要比较内置 SSAO 与 FidelityFX CACAO 时使用专用配置。该配置额外要求 Vulkan SDK 中的 `dxc`，并会生成、验证上游 CACAO SPIR-V：
 
 ```powershell
-cmake --preset windows-msvc-ao-compare
-cmake --build --preset windows-msvc-ao-compare
+.\tools\dev\Build-Developer.ps1 -Profile cacao
 ```
 
 构建精简运行时：
 
 ```powershell
-cmake --preset windows-msvc-runtime
-cmake --build --preset windows-msvc-runtime
+.\tools\dev\Build-Runtime.ps1
 ```
+
+`Build-Runtime.ps1` 会读取 `VulkanLab.exe --build-info-json`，要求配置为 Release，且
+Editor、Runtime Control、Capture、Asset Authoring、Validation、Debug Utils、GPU
+Profiler、Tracy 和 CACAO 全部未编译。该检查与 Cook 内部检查互补，可在进入资产闭包
+处理前发现拿错 runtime 产物的问题。
 
 `windows-msvc-runtime` 仍保留 Forward、Directional Shadow、HDR/Tone Mapping、IBL、Skybox、场景加载和 KTX2 读取。它只裁剪编辑器、Runtime Control、截图、资产写入、Validation、GPU Debug Utils、GPU timestamp profiling 和 Tracy，不改变 Shader ABI、材质布局或 descriptor layout。
 
@@ -238,6 +252,8 @@ temp/          # 运行时临时文件
 ```
 
 使用 `-WhatIf` 可以先查看将删除的生成物；通过 `-KeepPreset` 可以指定需要保留的 build tree。脚本不会删除源码资产、LocalAppData 下的 Derived Asset Cache 或 Editor Preferences。
+默认保留 `dev/full/runtime/tracy/cacao` 五个正式生成树；添加 `-IncludePackages` 才会
+删除 Git 忽略的 `dist/`，普通清理不会删除已发布 package。
 
 需要 GPU 和可呈现窗口的 smoke/golden 测试使用 `visual` 标签；纯 CPU、资产和 package 测试使用 `unit` 标签：
 
@@ -520,24 +536,25 @@ DerivedAssets/<projectId>/
 
 ## Cook 与独立运行包
 
-Stage 7 的 Cook 只接受 Native SceneDocument 作为发布根，不再接受模型预览。先构建精简 Release runtime 和开发 AssetTool，并确保场景引用模型的 Validator 报告、Native BC7 纹理和环境 KTX2 都处于 Ready：
+Stage 7 的 Cook 只接受 Native SceneDocument 作为发布根，不再接受模型预览。稳定入口
+会构建开发 AssetTool 和精简 Release Runtime，检查 Runtime BuildInfo，然后调用现有
+AssetTool 完成闭包、验证、原子发布和 package 校验：
 
 ```powershell
-cmake --preset windows-msvc-runtime
-cmake --build build/runtime --config Release --target VulkanLab
-
-cmake --preset windows-msvc-dev-fast
-cmake --build build/dev --config Debug `
-  --target VulkanLabAssetTool
-
-.\build\dev\run\Debug\VulkanLabAssetTool.exe cook `
-  --project . `
-  --runtime-dir .\build\runtime\run\Release `
-  --output .\dist\my-scene `
-  --scene-id my-scene `
-  --startup-scene my-scene `
-  --build-missing
+.\tools\dev\Cook-Package.ps1 `
+  -PackageName my-scene `
+  -SceneId my-scene `
+  -StartupScene my-scene `
+  -BuildMissing `
+  -LaunchSmoke
 ```
+
+默认输出为 `dist/<PackageName>`。`-OutputDirectory` 可显式覆盖；`-Project`、
+`-CacheRoot`、`-Workers`、`-MemoryBudgetMiB`、`-KtxTool` 和 `-GltfValidator` 会原样
+转交给相应构建或 AssetTool 阶段。`-LaunchSmoke` 会把已验证 package 复制到
+`%TEMP%/VulkanLab/PackageSmoke/<id>/`，再次校验完整闭包，确认精简 Runtime 能持续运行
+后安全删除临时副本。该步骤不会从源码 Catalog、models 或用户 Derived Asset Cache
+补读资源。
 
 可以重复传入 `--scene-id`，一个包可包含多个 Native Scene。`--startup-scene` 必须属于已选场景；省略时使用 Catalog 顺序中的第一个已选场景。完全省略 `--scene-id` 时选择所有 `optional=false` 的 Native Scene。模型、import profile 和环境均从 SceneDocument/Catalog 闭包推导；Cook 中使用 `--model-id`、`--environment-id` 或 `--profile` 会返回迁移错误。
 
@@ -545,7 +562,16 @@ cmake --build build/dev --config Debug `
 
 Cook 会调用目标 `VulkanLab.exe --build-info-json`。目标必须是 `windows-msvc-runtime` 的 Release 产物，Editor、Runtime Control、Capture、Asset Authoring、Validation、Debug Utils、GPU Profiler 和 Tracy 必须全部未编译。全功能 Debug/Release 不能作为发布 runtime。
 
-交付前使用同一套 hash 校验：
+已有 package 可独立重新验证：
+
+```powershell
+.\tools\dev\Verify-Package.ps1 -Path .\dist\my-scene
+.\tools\dev\Verify-Package.ps1 -Path .\dist\my-scene -LaunchSmoke
+```
+
+`Verify-Package.ps1` 默认只构建 AssetTool target，不会构建 Editor Runtime 或
+DirectXTex 之外的无关产品。脚本只编排已有 CLI，不复制 CookClosureResolver、Validator、
+artifact admission、hash 或语义验证逻辑。需要定位底层问题时，仍可直接运行：
 
 ```powershell
 .\build\dev\run\Debug\VulkanLabAssetTool.exe package verify `
@@ -570,7 +596,7 @@ dist/my-scene/
 
 Cooked Catalog 只保留选中的 SceneDocument、其引用的唯一 Models/Environments 和必要 profiles，不注册 Model Preview。重复 ModelInstance 不复制模型或 GPU 资源；内容寻址 blob 跨模型去重。环境闭包只包含派生 KTX2 与 manifest，不包含源 HDR。包内也不包含 PNG/JPEG、AssetTool、VulkanLabCtl、编辑器、文档或 shader source。
 
-Cook 先在输出目录旁构建 staging。发布前会复核 Catalog 与 SceneDocument 未在 Cook 期间变化，并验证 schema v3 package manifest、最小 Catalog、SceneDocument 引用、Artifact Index、KTX2 metadata、shader closure、所有文件大小和 SHA-256；成功后才原子替换旧包。失败会删除 staging 并保留旧包。
+Cook 先在输出目录同级构建 AssetTool 管理的 staging。发布前会复核 Catalog 与 SceneDocument 未在 Cook 期间变化，并验证 schema v3 package manifest、最小 Catalog、SceneDocument 引用、Artifact Index、KTX2 metadata、shader closure、所有文件大小和 SHA-256；成功后才原子替换旧包。失败会删除 staging 并保留旧包。
 
 包内运行不需要源码 locator 或用户级 derived cache：
 
