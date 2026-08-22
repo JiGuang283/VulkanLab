@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 5,
   "id": "gi-calibration-lab",
   "displayName": "GI Calibration Lab",
   "activeCamera": "b1000000-0000-4000-8000-000000000001",
@@ -456,6 +456,32 @@
           "range": 6.0,
           "innerConeRadians": 0.35,
           "outerConeRadians": 0.6
+        }
+      }
+    },
+    {
+      "id": "b1000000-0000-4000-8000-000000000021",
+      "name": "GI Calibration Probe Volume",
+      "parent": null,
+      "enabled": true,
+      "transform": {
+        "translation": [0.0, 0.0, 2.0],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.0, 1.0, 1.0]
+      },
+      "components": {
+        "ddgiProbeVolume": {
+          "probeCounts": [10, 12, 5],
+          "probeSpacing": [1.4, 1.3, 1.1],
+          "raysPerProbe": 128,
+          "probesUpdatedPerFrame": 64,
+          "maxRayDistance": 16.0,
+          "hysteresis": 0.97,
+          "normalBias": 0.15,
+          "viewBias": 0.05,
+          "intensity": 1.0,
+          "relocationEnabled": true,
+          "classificationEnabled": true
         }
       }
     }
