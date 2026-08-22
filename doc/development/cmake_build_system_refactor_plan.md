@@ -2,7 +2,7 @@
 
 > Status: Active
 > Last verified: 2026-08-22
-> Verified against: `597d038`
+> Verified against: `2994508`
 
 ## Review Summary
 
@@ -247,11 +247,11 @@ VulkanLabRuntimeImage
 VulkanLabDeveloper
   -> VulkanLabRuntimeImage
   -> VulkanLabAssetTool        when enabled
+  -> VulkanLabCtl              when enabled
   -> editor/tool payload
 
 VulkanLabFull
   -> VulkanLabDeveloper
-  -> VulkanLabCtl              when enabled
   -> VulkanLabRenderTest       when enabled
   -> VulkanLabCpuTests         when BUILD_TESTING
 
@@ -441,6 +441,28 @@ bootstrap脚本；在 clean/incremental数据证明有收益前，不替换 cano
 - AssetTool源码修改不会导致 VulkanLab relink。
 - Shader源码修改不会无条件要求 AssetTool relink。
 - Runtime feature日志不因 `VKL_BUILD_CONTROL_TOOL` 等 product option改变。
+
+### Stage 2 Verification Record
+
+2026-08-22 完成以下验证：
+
+- `VulkanLabRuntimeImage` 从清理后的 dev产物状态构建成功；输出目录没有
+  `VulkanLabAssetTool.exe`，构建日志没有 AssetTool或DirectXTex编译/链接。
+- `VulkanLabDeveloper` 随后只补齐当前profile启用的AssetTool与KTX CLI；
+  `VulkanLabFull` 成功生成Renderer、Ctl、AssetTool、RenderTest和CPU test executable。
+- 移除 `vkl_engine` 后，CPU tests改为显式链接实际模块。完整 `ktx` 与
+  `ktx_read` 在同一测试进程中的MSVC静态链接顺序已显式约束；测试 executable
+  链接成功，但按项目策略没有执行测试。
+- dev与runtime分别构建Debug和Release成功；dev通过Runtime Control正常启动、查询
+  并退出，runtime持续运行5秒。运行日志没有新增error或critical。
+- `RuntimeFeatures.h` 只包含 `VKL_ENABLE_*`；`--build-info-json`不再报告产品选择。
+  `system.info.build.products`按运行目录实际发现AssetTool=true、Ctl=false、
+  RenderTest=false，与dev产物一致。
+- 单独修改AssetTool源文件后只有AssetTool重新链接；单独修改一个Shader后只重新
+  编译和stage对应SPIR-V，VulkanLab与AssetTool均未重新链接。
+- RuntimeImage仍会编译 `ktx_read` 当前传递引入的ASTC实现；该第三方配置问题记录为
+  Stage 3 Dependency拆分输入，不属于companion executable耦合。
+- `cmake --list-presets`、三套configure profile和`git diff --check`通过。
 
 ## Stage 3: CMake 文件和 Dependency 配置拆分
 
