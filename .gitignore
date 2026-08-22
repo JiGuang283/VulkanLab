@@ -2,6 +2,7 @@
 build/
 build-*/
 out/
+/dist/
 Debug/
 Release/
 x64/

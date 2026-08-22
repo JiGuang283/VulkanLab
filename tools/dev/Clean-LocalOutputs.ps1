@@ -3,8 +3,11 @@ param(
     [string[]]$KeepPreset = @(
         'dev',
         'full',
-        'runtime'
-    )
+        'runtime',
+        'tracy',
+        'cacao'
+    ),
+    [switch]$IncludePackages
 )
 
 $ErrorActionPreference = 'Stop'
@@ -36,6 +39,10 @@ foreach ($relativePath in @(
         'imgui.ini',
         'out/smoke')) {
     Remove-RepositoryItem (Join-Path $repositoryRoot $relativePath)
+}
+
+if ($IncludePackages) {
+    Remove-RepositoryItem (Join-Path $repositoryRoot 'dist')
 }
 
 if (Test-Path -LiteralPath $buildRoot) {
