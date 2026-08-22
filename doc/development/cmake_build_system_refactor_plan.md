@@ -2,7 +2,7 @@
 
 > Status: Active
 > Last verified: 2026-08-22
-> Verified against: `ed1723c`
+> Verified against: `b7f80a6`
 
 ## Review Summary
 
@@ -627,27 +627,40 @@ Forward/Deferred和MRT组合增加，增量构建成本会持续放大。
 
 ### Solution
 
-- 新增 `cmake/RuntimeImage.cmake` 和 `StageRuntimeImage.cmake`。
-- 每个 subsystem只向 runtime manifest注册 payload：
+- 新增 `cmake/RuntimeImage.cmake` 和 `StageRuntimePayloads.cmake`。
+- runtime文件按以下三类 owner管理，避免同一文件由两套规则复制：
   ```text
-  VulkanLab.exe
-  shader/manifest.json
-  shader/**/*.spv
-  vulkanlab_project.json
-  editor/lucide.ttf             Editor only
-  licenses/Lucide/*             Editor only
-  VulkanLabAssetTool.exe        Developer aggregate only
-  ktx.exe                       AssetTool only
-  gltf_validator.exe            installed and discovered only
-  CACAO license/notices         CACAO only
+  Target outputs:
+    VulkanLab.exe
+    VulkanLabAssetTool.exe / VulkanLabCtl.exe / VulkanLabRenderTest.exe
+    ktx.exe
+
+  Shader publisher:
+    shader/manifest.json
+    shader/**/*.spv
+
+  Runtime payload owners:
+    runtime:
+      vulkanlab_project.json
+      editor/lucide.ttf             Editor only
+      licenses/Lucide/*             Editor only
+      CACAO license/notices         CACAO only
+    asset-tool:
+      gltf_validator.exe            installed and discovered only
+      gltf_validator.LICENSE/NOTICES
   ```
-- staging脚本只管理 manifest声明的相对路径，禁止删除用户 Workspace或 package目录。
-- 上一次 manifest存在、当前 manifest不再包含的 owned file应被删除。
-- runtime image staging使用 stamp和真实输入依赖，不在无改动 build中重复复制所有文件。
+- subsystem通过`vkl_register_runtime_payload()`声明source和相对destination；可选模块还
+  通过`vkl_register_runtime_owned_path()`声明关闭后允许清理的已知路径。
+- 每个owner维护per-config payload、known和owned清单。reconciler只删除known或上一版
+  owned清单中的相对路径，禁止删除未登记日志、截图、Workspace或package文件。
+- 每次owner target构建会执行一次小清单核对，以便修复被手工删除的payload；复制使用
+  `ONLY_IF_DIFFERENT`，无改动build不会改写文件时间戳，也不会扫描或复制Shader目录。
+- reconciler先验证全部当前source，再执行清理和复制；缺失source不会破坏上一次可运行
+  镜像。
 - 保留当前用户路径：
   `build/<profile>/run/<Config>/VulkanLab.exe`。
-- `VulkanLab.exe` 可继续直接输出到 `run/`；本计划不强制增加一层 raw binary copy，除非
-  staging实现证明无法可靠管理 executable。
+- executable继续直接输出到`run/`，不增加raw binary复制层。工作流target决定本次需要
+  构建哪些executable；静态payload owner只处理其职责内的附属文件。
 
 ### Why Not Use CPack
 
@@ -662,6 +675,25 @@ BC7、Environment、Catalog和 Shader hash。CPack不了解这些语义，接入
 - 无改动增量 build不重复 stage整个 Shader目录。
 - Developer、Runtime、Tracy和CACAO运行镜像只包含各自所需文件。
 - Developer runtime image仍可从任意工作目录启动并定位源码项目。
+
+### Stage 5 Verification Record
+
+实现提交：`b7f80a6`。
+
+- 项目内Lucide、CACAO、project locator和Validator的分散`POST_BUILD`复制已移除；
+  Shader继续由Stage 4 publisher独立管理。
+- Dev、Full、Runtime、Tracy和CACAO五个profile均完成配置与构建；所有镜像包含127个
+  Shader，只有Editor profile包含Lucide，只有CACAO profile包含CACAO许可，只有工具
+  profile包含AssetTool和Validator。
+- Runtime profile中注入的Editor、CACAO和Validator陈旧文件在下一次RuntimeImage构建
+  后被删除；同目录未登记的`runtime-user.log`得到保留。
+- 删除dev runtime的`vulkanlab_project.json`后，单独构建
+  `windows-msvc-dev-runtime`即可恢复，且未构建AssetTool或DirectXTex。
+- no-op dev build会执行小清单reconcile，但Lucide、locator和Validator文件时间戳均保持
+  不变；没有Shader compile job。
+- 缺失payload source受控探针在清理前失败，上一次`last-good`文件保持不变。
+- Dev Runtime Control ping/quit成功，精简Runtime持续渲染5秒；Full测试executable完成
+  链接，但遵循项目策略未运行测试套件。
 
 ## Stage 6: Build、Cook 与 Package 的统一入口
 

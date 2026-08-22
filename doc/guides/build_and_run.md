@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-22
-> Verified against: `ed1723c`
+> Verified against: `b7f80a6`
 
 ## 环境要求
 
@@ -108,6 +108,13 @@ CMake 通过 `configure_file()` 生成 `RuntimeFeatures.h`，其中只包含 `VK
 
 这些 target 只表达构建工作流，不作为 C++ 链接聚合层；具体 executable 和测试仍直接链接其所需模块。
 
+`run/<Config>`中的文件具有明确owner：executable和`ktx.exe`由对应target直接输出，
+Shader由`VulkanLabShaders`事务式发布，其余静态payload由声明式runtime reconciler管理。
+Renderer owner负责project locator、Editor字体和CACAO许可；AssetTool owner负责已安装的
+glTF Validator及其许可。reconciler只会清理由该owner登记的路径，不会删除同目录中的
+日志、截图或其他用户文件。无改动构建仍会做一次小清单核对以修复缺失文件，但通过
+`ONLY_IF_DIFFERENT`保持现有payload时间戳。
+
 ### CMake target 与 dependency 边界
 
 `src/CMakeLists.txt` 只安排 owner 目录顺序并组装 `VulkanLab`。Foundation、GPU
@@ -204,6 +211,7 @@ build/full/run/Release/VulkanLabRenderTest.exe
 ```text
 build/<profile>/
   generated/<Config>/shader/  # Shader 中间产物
+  generated/runtime-image/    # per-config runtime payload ownership
   lib/<Config>/               # 静态库
   symbols/<Config>/           # 编译和链接 PDB
   run/<Config>/               # 可直接运行的 exe、Shader、字体和 license
