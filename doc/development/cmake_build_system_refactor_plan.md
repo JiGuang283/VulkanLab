@@ -1,8 +1,8 @@
 # CMake 与 Build 体系收口实施计划
 
-> Status: Active
+> Status: Completed
 > Last verified: 2026-08-22
-> Verified against: `48f0c5b`
+> Verified against: `ab17300`
 
 ## Review Summary
 
@@ -43,7 +43,10 @@
 
 因此，本计划采取“小步收口”而不是 superbuild 重写：先固化现有输出基线，再收敛
 Preset 和依赖图，然后修复 Shader 增量构建，最后统一运行镜像与 Cook 入口。KTX
-预构建依赖、Ninja 和编译加速只在测量证明有收益后引入。
+Stage 7 的实测证明 Ninja 对当前大量独立 CMake target 的调度有显著收益，因此它已
+成为 CLI/VS Code 日常 Dev 的推荐 generator；Visual Studio generator继续保留为
+`.sln`、IDE 调试和稳定回退路径。预构建依赖、PCH、`/MP`、编译缓存和 IPO没有足够
+证据支持作为当前默认值。
 
 ## Goals
 
@@ -60,7 +63,8 @@ Source Project
 
 - 日常渲染器修改只构建 VulkanLab、必要运行库和发生变化的 Shader。
 - AssetTool、Ctl、RenderTest 和 Tests只在对应工作流中构建。
-- 相同 CMake feature set只拥有一个 configure tree；Debug/Release由 build config区分。
+- 相同 feature set在同一 generator内只拥有一个 configure tree；Dev有意保留 Ninja
+  与 Visual Studio 两个 generator，Debug/Release仍由 build config区分。
 - `run/<Config>` 能准确表示当前构建，不保留已经关闭功能的陈旧文件。
 - Shader include变更只重编译真实依赖它的 variant。
 - VS Code 的代码模型与 CMake target保持一致，不引用不存在的 compilation database。
@@ -80,7 +84,7 @@ Source Project
 - 不改变 Shader ABI、Catalog、SceneDocument、Derived Asset Cache 或 Cook schema。
 - 不修改用户场景、环境、模型和 LocalAppData 中的派生缓存。
 
-## Current State
+## Initial State Before Refactor
 
 ### Configure Trees
 
@@ -182,6 +186,8 @@ build/<profile>/
 明确区分：
 
 - Configure Profile：决定编译能力、依赖和 target集合，必须使用独立 binary tree。
+- Generator：决定 Ninja 或 Visual Studio 的调度、IDE工程和 compilation database能力；
+  相同 Dev profile允许为不同 generator保留独立 tree。
 - Build Config：决定 Debug/Release 优化和符号，同一 Visual Studio tree中可以切换。
 - Build Target：决定本次实际构建哪些 executable、Shader和运行文件。
 
@@ -189,6 +195,7 @@ build/<profile>/
 
 ```text
 build/
+  ninja-dev/
   dev/
   full/
   runtime/
@@ -206,12 +213,15 @@ windows-msvc-base              hidden
   |     +-- windows-msvc-tracy
   |     `-- windows-msvc-ao-compare
   `-- windows-msvc-runtime
+
+windows-ninja-dev              Dev feature set + Ninja generator
 ```
 
 用户可见 configure preset：
 
 | Configure preset | Binary tree | Feature set |
 |---|---|---|
+| `windows-ninja-dev` | `build/ninja-dev` | 推荐的日常 Editor Dev；功能等价于 dev-fast，生成 `compile_commands.json` |
 | `windows-msvc-dev-fast` | `build/dev` | 日常 Editor，全运行功能，Tests/RenderTest/Ctl关闭 |
 | `windows-msvc-full` | `build/full` | 全运行功能、全部工具和 Tests target |
 | `windows-msvc-runtime` | `build/runtime` | 精简 Release Runtime |
@@ -222,6 +232,7 @@ Build preset：
 
 | Build preset | Configure preset | Configuration | Aggregate target |
 |---|---|---|---|
+| `windows-ninja-dev` | ninja-dev | Debug | `VulkanLabDeveloper` |
 | `windows-msvc-dev-fast` | dev-fast | Debug | `VulkanLabDeveloper` |
 | `windows-msvc-dev-runtime` | dev-fast | Debug | `VulkanLabRuntimeImage` |
 | `windows-msvc-full-debug` | full | Debug | `VulkanLabFull` |
@@ -753,15 +764,25 @@ BC7、Environment、Catalog和 Shader hash。CPack不了解这些语义，接入
   `-IncludePackages`才删除`dist/`。
 - 遵循项目策略，未运行CTest、Golden、视觉回归或Validation smoke。
 
+Stage 7 后，Cook/Verify的AssetTool改由功能等价的Ninja Dev tree构建，清理脚本也将
+`ninja-dev`作为第六个正式生成树保留；Stage 6 的Cook和package语义没有改变。
+
 ## Stage 7: 构建性能测量与可选优化
+
+> Status: Completed in `ab17300`
 
 ### Goal
 
 在依赖图和增量正确性收口后，再根据数据决定是否引入更激进的编译优化。
 
-### Measurements
+### Measurement Method
 
-每个 profile记录：
+测量环境为 2026-08-22 的同一台 Windows 开发机：20 个逻辑处理器、约 51 GiB
+内存、MSVC 19.44、Visual Studio 2022 17.14 和 CMake 4.1.0-rc1。clean build使用
+独立临时 binary tree；no-op取三次中位数。时间均为 wall time，只适合同机前后比较，
+不作为跨机器性能承诺。
+
+所有 profile都记录：
 
 - clean configure/generate时间。
 - clean build时间。
@@ -771,29 +792,106 @@ BC7、Environment、Catalog和 Shader hash。CPack不了解这些语义，接入
 - 单 Shader和共享 Shader include修改后的 build时间。
 - solution target数量和 build tree大小。
 
-### Optional Improvements
+### Visual Studio Generator Results
 
-按测量结果依次评估：
+| Profile | VS projects | Clean configure | Clean build | No-op median | Clean tree |
+|---|---:|---:|---:|---:|---:|
+| Dev | 56 | 5.589 s | 284.468 s | 4.186 s | 1500.1 MiB |
+| Full | 68 | 6.174 s | 311.314 s | 4.580 s | 1772.3 MiB |
+| Runtime | 38 | 4.864 s | 210.687 s | 2.887 s | 210.5 MiB |
+| Tracy | 58 | 7.539 s | 284.318 s | 4.326 s | 1539.0 MiB |
+| CACAO | 59 | 5.663 s | 291.115 s | 4.279 s | 1539.8 MiB |
 
-1. 实验性 Ninja + MSVC dev preset和可靠的 `VsDevCmd` bootstrap。
-2. MSBuild项目级并行和 `/MP`，避免与 CI或编译机器过度订阅。
-3. Renderer或Editor PCH，仅在公共稳定 header解析占主导时启用。
-4. `sccache`/`clcache`，仅在本地和 CI部署成本可接受时启用。
-5. Runtime Release可选 IPO/LTCG，作为交付优化而不是日常 build默认值。
-6. KTX/DirectXTex预构建 dependency cache或独立 tools superbuild。
+Full clean build只构建测试 executable，没有运行任何测试。Runtime tree显著较小，
+说明 Stage 2/3 的 feature和第三方依赖裁剪有效；Dev/Tracy/CACAO的 clean build仍主要
+受完整 renderer、KTX和编辑器依赖影响。
 
-### Explicitly Rejected Defaults
+Visual Studio Dev的增量探针如下：
 
-- Dev默认 Unity Build：会恶化单文件迭代、宏隔离和错误定位。
-- 全局 PCH：会加强不合理 include耦合。
-- 固定并行 job数量：不同开发机和 CI资源差异过大。
-- 立即 ExternalProject化全部依赖：会增加跨配置、调试符号和安装路径复杂度。
+| Change | Time | Recompiled work |
+|---|---:|---:|
+| touch `RendererFeatureGraph.cpp` | 5.793 s | 1 C++ translation unit |
+| touch `Device.h` | 83.499 s | 73 C++ translation units |
+| touch `present.frag` | 1.332 s | 1 Shader job |
+| touch `atmosphere_scattering.glsl` | 2.160 s | 3 Shader jobs |
+| touch `global_frame.glsl` | 16.031 s | 36 Shader jobs |
+
+Stage 4 已把局部 atmosphere include从基线的 `42.955 s / 127 jobs` 收敛到
+`2.160 s / 3 jobs`。共享 ABI include仍正确触发全部真实 consumer；这里不能为了更
+小的数字牺牲依赖正确性。
+
+### Ninja Experiment And Decision
+
+使用同一 MSVC toolchain、同一 Dev feature set和同一 aggregate target建立临时 Ninja
+tree，结果为：
+
+| Measurement | Visual Studio Dev | Ninja Dev |
+|---|---:|---:|
+| clean configure | 5.589 s | 2.927 s |
+| clean `VulkanLabDeveloper` build | 284.468 s | 40.093 s |
+| direct generator no-op | 4.186 s | 0.548 s |
+| single Renderer `.cpp` | 5.793 s | 2.097 s |
+| `Device.h`，73 TUs | 83.499 s | 12.614 s |
+
+收益主要来自 Ninja对当前多个项目目标和 translation unit的统一调度，而不是减少了
+编译工作量。正式 `build/ninja-dev` tree约 1.35 GiB，并生成
+`compile_commands.json`。通过 PowerShell wrapper从普通终端执行的 no-op约为
+`3.2 s`，其中包含 PowerShell启动和首次 MSVC环境发现开销；在已经初始化的 Developer
+Shell中不会重复该 bootstrap。
+
+因此作出以下决定：
+
+1. 新增 `windows-ninja-dev`，作为 CLI与VS Code的推荐日常 Dev generator。
+2. `Build-Developer.ps1`和`Configure-Project.ps1`默认选择`ninja-dev`。
+3. wrapper通过`vswhere`和`VsDevCmd.bat`初始化x64 MSVC，并优先发现`PATH`或Visual
+   Studio CMake Tools附带的Ninja。
+4. `Build-Developer.ps1 -Profile dev`继续提供Visual Studio solution和稳定回退。
+5. Cook/Verify使用Ninja tree中的AssetTool；Runtime Release仍使用受检查的Visual
+   Studio runtime tree。
+6. wrapper仅在`CMakeCache.txt`不存在或显式`-Reconfigure`时Configure，避免每次build
+   重复生成。
+
+Ninja和Visual Studio Dev是同一 feature profile的两种 generator，不应被理解为两种
+产品能力。正式 feature profile仍是 Dev、Full、Runtime、Tracy和CACAO五类。
+
+### Evaluated But Not Enabled
+
+- **PCH**：高频 header探针在Ninja下已经从83.499 s降到12.614 s，当前数据不足以证明
+  PCH收益能够覆盖耦合、失效范围和维护成本。后续应通过 compiler trace证明 parse
+  时间占主导后再为稳定的Renderer/Editor边界分别引入，禁止全局PCH。
+- **MSBuild `/MP`**：Visual Studio generator已经进行项目级并行，Ninja又负责全局TU
+  调度。叠加固定`/MP`可能过度订阅开发机和CI，当前不启用。
+- **`sccache`/`clcache`**：测量环境没有已部署的可用缓存，且当前主要目标是增量而非
+  跨clean build复用。等CI和团队机器具备统一缓存后再评估。
+- **IPO/LTCG**：它改善Release运行时而非开发构建，并显著增加链接成本；不属于本轮
+  迭代优化。
+- **KTX/DirectXTex预构建**：clean tree仍显示第三方依赖成本较高，但Ninja已解决日常
+  调度瓶颈。二进制dependency cache留给CI或可复现工具链阶段。
+- **Unity Build**：继续拒绝作为Dev默认值，避免单文件迭代、宏隔离和错误定位恶化。
+
+仍然拒绝固定并行job数量和立即ExternalProject化全部依赖；前者无法适配不同开发机，
+后者会增加跨配置、调试符号和安装路径复杂度。
 
 ### Completion Criteria
 
-- no-op和单文件增量时间不差于 Stage 0 baseline。
-- Shader局部变更明显少于当前近全量变体 rebuild。
-- 若启用 Ninja/PCH/编译缓存，必须有记录数据证明收益并保留稳定回退路径。
+- Ninja direct no-op和单文件增量明显快于Stage 0 Visual Studio baseline。
+- Shader局部变更只编译真实consumer。
+- 默认脚本可从普通PowerShell发现MSVC/Ninja并生成可运行镜像。
+- Visual Studio Dev仍能完整构建，作为`.sln`和generator回退路径。
+- Ninja应用可启动、响应Runtime Control `ping/quit`并正常退出。
+- Runtime Release在构建优化后仍通过最小BuildInfo检查。
+
+### Stage 7 Verification Record
+
+- `windows-ninja-dev`完成正式Configure/Build，生成
+  `build/ninja-dev/run/Debug/VulkanLab.exe`和`compile_commands.json`。
+- 默认`Build-Developer.ps1`从普通PowerShell完成增量构建；最近一次wrapper no-op为
+  `3.241 s`。
+- Ninja开发版通过Runtime Control执行`ping -> quit`，进程退出码为0。
+- `Build-Developer.ps1 -Profile dev`重新构建Visual Studio回退路径成功。
+- `Build-Runtime.ps1`重新构建Release镜像并通过最小feature BuildInfo检查。
+- 所有PowerShell脚本通过Windows PowerShell 5.1 parser检查，CMake可枚举全部preset。
+- 遵循项目策略，没有运行CTest、Golden、视觉回归或Validation smoke。
 
 ## Verification Matrix
 
@@ -804,10 +902,10 @@ Validation smoke。
 
 | Change | Required build/start |
 |---|---|
-| Preset/layout | dev-fast + runtime |
-| Editor dependency | dev-fast + runtime |
-| AssetTool graph | dev-fast Developer + dev RuntimeImage |
-| Shader pipeline | dev-fast Shader + VulkanLab start |
+| Preset/layout | ninja-dev + Visual Studio dev fallback + runtime |
+| Editor dependency | ninja-dev + runtime |
+| AssetTool graph | ninja-dev Developer + dev RuntimeImage |
+| Shader pipeline | ninja-dev Shader + VulkanLab start |
 | Tracy dependency | tracy build + start |
 | CACAO dependency | ao-compare build + start |
 | Cook workflow | runtime Release + one small Native Scene package |
@@ -818,7 +916,7 @@ Validation smoke。
 - Configure摘要与 BuildInfo feature一致。
 - `run/<Config>` 不存在已关闭 feature的陈旧 payload。
 - `VulkanLab.exe --build-info-json` 在创建 Window/Vulkan前成功。
-- dev-fast和runtime都能启动并持续渲染。
+- ninja-dev、Visual Studio dev回退和runtime都能构建；受影响路径按阶段启动验证。
 - package verify成功，并能从仓库外启动。
 
 测试 target仍必须保持可配置、可构建，但只有用户明确要求时才运行测试套件。
@@ -834,7 +932,8 @@ Validation smoke。
 5. `build: track precise shader dependencies`
 6. `build: stage declarative developer runtime images`
 7. `build: unify cook and package workflows`
-8. `docs: document the consolidated build system`
+8. `build: add accelerated Ninja development preset`
+9. `docs: document the consolidated build system`
 
 每个提交必须保持至少一个常用 preset可构建，不允许在多个提交之间留下无法 Configure
 的中间状态。
@@ -851,6 +950,8 @@ Validation smoke。
 | KTX upstream cache污染 | 集中 helper和注释；预构建模式留到测量阶段 |
 | 拆分 CMake暴露循环依赖 | 不新增细粒度 library；必要时先提取 data-only interface而不是互相链接 |
 | Full tree过大 | 日常使用 dev tree；Full只用于完整工具和显式测试构建 |
+| Ninja环境依赖普通终端不可见 | wrapper通过vswhere初始化MSVC，并发现VS内置Ninja；保留Visual Studio dev回退 |
+| 两个Dev tree被误认为不同产品配置 | 文档和脚本明确其feature相同，只有generator、输出目录和IDE能力不同 |
 
 ## Future Improvements
 
@@ -868,12 +969,14 @@ Validation smoke。
 
 本计划完成的判定标准是：
 
-- 只有五类有真实 feature差异的 configure tree；Full Debug/Release共享。
+- 只有五类有真实feature差异的profile；Full Debug/Release共享。Dev可按需保留Ninja和
+  Visual Studio两个generator tree。
 - Preset通过 inheritance维护，仓库脚本不包含废弃 build目录。
-- VS Code不再引用不存在的 `compile_commands.json`。
+- VS Code不再引用不存在的compilation database；Ninja tree提供真实
+  `compile_commands.json`，Visual Studio tree使用CMake Tools provider。
 - VulkanLab、AssetTool、Shader和测试之间不存在工作流级错误硬依赖。
 - 日常 Runtime build不会被 DirectXTex/KTX Tool链无条件拖入。
 - Shader使用真实 include依赖，variant构建逻辑无重复 custom command模板。
 - Runtime image由统一 manifest装配并清理陈旧 payload。
 - 出包流程统一为 Runtime Release -> Cook -> Verify -> 仓库外启动。
-- dev-fast与runtime均可构建和运行，且增量构建数据不低于基线。
+- Ninja dev、Visual Studio dev回退与runtime均可构建；Ninja增量数据显著优于基线。

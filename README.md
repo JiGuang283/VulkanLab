@@ -98,12 +98,17 @@ git submodule update --init --recursive
 ## Build And Run
 
 The fast development preset builds the editor-enabled Debug renderer without
-test targets:
+test targets. The developer script uses Ninja with the MSVC toolchain by
+default and initializes the Visual Studio environment automatically:
 
 ```powershell
 ./tools/dev/Build-Developer.ps1
-./build/dev/run/Debug/VulkanLab.exe --project .
+./build/ninja-dev/run/Debug/VulkanLab.exe --project .
 ```
+
+Use `./tools/dev/Build-Developer.ps1 -Profile dev` when a Visual Studio
+solution is preferred. Both paths compile the same development feature set;
+only the CMake generator and binary tree differ.
 
 The minimal runtime configuration is built with:
 

@@ -2,12 +2,13 @@
 
 > Status: Current
 > Last verified: 2026-08-22
-> Verified against: `48f0c5b`
+> Verified against: `ab17300`
 
 ## 环境要求
 
 - Windows 10/11 和支持 Vulkan 的显卡驱动。
 - Visual Studio 2022 C++ 工具链。
+- Ninja；优先使用 Visual Studio 2022 随 CMake Tools 安装的版本，也可以放入 `PATH`。
 - CMake 3.22 或更高版本。
 - Vulkan SDK。CMake 需要能找到 Vulkan、`glslc`、`spirv-val` 和 SDK 中的 GLM 头文件。
 - 仓库内 `external/` 依赖完整，尤其是 `glfw/lib-vc2022`、ImGui、stb、VMA 和 glTF 头文件。
@@ -21,36 +22,58 @@ git submodule update --init --recursive
 
 ## 构建配置
 
-Windows MSVC 提供五类主要构建配置。完整 Debug/Release 共用同一个
-`build/full` 多配置生成树，避免重复生成 Visual Studio 工程：
+项目提供五类有实际 feature 差异的构建配置。Dev 额外提供 Ninja 和 Visual Studio
+两种 generator；它们的编译能力相同，但使用独立 binary tree。完整 Debug/Release
+共用同一个 `build/full` 多配置生成树，避免重复生成 Visual Studio 工程：
 
 | Preset | 配置 | 用途 | 主要产物 |
 |---|---|---|---|
+| `windows-ninja-dev` | Debug，全运行时功能，`BUILD_TESTING=OFF` | 推荐的 CLI/VS Code 日常迭代 | VulkanLab 和 AssetTool |
+| `windows-msvc-dev-fast` | Debug，全运行时功能，`BUILD_TESTING=OFF` | Visual Studio `.sln` 与回退 | VulkanLab 和 AssetTool |
 | `windows-msvc-full` + `windows-msvc-full-debug` | Debug，全功能，`BUILD_TESTING=ON` | 完整开发与诊断 | VulkanLab、AssetTool、Ctl、RenderTest 和测试目标 |
 | `windows-msvc-full` + `windows-msvc-full-release` | Release，全功能，`BUILD_TESTING=ON` | 完整 Release 验证 | 与 Debug 相同的功能和工具 |
-| `windows-msvc-dev-fast` | Debug，全运行时功能，`BUILD_TESTING=OFF` | 日常快速迭代 | VulkanLab 和 AssetTool |
 | `windows-msvc-ao-compare` | Debug，基于 dev-fast，CACAO ON | SSAO/CACAO 质量与性能对比 | VulkanLab、AssetTool 和 Ctl |
 | `windows-msvc-tracy` | Debug，全运行时功能，Tracy ON，`BUILD_TESTING=OFF` | CPU/Vulkan GPU 深度性能分析 | VulkanLab、AssetTool 和 Ctl |
 | `windows-msvc-runtime` | Release，开发基础设施全部关闭 | 精简运行时 | 仅 VulkanLab |
 
-日常修改渲染器时优先使用快速配置：
+日常修改渲染器时优先使用以下入口：
 
 ```powershell
 .\tools\dev\Build-Developer.ps1
 ```
 
-该入口会依次 Configure 和 Build，并输出可运行镜像路径。只需要重新生成工程时使用：
+默认 profile 是 `ninja-dev`。脚本会在首次使用时 Configure，之后直接增量 Build，并
+输出 `build/ninja-dev/run/Debug` 下的可运行镜像。普通 PowerShell 中无需预先执行
+`VsDevCmd.bat`：脚本会通过 `vswhere` 初始化 x64 MSVC 环境，并查找 `PATH` 或 Visual
+Studio 自带的 Ninja。需要强制重新生成时使用：
 
 ```powershell
+.\tools\dev\Build-Developer.ps1 -Reconfigure
+```
+
+需要 `.sln`、Visual Studio 工程浏览或 generator 回退时，显式选择 `dev`：
+
+```powershell
+.\tools\dev\Build-Developer.ps1 -Profile dev
+```
+
+只 Configure 不 Build 时使用：
+
+```powershell
+.\tools\dev\Configure-Project.ps1
 .\tools\dev\Configure-Project.ps1 -Profile dev
 ```
 
-底层等价命令仍然受支持：
+在 Visual Studio Developer PowerShell 中，底层等价命令仍然受支持：
 
 ```powershell
-cmake --preset windows-msvc-dev-fast
-cmake --build --preset windows-msvc-dev-fast
+cmake --preset windows-ninja-dev
+cmake --build --preset windows-ninja-dev
 ```
+
+Ninja tree 会生成 `build/ninja-dev/compile_commands.json`。Visual Studio generator不
+承诺生成 compilation database；VS Code 的默认 IntelliSense 继续使用 CMake Tools
+configuration provider，而不是绑定某个 build tree 的绝对路径。
 
 需要统一 CPU/GPU 时间线时使用专用配置：
 
@@ -192,7 +215,7 @@ SPIR-V，也没有独立的`compile.bat`；普通C++ rebuild不会重新调用`g
 构建Shader时使用：
 
 ```powershell
-cmake --build --preset windows-msvc-dev-fast --target VulkanLabShaders
+cmake --build --preset windows-ninja-dev --target VulkanLabShaders
 ```
 
 启用 `BUILD_TESTING` 时，`VulkanLabCpuTests` 会静态链接 SPIRV-Reflect 并读取上述实际 SPIR-V，校验 shader stage、descriptor、共享 UBO/push ABI、vertex input、varying 和 fragment output。SPIRV-Reflect 不链接进 `VulkanLab.exe`。
@@ -234,6 +257,10 @@ build/<profile>/
   test-results/                # 测试实际输出
 ```
 
+推荐开发镜像位于 `build/ninja-dev/run/Debug`。`build/dev/run/Debug` 是功能等价的
+Visual Studio generator 镜像；`ninja-dev` 是 generator 替代项，不是新的 runtime
+feature profile。
+
 源码项目根只保存权威 Catalog、SceneDocument、模型和 Shader 源码。开发运行的可写数据默认位于 `%LOCALAPPDATA%/VulkanLab/Workspaces/<projectId>/`：
 
 ```text
@@ -252,7 +279,8 @@ temp/          # 运行时临时文件
 ```
 
 使用 `-WhatIf` 可以先查看将删除的生成物；通过 `-KeepPreset` 可以指定需要保留的 build tree。脚本不会删除源码资产、LocalAppData 下的 Derived Asset Cache 或 Editor Preferences。
-默认保留 `dev/full/runtime/tracy/cacao` 五个正式生成树；添加 `-IncludePackages` 才会
+默认保留 `ninja-dev/dev/full/runtime/tracy/cacao` 六个正式生成树；其中前两个是同一
+Dev feature set 的不同 generator。添加 `-IncludePackages` 才会
 删除 Git 忽略的 `dist/`，普通清理不会删除已发布 package。
 
 需要 GPU 和可呈现窗口的 smoke/golden 测试使用 `visual` 标签；纯 CPU、资产和 package 测试使用 `unit` 标签：
@@ -269,7 +297,7 @@ ctest --preset windows-msvc-test -L visual --output-on-failure
 程序不依赖当前工作目录。下面是从输出目录启动的常用方式：
 
 ```powershell
-cd build\dev\run\Debug
+cd build\ninja-dev\run\Debug
 .\VulkanLab.exe
 ```
 
@@ -569,12 +597,13 @@ Cook 会调用目标 `VulkanLab.exe --build-info-json`。目标必须是 `window
 .\tools\dev\Verify-Package.ps1 -Path .\dist\my-scene -LaunchSmoke
 ```
 
-`Verify-Package.ps1` 默认只构建 AssetTool target，不会构建 Editor Runtime 或
-DirectXTex 之外的无关产品。脚本只编排已有 CLI，不复制 CookClosureResolver、Validator、
-artifact admission、hash 或语义验证逻辑。需要定位底层问题时，仍可直接运行：
+`Cook-Package.ps1`和`Verify-Package.ps1`复用`ninja-dev`中的AssetTool，并单独构建、
+检查`runtime` Release镜像；不会为了出包构建Editor Runtime或其他产品。脚本只编排
+已有CLI，不复制CookClosureResolver、Validator、artifact admission、hash或语义验证
+逻辑。需要定位底层问题时，仍可直接运行：
 
 ```powershell
-.\build\dev\run\Debug\VulkanLabAssetTool.exe package verify `
+.\build\ninja-dev\run\Debug\VulkanLabAssetTool.exe package verify `
   --path .\dist\my-scene
 ```
 

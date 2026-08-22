@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-22
-> Verified against: `48f0c5b`
+> Verified against: `ab17300`
 
 VulkanLab 是一个开发中的 Windows Vulkan 1.3 实时渲染器。当前架构以
 `Application` 为组合根，以类型化 service、snapshot、action 和 submission
@@ -118,13 +118,19 @@ src/CMakeLists.txt Application executable assembly
 - `vkl_scene_data`, `vkl_asset_core`, `vkl_asset_runtime`
 - `vkl_scene_runtime`, `vkl_scene_workflow`
 - `vkl_capture`
+- `vkl_editor` 和 `vkl_runtime_control_adapter`（条件构建）
 
 开发者命令入口位于 `tools/dev/`。`Configure-Project.ps1`、
 `Build-Developer.ps1` 和 `Build-Runtime.ps1` 只选择上述 CMake preset/target；
 `Cook-Package.ps1` 和 `Verify-Package.ps1` 只串联 Runtime BuildInfo 检查与
 `VulkanLabAssetTool`。场景闭包、Validator、派生资产 admission、package hash 和原子
 发布仍由 AssetTool 数据层独占，PowerShell 不维护第二套 package 规则。
-- `vkl_editor` 和 `vkl_runtime_control_adapter`（条件构建）
+
+构建系统将 feature profile、generator 和 build target 分开处理。日常 Dev feature set
+默认由 `windows-ninja-dev` 生成到 `build/ninja-dev`，以获得较低的调度开销和真实
+`compile_commands.json`；`windows-msvc-dev-fast` 生成到 `build/dev`，保留 `.sln`
+和 Visual Studio 回退能力。两者都构建 `VulkanLabDeveloper`，不会产生不同的运行时
+feature ABI。Full、Runtime、Tracy 和 CACAO 仍使用各自独立的 Visual Studio tree。
 
 `VulkanLab` executable 只直接编译 `main.cpp` 与 `app/Application.cpp`，再链接所需
 模块。测试和工具直接链接其实际使用的模块，不再经过一个隐藏依赖关系的
