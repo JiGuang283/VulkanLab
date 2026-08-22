@@ -1,6 +1,6 @@
 #include "BuildInfo.h"
 
-#include <BuildFeatures.h>
+#include <RuntimeFeatures.h>
 #include <BuildInfoGenerated.h>
 
 namespace vkr {
@@ -20,10 +20,7 @@ const BuildInfo &currentBuildInfo() {
                                  build::kGpuDebugUtils,
                                  build::kGpuProfiling,
                                  build::kTracy,
-                                 build::kCacao,
-                                 build::kAssetTool,
-                                 build::kControlTool,
-                                 build::kRenderTest}};
+                                 build::kCacao}};
     return info;
 }
 

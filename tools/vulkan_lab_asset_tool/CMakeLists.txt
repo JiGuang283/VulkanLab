@@ -29,7 +29,6 @@ target_link_libraries(vkl_asset_tool_core
 )
 
 add_executable(VulkanLabAssetTool main.cpp)
-add_dependencies(VulkanLabAssetTool VulkanLabShaders)
 target_link_libraries(VulkanLabAssetTool PRIVATE
     vkl_build_options
     vkl_asset_core

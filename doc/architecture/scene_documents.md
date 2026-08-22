@@ -20,7 +20,7 @@ CatalogSceneDocument
   -> RenderQueue / RenderView
 ```
 
-`vkl_scene_data` 是独立静态库，提供持久 ID 与 SceneDocument DTO、解析、验证和原子存储。它不依赖 Renderer、Vulkan、ImGui 或 `vkl_asset_core`；Asset、Renderer 和 Scene Runtime 等具体 target 按需依赖它。`vkl_engine` 目前只是兼容构建入口使用的 `INTERFACE` 聚合 target，不拥有实现源码。
+`vkl_scene_data` 是独立静态库，提供持久 ID 与 SceneDocument DTO、解析、验证和原子存储。它不依赖 Renderer、Vulkan、ImGui 或 `vkl_asset_core`；Asset、Renderer、Scene Runtime 和测试等具体 target 按需直接依赖它。构建入口由不参与链接的 workflow aggregate targets 表示，不再通过 `vkl_engine` 隐藏模块依赖。
 
 ## Engine Primitives
 

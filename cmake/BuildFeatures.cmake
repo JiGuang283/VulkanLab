@@ -39,15 +39,15 @@ if(VKL_ENABLE_ASSET_AUTHORING AND NOT VKL_BUILD_ASSET_TOOL)
         "OnDemand import requires an external --asset-tool path.")
 endif()
 
-set(VKL_BUILD_FEATURES_INCLUDE_DIR
+set(VKL_RUNTIME_FEATURES_INCLUDE_DIR
     "${PROJECT_BINARY_DIR}/generated")
-file(MAKE_DIRECTORY "${VKL_BUILD_FEATURES_INCLUDE_DIR}")
+file(MAKE_DIRECTORY "${VKL_RUNTIME_FEATURES_INCLUDE_DIR}")
 configure_file(
-    "${PROJECT_SOURCE_DIR}/cmake/BuildFeatures.h.in"
-    "${VKL_BUILD_FEATURES_INCLUDE_DIR}/BuildFeatures.h"
+    "${PROJECT_SOURCE_DIR}/cmake/RuntimeFeatures.h.in"
+    "${VKL_RUNTIME_FEATURES_INCLUDE_DIR}/RuntimeFeatures.h"
 )
 target_include_directories(vkl_build_options INTERFACE
-    "${VKL_BUILD_FEATURES_INCLUDE_DIR}"
+    "${VKL_RUNTIME_FEATURES_INCLUDE_DIR}"
 )
 
 message(STATUS "VulkanLab configure profile")

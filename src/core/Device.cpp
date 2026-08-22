@@ -4,7 +4,7 @@
 #include "VulkanCheck.h"
 #include "diagnostics/TracyProfiler.h"
 
-#include <BuildFeatures.h>
+#include <RuntimeFeatures.h>
 
 #include <algorithm>
 #include <array>

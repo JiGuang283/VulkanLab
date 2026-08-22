@@ -104,8 +104,9 @@ src/render/features/
 - `vkl_editor` 和 `vkl_runtime_control_adapter`（条件构建）
 
 `VulkanLab` executable 只直接编译 `main.cpp` 与 `app/Application.cpp`，再链接所需
-模块。`vkl_engine` 目前是无源码的过渡 INTERFACE aggregate，只用于已有测试和
-下游 target 的兼容，不代表一个重新集中所有实现的 monolith。
+模块。测试和工具直接链接其实际使用的模块，不再经过一个隐藏依赖关系的
+`vkl_engine` 聚合 target。面向开发者的构建入口使用无链接语义的 custom aggregate
+targets，例如 `VulkanLabRuntimeImage`、`VulkanLabDeveloper` 和 `VulkanLabFull`。
 
 构建开关只裁剪开发基础设施，不切换渲染算法 ABI。Editor、Runtime Control、
 Capture、Asset Authoring、Validation、Debug Utils、GPU Profiler 和 Tracy 可以独立

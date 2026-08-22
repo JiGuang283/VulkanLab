@@ -3,7 +3,7 @@
 #include "scene/SceneRuntimeCoordinator.h"
 #include "workflows/SceneWorkflowController.h"
 
-#include <BuildFeatures.h>
+#include <RuntimeFeatures.h>
 
 #include "assets/EnvironmentLoadManager.h"
 #if VKL_ENABLE_RUNTIME_CONTROL

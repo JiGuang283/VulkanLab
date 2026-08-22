@@ -1,6 +1,6 @@
 #include "EditorController.h"
 
-#include <BuildFeatures.h>
+#include <RuntimeFeatures.h>
 
 #include "render/frame/RenderSettingsController.h"
 #include "scene/SceneRuntimeCoordinator.h"

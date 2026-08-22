@@ -104,7 +104,7 @@
       "configurePreset": "windows-msvc-dev-fast",
       "configuration": "Debug",
       "targets": [
-        "VulkanLab"
+        "VulkanLabDeveloper"
       ]
     },
     {
@@ -113,7 +113,7 @@
       "configurePreset": "windows-msvc-dev-fast",
       "configuration": "Debug",
       "targets": [
-        "VulkanLab"
+        "VulkanLabRuntimeImage"
       ]
     },
     {
@@ -121,11 +121,7 @@
       "hidden": true,
       "configurePreset": "windows-msvc-full",
       "targets": [
-        "VulkanLab",
-        "VulkanLabAssetTool",
-        "VulkanLabCtl",
-        "VulkanLabRenderTest",
-        "VulkanLabCpuTests"
+        "VulkanLabFull"
       ]
     },
     {
@@ -155,7 +151,7 @@
       "configurePreset": "windows-msvc-runtime",
       "configuration": "Release",
       "targets": [
-        "VulkanLab"
+        "VulkanLabRuntimeImage"
       ]
     },
     {
@@ -163,9 +159,7 @@
       "configurePreset": "windows-msvc-tracy",
       "configuration": "Debug",
       "targets": [
-        "VulkanLab",
-        "VulkanLabCtl",
-        "VulkanLabAssetTool"
+        "VulkanLabDeveloper"
       ]
     },
     {
@@ -173,9 +167,7 @@
       "configurePreset": "windows-msvc-ao-compare",
       "configuration": "Debug",
       "targets": [
-        "VulkanLab",
-        "VulkanLabCtl",
-        "VulkanLabAssetTool"
+        "VulkanLabDeveloper"
       ]
     }
   ],

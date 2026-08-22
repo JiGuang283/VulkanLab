@@ -508,31 +508,6 @@ if(VKL_ENABLE_RUNTIME_CONTROL)
     )
 endif()
 
-# Transitional aggregate for existing downstream targets. It owns no source;
-# concrete runtime modules above define the actual build boundaries.
-add_library(vkl_engine INTERFACE)
-add_library(VulkanLab::Engine ALIAS vkl_engine)
-target_link_libraries(vkl_engine INTERFACE
-        vkl_build_options
-        vkl_asset_core
-        vkl_asset_runtime
-        vkl_capture
-        vkl_foundation
-        vkl_gpu_runtime
-        vkl_platform_runtime
-        vkl_renderer_runtime
-        vkl_scene_runtime
-        vkl_scene_workflow
-        vkl_shader_catalog
-        vkl_scene_data
-)
-if(VKL_ENABLE_EDITOR_UI)
-    target_link_libraries(vkl_engine INTERFACE vkl_editor)
-endif()
-if(VKL_ENABLE_RUNTIME_CONTROL)
-    target_link_libraries(vkl_engine INTERFACE vkl_runtime_control_adapter)
-endif()
-
 add_executable(VulkanLab
     main.cpp
     app/Application.cpp

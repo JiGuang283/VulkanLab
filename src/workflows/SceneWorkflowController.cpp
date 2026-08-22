@@ -1,6 +1,6 @@
 #include "SceneWorkflowController.h"
 
-#include <BuildFeatures.h>
+#include <RuntimeFeatures.h>
 
 #include "core/Log.h"
 #include "diagnostics/Profiling.h"

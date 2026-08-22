@@ -26,4 +26,4 @@ target_link_libraries(VulkanLabRenderTest PRIVATE
     vkl_build_options
     vkl_render_test_core
 )
-add_dependencies(VulkanLabRenderTest VulkanLab)
+add_dependencies(VulkanLabRenderTest VulkanLabRuntimeImage)

@@ -95,7 +95,18 @@ cmake --build --preset windows-msvc-runtime
 - Tracy 与现有 GPU timestamp profiler 相互独立；`VKL_ENABLE_TRACY=OFF` 时不配置 Tracy submodule，也不链接 TracyClient。
 - `VKL_ENABLE_CACAO=OFF` 时不生成上游 shader、不编译或链接 CACAO SDK；内置 SSAO 与 Screen-Space ABI 保持可用。
 
-CMake 通过 `configure_file()` 生成 `BuildFeatures.h`。宏仅用于程序入口、模块装配和真实/空实现选择，不用于控制 IBL、Shadow 或任何 GPU ABI。`VulkanLab.exe --help`、启动日志、BuildInfo 和 Runtime Control 的 `system.info.build.features` 都会报告实际编译能力。
+CMake 通过 `configure_file()` 生成 `RuntimeFeatures.h`，其中只包含 `VKL_ENABLE_*` 运行时能力。宏仅用于程序入口、模块装配和真实/空实现选择，不用于控制 IBL、Shadow 或任何 GPU ABI。`VKL_BUILD_*` 与 `BUILD_TESTING` 只决定当前生成树中有哪些产品目标，不进入运行时头文件。`VulkanLab.exe --help`、启动日志、BuildInfo 和 Runtime Control 的 `system.info.build.features` 都会报告实际编译能力；`system.info.build.products` 则按 executable 同目录的实际文件报告可用工具。
+
+常用工作流目标为：
+
+| Target | 产物边界 |
+|---|---|
+| `VulkanLabRuntimeImage` | 渲染器、Shader 和运行时依赖，不隐式构建资产工具或测试。 |
+| `VulkanLabDeveloper` | Runtime Image，加当前 profile 启用的 AssetTool/Ctl。 |
+| `VulkanLabFull` | Developer，再加 RenderTest 与 CPU test executable。 |
+| `VulkanLabCookInput` | Cook 所需的 Runtime Image 与 AssetTool。 |
+
+这些 target 只表达构建工作流，不作为 C++ 链接聚合层；具体 executable 和测试仍直接链接其所需模块。
 
 未编译功能的启动参数不会被静默忽略。`--runtime-control`、`--runtime-control-pipe`、`--capture-root`、`--asset-mode ondemand`、`--asset-tool` 和非 `off` Validation profile 会在创建 Window/Vulkan 前返回明确错误。Editor 未编译时 `--no-gui` 仍被接受；Asset Authoring 未编译时默认模式为 `ReadOnly`。Runtime Control 已编译但某个子功能被裁剪时，对应协议方法返回 `feature_not_compiled`。
 

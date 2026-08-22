@@ -1,6 +1,6 @@
 #pragma once
 
-#include <BuildFeatures.h>
+#include <RuntimeFeatures.h>
 
 #include <cstdint>
 #include <memory>

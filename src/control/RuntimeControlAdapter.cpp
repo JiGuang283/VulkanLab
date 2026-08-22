@@ -5,7 +5,7 @@
 #include "scene/SceneRuntimeCoordinator.h"
 #include "workflows/SceneWorkflowController.h"
 
-#include <BuildFeatures.h>
+#include <RuntimeFeatures.h>
 
 #include "assets/ArtifactStatus.h"
 #include "assets/ContentHash.h"
@@ -697,10 +697,17 @@ ControlJson RuntimeControlAdapter::runtimeSystemInfo() {
             {"gpuDebugUtils", build.features.gpuDebugUtils},
             {"gpuProfiling", build.features.gpuProfiling},
             {"tracy", build.features.tracy},
-            {"cacao", build.features.cacao},
-            {"assetTool", build.features.assetTool},
-            {"controlTool", build.features.controlTool},
-            {"renderTest", build.features.renderTest}}}}},
+            {"cacao", build.features.cacao}}},
+          {"products",
+           {{"assetTool",
+             std::filesystem::exists(projectContext_.runtimeRoot /
+                                     "VulkanLabAssetTool.exe")},
+            {"controlTool",
+             std::filesystem::exists(projectContext_.runtimeRoot /
+                                     "VulkanLabCtl.exe")},
+            {"renderTest",
+             std::filesystem::exists(projectContext_.runtimeRoot /
+                                     "VulkanLabRenderTest.exe")}}}}},
         {"gpu",
          {{"name", gpu.deviceName},
           {"vendorId", gpu.vendorID},

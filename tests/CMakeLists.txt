@@ -41,10 +41,16 @@ set_target_properties(VulkanLabCpuTests PROPERTIES
 target_link_libraries(VulkanLabCpuTests PRIVATE
     vkl_build_options
     vkl_asset_core
-    vkl_asset_runtime
+    # The combined test executable exercises both offline KTX writing and
+    # runtime KTX reading. Keep the complete provider before ktx_read's
+    # transitive dependency so MSVC does not extract duplicate KTX2 symbols.
     vkl_asset_tool_core
+    vkl_asset_runtime
+    vkl_capture
     vkl_control
-    vkl_engine
+    vkl_foundation
+    vkl_gpu_runtime
+    vkl_renderer_runtime
     vkl_render_test_core
     VulkanLab::SpirvReflect
 )

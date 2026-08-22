@@ -7,7 +7,7 @@
 #include "core/Log.h"
 #include "render/shader/ShaderRegistry.h"
 
-#include <BuildFeatures.h>
+#include <RuntimeFeatures.h>
 #include <json.hpp>
 
 #include <cstdlib>
@@ -119,10 +119,7 @@ void printBuildInfoJson(std::ostream &out) {
           {"gpuDebugUtils", features.gpuDebugUtils},
           {"gpuProfiling", features.gpuProfiling},
           {"tracy", features.tracy},
-          {"cacao", features.cacao},
-          {"assetTool", features.assetTool},
-          {"controlTool", features.controlTool},
-          {"renderTest", features.renderTest}}},
+          {"cacao", features.cacao}}},
         {"rendering",
          {{"renderPaths", {"forward", "deferred"}},
           {"materialBindings", {"legacy", "bindless"}},
