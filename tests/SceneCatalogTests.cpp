@@ -87,10 +87,15 @@ void testCatalogLoadAndProjectResolution() {
         std::filesystem::weakly_canonical(fixture.root);
     const std::filesystem::path canonicalRuntime =
         std::filesystem::weakly_canonical(runtime);
+    const std::filesystem::path workspace =
+        vkr::ProjectContextResolver::defaultWorkspaceRoot("catalog-test");
     requireCatalog(context.projectRoot == canonicalProject &&
                        context.runtimeRoot == canonicalRuntime &&
-                       context.captureRoot ==
-                           canonicalRuntime / "artifacts/captures",
+                       context.workspaceRoot == workspace &&
+                       context.logRoot == workspace / "logs" &&
+                       context.captureRoot == workspace / "captures" &&
+                       context.diagnosticsRoot == workspace / "diagnostics" &&
+                       context.tempRoot == workspace / "temp",
                    "explicit ProjectContext roots were not resolved");
     requireCatalog(
         context.resolveProjectPath("models/scene.glb") ==

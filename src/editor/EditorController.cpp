@@ -2775,13 +2775,19 @@ void EditorController::draw() {
         actions.drawCapture = [this]() { drawCapturePanel(); };
 #endif
         actions.exportRenderGraphJson = [this]() {
-            std::filesystem::create_directories("logs");
-            std::ofstream("logs/render_graph.json", std::ios::binary)
+            std::filesystem::create_directories(
+                projectContext_.diagnosticsRoot);
+            std::ofstream(projectContext_.diagnosticsRoot /
+                              "render_graph.json",
+                          std::ios::binary)
                 << renderer_->renderGraphJson();
         };
         actions.exportRenderGraphDot = [this]() {
-            std::filesystem::create_directories("logs");
-            std::ofstream("logs/render_graph.dot", std::ios::binary)
+            std::filesystem::create_directories(
+                projectContext_.diagnosticsRoot);
+            std::ofstream(projectContext_.diagnosticsRoot /
+                              "render_graph.dot",
+                          std::ios::binary)
                 << renderer_->renderGraphDot();
         };
         diagnosticsPanel_->draw(snapshot, actions);

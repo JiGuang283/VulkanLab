@@ -76,7 +76,8 @@ descriptor 写入和 slot 复用/耗尽计数。逐帧运行状态也在
   --window-size 800x600 `
   --fixed-delta 0.016666667 `
   --no-gui `
-  --capture-root .\artifacts\captures
+  --workspace .\out\diagnostics\manual-run `
+  --capture-root .\out\diagnostics\manual-run\captures
 ```
 
 可在同一启动命令中增加 `--validation off|core|sync|gpu` 和
@@ -97,7 +98,7 @@ profile，并检查 `system.info.diagnostics.validation.actual` 与 requested �
 
 ## 输出与限制
 
-开发运行默认输出根目录为 executable 旁的 `artifacts/captures/`。显式 `--capture-root` 不能用于 cooked package，避免交付包写入任意外部位置。`capture.screenshot` 只接受该根目录下的相对 `.png` 路径，并以临时文件加原子替换发布结果。
+开发运行默认 Workspace 位于 `%LOCALAPPDATA%/VulkanLab/Workspaces/<projectId>/`，截图根目录是其中的 `captures/`。`--workspace` 覆盖日志、截图、诊断导出和临时文件的共同根；`--capture-root` 只覆盖截图目录。显式 `--capture-root` 不能用于 cooked package。`capture.screenshot` 只接受截图根目录下的相对 `.png` 路径，并以临时文件加原子替换发布结果。
 
 当前已经提供：
 

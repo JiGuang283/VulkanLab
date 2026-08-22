@@ -7,12 +7,12 @@ diagnostics but magnify per-draw C++ overhead.
 
 ```powershell
 .\tools\performance\Measure-Renderer.ps1 `
-  -Renderer .\build\windows-msvc-release\Release\VulkanLab.exe `
-  -ControlTool .\build\windows-msvc-release\Release\VulkanLabCtl.exe `
+  -Renderer .\build\windows-msvc-release\run\Release\VulkanLab.exe `
+  -ControlTool .\build\windows-msvc-release\run\Release\VulkanLabCtl.exe `
   -Scene "Main Sponza" `
   -Profile Default `
   -MaterialBinding bindless `
-  -Output .\build\perf-results\main-sponza-default.json
+  -Output .\out\performance\results\main-sponza-default.json
 ```
 
 Profiles:
@@ -33,3 +33,8 @@ include the editor workspace. The result includes presented FPS, estimated CPU
 frame time, median GPU frame/pass times, active RenderGraph counts, material
 binding backend, active render path, full RenderGraph execution order,
 screen-space runtime state, and validation error count.
+
+Each invocation uses an isolated writable workspace under
+`out/performance/<pipe-id>/`; the renderer working directory remains the
+runtime image beside `VulkanLab.exe`. Source assets are read through the
+explicit `--project` path and are not used for logs or temporary output.

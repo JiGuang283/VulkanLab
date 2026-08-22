@@ -23,6 +23,7 @@ struct Config {
     // ---- 资源路径 ----
     std::string derivedTextureCachePath;
     std::filesystem::path projectPath;
+    std::filesystem::path workspacePath;
     std::string assetToolPath;
     std::string gltfValidatorPath;
     bool cachePathExplicit = false;

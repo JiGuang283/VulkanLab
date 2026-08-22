@@ -82,14 +82,16 @@ void testRuntimePackageRoundTrip() {
                    "runtime package was not discovered beside executable");
     const vkr::ProjectContext context = vkr::ProjectContextResolver::resolve(
         std::nullopt, temporary.root / "VulkanLab.exe");
+    const std::filesystem::path workspace =
+        vkr::ProjectContextResolver::defaultWorkspaceRoot("package-test");
     requirePackage(context.cookedPackage && !context.catalogWritable &&
                        context.projectRoot ==
                            std::filesystem::weakly_canonical(temporary.root) &&
                        context.runtimeRoot == context.projectRoot &&
                        context.cacheRoot ==
                            context.projectRoot / "runtime_assets" &&
-                       context.captureRoot ==
-                           context.runtimeRoot / "artifacts/captures" &&
+                       context.workspaceRoot == workspace &&
+                       context.captureRoot == workspace / "captures" &&
                        context.packageProfileId == "desktop-512",
                    "package ProjectContext was not configured correctly");
     bool overrideRejected = false;

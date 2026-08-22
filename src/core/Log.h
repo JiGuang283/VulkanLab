@@ -21,9 +21,9 @@ enum class Level {
 struct Settings {
     Level       consoleLevel = Level::Info;
     Level       fileLevel = Level::Trace;
-    bool        enableFile = true;
+    bool        enableFile = false;
     bool        enableColor = true;
-    std::string filePath = "logs/VulkanLab.log";
+    std::string filePath;
 };
 
 void init(const Settings &settings = {});

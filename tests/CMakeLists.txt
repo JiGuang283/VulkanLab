@@ -1,3 +1,7 @@
+set(VKL_TEST_WORK_ROOT "${PROJECT_BINARY_DIR}/test-work")
+set(VKL_TEST_RESULTS_ROOT "${PROJECT_BINARY_DIR}/test-results")
+file(MAKE_DIRECTORY "${VKL_TEST_WORK_ROOT}/unit")
+
 add_executable(VulkanLabCpuTests
     PreparedModelDataTests.cpp
     DerivedTextureManifestTests.cpp
@@ -31,6 +35,9 @@ add_executable(VulkanLabCpuTests
     GpuDebugUtilsTests.cpp
     EnvironmentCacheTests.cpp
 )
+set_target_properties(VulkanLabCpuTests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/test-bin/$<CONFIG>"
+)
 target_link_libraries(VulkanLabCpuTests PRIVATE
     vkl_build_options
     vkl_asset_core
@@ -46,14 +53,17 @@ target_compile_definitions(VulkanLabCpuTests PRIVATE
     VKL_TEST_SHADER_ROOT="$<TARGET_FILE_DIR:VulkanLab>/shader"
 )
 add_test(NAME VulkanLabCpuTests COMMAND VulkanLabCpuTests)
-set_tests_properties(VulkanLabCpuTests PROPERTIES LABELS "unit")
+set_tests_properties(VulkanLabCpuTests PROPERTIES
+    LABELS "unit"
+    WORKING_DIRECTORY "${VKL_TEST_WORK_ROOT}/unit"
+)
 
 if(WIN32)
     add_test(
         NAME VulkanLabAssetToolCatalogImport
         COMMAND ${CMAKE_COMMAND}
             "-DTOOL=$<TARGET_FILE:VulkanLabAssetTool>"
-            "-DTEST_ROOT=${PROJECT_BINARY_DIR}/asset_tool_catalog_test"
+            "-DTEST_ROOT=${VKL_TEST_WORK_ROOT}/asset-tool-catalog"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/AssetToolCatalogImportTest.cmake"
     )
     set_tests_properties(VulkanLabAssetToolCatalogImport PROPERTIES
@@ -62,7 +72,7 @@ if(WIN32)
         NAME VulkanLabAssetToolTextureCache
         COMMAND ${CMAKE_COMMAND}
             "-DTOOL=$<TARGET_FILE:VulkanLabAssetTool>"
-            "-DTEST_ROOT=${PROJECT_BINARY_DIR}/asset_tool_texture_cache_test"
+            "-DTEST_ROOT=${VKL_TEST_WORK_ROOT}/asset-tool-texture-cache"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/AssetToolTextureCacheTest.cmake"
     )
     set_tests_properties(VulkanLabAssetToolTextureCache PROPERTIES
@@ -73,7 +83,7 @@ if(WIN32)
             "-DTOOL=$<TARGET_FILE:VulkanLabAssetTool>"
             "-DRUNTIME_DIR=$<TARGET_FILE_DIR:VulkanLab>"
             "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
-            "-DTEST_ROOT=${PROJECT_BINARY_DIR}/asset_tool_cook_test"
+            "-DTEST_ROOT=${VKL_TEST_WORK_ROOT}/asset-tool-cook"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/AssetToolCookTest.cmake"
     )
     set_tests_properties(VulkanLabAssetToolCook PROPERTIES
@@ -94,7 +104,7 @@ if(WIN32)
                 --runtime $<TARGET_FILE:VulkanLab>
                 --project "${PROJECT_SOURCE_DIR}"
                 --spec "${CMAKE_CURRENT_SOURCE_DIR}/render/${spec_name}"
-                --output "${PROJECT_BINARY_DIR}/render-test-results"
+                --output "${VKL_TEST_RESULTS_ROOT}/render"
                 --operation-timeout-ms 600000
         )
         set_tests_properties(${test_name} PROPERTIES
@@ -122,7 +132,7 @@ if(WIN32)
             "-DRENDER_TEST=$<TARGET_FILE:VulkanLabRenderTest>"
             "-DRUNTIME=$<TARGET_FILE:VulkanLab>"
             "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
-            "-DTEST_ROOT=${PROJECT_BINARY_DIR}/environment_ibl_visual_test"
+            "-DTEST_ROOT=${VKL_TEST_WORK_ROOT}/environment-ibl-visual"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/EnvironmentIblVisualTest.cmake"
     )
     set_tests_properties(VulkanLabRenderSmokeEnvironmentIbl PROPERTIES

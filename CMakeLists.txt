@@ -3,16 +3,35 @@ project(VulkanLab LANGUAGES C CXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Keep multi-config artifacts stable when targets move into subdirectories.
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/$<CONFIG>")
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/$<CONFIG>")
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/$<CONFIG>")
+# Keep the runnable developer image separate from CMake intermediates and
+# static libraries. Each configure preset has its own PROJECT_BINARY_DIR.
+set(VKL_RUNTIME_OUTPUT_ROOT "${PROJECT_BINARY_DIR}/run" CACHE PATH
+    "Root for runnable VulkanLab developer images")
+set(VKL_RUNTIME_OUTPUT_DIRECTORY
+    "${VKL_RUNTIME_OUTPUT_ROOT}/$<CONFIG>")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${VKL_RUNTIME_OUTPUT_DIRECTORY}")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${VKL_RUNTIME_OUTPUT_DIRECTORY}")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY
+    "${PROJECT_BINARY_DIR}/lib/$<CONFIG>")
+set(CMAKE_PDB_OUTPUT_DIRECTORY
+    "${PROJECT_BINARY_DIR}/symbols/$<CONFIG>")
+set(CMAKE_COMPILE_PDB_OUTPUT_DIRECTORY
+    "${PROJECT_BINARY_DIR}/symbols/$<CONFIG>")
 
 include(CTest)
 include(cmake/ProjectOptions.cmake)
 include(cmake/BuildFeatures.cmake)
 include(cmake/Dependencies.cmake)
 include(cmake/BuildInfo.cmake)
+
+# Some vendored projects override output properties after reading the global
+# CMake defaults. Keep their debug symbols in the project symbols tree.
+if(TARGET fmt)
+    set_target_properties(fmt PROPERTIES
+        COMPILE_PDB_OUTPUT_DIRECTORY
+            "${PROJECT_BINARY_DIR}/symbols/$<CONFIG>"
+    )
+endif()
 
 configure_file(
     "${PROJECT_SOURCE_DIR}/cmake/VulkanLabProjectLocator.json.in"

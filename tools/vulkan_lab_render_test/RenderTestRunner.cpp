@@ -409,12 +409,14 @@ class RunnerSession {
             std::filesystem::absolute(options_.runtimeExecutable)
                 .lexically_normal();
         const std::filesystem::path workingDirectory = runtime.parent_path();
+        const std::filesystem::path workspaceRoot = resultRoot_ / "workspace";
         std::filesystem::create_directories(captureRoot_);
         const std::string suffix = uniqueToken(spec_->name);
         const auto endpoint = control::makeRuntimeControlEndpoint(suffix);
         report_["runtime"] = {{"executable", runtime.u8string()},
                               {"workingDirectory",
                                workingDirectory.u8string()},
+                              {"workspaceRoot", workspaceRoot.u8string()},
                               {"pipe", endpoint.nameUtf8},
                               {"pipeSuffix", suffix}};
 
@@ -431,7 +433,8 @@ class RunnerSession {
             widenUtf8(suffix), L"--automation", L"--window-size",
             widenUtf8(viewport.str()), L"--fixed-delta",
             widenUtf8(fixedDelta.str()), L"--capture-root",
-            captureRoot_.wstring()};
+            captureRoot_.wstring(), L"--workspace",
+            workspaceRoot.wstring(), L"--asset-mode", L"readonly"};
         if (!spec_->includeGui)
             processOptions.arguments.push_back(L"--no-gui");
         if (options_.projectRoot) {

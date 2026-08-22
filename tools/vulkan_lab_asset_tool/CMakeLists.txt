@@ -38,12 +38,12 @@ target_link_libraries(VulkanLabAssetTool PRIVATE
 )
 
 if(TARGET ktxtools)
-    add_dependencies(VulkanLabAssetTool ktxtools)
-    add_custom_command(TARGET VulkanLabAssetTool POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:ktxtools>
-            $<TARGET_FILE_DIR:VulkanLabAssetTool>/ktx.exe
+    # KTX-Software overrides CMAKE_RUNTIME_OUTPUT_DIRECTORY inside its own
+    # project. Put its CLI back into the same runnable image as AssetTool.
+    set_target_properties(ktxtools PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${VKL_RUNTIME_OUTPUT_DIRECTORY}"
     )
+    add_dependencies(VulkanLabAssetTool ktxtools)
 endif()
 
 set(VKL_GLTF_VALIDATOR_EXECUTABLE "" CACHE FILEPATH

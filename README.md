@@ -103,7 +103,7 @@ test targets:
 ```powershell
 cmake --preset windows-msvc-dev-fast
 cmake --build --preset windows-msvc-dev-fast
-./build/windows-msvc-dev-fast/Debug/VulkanLab.exe --project .
+./build/windows-msvc-dev-fast/run/Debug/VulkanLab.exe --project .
 ```
 
 The minimal runtime configuration is built with:
@@ -111,13 +111,17 @@ The minimal runtime configuration is built with:
 ```powershell
 cmake --preset windows-msvc-runtime
 cmake --build --preset windows-msvc-runtime
-./build/windows-msvc-runtime/Release/VulkanLab.exe --project .
+./build/windows-msvc-runtime/run/Release/VulkanLab.exe --project .
 ```
 
 Large optional models, source HDR environments, generated KTX2 caches, build
 outputs, captures, and logs are intentionally excluded from Git. Missing
 optional catalog entries remain unavailable until their source assets are
 imported locally.
+
+Runnable images are isolated under `build/<preset>/run/<Config>`. Writable
+runtime data defaults to `%LOCALAPPDATA%/VulkanLab/Workspaces/<projectId>` and
+can be redirected with `--workspace <path>` for automation or diagnostics.
 
 ## Current Limitations
 

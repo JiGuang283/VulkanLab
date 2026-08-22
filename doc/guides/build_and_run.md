@@ -137,25 +137,57 @@ cmake --build --preset windows-msvc-dev-fast --target VulkanLabShaders
 开发构建只把 executable、运行时工具、`vulkanlab_project.json` locator 和生成的 SPIR-V 放入输出目录，不复制完整 `models/` 或 `textures/`。开发场景直接通过 ProjectContext 从源码项目读取源资产；Release 交付使用后文的 `cook` 命令生成经过校验的最小闭包。Windows 构建还会生成运行时控制工具。
 
 ```text
-build/windows-msvc-debug/Debug/VulkanLab.exe
-build/windows-msvc-debug/Debug/VulkanLabCtl.exe
-build/windows-msvc-release/Release/VulkanLab.exe
-build/windows-msvc-release/Release/VulkanLabCtl.exe
+build/windows-msvc-debug/run/Debug/VulkanLab.exe
+build/windows-msvc-debug/run/Debug/VulkanLabCtl.exe
+build/windows-msvc-release/run/Release/VulkanLab.exe
+build/windows-msvc-release/run/Release/VulkanLabCtl.exe
 ```
 
 阶段三的资产工具接入构建后还会生成：
 
 ```text
-build/windows-msvc-debug/Debug/VulkanLabAssetTool.exe
-build/windows-msvc-release/Release/VulkanLabAssetTool.exe
+build/windows-msvc-debug/run/Debug/VulkanLabAssetTool.exe
+build/windows-msvc-release/run/Release/VulkanLabAssetTool.exe
 ```
 
 开发构建还会生成独立视觉测试程序，它不进入 Cook package：
 
 ```text
-build/windows-msvc-debug/Debug/VulkanLabRenderTest.exe
-build/windows-msvc-release/Release/VulkanLabRenderTest.exe
+build/windows-msvc-debug/run/Debug/VulkanLabRenderTest.exe
+build/windows-msvc-release/run/Release/VulkanLabRenderTest.exe
 ```
+
+每个 preset 的目录按用途分层：
+
+```text
+build/<preset>/
+  generated/<Config>/shader/  # Shader 中间产物
+  lib/<Config>/               # 静态库
+  symbols/<Config>/           # 编译和链接 PDB
+  run/<Config>/               # 可直接运行的 exe、Shader、字体和 license
+  test-bin/<Config>/          # 单元测试 executable
+  test-work/                   # 测试临时项目
+  test-results/                # 测试实际输出
+```
+
+源码项目根只保存权威 Catalog、SceneDocument、模型和 Shader 源码。开发运行的可写数据默认位于 `%LOCALAPPDATA%/VulkanLab/Workspaces/<projectId>/`：
+
+```text
+logs/          # VulkanLab.log
+captures/      # 默认截图
+diagnostics/   # RenderGraph JSON/DOT 等导出
+temp/          # 运行时临时文件
+```
+
+派生纹理缓存继续使用 `%LOCALAPPDATA%/VulkanLab/DerivedAssets/<projectId>/`，Editor preferences/layout 使用 `%LOCALAPPDATA%/VulkanLab/Editor/<projectId>/`。自动化和临时调试可通过 `--workspace <path>` 隔离整套运行输出；`--capture-root` 只覆盖截图目录。
+
+在仓库根目录运行以下脚本，可以清理历史 smoke 输出和旧版源目录运行数据，同时保留当前常用 preset：
+
+```powershell
+.\tools\dev\Clean-LocalOutputs.ps1
+```
+
+使用 `-WhatIf` 可以先查看将删除的生成物；通过 `-KeepPreset` 可以指定需要保留的 build tree。脚本不会删除源码资产、LocalAppData 下的 Derived Asset Cache 或 Editor Preferences。
 
 需要 GPU 和可呈现窗口的 smoke/golden 测试使用 `visual` 标签；纯 CPU、资产和 package 测试使用 `unit` 标签：
 
@@ -171,7 +203,7 @@ ctest --preset windows-msvc-test -L visual --output-on-failure
 程序不依赖当前工作目录。下面是从输出目录启动的常用方式：
 
 ```powershell
-cd build\windows-msvc-dev-fast\Debug
+cd build\windows-msvc-dev-fast\run\Debug
 .\VulkanLab.exe
 ```
 
@@ -179,6 +211,8 @@ CMake 会把 `vulkanlab_project.json` 写到 Debug/Release 可执行文件旁，
 
 ```powershell
 .\VulkanLab.exe --project C:\Project\vulkan_learn
+.\VulkanLab.exe --project C:\Project\vulkan_learn `
+  --workspace C:\Temp\VulkanLab\my-run
 ```
 
 Runtime Control 默认关闭。需要从另一个终端控制运行中的渲染器时：
@@ -372,7 +406,7 @@ Catalog 当前包含以下初始 glTF model 条目：
 使用输出目录启动渲染器时，locator 仍会选择相同的用户级共享缓存：
 
 ```powershell
-cd build\windows-msvc-dev-fast\Debug
+cd build\windows-msvc-dev-fast\run\Debug
 .\VulkanLab.exe --runtime-control
 ```
 
@@ -446,9 +480,9 @@ cmake --preset windows-msvc-dev-fast
 cmake --build build/windows-msvc-dev-fast --config Debug `
   --target VulkanLabAssetTool
 
-.\build\windows-msvc-dev-fast\Debug\VulkanLabAssetTool.exe cook `
+.\build\windows-msvc-dev-fast\run\Debug\VulkanLabAssetTool.exe cook `
   --project . `
-  --runtime-dir .\build\windows-msvc-runtime\Release `
+  --runtime-dir .\build\windows-msvc-runtime\run\Release `
   --output .\dist\my-scene `
   --scene-id my-scene `
   --startup-scene my-scene `
@@ -464,7 +498,7 @@ Cook 会调用目标 `VulkanLab.exe --build-info-json`。目标必须是 `window
 交付前使用同一套 hash 校验：
 
 ```powershell
-.\build\windows-msvc-dev-fast\Debug\VulkanLabAssetTool.exe package verify `
+.\build\windows-msvc-dev-fast\run\Debug\VulkanLabAssetTool.exe package verify `
   --path .\dist\my-scene
 ```
 
@@ -513,4 +547,4 @@ Native BC7 的引入基线是 Main Sponza 2048 Debug 总加载约 `26.11 s`，�
 - HDR 环境的首次 CPU bake 可能持续较长时间，应在资产导入阶段完成，而不是在场景切换时触发。运行时只读取已经发布的环境 KTX2；IBL 与 Skybox 默认关闭。
 - glTF 模型加载期间继续渲染当前 Scene；新的 `ModelAsset` 完全 Ready 后才原子发布预览 Scene。旧 Scene 和不再使用的共享资源按 frame submission serial 延迟释放，因此两个大型模型切换时可能短暂同时占用显存。活跃任务的紧凑进度位于窗口顶部，详细进度位于 `Scene -> Scenes`。
 - `Full` 对 Main Sponza 仍是高风险选项。开发模式的 KTX2 缓存只覆盖已经显式生成且精确匹配的 profile；未命中时仍可能回退 RGBA8。
-- 日志写入运行目录下的 `logs/VulkanLab.log`。加载统计也显示在 `VulkanLab -> Diagnostics -> Load Stats`。
+- 日志写入当前 Project Workspace 下的 `logs/VulkanLab.log`。加载统计也显示在 `VulkanLab -> Diagnostics -> Load Stats`。

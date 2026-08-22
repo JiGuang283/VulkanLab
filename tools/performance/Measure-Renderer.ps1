@@ -28,8 +28,11 @@ $rendererPath = (Resolve-Path $Renderer).Path
 $controlPath = (Resolve-Path $ControlTool).Path
 $projectPath = (Resolve-Path $Project).Path
 $pipeSuffix = 'perf_' + [Guid]::NewGuid().ToString('N')
-$stdoutPath = Join-Path $env:TEMP ($pipeSuffix + '.stdout.log')
-$stderrPath = Join-Path $env:TEMP ($pipeSuffix + '.stderr.log')
+$runtimePath = Split-Path -Parent $rendererPath
+$workspacePath = Join-Path $projectPath "out\performance\$pipeSuffix"
+New-Item -ItemType Directory -Force $workspacePath | Out-Null
+$stdoutPath = Join-Path $workspacePath 'renderer.stdout.log'
+$stderrPath = Join-Path $workspacePath 'renderer.stderr.log'
 $process = $null
 
 function Invoke-Control {
@@ -73,11 +76,13 @@ try {
     Remove-Item $stdoutPath, $stderrPath -ErrorAction SilentlyContinue
     $rendererArguments = @(
         '--project', $projectPath,
+        '--workspace', $workspacePath,
         '--runtime-control',
         '--runtime-control-pipe', $pipeSuffix,
         '--automation',
         '--window-size', "${Width}x${Height}",
-        '--validation', 'off'
+        '--validation', 'off',
+        '--asset-mode', 'readonly'
     )
     if (-not $Gui) {
         $rendererArguments += '--no-gui'
@@ -88,7 +93,7 @@ try {
 
     $process = Start-Process -FilePath $rendererPath `
         -ArgumentList $rendererArguments `
-        -WorkingDirectory $projectPath `
+        -WorkingDirectory $runtimePath `
         -WindowStyle Hidden `
         -RedirectStandardOutput $stdoutPath `
         -RedirectStandardError $stderrPath `

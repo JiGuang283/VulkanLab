@@ -46,7 +46,8 @@ std::string utf8Argument(const wchar_t *value) {
 }
 
 void printUsage(std::ostream &out) {
-    out << "Usage: VulkanLab.exe [--project <path>] [--runtime-control] "
+    out << "Usage: VulkanLab.exe [--project <path>] [--workspace <path>] "
+           "[--runtime-control] "
            "[--runtime-control-pipe <suffix>] [--validation <profile>] "
            "[--asset-mode <mode>] [--cache-root <path>] [diagnostics] "
            "[--material-binding <mode>] "
@@ -61,6 +62,8 @@ void printUsage(std::ostream &out) {
            "and '_' only.\n"
         << "  --project <path>   Use the source project and writable scene "
            "catalog at <path>.\n"
+        << "  --workspace <path>  Override the writable logs, captures, "
+           "diagnostics, and temporary-data root.\n"
         << "  --asset-mode <mode>  ondemand, readonly, or cooked-only.\n"
         << "  --asset-tool <path>  Override VulkanLabAssetTool.exe path.\n"
         << "  --gltf-validator <path>  Override Khronos glTF Validator "
@@ -186,6 +189,11 @@ bool parseArguments(int argc, wchar_t **argv, vkr::Config &config) {
                 throw std::invalid_argument(
                     "--project requires a directory path");
             config.projectPath = argv[i];
+        } else if (argument == L"--workspace") {
+            if (++i >= argc)
+                throw std::invalid_argument(
+                    "--workspace requires a directory path");
+            config.workspacePath = argv[i];
         } else if (argument == L"--asset-mode") {
             if (++i >= argc)
                 throw std::invalid_argument("--asset-mode requires a value");
@@ -299,8 +307,33 @@ int wmain(int argc, wchar_t **argv) {
         return EXIT_FAILURE;
     }
 
-    vkr::log::init();
+    vkr::log::Settings bootstrapLog;
+    bootstrapLog.enableFile = false;
+    vkr::log::init(bootstrapLog);
     try {
+        // 按需覆写默认配置，例如：
+        // config.windowWidth  = 1280;
+        // config.windowHeight = 720;
+
+        const std::optional<std::filesystem::path> explicitProject =
+            config.projectPath.empty()
+                ? std::nullopt
+                : std::optional<std::filesystem::path>(config.projectPath);
+        const std::optional<std::filesystem::path> explicitWorkspace =
+            config.workspacePath.empty()
+                ? std::nullopt
+                : std::optional<std::filesystem::path>(config.workspacePath);
+        vkr::ProjectContext projectContext =
+            vkr::ProjectContextResolver::resolve(explicitProject, {},
+                                                 explicitWorkspace);
+        vkr::SceneCatalog catalog = vkr::SceneCatalog::load(
+            projectContext.catalogPath, projectContext.projectRoot);
+        vkr::log::shutdown();
+        vkr::log::Settings runtimeLog;
+        runtimeLog.enableFile = true;
+        runtimeLog.filePath =
+            (projectContext.logRoot / "VulkanLab.log").u8string();
+        vkr::log::init(runtimeLog);
         const vkr::BuildFeatureInfo &features =
             vkr::currentBuildInfo().features;
         VKR_LOG_INFO(
@@ -312,18 +345,6 @@ int wmain(int argc, wchar_t **argv) {
             features.assetAuthoring, features.validation,
             features.gpuDebugUtils, features.gpuProfiling, features.tracy,
             features.cacao);
-        // 按需覆写默认配置，例如：
-        // config.windowWidth  = 1280;
-        // config.windowHeight = 720;
-
-        const std::optional<std::filesystem::path> explicitProject =
-            config.projectPath.empty()
-                ? std::nullopt
-                : std::optional<std::filesystem::path>(config.projectPath);
-        vkr::ProjectContext projectContext =
-            vkr::ProjectContextResolver::resolve(explicitProject);
-        vkr::SceneCatalog catalog = vkr::SceneCatalog::load(
-            projectContext.catalogPath, projectContext.projectRoot);
         const bool captureRootExplicit =
             !config.diagnostics.captureRoot.empty();
         if (projectContext.cookedPackage) {
@@ -386,6 +407,8 @@ int wmain(int argc, wchar_t **argv) {
                      projectContext.diagnostic);
         VKR_LOG_INFO("Assets", "Runtime root: '{}'",
                      projectContext.runtimeRoot.u8string());
+        VKR_LOG_INFO("Assets", "Workspace root: '{}'",
+                     projectContext.workspaceRoot.u8string());
         VKR_LOG_INFO("Assets", "Derived asset cache: '{}'",
                      config.derivedTextureCachePath);
 

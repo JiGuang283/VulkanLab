@@ -25,16 +25,16 @@ cmake --build --preset windows-msvc-release
 每个配置都会生成渲染器和控制客户端：
 
 ```text
-build/windows-msvc-debug/Debug/VulkanLab.exe
-build/windows-msvc-debug/Debug/VulkanLabCtl.exe
-build/windows-msvc-release/Release/VulkanLab.exe
-build/windows-msvc-release/Release/VulkanLabCtl.exe
+build/windows-msvc-debug/run/Debug/VulkanLab.exe
+build/windows-msvc-debug/run/Debug/VulkanLabCtl.exe
+build/windows-msvc-release/run/Release/VulkanLab.exe
+build/windows-msvc-release/run/Release/VulkanLabCtl.exe
 ```
 
 启动默认 endpoint：
 
 ```powershell
-cd build\windows-msvc-debug\Debug
+cd build\windows-msvc-debug\run\Debug
 .\VulkanLab.exe --runtime-control
 ```
 
@@ -159,7 +159,7 @@ Viewport Color 截取纯场景，输出尺寸是实际 Viewport render extent。
 
 截图路径必须是 capture root 下的非空相对 `.png` 路径。绝对路径、`..` 逃逸、其他扩展名和解析后落在根目录外的路径都会以 `invalid_capture_path` 拒绝。PNG 先写临时文件再原子发布；取消或失败不会留下最终文件。
 
-开发运行默认 capture root 位于 runtime 旁的 `artifacts/captures/`，可通过 `--capture-root <path>` 覆盖。标准 `windows-msvc-runtime` 和 Stage 7 Cooked package均未编译 Runtime Control 或 Capture，因此没有 Named Pipe endpoint；传入 `--runtime-control` 会在 Vulkan 初始化前报错。自定义构建若保留 Runtime Control 但裁剪 Capture，截图协议返回 `feature_not_compiled`。Viewport Color 或 Swapchain source 不支持 8-bit RGBA/BGRA transfer-source 时返回 `capture_unsupported`；另一个来源仍可独立保持可用。
+开发运行默认 capture root 位于 `%LOCALAPPDATA%/VulkanLab/Workspaces/<projectId>/captures/`，可通过 `--workspace <path>` 隔离整套运行数据，或使用 `--capture-root <path>` 只覆盖截图目录。标准 `windows-msvc-runtime` 和 Stage 7 Cooked package均未编译 Runtime Control 或 Capture，因此没有 Named Pipe endpoint；传入 `--runtime-control` 会在 Vulkan 初始化前报错。自定义构建若保留 Runtime Control 但裁剪 Capture，截图协议返回 `feature_not_compiled`。Viewport Color 或 Swapchain source 不支持 8-bit RGBA/BGRA transfer-source 时返回 `capture_unsupported`；另一个来源仍可独立保持可用。
 
 常见截图错误码还有 `capture_queue_full`、`capture_not_found`、`capture_not_cancellable` 和 `capture_failed`。截图路径不会调用 `vkQueueWaitIdle()` 或 `vkDeviceWaitIdle()`；完成状态由正常 frame fence 的 submission serial 推进。
 
@@ -372,9 +372,9 @@ Catalog glTF 的最近验证报告可只读查询；响应最多包含 32 条 is
 下面的 PowerShell 示例启动隔离实例、等待场景和渲染稳定、截图并退出：
 
 ```powershell
-$runtime = Resolve-Path .\build\windows-msvc-release\Release
+$runtime = Resolve-Path .\build\windows-msvc-release\run\Release
 $suffix = "smoke_$PID"
-$captureRoot = Join-Path $PWD "artifacts\smoke-$PID"
+$captureRoot = Join-Path $PWD "out\runtime-control\smoke-$PID"
 $app = Start-Process `
   -FilePath "$runtime\VulkanLab.exe" `
   -WorkingDirectory $runtime `

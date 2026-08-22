@@ -97,8 +97,10 @@ Settings settingsFromEnv(Settings settings) {
         parseLevel(std::getenv("VKR_LOG_LEVEL"), settings.consoleLevel);
     settings.fileLevel =
         parseLevel(std::getenv("VKR_LOG_FILE_LEVEL"), settings.fileLevel);
-    if (const char *file = std::getenv("VKR_LOG_FILE"))
+    if (const char *file = std::getenv("VKR_LOG_FILE")) {
         settings.filePath = file;
+        settings.enableFile = true;
+    }
     if (truthy(std::getenv("VKR_LOG_NO_COLOR")))
         settings.enableColor = false;
     return settings;
@@ -123,7 +125,7 @@ void init(const Settings &inputSettings) {
     consoleSink->set_pattern("%^[%H:%M:%S.%e] [%l] [%n] %v%$");
     sinks.push_back(std::move(consoleSink));
 
-    if (settings.enableFile) {
+    if (settings.enableFile && !settings.filePath.empty()) {
         const std::filesystem::path logPath(settings.filePath);
         if (logPath.has_parent_path())
             std::filesystem::create_directories(logPath.parent_path());

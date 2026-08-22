@@ -57,8 +57,8 @@ Cooked package 保留 requested profile 供诊断，但 actual 强制为 `off`�
 
 在 RenderDoc 的 **Launch Application** 中填写：
 
-- Executable Path：`<repo>\build\windows-msvc-dev-fast\Debug\VulkanLab.exe`
-- Working Directory：`<repo>\build\windows-msvc-dev-fast\Debug`
+- Executable Path：`<repo>\build\windows-msvc-dev-fast\run\Debug\VulkanLab.exe`
+- Working Directory：`<repo>\build\windows-msvc-dev-fast\run\Debug`
 - Command-line Arguments：建议先用 `--validation off`，需要同时查看 Core Validation 时改为 `--validation core`
 - Capture API：Vulkan
 
@@ -69,7 +69,7 @@ Cooked package 保留 requested profile 供诊断，但 actual 强制为 `off`�
 也可以先从终端启动：
 
 ```powershell
-cd build\windows-msvc-dev-fast\Debug
+cd build\windows-msvc-dev-fast\run\Debug
 .\VulkanLab.exe --validation off
 ```
 
@@ -152,7 +152,7 @@ Release 示例：
 输出位于：
 
 ```text
-artifacts/validation-smoke/<profile>-<pid>/
+out/validation/<profile>-<pid>/
 ```
 
 Runtime Control 的 `window.resize` 仅在 `--automation` 模式可用，尺寸范围为 `1..16384`。普通交互实例返回 `automation_required`。

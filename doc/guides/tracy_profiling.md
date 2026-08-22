@@ -45,7 +45,7 @@ cmake --build --preset windows-msvc-tracy
 从仓库根目录启动：
 
 ```powershell
-.\build\windows-msvc-tracy\Debug\VulkanLab.exe `
+.\build\windows-msvc-tracy\run\Debug\VulkanLab.exe `
   --runtime-control `
   --runtime-control-pipe tracy `
   --validation off
@@ -66,10 +66,10 @@ cmake --build --preset windows-msvc-tracy
 不打开 GUI 也可以保存固定时长 capture：
 
 ```powershell
-New-Item -ItemType Directory -Force artifacts\tracy
+New-Item -ItemType Directory -Force out\tracy
 
 .\external\tools\tracy\0.13.1\tracy-capture.exe `
-  -o artifacts\tracy\renderer-smoke.tracy `
+  -o out\tracy\renderer-smoke.tracy `
   -a 127.0.0.1 `
   -s 10
 ```
@@ -78,10 +78,10 @@ New-Item -ItemType Directory -Force artifacts\tracy
 
 ```powershell
 .\external\tools\tracy\0.13.1\tracy-csvexport.exe `
-  -f "Application Frame" artifacts\tracy\renderer-smoke.tracy
+  -f "Application Frame" out\tracy\renderer-smoke.tracy
 
 .\external\tools\tracy\0.13.1\tracy-csvexport.exe `
-  -g -f "MainForward" artifacts\tracy\renderer-smoke.tracy
+  -g -f "MainForward" out\tracy\renderer-smoke.tracy
 ```
 
 `-g` 输出每次 GPU zone 事件，不是聚合统计。分析 Main Sponza 加载通常只需在发出 `scene load` 前开始 6 到 10 秒采集；长时间稳定帧采集会迅速增加 trace 体积。
@@ -133,7 +133,7 @@ Tracy Vulkan context 使用 graphics queue。初始化 context 允许官方实�
 ## 状态检查
 
 ```powershell
-.\build\windows-msvc-tracy\Debug\VulkanLabCtl.exe `
+.\build\windows-msvc-tracy\run\Debug\VulkanLabCtl.exe `
   --pipe tracy --json info
 ```
 

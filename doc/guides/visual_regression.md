@@ -12,11 +12,11 @@
 cmake --preset windows-msvc-debug
 cmake --build --preset windows-msvc-debug
 
-.\build\windows-msvc-debug\Debug\VulkanLabRenderTest.exe run `
+.\build\windows-msvc-debug\run\Debug\VulkanLabRenderTest.exe run `
   --project . `
-  --runtime .\build\windows-msvc-debug\Debug\VulkanLab.exe `
+  --runtime .\build\windows-msvc-debug\run\Debug\VulkanLab.exe `
   --spec .\tests\render\renderer_smoke_legacy.json `
-  --output .\artifacts\render-tests
+  --output .\out\test-results\render
 ```
 
 Runner 会为每次运行创建唯一 Named Pipe、capture root 和结果目录。工作目录由 Runner 显式设置，不依赖调用命令时的当前目录；进程树由 Windows Job Object 管理，正常结束发送 `app.quit`，异常或超时则终止整个 Job。
@@ -159,11 +159,11 @@ Smoke 检查尺寸、非黑像素比例和主导纯色比例，用于发现黑�
 4. 重新运行 Debug/Release golden，至少连续通过两次。
 
 ```powershell
-.\build\windows-msvc-debug\Debug\VulkanLabRenderTest.exe run `
+.\build\windows-msvc-debug\run\Debug\VulkanLabRenderTest.exe run `
   --project . `
-  --runtime .\build\windows-msvc-debug\Debug\VulkanLab.exe `
+  --runtime .\build\windows-msvc-debug\run\Debug\VulkanLab.exe `
   --spec .\tests\render\renderer_smoke_legacy_golden.json `
-  --output .\artifacts\golden-review `
+  --output .\out\test-results\golden-review `
   --accept
 ```
 

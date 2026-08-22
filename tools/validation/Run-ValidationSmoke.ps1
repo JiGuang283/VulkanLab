@@ -14,7 +14,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$runtime = (Resolve-Path (Join-Path $repoRoot "$BuildDirectory\$Configuration")).Path
+$runtime = (Resolve-Path (Join-Path $repoRoot "$BuildDirectory\run\$Configuration")).Path
 $appPath = Join-Path $runtime 'VulkanLab.exe'
 $ctlPath = Join-Path $runtime 'VulkanLabCtl.exe'
 if (-not (Test-Path -LiteralPath $appPath) -or
@@ -23,10 +23,12 @@ if (-not (Test-Path -LiteralPath $appPath) -or
 }
 
 if ([string]::IsNullOrWhiteSpace($CaptureRoot)) {
-    $CaptureRoot = Join-Path $repoRoot "artifacts\validation-smoke\$Profile-$PID"
+    $CaptureRoot = Join-Path $repoRoot "out\validation\$Profile-$PID"
 }
 $CaptureRoot = [System.IO.Path]::GetFullPath($CaptureRoot)
 [System.IO.Directory]::CreateDirectory($CaptureRoot) | Out-Null
+$workspaceRoot = Join-Path $CaptureRoot 'workspace'
+[System.IO.Directory]::CreateDirectory($workspaceRoot) | Out-Null
 
 $suffix = "validation_${Profile}_${PID}_$([DateTime]::UtcNow.Ticks)"
 $timeoutMs = if ($Profile -eq 'gpu') { 180000 } else { 60000 }
@@ -57,6 +59,8 @@ try {
         '--fixed-delta', '0.016666667',
         '--no-gui',
         '--capture-root', $CaptureRoot,
+        '--workspace', $workspaceRoot,
+        '--asset-mode', 'readonly',
         '--validation', $Profile
     )
     $app = Start-Process -FilePath $appPath -WorkingDirectory $runtime `
