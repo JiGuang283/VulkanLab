@@ -2,6 +2,7 @@
 param(
     [string[]]$KeepPreset = @(
         'dev',
+        'ninja-dev',
         'full',
         'runtime',
         'tracy',

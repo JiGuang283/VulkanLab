@@ -53,6 +53,23 @@
       }
     },
     {
+      "name": "windows-ninja-dev",
+      "displayName": "Windows Ninja Fast Development",
+      "description": "Preferred CLI and VS Code Debug editor build using Ninja with the MSVC toolchain.",
+      "inherits": "windows-msvc-editor-base",
+      "generator": "Ninja",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "binaryDir": "${sourceDir}/build/ninja-dev",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "VKL_BUILD_PROFILE": "dev"
+      }
+    },
+    {
       "name": "windows-msvc-full",
       "displayName": "Windows MSVC Full Toolchain",
       "description": "Shared multi-config tree for full Debug and Release builds.",
@@ -103,6 +120,13 @@
       "name": "windows-msvc-dev-fast",
       "configurePreset": "windows-msvc-dev-fast",
       "configuration": "Debug",
+      "targets": [
+        "VulkanLabDeveloper"
+      ]
+    },
+    {
+      "name": "windows-ninja-dev",
+      "configurePreset": "windows-ninja-dev",
       "targets": [
         "VulkanLabDeveloper"
       ]

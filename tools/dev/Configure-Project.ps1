@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('dev', 'full', 'runtime', 'tracy', 'cacao')]
-    [string]$Profile = 'dev',
+    [ValidateSet('ninja-dev', 'dev', 'full', 'runtime', 'tracy', 'cacao')]
+    [string]$Profile = 'ninja-dev',
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Debug'
 )
@@ -11,4 +11,3 @@ $ErrorActionPreference = 'Stop'
 
 $profileInfo = Invoke-VulkanLabConfigure $Profile $Configuration
 Write-Host "Configured '$Profile' at $($profileInfo.BinaryDirectory)"
-

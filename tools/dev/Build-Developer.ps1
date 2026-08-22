@@ -1,18 +1,16 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('dev', 'full', 'tracy', 'cacao')]
-    [string]$Profile = 'dev',
+    [ValidateSet('ninja-dev', 'dev', 'full', 'tracy', 'cacao')]
+    [string]$Profile = 'ninja-dev',
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Debug',
-    [switch]$SkipConfigure
+    [switch]$Reconfigure
 )
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'VulkanLabDev.ps1')
 
-if (-not $SkipConfigure) {
-    $null = Invoke-VulkanLabConfigure $Profile $Configuration
-}
+$null = Ensure-VulkanLabConfigured $Profile $Configuration -Force:$Reconfigure
 $profileInfo = Invoke-VulkanLabBuildPreset $Profile $Configuration
 
 if (-not (Test-Path -LiteralPath $profileInfo.VulkanLab -PathType Leaf)) {
@@ -20,4 +18,3 @@ if (-not (Test-Path -LiteralPath $profileInfo.VulkanLab -PathType Leaf)) {
 }
 Write-Host "Developer image ready: $($profileInfo.RuntimeDirectory)"
 Write-Host "Run: $($profileInfo.VulkanLab) --project $(Get-VulkanLabRepositoryRoot)"
-

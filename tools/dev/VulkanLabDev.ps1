@@ -59,16 +59,82 @@ function Invoke-VulkanLabCommand {
     }
 }
 
+function Initialize-VulkanLabMsvcEnvironment {
+    if ($null -ne (Get-Command cl.exe -ErrorAction SilentlyContinue) -and
+        $null -ne (Get-Command ninja.exe -ErrorAction SilentlyContinue)) {
+        return
+    }
+
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} `
+        'Microsoft Visual Studio/Installer/vswhere.exe'
+    if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+        throw 'vswhere.exe was not found; install Visual Studio 2022 with the C++ workload.'
+    }
+    $installPath = & $vswhere -latest -products * `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -property installationPath
+    if ($LASTEXITCODE -ne 0 -or
+        [string]::IsNullOrWhiteSpace($installPath)) {
+        throw 'Visual Studio 2022 with the x64 C++ toolchain was not found.'
+    }
+
+    if ($null -eq (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
+        $vsDevCmd = Join-Path $installPath 'Common7/Tools/VsDevCmd.bat'
+        if (-not (Test-Path -LiteralPath $vsDevCmd -PathType Leaf)) {
+            throw "VsDevCmd.bat was not found: $vsDevCmd"
+        }
+        $command = '"' + $vsDevCmd +
+            '" -no_logo -arch=x64 -host_arch=x64 >nul && set'
+        $environmentLines = & cmd.exe /d /s /c $command
+        if ($LASTEXITCODE -ne 0) {
+            throw 'VsDevCmd.bat failed to initialize the x64 MSVC environment.'
+        }
+        foreach ($line in $environmentLines) {
+            $separator = $line.IndexOf('=')
+            if ($separator -le 0) {
+                continue
+            }
+            [Environment]::SetEnvironmentVariable(
+                $line.Substring(0, $separator),
+                $line.Substring($separator + 1),
+                'Process')
+        }
+    }
+    if ($null -eq (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
+        throw 'VsDevCmd completed but cl.exe is still unavailable.'
+    }
+
+    if ($null -eq (Get-Command ninja.exe -ErrorAction SilentlyContinue)) {
+        $bundledNinja = Join-Path $installPath `
+            'Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe'
+        if (Test-Path -LiteralPath $bundledNinja -PathType Leaf) {
+            $ninjaDirectory = Split-Path -Parent $bundledNinja
+            $env:Path = $ninjaDirectory + [IO.Path]::PathSeparator + $env:Path
+        }
+    }
+    if ($null -eq (Get-Command ninja.exe -ErrorAction SilentlyContinue)) {
+        throw 'ninja.exe was not found on PATH or in the Visual Studio CMake tools.'
+    }
+}
+
 function Get-VulkanLabProfile {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('dev', 'full', 'runtime', 'tracy', 'cacao')]
+        [ValidateSet('ninja-dev', 'dev', 'full', 'runtime', 'tracy', 'cacao')]
         [string]$Profile,
         [ValidateSet('Debug', 'Release')]
         [string]$Configuration = 'Debug'
     )
 
     switch ($Profile) {
+        'ninja-dev' {
+            if ($Configuration -ne 'Debug') {
+                throw 'The ninja-dev profile only defines a Debug build.'
+            }
+            $configurePreset = 'windows-ninja-dev'
+            $buildPreset = 'windows-ninja-dev'
+            $directory = 'ninja-dev'
+        }
         'dev' {
             if ($Configuration -ne 'Debug') {
                 throw 'The dev profile only defines a Debug build.'
@@ -131,28 +197,52 @@ function Get-VulkanLabProfile {
 function Invoke-VulkanLabConfigure {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('dev', 'full', 'runtime', 'tracy', 'cacao')]
+        [ValidateSet('ninja-dev', 'dev', 'full', 'runtime', 'tracy', 'cacao')]
         [string]$Profile,
         [ValidateSet('Debug', 'Release')]
         [string]$Configuration = 'Debug'
     )
 
     $profileInfo = Get-VulkanLabProfile $Profile $Configuration
+    if ($Profile -eq 'ninja-dev') {
+        Initialize-VulkanLabMsvcEnvironment
+    }
     Invoke-VulkanLabCommand 'cmake' @(
         '--preset', $profileInfo.ConfigurePreset)
+    return $profileInfo
+}
+
+function Ensure-VulkanLabConfigured {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('ninja-dev', 'dev', 'full', 'runtime', 'tracy', 'cacao')]
+        [string]$Profile,
+        [ValidateSet('Debug', 'Release')]
+        [string]$Configuration = 'Debug',
+        [switch]$Force
+    )
+
+    $profileInfo = Get-VulkanLabProfile $Profile $Configuration
+    $cachePath = Join-Path $profileInfo.BinaryDirectory 'CMakeCache.txt'
+    if ($Force -or -not (Test-Path -LiteralPath $cachePath -PathType Leaf)) {
+        return Invoke-VulkanLabConfigure $Profile $Configuration
+    }
     return $profileInfo
 }
 
 function Invoke-VulkanLabBuildPreset {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('dev', 'full', 'runtime', 'tracy', 'cacao')]
+        [ValidateSet('ninja-dev', 'dev', 'full', 'runtime', 'tracy', 'cacao')]
         [string]$Profile,
         [ValidateSet('Debug', 'Release')]
         [string]$Configuration = 'Debug'
     )
 
     $profileInfo = Get-VulkanLabProfile $Profile $Configuration
+    if ($Profile -eq 'ninja-dev') {
+        Initialize-VulkanLabMsvcEnvironment
+    }
     Invoke-VulkanLabCommand 'cmake' @(
         '--build', '--preset', $profileInfo.BuildPreset)
     return $profileInfo
@@ -161,7 +251,7 @@ function Invoke-VulkanLabBuildPreset {
 function Invoke-VulkanLabBuildTarget {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('dev', 'full', 'runtime', 'tracy', 'cacao')]
+        [ValidateSet('ninja-dev', 'dev', 'full', 'runtime', 'tracy', 'cacao')]
         [string]$Profile,
         [Parameter(Mandatory = $true)]
         [string]$Target,
@@ -170,6 +260,9 @@ function Invoke-VulkanLabBuildTarget {
     )
 
     $profileInfo = Get-VulkanLabProfile $Profile $Configuration
+    if ($Profile -eq 'ninja-dev') {
+        Initialize-VulkanLabMsvcEnvironment
+    }
     Invoke-VulkanLabCommand 'cmake' @(
         '--build', $profileInfo.BinaryDirectory,
         '--config', $Configuration,

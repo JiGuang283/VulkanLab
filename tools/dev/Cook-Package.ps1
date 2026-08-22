@@ -31,9 +31,9 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
 }
 $packageRoot = Get-VulkanLabFullPath $OutputDirectory
 
-$null = Invoke-VulkanLabConfigure 'dev' 'Debug'
-$null = Invoke-VulkanLabBuildTarget 'dev' 'VulkanLabAssetTool' 'Debug'
-$null = Invoke-VulkanLabConfigure 'runtime' 'Release'
+$null = Ensure-VulkanLabConfigured 'ninja-dev' 'Debug'
+$null = Invoke-VulkanLabBuildTarget 'ninja-dev' 'VulkanLabAssetTool' 'Debug'
+$null = Ensure-VulkanLabConfigured 'runtime' 'Release'
 $runtimeProfile = Invoke-VulkanLabBuildPreset 'runtime' 'Release'
 $null = Assert-VulkanLabMinimalRuntime $runtimeProfile.VulkanLab
 
@@ -87,4 +87,3 @@ if ($LaunchSmoke) {
 & $verifyScript @verifyArguments
 
 Write-Host "Cooked package ready: $packageRoot"
-

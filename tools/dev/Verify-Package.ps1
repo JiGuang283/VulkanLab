@@ -17,10 +17,10 @@ if (-not (Test-Path -LiteralPath $packageRoot -PathType Container)) {
 }
 
 if (-not $SkipToolBuild) {
-    $null = Invoke-VulkanLabConfigure 'dev' 'Debug'
-    $null = Invoke-VulkanLabBuildTarget 'dev' 'VulkanLabAssetTool' 'Debug'
+    $null = Ensure-VulkanLabConfigured 'ninja-dev' 'Debug'
+    $null = Invoke-VulkanLabBuildTarget 'ninja-dev' 'VulkanLabAssetTool' 'Debug'
 }
-$dev = Get-VulkanLabProfile 'dev' 'Debug'
+$dev = Get-VulkanLabProfile 'ninja-dev' 'Debug'
 if (-not (Test-Path -LiteralPath $dev.AssetTool -PathType Leaf)) {
     throw "VulkanLabAssetTool.exe was not found: $($dev.AssetTool)"
 }
@@ -85,4 +85,3 @@ try {
         Remove-Item -LiteralPath $resolvedSmoke -Recurse -Force
     }
 }
-
