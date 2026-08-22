@@ -28,4 +28,3 @@ target_link_libraries(VulkanLabRenderTest PRIVATE
     vkl_project_warnings
     vkl_render_test_core
 )
-add_dependencies(VulkanLabRenderTest VulkanLabRuntimeImage)

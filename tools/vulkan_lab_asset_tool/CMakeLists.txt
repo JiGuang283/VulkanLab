@@ -61,24 +61,21 @@ if(VKL_GLTF_VALIDATOR_EXECUTABLE AND
    EXISTS "${VKL_GLTF_VALIDATOR_EXECUTABLE}")
     get_filename_component(VKL_GLTF_VALIDATOR_ROOT
         "${VKL_GLTF_VALIDATOR_EXECUTABLE}" DIRECTORY)
-    add_custom_command(TARGET VulkanLabAssetTool POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${VKL_GLTF_VALIDATOR_EXECUTABLE}"
-            "$<TARGET_FILE_DIR:VulkanLabAssetTool>/gltf_validator.exe"
-    )
+    vkl_register_runtime_payload(
+        OWNER asset-tool
+        SOURCE "${VKL_GLTF_VALIDATOR_EXECUTABLE}"
+        DESTINATION "gltf_validator.exe")
     if(EXISTS "${VKL_GLTF_VALIDATOR_ROOT}/LICENSE")
-        add_custom_command(TARGET VulkanLabAssetTool POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${VKL_GLTF_VALIDATOR_ROOT}/LICENSE"
-                "$<TARGET_FILE_DIR:VulkanLabAssetTool>/gltf_validator.LICENSE"
-        )
+        vkl_register_runtime_payload(
+            OWNER asset-tool
+            SOURCE "${VKL_GLTF_VALIDATOR_ROOT}/LICENSE"
+            DESTINATION "gltf_validator.LICENSE")
     endif()
     if(EXISTS "${VKL_GLTF_VALIDATOR_ROOT}/NOTICES")
-        add_custom_command(TARGET VulkanLabAssetTool POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${VKL_GLTF_VALIDATOR_ROOT}/NOTICES"
-                "$<TARGET_FILE_DIR:VulkanLabAssetTool>/gltf_validator.NOTICES"
-        )
+        vkl_register_runtime_payload(
+            OWNER asset-tool
+            SOURCE "${VKL_GLTF_VALIDATOR_ROOT}/NOTICES"
+            DESTINATION "gltf_validator.NOTICES")
     endif()
 else()
     message(STATUS

@@ -42,39 +42,47 @@ if(VKL_ENABLE_RUNTIME_CONTROL)
 endif()
 if(VKL_ENABLE_EDITOR_UI)
     target_link_libraries(VulkanLab PRIVATE vkl_editor)
-    add_custom_command(TARGET VulkanLab POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_FILE_DIR:VulkanLab>/editor"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${PROJECT_SOURCE_DIR}/external/lucide-static/lucide.ttf"
-            "$<TARGET_FILE_DIR:VulkanLab>/editor/lucide.ttf"
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_FILE_DIR:VulkanLab>/licenses/Lucide"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${PROJECT_SOURCE_DIR}/external/lucide-static/LICENSE"
-            "$<TARGET_FILE_DIR:VulkanLab>/licenses/Lucide/LICENSE"
-    )
 endif()
 add_dependencies(VulkanLab VulkanLabShaders)
-
-if(VKL_ENABLE_CACAO)
-    add_custom_command(TARGET VulkanLab POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_FILE_DIR:VulkanLab>/licenses/FidelityFX-CACAO"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${PROJECT_SOURCE_DIR}/external/FidelityFX-CACAO/license.txt"
-            "$<TARGET_FILE_DIR:VulkanLab>/licenses/FidelityFX-CACAO/license.txt"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${PROJECT_SOURCE_DIR}/external/FidelityFX-CACAO/NOTICES.txt"
-            "$<TARGET_FILE_DIR:VulkanLab>/licenses/FidelityFX-CACAO/NOTICES.txt"
-    )
-endif()
 
 # Developer builds locate source assets through vulkanlab_project.json. Only
 # the locator belongs beside the executable; cooked packages stage their own
 # verified resource closure.
-add_custom_command(TARGET VulkanLab POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${PROJECT_BINARY_DIR}/generated/vulkanlab_project.json"
-        "$<TARGET_FILE_DIR:VulkanLab>/vulkanlab_project.json"
-)
+vkl_register_runtime_payload(
+    OWNER runtime
+    SOURCE "${PROJECT_BINARY_DIR}/generated/vulkanlab_project.json"
+    DESTINATION "vulkanlab_project.json")
+
+foreach(editor_payload IN ITEMS
+        editor/lucide.ttf
+        licenses/Lucide/LICENSE)
+    vkl_register_runtime_owned_path(
+        OWNER runtime DESTINATION "${editor_payload}")
+endforeach()
+if(VKL_ENABLE_EDITOR_UI)
+    vkl_register_runtime_payload(
+        OWNER runtime
+        SOURCE "${PROJECT_SOURCE_DIR}/external/lucide-static/lucide.ttf"
+        DESTINATION "editor/lucide.ttf")
+    vkl_register_runtime_payload(
+        OWNER runtime
+        SOURCE "${PROJECT_SOURCE_DIR}/external/lucide-static/LICENSE"
+        DESTINATION "licenses/Lucide/LICENSE")
+endif()
+
+foreach(cacao_payload IN ITEMS
+        licenses/FidelityFX-CACAO/license.txt
+        licenses/FidelityFX-CACAO/NOTICES.txt)
+    vkl_register_runtime_owned_path(
+        OWNER runtime DESTINATION "${cacao_payload}")
+endforeach()
+if(VKL_ENABLE_CACAO)
+    vkl_register_runtime_payload(
+        OWNER runtime
+        SOURCE "${PROJECT_SOURCE_DIR}/external/FidelityFX-CACAO/license.txt"
+        DESTINATION "licenses/FidelityFX-CACAO/license.txt")
+    vkl_register_runtime_payload(
+        OWNER runtime
+        SOURCE "${PROJECT_SOURCE_DIR}/external/FidelityFX-CACAO/NOTICES.txt"
+        DESTINATION "licenses/FidelityFX-CACAO/NOTICES.txt")
+endif()

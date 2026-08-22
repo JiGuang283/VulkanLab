@@ -53,6 +53,10 @@ vulkanlab_set_target_folder("VulkanLab/Shaders"
 
 vulkanlab_set_target_folder("VulkanLab/Workflows"
     VulkanLabRuntimeImage
+    VulkanLabRuntimePayloads
+    VulkanLabRuntimePayloadsCleanup
+    VulkanLabAssetToolRuntimePayloads
+    VulkanLabAssetToolRuntimePayloadsCleanup
     VulkanLabDeveloper
     VulkanLabFull
     VulkanLabCookInput

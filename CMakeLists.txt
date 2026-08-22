@@ -19,6 +19,7 @@ set(CMAKE_COMPILE_PDB_OUTPUT_DIRECTORY
 include(CTest)
 include(cmake/ProjectOptions.cmake)
 include(cmake/BuildFeatures.cmake)
+include(cmake/RuntimeImage.cmake)
 include(cmake/Dependencies.cmake)
 include(cmake/BuildInfo.cmake)
 
@@ -39,16 +40,41 @@ configure_file(
 
 add_subdirectory(shader)
 add_subdirectory(src)
-
-# RuntimeImage is the complete runnable renderer payload. VulkanLab owns its
-# shader and runtime-file staging, while this target gives build workflows a
-# stable dependency that is not an executable-to-tool coupling.
-add_custom_target(VulkanLabRuntimeImage DEPENDS VulkanLab)
-
 add_subdirectory(tools)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)
+endif()
+
+# Optional payload paths are always known so reconfiguring an existing build
+# tree can remove files owned by a feature or tool that is no longer present.
+foreach(asset_tool_payload IN ITEMS
+        gltf_validator.exe
+        gltf_validator.LICENSE
+        gltf_validator.NOTICES)
+    vkl_register_runtime_owned_path(
+        OWNER asset-tool DESTINATION "${asset_tool_payload}")
+endforeach()
+
+vkl_define_runtime_payload_target(VulkanLabRuntimePayloads runtime)
+vkl_define_runtime_payload_target(
+    VulkanLabAssetToolRuntimePayloads asset-tool)
+
+# RuntimeImage is the complete runnable renderer payload. Shader publication
+# remains transactional and independently owned; static payloads are staged
+# from the declarations collected above.
+add_custom_target(VulkanLabRuntimeImage)
+add_dependencies(VulkanLabRuntimeImage
+    VulkanLab
+    VulkanLabRuntimePayloads)
+if(TARGET VulkanLabAssetTool)
+    add_dependencies(VulkanLabAssetTool VulkanLabAssetToolRuntimePayloads)
+else()
+    add_dependencies(VulkanLabRuntimeImage
+        VulkanLabAssetToolRuntimePayloadsCleanup)
+endif()
+if(TARGET VulkanLabRenderTest)
+    add_dependencies(VulkanLabRenderTest VulkanLabRuntimeImage)
 endif()
 
 set(VKL_DEVELOPER_TARGETS VulkanLabRuntimeImage)

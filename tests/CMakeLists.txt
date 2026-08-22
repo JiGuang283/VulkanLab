@@ -99,6 +99,7 @@ if(WIN32)
         NAME VulkanLabDeveloperRuntimeLayout
         COMMAND ${CMAKE_COMMAND}
             "-DRUNTIME_DIR=$<TARGET_FILE_DIR:VulkanLab>"
+            "-DEXPECTED_SHADER_LIST=${VKL_SHADER_EXPECTED_LIST}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/DeveloperRuntimeLayoutTest.cmake"
     )
     set_tests_properties(VulkanLabDeveloperRuntimeLayout PROPERTIES
