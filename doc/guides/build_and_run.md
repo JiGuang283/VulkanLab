@@ -1,8 +1,8 @@
 # 构建与运行
 
 > Status: Current
-> Last verified: 2026-08-15
-> Verified against: `62f6cc4`
+> Last verified: 2026-08-22
+> Verified against: `98aba18`
 
 ## 环境要求
 
@@ -107,6 +107,26 @@ CMake 通过 `configure_file()` 生成 `RuntimeFeatures.h`，其中只包含 `VK
 | `VulkanLabCookInput` | Cook 所需的 Runtime Image 与 AssetTool。 |
 
 这些 target 只表达构建工作流，不作为 C++ 链接聚合层；具体 executable 和测试仍直接链接其所需模块。
+
+### CMake target 与 dependency 边界
+
+`src/CMakeLists.txt` 只安排 owner 目录顺序并组装 `VulkanLab`。Foundation、GPU
+runtime、Renderer、Asset、Scene、Workflow、Control、Editor 等 target 分别在
+对应源码目录的 `CMakeLists.txt` 中定义；C++ source 全部显式列出，不使用
+`GLOB_RECURSE`。这使 Visual Studio solution 中的 target 与源码所有权保持一致，
+但不会为了目录形式把共享 RenderGraph/Shader ABI 的 Renderer 拆成大量小静态库。
+
+CMake 编译接口分为 `VulkanLab::ProjectOptions`、
+`VulkanLab::ProjectWarnings` 和 `VulkanLab::RuntimeFeatures`。运行时模块通常通过
+`VulkanLab::BuildOptions` 聚合使用三者；AssetTool、Ctl、RenderTest 和 tests 只链接
+实际需要的项目选项与 warning policy，不继承生成的运行时 feature header。第三方
+target 不继承项目 warnings。
+
+第三方配置位于 `cmake/dependencies/`，按 Core、Rendering、Editor、AssetTools 和
+Diagnostics 分组。关闭 Editor、AssetTool、Tracy、CACAO 或 tests 时，对应 ImGui/
+ImGuizmo、DirectXTex/KTX CLI、TracyClient、CACAO 或 SPIR-V Reflect 源码不会进入
+solution。KTX2 read-only runtime 仍会配置 `ktx_read` 及 KTX 当前传递需要的 ASTC
+实现，这是运行时纹理缓存读取依赖，不表示 AssetTool 被构建。
 
 未编译功能的启动参数不会被静默忽略。`--runtime-control`、`--runtime-control-pipe`、`--capture-root`、`--asset-mode ondemand`、`--asset-tool` 和非 `off` Validation profile 会在创建 Window/Vulkan 前返回明确错误。Editor 未编译时 `--no-gui` 仍被接受；Asset Authoring 未编译时默认模式为 `ReadOnly`。Runtime Control 已编译但某个子功能被裁剪时，对应协议方法返回 `feature_not_compiled`。
 

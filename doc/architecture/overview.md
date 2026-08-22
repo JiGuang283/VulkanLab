@@ -1,8 +1,8 @@
 # 系统架构概览
 
 > Status: Current
-> Last verified: 2026-08-21
-> Verified against: Forward / Deferred Stage 7 working tree
+> Last verified: 2026-08-22
+> Verified against: `98aba18`
 
 VulkanLab 是一个开发中的 Windows Vulkan 1.3 实时渲染器。当前架构以
 `Application` 为组合根，以类型化 service、snapshot、action 和 submission
@@ -94,7 +94,24 @@ src/render/features/
 
 ## CMake 模块边界
 
-`src/CMakeLists.txt` 以真实依赖建立以下 target：
+根 `src/CMakeLists.txt` 只声明模块顺序并组装 `VulkanLab` executable。各 target
+由其主要 owner 目录中的 `CMakeLists.txt` 定义：
+
+```text
+src/core/          foundation + GPU runtime
+src/platform/      window/input platform runtime
+src/render/        shader catalog + renderer runtime
+src/assets/        asset core + asset runtime
+src/diagnostics/   capture
+src/scene_data/    scene data
+src/scene/         scene runtime
+src/workflows/     scene workflow
+src/control/       protocol/server + optional runtime adapter
+src/editor/        optional editor
+src/CMakeLists.txt Application executable assembly
+```
+
+这些 owner 文件以真实依赖建立以下 target：
 
 - `vkl_foundation`, `vkl_gpu_runtime`, `vkl_platform_runtime`
 - `vkl_shader_catalog`, `vkl_renderer_runtime`
@@ -107,6 +124,19 @@ src/render/features/
 模块。测试和工具直接链接其实际使用的模块，不再经过一个隐藏依赖关系的
 `vkl_engine` 聚合 target。面向开发者的构建入口使用无链接语义的 custom aggregate
 targets，例如 `VulkanLabRuntimeImage`、`VulkanLabDeveloper` 和 `VulkanLabFull`。
+
+项目编译接口按职责拆分为：
+
+- `VulkanLab::ProjectOptions`：C++ language/ABI 和项目通用编译定义。
+- `VulkanLab::ProjectWarnings`：项目代码 warning policy。
+- `VulkanLab::RuntimeFeatures`：生成的 `RuntimeFeatures.h` include 路径。
+- `VulkanLab::BuildOptions`：前三者的运行时聚合接口。
+
+进程外 host tools 和测试只按需链接 ProjectOptions/ProjectWarnings，不继承运行时
+feature header。第三方 target 不继承项目 warning policy。第三方依赖配置按
+`Core`、`Rendering`、`Editor`、`AssetTools` 和 `Diagnostics` 分文件管理；Editor、
+DirectXTex、Tracy、CACAO 和 SPIR-V Reflect 只在对应 feature 或 product 需要时进入
+生成图。KTX 的 read-only runtime 部分仍是所有配置都需要的派生纹理读取依赖。
 
 构建开关只裁剪开发基础设施，不切换渲染算法 ABI。Editor、Runtime Control、
 Capture、Asset Authoring、Validation、Debug Utils、GPU Profiler 和 Tracy 可以独立

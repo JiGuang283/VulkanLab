@@ -2,7 +2,7 @@
 
 > Status: Active
 > Last verified: 2026-08-22
-> Verified against: `2994508`
+> Verified against: `98aba18`
 
 ## Review Summary
 
@@ -504,6 +504,39 @@ feature可独立编译和链接时再拆。
 - 每个 target在一个明确 owner文件中定义。
 - 关闭 Editor、AssetTool、Tracy或CACAO时不配置其源码依赖。
 - Dev和Runtime的 target数量不因重构无意义增加。
+
+### Stage 3 Verification Record
+
+Stage 3 已由 `98aba18` 完成并验证：
+
+- 根 `src/CMakeLists.txt` 缩减为模块 `add_subdirectory()` 顺序和 `VulkanLab`
+  executable assembly；Foundation、GPU Runtime、Platform、Renderer、Assets、
+  Diagnostics、Scene Data、Scene、Workflow、Control 和 Editor 均由各自 owner
+  `CMakeLists.txt` 定义。
+- `cmake/Dependencies.cmake` 只负责编排 Core、Diagnostics、AssetTools、Rendering
+  和 Editor 五个 dependency 文件。DirectXTex、Tracy、CACAO、ImGui/ImGuizmo 和
+  SPIR-V Reflect 只在对应 product/feature 打开时配置。
+- KTX 与 DirectXTex 使用的通用 cache 变量在添加上游子目录后恢复；fresh 配置的
+  dev/full/runtime `CMakeCache.txt` 均未泄漏 `BUILD_SHARED_LIBS`、`BUILD_TOOLS`、
+  `BUILD_SAMPLE`、`BUILD_DX11`、`BUILD_DX12` 或 `BC_USE_OPENMP`。
+- `VulkanLab::ProjectOptions`、`VulkanLab::ProjectWarnings` 和
+  `VulkanLab::RuntimeFeatures` 已拆开；运行时通过 `BuildOptions` 聚合，host tools
+  和 tests 不再继承 runtime feature include path，第三方 target 不继承项目
+  warning policy。
+- 三套 profile 均从 fresh 生成树配置成功。实际 Visual Studio solution project
+  数为 dev 51、full 63、runtime 33，与 Stage 2 的有效 target 集合一致，没有因文件
+  拆分新增 C++ target。runtime solution 只包含 `VulkanLab` 产品，不包含 Editor、
+  ImGui、ImGuizmo、DirectXTex、Tracy、CACAO、SPIR-V Reflect 或开发工具。
+- dev Debug、full Debug 和 runtime Release 全部构建成功；full 同时链接了 AssetTool、
+  Ctl、RenderTest 和 CPU test executable。按项目策略只确认测试 executable 可构建，
+  未执行 CTest 或其他测试套件。
+- dev 通过唯一 Named Pipe 完成启动、默认模型加载、`ping/info/quit`；runtime Release
+  在无 Editor、无 GUI 路径持续渲染 5 秒。两者均未出现新的配置、链接或启动错误。
+- C++ source glob 审计为空，`git diff --check` 通过。构建仍显示既有的 MSVC
+  `getenv`、结构对齐、未使用参数和 CRT/PDB warning；它们不是本阶段引入的错误。
+- runtime 的 `ktx_read` 仍会编译 KTX 当前传递依赖的 ASTC implementation。该依赖
+  属于运行时 KTX2 reader 的上游实现细节，不会引入 KTX CLI、KTX1 或 AssetTool；
+  是否进一步拆成预构建依赖留到 Stage 7 测量后决定。
 
 ## Stage 4: Shader 构建管线重构
 
