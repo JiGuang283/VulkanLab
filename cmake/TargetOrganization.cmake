@@ -46,6 +46,7 @@ vulkanlab_set_target_folder("VulkanLab/Tests"
 )
 
 vulkanlab_set_target_folder("VulkanLab/Shaders"
+    VulkanLabShaderCompile
     VulkanLabShaders
     vkl_cacao_shaders
 )

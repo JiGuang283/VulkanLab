@@ -240,6 +240,8 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
                 throw fieldError(field + ".targetEnv",
                                  "expected vulkan1.0 or vulkan1.2");
             }
+            const std::string binaryQualifier =
+                targetEnv.empty() ? std::string{} : "." + targetEnv;
 
             const std::string vertex = optionalString(item, "vertex", field);
             const std::string fragment =
@@ -313,9 +315,11 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
                                  "DDGI resources");
             }
             program.vertSpvPath = resolveSpirvPath(
-                shaderRoot, program.vertexSourcePath, field + ".vertex");
+                shaderRoot, program.vertexSourcePath, field + ".vertex",
+                binaryQualifier + ".spv");
             program.fragSpvPath = resolveSpirvPath(
-                shaderRoot, program.fragmentSourcePath, field + ".fragment");
+                shaderRoot, program.fragmentSourcePath, field + ".fragment",
+                binaryQualifier + ".spv");
             if (program.usesMaterialTextures) {
                 if (program.fragmentSourcePath.empty()) {
                     throw fieldError(field + ".materialTextures",
@@ -323,36 +327,43 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
                 }
                 program.bindlessFragSpvPath = resolveSpirvPath(
                     shaderRoot, program.fragmentSourcePath,
-                    field + ".fragment", ".bindless.spv");
+                    field + ".fragment",
+                    binaryQualifier + ".bindless.spv");
             }
             if (program.usesLightingMrt) {
                 program.colorOnlyFragSpvPath = resolveSpirvPath(
                     shaderRoot, program.fragmentSourcePath,
-                    field + ".fragment", ".mrt1.spv");
+                    field + ".fragment",
+                    binaryQualifier + ".mrt1.spv");
                 program.specularFragSpvPath = resolveSpirvPath(
                     shaderRoot, program.fragmentSourcePath,
-                    field + ".fragment", ".mrt2.spv");
+                    field + ".fragment",
+                    binaryQualifier + ".mrt2.spv");
                 if (program.usesMaterialTextures) {
                     program.bindlessColorOnlyFragSpvPath = resolveSpirvPath(
                         shaderRoot, program.fragmentSourcePath,
-                        field + ".fragment", ".mrt1.bindless.spv");
+                        field + ".fragment",
+                        binaryQualifier + ".mrt1.bindless.spv");
                     program.bindlessSpecularFragSpvPath = resolveSpirvPath(
                         shaderRoot, program.fragmentSourcePath,
-                        field + ".fragment", ".mrt2.bindless.spv");
+                        field + ".fragment",
+                        binaryQualifier + ".mrt2.bindless.spv");
                 }
             }
             if (program.usesSurfaceMrt) {
                 for (uint32_t attachmentCount = 0; attachmentCount < 3;
                      ++attachmentCount) {
                     const std::string suffix =
-                        ".mrt" + std::to_string(attachmentCount) + ".spv";
+                        binaryQualifier + ".mrt" +
+                        std::to_string(attachmentCount) + ".spv";
                     program.reducedSurfaceFragSpvPaths[attachmentCount] =
                         resolveSpirvPath(shaderRoot,
                                          program.fragmentSourcePath,
                                          field + ".fragment", suffix);
                     if (program.usesMaterialTextures) {
                         const std::string bindlessSuffix =
-                            ".mrt" + std::to_string(attachmentCount) +
+                            binaryQualifier + ".mrt" +
+                            std::to_string(attachmentCount) +
                             ".bindless.spv";
                         program.bindlessReducedSurfaceFragSpvPaths
                             [attachmentCount] = resolveSpirvPath(
@@ -362,7 +373,8 @@ ShaderRegistry::load(const std::filesystem::path &manifestPath) {
                 }
             }
             program.computeSpvPath = resolveSpirvPath(
-                shaderRoot, program.computeSourcePath, field + ".compute");
+                shaderRoot, program.computeSourcePath, field + ".compute",
+                binaryQualifier + ".spv");
             registry.programs_.push_back(std::move(program));
         }
 
