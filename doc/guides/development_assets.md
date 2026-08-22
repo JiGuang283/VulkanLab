@@ -2,7 +2,7 @@
 
 > Status: Current
 > Last verified: 2026-08-22
-> Verified against: `b90cae9`
+> Verified against: `4e495b9`
 
 VulkanLab 的大型模型源资产不进入 Git。为了让另一台电脑在克隆源码后获得相同的场景开发环境，项目提供本地资产包生成器和安装器。资产包是 Git 之外的交付物，可以通过移动硬盘、局域网或网盘传输；脚本不会上传 GitHub，也不依赖固定下载地址。
 
