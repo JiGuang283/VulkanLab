@@ -2,7 +2,7 @@
 
 > Status: Active
 > Last verified: 2026-08-22
-> Verified against: `17cd0b7`
+> Verified against: `597d038`
 
 ## Review Summary
 
@@ -348,6 +348,8 @@ CMake 4.1.0-rc1 环境下记录，并由 `17cd0b7` 固化。所有时间均为�
 
 ## Stage 1: Preset 与 VS Code 配置收口
 
+> Status: Completed in `597d038`
+
 ### Problem And Root Cause
 
 Preset重复声明相同 feature变量；Debug/Release使用两个相同 configure tree。工程同时
@@ -389,6 +391,21 @@ bootstrap脚本；在 clean/incremental数据证明有收益前，不替换 cano
 - `build/` 只需要 dev、full、runtime以及按需 profile。
 - full tree可以先后构建 Debug和Release而无需重新 Configure。
 - 删除任意一个 profile目录不会影响其他 profile。
+
+### Stage 1 Verification Record
+
+2026-08-22 完成以下验证：
+
+- `cmake --list-presets` 只暴露 dev、full、runtime、tracy 和 cacao 五个
+  configure profile；旧 Debug/Release 仅保留为 build preset兼容别名。
+- `build/dev` Debug、`build/runtime` Release、`build/full` Debug 与 Release均构建
+  成功；full的两个配置在同一生成树中连续构建，没有重新 Configure。
+- dev与runtime executable分别使用隔离 Workspace持续运行8秒，日志中没有
+  `error` 或 `critical` 记录。
+- 清理旧生成树后，`build/`只包含 `dev`、`full` 和 `runtime`。
+- VS Code JSON、CMake preset和迁移后的 PowerShell脚本均通过语法解析；
+  `git diff --check`通过。
+- 按项目默认策略没有运行CTest、Golden或Validation smoke。
 
 ## Stage 2: Target 图与 Build Feature 语义收口
 
